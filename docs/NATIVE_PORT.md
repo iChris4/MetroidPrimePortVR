@@ -984,6 +984,8 @@ unpacks to a temporary directory instead of mounting.
   the rotation leaves what is seen of the element unchanged and the angle is
   derived from the aspect ratio, so it holds at any aspect rather than only
   16:9. Menus, the credits and other non-aspect-matched frames are unaffected.
+  Off while the headset runs: the HUD is head-locked there, with no screen corners to
+  reach (PORT_NOTES.md, 2026-10-09).
 - Field of view (Video > Display and pause Options > Display, persisted as `fov`,
   45-90, retail 55): the first-person camera's vertical FOV. The overlay also
   shows the horizontal FOV it gives at the current aspect. The arm cannon is

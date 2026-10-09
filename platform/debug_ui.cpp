@@ -1642,7 +1642,11 @@ void SetAspectMode(EAspectMode mode) {
 
 bool HudWide() {
   EnsureInitialized();
-  return sHudWide && !sOriginalExperience;
+  // PortVr: off while the headset runs. The HUD is head-locked there, re-projected through each
+  // eye's frustum, so it has no wide corners to reach, and the visor frame's slices are cut by
+  // scissors in mono screen columns (CGuiFrame::Draw) that no longer match where the frame lands
+  // in the eyes: the frame tore apart while the radar and visor selector slid off it.
+  return sHudWide && !sOriginalExperience && !PortVr::OpenXRIsRunning();
 }
 
 void SetHudWide(bool enabled) {
@@ -5699,7 +5703,8 @@ void DrawVideoDisplay() {
     MarkDirty();
   }
   ImGui::SetItemTooltip("Keeps each HUD element's shape but spreads its position so edge elements\n"
-                        "reach the wide corners. Only affects the in-game HUD, not menus.");
+                        "reach the wide corners. Only affects the in-game HUD, not menus.\n"
+                        "Off while the headset runs.");
 
   int hudScale = sHudScale;
   if (ImGui::SliderInt("HUD scale", &hudScale, kHudScaleMin, kHudScaleMax, "%d%%")) {

@@ -174,7 +174,7 @@ inline int FourThreeWidth(int width, int height) {
 }
 // Widescreen HUD: keep each HUD element's shape but spread its position about
 // the screen centre so edge elements reach the true wide corners. Only affects
-// the aspect-matched in-game HUD frames.
+// the aspect-matched in-game HUD frames. False while the headset runs.
 bool HudWide();
 void SetHudWide(bool enabled);
 // Scripted 16:9 cutscene bars (CCameraFilterPass kFS_CinemaBars). Off by default:

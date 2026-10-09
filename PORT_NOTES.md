@@ -1,3 +1,28 @@
+## VR: the widescreen HUD is off while the headset runs (2026-10-09)
+
+A Quest 2 player on alpha.1 saw the radar and the visor selector off the HUD
+frame, left of its left bracket, with the frame's top line stretched out. Not
+a Quest 2 problem: alpha.1 defaults to `aspect=window` (the Quest's 1280x720
+framebuffer is 16:9) and `hud_wide=1`, and neither test headset ran that pair
+(the Quest 3 had `aspect=4:3`, the PC `hud_wide=0`). With those two lines added
+to the Quest 3's ini, alpha.2 shows the same picture: the side clusters pushed
+outward, the frame in misaligned strips, "ENERGY" cut to "ENERG".
+
+The spread is a flat-screen layout. `CGuiFrame::Draw` warps the visor frame in
+slices, each under a scissor in mono screen columns, while the widgets move by
+a transform. In the headset the HUD is head-locked and re-projected through
+each eye's frustum, so those columns no longer match where the frame lands in
+the eye: the unspread middle slice keeps the brackets in place while the
+radar and selectors slide off them. The head-locked HUD has no wide corners to
+reach anyway, so `PortDebug::HudWide()` is false while `OpenXRIsRunning()`
+(as `OriginalOverridesComfort` already does). The saved `hud_wide` is left
+alone for the desktop, so Nobbie's default change (2e6e20a8) was not enough on
+its own: alpha.1 players already have `hud_wide=1` in their ini. The pause
+Options entry reads Off in the headset, as it does under Original experience.
+
+Still open: below 4:3 (a portrait desktop window) the vertical spread takes the
+same scissor path; it is not gated, since no headset build renders below 4:3.
+
 ## VR: directional movement, PrimedGun's left stick strafe (2026-10-08)
 
 The directional movement settings (LEFT STICK STRAFE, MOVEMENT DIRECTION, the
