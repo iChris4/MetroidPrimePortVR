@@ -28,6 +28,10 @@ Links aurora's stock prebuilt Dawn instead of PrimedGun's patched one
 (Build-QuestDawn.ps1), so the eyes render in a pass each instead of one multiview
 pass.
 
+.PARAMETER Unsigned
+Builds an unsigned release APK for the release maintainer to sign with the
+existing update key. This APK cannot be installed until it has been signed.
+
 .EXAMPLE
 quest\Build-Quest.ps1 -Install
 #>
@@ -36,9 +40,13 @@ param(
     [ValidateSet('release', 'debug')] [string]$Configuration = 'release',
     [string]$CMakeDir = '',
     [switch]$Install,
+    [switch]$Unsigned,
     [switch]$StockDawn
 )
 $ErrorActionPreference = 'Stop'
+if ($Unsigned -and ($Configuration -ne 'release' -or $Install)) {
+    throw '-Unsigned requires release configuration and cannot be used with -Install.'
+}
 
 $root = $PSScriptRoot
 $repo = Split-Path -Parent $root
@@ -106,7 +114,9 @@ if (-not $StockDawn) {
     if (-not (Test-Path $dawnPackage)) { throw "Patched Dawn package missing: $dawnPackage" }
     $gradleArgs += "-PquestDawnPackage=$dawnPackage"
 }
-if ($Configuration -eq 'release' -and -not (Test-Path (Join-Path $root 'keystore.properties')) -and
+if ($Unsigned) {
+    $gradleArgs += '-PquestUnsignedRelease=true'
+} elseif ($Configuration -eq 'release' -and -not (Test-Path (Join-Path $root 'keystore.properties')) -and
     -not $env:PRIMEDGUN_QUEST_KEYSTORE) {
     Write-Host 'No release key configured: signing with the shared debug key, for sideloading.'
     $gradleArgs += '-PquestDebugSigning=true'

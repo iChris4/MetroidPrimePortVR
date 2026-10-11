@@ -88,6 +88,8 @@ if (hasReleaseKey && !File(keystorePath!!).exists()) {
     throw GradleException("keystore not found at $keystorePath")
 }
 val allowDebugSigning = providers.gradleProperty("questDebugSigning").orNull?.toBoolean() ?: false
+// Prepare an APK for the release maintainer to sign with the existing update key.
+val unsignedRelease = providers.gradleProperty("questUnsignedRelease").orNull?.toBoolean() ?: false
 
 android {
     namespace = "org.primedgun.v2"
@@ -110,7 +112,7 @@ android {
         // Quest 2 shipped Android 10 (API 29); AHardwareBuffer needs 26.
         minSdk = 29
         targetSdk = 34
-        versionCode = 3
+        versionCode = 4
         versionName = "2.0.0-alpha.3"
 
         ndk {
@@ -141,6 +143,7 @@ android {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = when {
+                unsignedRelease -> null
                 hasReleaseKey -> signingConfigs.getByName("release")
                 allowDebugSigning -> signingConfigs.getByName("debug")
                 else -> null
@@ -186,7 +189,7 @@ kotlin {
 // Signing a release with the debug key is a decision, not a default; see above.
 tasks.matching { it.name == "preReleaseBuild" }.configureEach {
     doFirst {
-        if (!hasReleaseKey && !allowDebugSigning) {
+        if (!hasReleaseKey && !allowDebugSigning && !unsignedRelease) {
             throw GradleException(
                 "refusing to sign the release with the shared debug key.\n" +
                     "  create this project's own key (see quest/README.md), or, for a build you\n" +
