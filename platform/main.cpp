@@ -1273,6 +1273,7 @@ int main(int argc, char** argv) {
                      "metroid_prime_port: no disc image given.\n"
                      "  usage: %s <path to Metroid Prime (USA v1.00, or PAL: experimental).iso>\n"
                      "  or set MP_DISC, or place the image next to the executable.\n", argv[0]);
+        PortVr::OpenXRShutdownBeforeAurora();
         aurora_shutdown();
         return 1;
     }
@@ -1312,6 +1313,7 @@ int main(int argc, char** argv) {
             if (!discFromArgs) {
                 PortLog::Write("metroid_prime_port: closed at the disc message\n");
             }
+            PortVr::OpenXRShutdownBeforeAurora();
             aurora_shutdown();
             return 1;
         }
@@ -1319,6 +1321,7 @@ int main(int argc, char** argv) {
         discImage = PickDisc();
         if (discImage.empty()) {
             PortLog::Write("metroid_prime_port: no disc image given.\n");
+            PortVr::OpenXRShutdownBeforeAurora();
             aurora_shutdown();
             return 1;
         }
@@ -1415,6 +1418,7 @@ int main(int argc, char** argv) {
             if (PortVr::GetVrSettings().required || PortVr::OpenXRHeadsetIsOnlyDisplay()) {
                 PortVr::OpenXRRequestAppQuit("The headset session could not start: " + PortVr::OpenXRLastError());
                 aurora_dvd_close();
+                PortVr::OpenXRShutdownBeforeAurora();
                 aurora_shutdown();
                 return 1;
             }

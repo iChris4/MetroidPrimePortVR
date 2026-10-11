@@ -77,12 +77,16 @@ if (-not $CMakeDir) {
 if (-not $CMakeDir -or -not (Test-Path (Join-Path $CMakeDir 'bin\cmake.exe'))) {
     throw 'No CMake 3.25+ found; install one or pass -CMakeDir <install root>'
 }
-$ninja = Get-ChildItem -Path (Join-Path $sdkRoot 'cmake') -Directory -ErrorAction SilentlyContinue |
+$systemNinja = Get-Command ninja.exe -ErrorAction SilentlyContinue
+$ninjaPath = if ($systemNinja) { $systemNinja.Source } else { Get-ChildItem -Path (Join-Path $sdkRoot 'cmake') -Directory -ErrorAction SilentlyContinue |
     Sort-Object Name -Descending |
     Where-Object { Test-Path (Join-Path $_.FullName 'bin\ninja.exe') } |
-    Select-Object -First 1
-if (-not $ninja) { throw "No ninja.exe under $sdkRoot\cmake\*\bin" }
-$env:PATH = (Join-Path $ninja.FullName 'bin') + ';' + $env:PATH
+    Select-Object -First 1 | ForEach-Object { Join-Path $_.FullName 'bin\ninja.exe' } }
+if (-not $ninjaPath) { throw "No ninja.exe on PATH or under $sdkRoot\cmake\*\bin" }
+if ([version](& $ninjaPath --version) -lt [version]'1.11') {
+    throw 'The Quest build requires Ninja 1.11 or newer; put a current ninja.exe on PATH.'
+}
+$env:PATH = (Split-Path -Parent $ninjaPath) + ';' + $env:PATH
 # Parenthesised: PowerShell's comma binds tighter than +.
 $localProperties = @(
     ('sdk.dir=' + $sdkRoot.Replace('\', '\\')),

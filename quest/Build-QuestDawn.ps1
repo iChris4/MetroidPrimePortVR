@@ -72,10 +72,14 @@ $ndk = Join-Path $sdkRoot "ndk\$ndkVersion"
 $toolchainFile = Join-Path $ndk 'build\cmake\android.toolchain.cmake'
 if (-not (Test-Path $toolchainFile)) { throw "NDK $ndkVersion not found under $sdkRoot (set ANDROID_HOME)" }
 $llvmBin = Join-Path $ndk 'toolchains\llvm\prebuilt\windows-x86_64\bin'
-$ninja = Get-ChildItem -Path (Join-Path $sdkRoot 'cmake') -Directory -ErrorAction SilentlyContinue |
+$systemNinja = Get-Command ninja.exe -ErrorAction SilentlyContinue
+$ninja = if ($systemNinja) { $systemNinja.Source } else { Get-ChildItem -Path (Join-Path $sdkRoot 'cmake') -Directory -ErrorAction SilentlyContinue |
     Sort-Object Name -Descending | ForEach-Object { Join-Path $_.FullName 'bin\ninja.exe' } |
-    Where-Object { Test-Path $_ } | Select-Object -First 1
+    Where-Object { Test-Path $_ } | Select-Object -First 1 }
 if (-not $ninja) { throw "No Ninja under $sdkRoot\cmake; install the SDK's CMake 3.22.1" }
+if ([version](& $ninja --version) -lt [version]'1.11') {
+    throw 'Dawn requires Ninja 1.11 or newer; put a current ninja.exe on PATH.'
+}
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) { throw 'git is not on PATH (Dawn fetches its dependencies with it)' }
 $pythonPath = (Get-Command $Python -ErrorAction Stop).Source
 
