@@ -1,4 +1,5 @@
 #include "port_crash.h"
+#include "port_env.h"
 
 #include "port_build_info.h"
 #include "port_log_file.h"
@@ -98,7 +99,7 @@ const char* BaseName(const char* path) {
 }
 
 void CrashTest() {
-  const char* test = std::getenv("MP_CRASH_TEST");
+  const char* test = port::EnvString("MP_CRASH_TEST");
   if (test == nullptr) {
     return;
   }

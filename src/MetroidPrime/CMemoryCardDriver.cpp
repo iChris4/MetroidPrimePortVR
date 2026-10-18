@@ -10,6 +10,11 @@
 #include "dolphin/os.h"
 #include "stdio.h"
 
+#ifdef TARGET_PC
+#include "port_beam_doors.h"
+#include "port_map_side.h"
+#endif
+
 static bool lbl_805A9118;
 static const char* const skSaveFileNames[2] = {"MetroidPrime A", "MetroidPrime B"};
 #ifdef TARGET_PC
@@ -417,6 +422,29 @@ void CMemoryCardDriver::StartFileRenameBtoA() {
 }
 
 void CMemoryCardDriver::WriteBackupBuf() {
+#ifdef TARGET_PC
+  {
+    // The card write finished (this is only reached once the file was written
+    // and renamed into place), so the side files can follow it: one per slot,
+    // keyed on the bytes SGameFileSlot::PutTo just wrote and only for the slots
+    // that file holds. A failed write never gets here.
+    PortMapSide::SlotBytes slots[3]; // xe4_fileSlots' capacity
+    for (int i = 0; i < 3 && i < xe4_fileSlots.capacity(); ++i) {
+      if (!xe4_fileSlots[i].null()) {
+        slots[i].bytes = xe4_fileSlots[i]->x0_saveBuffer.data();
+        slots[i].size = static_cast< size_t >(xe4_fileSlots[i]->x0_saveBuffer.size());
+      }
+    }
+    PortMapSide::Flush(slots, 3);
+    // The open beam doorways' files follow the same write.
+    PortBeamDoors::SlotBytes beamSlots[3];
+    for (int i = 0; i < 3; ++i) {
+      beamSlots[i].bytes = slots[i].bytes;
+      beamSlots[i].size = slots[i].size;
+    }
+    PortBeamDoors::Flush(beamSlots, 3);
+  }
+#endif
   gpGameState->WriteBackupBuf();
   gpGameState->SetCardSerial(x28_cardSerial);
 }
@@ -785,7 +813,13 @@ void CMemoryCardDriver::ReadFinished() {
   }
 }
 
-void CMemoryCardDriver::EraseFileSlot(int saveIdx) { xe4_fileSlots[saveIdx] = nullptr; }
+void CMemoryCardDriver::EraseFileSlot(int saveIdx) {
+  xe4_fileSlots[saveIdx] = nullptr;
+#ifdef TARGET_PC
+  PortMapSide::StageErase(saveIdx);
+  PortBeamDoors::StageErase(saveIdx);
+#endif
+}
 
 void CMemoryCardDriver::BuildNewFileSlot(int saveIdx) {
   bool fusionBackup = gpGameState->SystemState().GetHasFusion();
@@ -879,12 +913,29 @@ void SGameFileSlot::InitializeFromGameState() {
     CMemoryStreamOut w(x0_saveBuffer.data(), x0_saveBuffer.size());
     gpGameState->PutTo(w);
   }
+#ifdef TARGET_PC
+  {
+    // The in-save trailers may be cut; the side file keeps all of it.
+    PortMapSide::Data data;
+    for (size_t i = 0; i < PortMapSide::kSeenWords; ++i)
+      data.seen[i] = gpGameState->PortSeenPickups()[i];
+    data.marks = gpGameState->PortMapMarkList();
+    PortMapSide::Stage(gpGameState->GetFileIdx(), x0_saveBuffer.data(), x0_saveBuffer.size(), data);
+    PortBeamDoors::Stage(gpGameState->GetFileIdx(), x0_saveBuffer.data(), x0_saveBuffer.size(),
+                         gpGameState->PortBeamDoorBits());
+  }
+#endif
   x944_fileInfo = CGameState::LoadGameFileState(x0_saveBuffer.data());
 }
 
 void SGameFileSlot::LoadGameState(int idx) {
   CMemoryInStream r(x0_saveBuffer.data(), x0_saveBuffer.size());
   gpMain->StreamNewGameState(r, idx);
+#ifdef TARGET_PC
+  PortMapSide::Apply(idx, x0_saveBuffer.data(), x0_saveBuffer.size(), gpGameState->PortSeenPickups(),
+                     gpGameState->PortMapMarkList());
+  PortBeamDoors::Apply(idx, x0_saveBuffer.data(), x0_saveBuffer.size(), gpGameState->PortBeamDoorBits());
+#endif
 }
 
 const CGameState::GameFileStateInfo* CMemoryCardDriver::GetGameFileStateInfo(int saveIdx) {

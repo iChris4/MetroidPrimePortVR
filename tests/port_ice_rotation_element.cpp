@@ -1,20 +1,14 @@
 #include "Kyoto/Math/CMatrix3f.hpp"
 #include "Kyoto/Math/CQuaternion.hpp"
 #include "Kyoto/Particles/CVectorElement.hpp"
+#include "port_test.h"
 
 #include <cmath>
 #include <cstdio>
+#include <memory>
 #include <vector>
 
 namespace {
-int sFailures = 0;
-
-void Check(bool condition, const char* message) {
-  if (!condition) {
-    std::fprintf(stderr, "FAIL: %s\n", message);
-    ++sFailures;
-  }
-}
 
 bool Near(float a, float b, float epsilon = 2.e-5f) { return std::fabs(a - b) <= epsilon; }
 
@@ -73,6 +67,15 @@ private:
   mutable int mCalls = 0;
 };
 
+CMatrix3f BasisMatrix() { return CMatrix3f(-1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f, 1.f, 0.f); }
+
+std::unique_ptr<CVectorElement> BasisConjugated(CVectorElement* source) {
+  const CVector3f basisAngles(90.f, 0.f, 180.f);
+  return std::unique_ptr<CVectorElement>(new CVEOrderedEulerProduct(
+      new TestVector(basisAngles, true),
+      new CVEOrderedEulerProduct(source, new TestVector(basisAngles, true))));
+}
+
 CVector3f SeededAngles(uint32_t seed) {
   auto next = [&seed]() {
     seed = seed * 1664525u + 1013904223u;
@@ -87,24 +90,24 @@ void TestOrderedProductAndEvaluation() {
   const CVector3f secondAngles(0.f, 90.f, 0.f);
   CVEOrderedEulerProduct product(new TestVector(firstAngles, true, 1, &trace),
                                  new TestVector(secondAngles, true, 2, &trace));
-  Check(product.IsFastConstant(), "both fast-constant operands mark the product fast-constant");
+  CHECK_MSG(product.IsFastConstant(), "both fast-constant operands mark the product fast-constant");
 
   CVector3f result(0.f, 0.f, 0.f);
-  Check(!product.GetValue(5, result), "GetValue keeps vector-element false return convention");
-  Check(trace == std::vector<int>{1, 2}, "operands evaluate once each in original order");
+  CHECK_MSG(!product.GetValue(5, result), "GetValue keeps vector-element false return convention");
+  CHECK_MSG((trace == std::vector<int>{1, 2}), "operands evaluate once each in original order");
 
   const CMatrix3f want = (EulerQuaternion(firstAngles) * EulerQuaternion(secondAngles)).BuildTransform();
   const CMatrix3f actual = EulerMatrix(result);
-  Check(SameMatrix(actual, want), "noncommuting X90 then Y90 returns equivalent composed orientation");
-  Check(Near(actual.Get02(), 1.f) && Near(actual.Get12(), 0.f) && Near(actual.Get22(), 0.f),
-        "X90 then Y90 rotates +Z to +X");
+  CHECK_MSG(SameMatrix(actual, want), "noncommuting X90 then Y90 returns equivalent composed orientation");
+  CHECK_MSG(Near(actual.Get02(), 1.f) && Near(actual.Get12(), 0.f) && Near(actual.Get22(), 0.f),
+            "X90 then Y90 rotates +Z to +X");
   const CMatrix3f reversed = (EulerQuaternion(secondAngles) * EulerQuaternion(firstAngles)).BuildTransform();
-  Check(!SameMatrix(want, reversed, 0.1f), "the source-order discriminator differs from reversed multiplication");
+  CHECK_MSG(!SameMatrix(want, reversed, 0.1f), "the source-order discriminator differs from reversed multiplication");
 
   CVEOrderedEulerProduct oneDynamic(new TestVector(firstAngles, true), new TestVector(secondAngles, false));
   CVEOrderedEulerProduct otherDynamic(new TestVector(firstAngles, false), new TestVector(secondAngles, true));
-  Check(!oneDynamic.IsFastConstant() && !otherDynamic.IsFastConstant(),
-        "one non-fast-constant operand keeps the product per-particle/per-frame");
+  CHECK_MSG(!oneDynamic.IsFastConstant() && !otherDynamic.IsFastConstant(),
+            "one non-fast-constant operand keeps the product per-particle/per-frame");
 }
 
 void TestGimbalAndAnimatedSamples() {
@@ -114,8 +117,8 @@ void TestGimbalAndAnimatedSamples() {
     CVEOrderedEulerProduct product(new TestVector(firstAngles, false), new TestVector(secondAngles, true));
     CVector3f result(0.f, 0.f, 0.f);
     product.GetValue(0, result);
-    Check(SameMatrix(EulerMatrix(result), EulerMatrix(firstAngles), 5.e-5f),
-           "exact and near Y gimbals preserve orientation");
+    CHECK_MSG(SameMatrix(EulerMatrix(result), EulerMatrix(firstAngles), 5.e-5f),
+               "exact and near Y gimbals preserve orientation");
   }
 
   for (float y : {90.f, -90.f}) {
@@ -124,8 +127,8 @@ void TestGimbalAndAnimatedSamples() {
     CVEOrderedEulerProduct product(new TestVector(firstAngles, false), new TestVector(identity, true));
     CVector3f result(0.f, 0.f, 0.f);
     product.GetValue(0, result);
-    Check(SameMatrix(EulerMatrix(result), EulerMatrix(firstAngles), 5.e-5f),
-          "mixed X/Z angles at either exact Y gimbal retain orientation");
+    CHECK_MSG(SameMatrix(EulerMatrix(result), EulerMatrix(firstAngles), 5.e-5f),
+              "mixed X/Z angles at either exact Y gimbal retain orientation");
   }
 
   for (float y : {89.9999f, -89.9999f}) {
@@ -135,8 +138,8 @@ void TestGimbalAndAnimatedSamples() {
     CVector3f result(0.f, 0.f, 0.f);
     product.GetValue(0, result);
     const CMatrix3f expected = (EulerQuaternion(firstAngles) * EulerQuaternion(secondAngles)).BuildTransform();
-    Check(SameMatrix(EulerMatrix(result), expected, 5.e-5f),
-          "two-operand near-gimbal composition preserves its matrix");
+    CHECK_MSG(SameMatrix(EulerMatrix(result), expected, 5.e-5f),
+              "two-operand near-gimbal composition preserves its matrix");
   }
 
   std::vector<CVector3f> keyed;
@@ -153,32 +156,51 @@ void TestGimbalAndAnimatedSamples() {
   animated.GetValue(0, start);
   animated.GetValue(119, end);
   animated.GetValue(120, looped);
-  Check(SameMatrix(EulerMatrix(start), EulerMatrix(CVector3f(0.f, 0.f, 0.f))),
-        "emitter-time loop starts at the first sample");
-  Check(SameMatrix(EulerMatrix(end), EulerMatrix(keyed.back())), "the complete last key sample is evaluated");
-  Check(SameMatrix(EulerMatrix(looped), EulerMatrix(start)), "the 120-frame emitter loop returns to sample zero");
+  CHECK_MSG(SameMatrix(EulerMatrix(start), EulerMatrix(CVector3f(0.f, 0.f, 0.f))),
+            "emitter-time loop starts at the first sample");
+  CHECK_MSG(SameMatrix(EulerMatrix(end), EulerMatrix(keyed.back())), "the complete last key sample is evaluated");
+  CHECK_MSG(SameMatrix(EulerMatrix(looped), EulerMatrix(start)), "the 120-frame emitter loop returns to sample zero");
+
+  const CMatrix3f basis = BasisMatrix();
+  std::unique_ptr<CVectorElement> converted = BasisConjugated(new TestVector(keyed));
+  CVector3f convertedStart(0.f, 0.f, 0.f), convertedEnd(0.f, 0.f, 0.f), convertedLoop(0.f, 0.f, 0.f);
+  converted->GetValue(0, convertedStart);
+  converted->GetValue(119, convertedEnd);
+  converted->GetValue(120, convertedLoop);
+  CHECK_MSG(SameMatrix(EulerMatrix(convertedStart), basis * EulerMatrix(keyed.front()) * basis.GetTranspose(), 5.e-5f),
+             "basis-conjugated keyed rotation reads its first frame");
+  CHECK_MSG(SameMatrix(EulerMatrix(convertedEnd), basis * EulerMatrix(keyed.back()) * basis.GetTranspose(), 5.e-5f),
+             "basis-conjugated keyed rotation evaluates the final frame");
+  CHECK_MSG(SameMatrix(EulerMatrix(convertedLoop), EulerMatrix(convertedStart), 5.e-5f),
+             "basis-conjugated keyed rotation retains its emitter-time loop");
 }
 
 void TestStableParticleRandomnessAndFiniteInputs() {
   const CVector3f fixedSeedA = SeededAngles(0x13579bdfu);
   const CVector3f fixedSeedB = SeededAngles(0x2468ace0u);
-  CVEOrderedEulerProduct particleA(new TestVector(fixedSeedA, false),
-                                  new TestVector(CVector3f(0.f, 42.f, 0.f), false));
-  CVEOrderedEulerProduct particleB(new TestVector(fixedSeedB, false),
-                                  new TestVector(CVector3f(0.f, 42.f, 0.f), false));
+  std::unique_ptr<CVectorElement> particleA = BasisConjugated(new TestVector(fixedSeedA, false));
+  std::unique_ptr<CVectorElement> particleB = BasisConjugated(new TestVector(fixedSeedB, false));
   CVector3f a1(0.f, 0.f, 0.f), a2(0.f, 0.f, 0.f), b(0.f, 0.f, 0.f);
-  particleA.GetValue(23, a1);
-  particleA.GetValue(23, a2);
-  particleB.GetValue(23, b);
-  Check(SameMatrix(EulerMatrix(a1), EulerMatrix(a2)), "fixed-seed random Euler values are stable on repeated draws");
-  Check(!SameMatrix(EulerMatrix(a1), EulerMatrix(b), 0.01f), "separate particle seeds are not shared or cached");
+  CVector3f aNextFrame(0.f, 0.f, 0.f);
+  particleA->GetValue(23, a1);
+  particleA->GetValue(23, a2);
+  particleA->GetValue(24, aNextFrame);
+  particleB->GetValue(23, b);
+  CHECK_MSG(SameMatrix(EulerMatrix(a1), EulerMatrix(a2)), "fixed-seed random Euler values are stable on repeated draws");
+  CHECK_MSG(SameMatrix(EulerMatrix(a1), EulerMatrix(aNextFrame)),
+            "a particle's basis-conjugated IRND remains stable across frames");
+  const CMatrix3f basis = BasisMatrix();
+  CHECK_MSG(SameMatrix(EulerMatrix(a1), basis * EulerMatrix(fixedSeedA) * basis.GetTranspose()),
+            "basis conjugation retains the particle's sampled random orientation");
+  CHECK_MSG(!SameMatrix(EulerMatrix(a1), EulerMatrix(b), 0.01f),
+            "separate basis-conjugated particle seeds are not shared or cached");
 
   CVEOrderedEulerProduct invalid(new TestVector(CVector3f(INFINITY, 0.f, 0.f), false),
                                 new TestVector(CVector3f(0.f, 0.f, 0.f), false));
   CVector3f safe(1.f, 2.f, 3.f);
   invalid.GetValue(0, safe);
-  Check(safe.GetX() == 0.f && safe.GetY() == 0.f && safe.GetZ() == 0.f,
-        "nonfinite input produces a finite neutral rotation");
+  CHECK_MSG(safe.GetX() == 0.f && safe.GetY() == 0.f && safe.GetZ() == 0.f,
+            "nonfinite input produces a finite neutral rotation");
 }
 } // namespace
 
@@ -195,10 +217,8 @@ int main() {
   TestOrderedProductAndEvaluation();
   TestGimbalAndAnimatedSamples();
   TestStableParticleRandomnessAndFiniteInputs();
-  if (sFailures != 0) {
-    std::fprintf(stderr, "%d failure(s)\n", sFailures);
-    return 1;
+  if (port_test::Failures() == 0) {
+    std::puts("port_ice_rotation_element: ok");
   }
-  std::puts("port_ice_rotation_element: ok");
-  return 0;
+  return PORT_TEST_RESULT();
 }

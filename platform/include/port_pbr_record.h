@@ -7,18 +7,13 @@
 #include <cstdint>
 #include <cstring>
 
+#include "port_bytes.h"
+
 namespace PortPbrRecord {
 
-inline uint32_t Be32(const uint8_t* p) {
-  return (uint32_t(p[0]) << 24) | (uint32_t(p[1]) << 16) | (uint32_t(p[2]) << 8) | p[3];
-}
+inline uint32_t Be32(const uint8_t* p) { return port::ReadBE32(p); }
 
-inline float BeFloat(const uint8_t* p) {
-  const uint32_t bits = Be32(p);
-  float value;
-  std::memcpy(&value, &bits, 4);
-  return value;
-}
+inline float BeFloat(const uint8_t* p) { return port::ReadBEFloat(p); }
 
 // Reads the record that ends at `end` (one past its tag) in a material of `size` bytes.
 // values gets the 19 floats (neutral where the record is short or absent), wrap the maps'

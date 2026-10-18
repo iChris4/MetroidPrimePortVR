@@ -1035,6 +1035,7 @@ int VmatSummary(const std::string& genpPath, const std::string& matiDir) {
       if (name == "VMAT") {
         has = true;
         b += 8;  // CNST, length
+        const uint32_t version = be32(b);
         std::cout << "  VMAT v" << be32(b) << " features 0x" << std::hex << be32(b + 4) << std::dec << " blend "
                   << be32(b + 8) << "\n";
         const uint32_t textures = be32(b + 12);
@@ -1062,6 +1063,9 @@ int VmatSummary(const std::string& genpPath, const std::string& matiDir) {
           b += 12;
         }
         std::cout << "\n    modulate " << real(b) << " depthSoften " << real(b + 4) << " spriteCenter " << be32(b + 8) << "\n";
+        if (version == 3) {
+          std::cout << "    opacityGain " << real(b + 12) << " opacityBias " << real(b + 16) << "\n";
+        }
       } else if (name == "VPMT" || name == "VSMT") {
         std::cout << "  " << name << " " << be32(b + 4) << " entries\n";
         if (name == "VPMT" && index <= nodes.size()) {

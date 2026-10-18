@@ -5,7 +5,7 @@
 
 // Read an embedded resource from a mapped DOL section on the already-mounted
 // disc. The native executable contains no generated game asset arrays.
-// Addresses are GM8E01 revision 0's (config/GM8E01_00/symbols.txt).
+// Addresses are GM8E01 revision 0's (decomp/config/GM8E01_00/symbols.txt).
 std::vector<uint8_t> PortReadDolResource(uint32_t address, uint32_t length);
 
 // The same resource on any supported disc: read at its 1.00 address when it

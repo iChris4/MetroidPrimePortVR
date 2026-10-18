@@ -17,12 +17,9 @@
 // "metroidprime" tag; everywhere else they stay on stderr exactly as before.
 namespace PortLog {
 
-inline void Write(const char* format, ...) {
+inline void WriteV(const char* format, va_list arguments) {
   char buffer[2048];
-  va_list arguments;
-  va_start(arguments, format);
   const int written = std::vsnprintf(buffer, sizeof(buffer), format, arguments);
-  va_end(arguments);
   if (written <= 0)
     return;
 #if defined(__ANDROID__)
@@ -31,6 +28,13 @@ inline void Write(const char* format, ...) {
 #else
   std::fputs(buffer, stderr);
 #endif
+}
+
+inline void Write(const char* format, ...) {
+  va_list arguments;
+  va_start(arguments, format);
+  WriteV(format, arguments);
+  va_end(arguments);
 }
 
 } // namespace PortLog

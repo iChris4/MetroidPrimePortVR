@@ -2,6 +2,7 @@
 #include "port_strings.h"
 
 #include "port_paths.h"
+#include "port_remastered_storage.h"
 
 #include <cstdlib>
 #include <filesystem>
@@ -92,6 +93,12 @@ bool IsSkipped(const std::string& relative) {
   static const char* const kCaches[] = {"pipeline_cache.db", "dawn_cache.db"};
   const size_t slash = relative.find('/');
   const std::string first = relative.substr(0, slash);
+  // The built-in Remastered import belongs to the app (port_remastered_storage.h): moving the data
+  // folder neither carries it along nor counts it, also when the data folder is the app's own
+  // storage, which is where the import sits.
+  if (first == PortRemasteredStorage::kRootFolderName) {
+    return true;
+  }
   if (slash == std::string::npos) {
     for (const char* name : kTopLevel) {
       if (first == name) {

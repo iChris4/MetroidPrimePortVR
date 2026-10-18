@@ -215,6 +215,9 @@ TEST(SceneHdrGxFog, TevDrawsFogTheirLightAfterOneConversion) {
     EXPECT_EQ(count(hdr, "prev = vf_apply(prev,"), 0u);
     EXPECT_EQ(count(hdr, "prev = vf_apply_hdr(prev,"), 1u);
     EXPECT_EQ(count(hdr, Convert), 1u) << "converted once";
+    EXPECT_EQ(count(hdr, "if (ubuf.hdr_tev_blend.x > 0.5)"), 1u);
+    EXPECT_EQ(count(hdr, "prev = vec4f(hdr_tev_srcalpha_add(prev.rgb, prev.a,"), 1u);
+    EXPECT_LT(hdr.find("prev = vec4f(hdr_tev_srcalpha_add(prev.rgb, prev.a,"), hdr.find("prev = vf_apply_hdr(prev,"));
     EXPECT_LT(hdr.find(Convert), hdr.find("prev = vf_apply_hdr(prev,")) << "the fog applies in the light";
     // The same sample and the same blend-mode weight as LDR's call.
     const auto args = [](const std::string& s, std::string_view call) {

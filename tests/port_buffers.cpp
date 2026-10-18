@@ -5,6 +5,7 @@
 #include "rstl/single_ptr.hpp"
 #include "rstl/rc_ptr.hpp"
 #include "MetroidPrime/PathFinding/CPFBitSet.hpp"
+#include "port_test.h"
 
 #include <array>
 #include <cstdarg>
@@ -13,12 +14,6 @@
 #include <stdexcept>
 
 namespace {
-void Check(bool condition) {
-  if (!condition) {
-    std::fputs("port buffer regression failed\n", stderr);
-    std::abort();
-  }
-}
 struct Element {
   static int live;
   Element() { ++live; }
@@ -59,39 +54,39 @@ int main() {
   int destroyed = 0;
   rstl::rc_ptr<ForwardDeleted> forward(new ForwardDeleted(destroyed));
   DropForwardOwner(forward);
-  Check(destroyed == 1 && forward.IsNull());
+  REQUIRE(destroyed == 1 && forward.IsNull());
   {
     rstl::auto_ptr<Element[]> first(new Element[7]);
     rstl::auto_ptr<Element[]> second(first);
-    Check(!first.owner() && second.owner() && Element::live == 7);
+    REQUIRE(!first.owner() && second.owner() && Element::live == 7);
     first = new Element[3];
     second = first;
-    Check(Element::live == 3 && !first.owner());
+    REQUIRE(Element::live == 3 && !first.owner());
   }
-  Check(Element::live == 0);
+  REQUIRE(Element::live == 0);
   {
     rstl::single_ptr<Element[]> first(new Element[4]);
     rstl::single_ptr<Element[]> second(first);
-    Check(first.null() && Element::live == 4);
+    REQUIRE(first.null() && Element::live == 4);
     second = second.get();
-    Check(Element::live == 4);
+    REQUIRE(Element::live == 4);
     second = nullptr;
   }
-  Check(Element::live == 0);
+  REQUIRE(Element::live == 0);
   {
     rstl::auto_ptr<rstl::game_memory<uchar>> first(static_cast<uchar*>(std::malloc(64)));
     rstl::auto_ptr<rstl::game_memory<uchar>> second(first);
   }
-  Check(gameFrees == 1);
+  REQUIRE(gameFrees == 1);
   CPFBitSet regions;
   regions.Add(511);
   regions.Add(512);
   regions.Add(4096);
-  Check(regions.Test(511) && regions.Test(512) && regions.Test(4096));
+  REQUIRE(regions.Test(511) && regions.Test(512) && regions.Test(4096));
   regions.Rmv(512);
-  Check(!regions.Test(512) && regions.Test(511));
+  REQUIRE(!regions.Test(512) && regions.Test(511));
   regions.Clear();
-  Check(!regions.Test(4096));
+  REQUIRE(!regions.Test(4096));
 
   // Retail save fields are MSB-first, including fields straddling words.
   const uchar golden[] = {0xb5, 0x12, 0x34, 0x56, 0x78, 0xa0};
@@ -106,13 +101,13 @@ int main() {
     out.Flush();
   }
   for (size_t i = 0; i < encoded.size(); ++i)
-    Check(encoded[i] == golden[i]);
+    REQUIRE(encoded[i] == golden[i]);
   CMemoryInStream in(golden, sizeof(golden));
-  Check(in.ReadBits(0) == 0);
-  Check(in.ReadBits(3) == 5);
-  Check(in.ReadBits(5) == 0x15);
-  Check(in.ReadBits(32) == 0x12345678);
-  Check(in.ReadBits(3) == 5);
+  REQUIRE(in.ReadBits(0) == 0);
+  REQUIRE(in.ReadBits(3) == 5);
+  REQUIRE(in.ReadBits(5) == 0x15);
+  REQUIRE(in.ReadBits(32) == 0x12345678);
+  REQUIRE(in.ReadBits(3) == 5);
 
   // Both small and direct-read EOF paths used to spin forever.
   for (uint size : {1u, 300u}) {
@@ -121,7 +116,7 @@ int main() {
     bool failed = false;
     try { empty.Get(dest.data(), size); }
     catch (const std::runtime_error&) { failed = true; }
-    Check(failed);
+    REQUIRE(failed);
   }
   std::puts("port buffer and serialization regressions passed");
 }

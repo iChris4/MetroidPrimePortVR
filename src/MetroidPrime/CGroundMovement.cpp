@@ -539,6 +539,18 @@ void CGroundMovement::MoveGroundCollider_New(CStateManager& mgr, CPhysicsActor& 
     options.x28_dampedDeltaCoefficient = 1.f;
     options.x2c_floorElasticForce = 0.1f;
     options.x30_wallElasticConstant = 0.2f;
+    // Upstream never assigns mWallElasticLinear in this branch (only the grounded
+    // branch does, 0.2f), and SMovementOptions() leaves the member indeterminate
+    // (include/MetroidPrime/CGroundMovement.hpp:39) — UB on the stack. The only
+    // reader is `x34*collisionFloorDot + x30` in MoveObjectAnalytical
+    // (this file, the `float elasticForce = floor ? ...` line), and
+    // collisionFloorDot is written only by RemoveNormalComponent under
+    // `clipCollision`, which this branch fixes false (x19_alwaysClip = false,
+    // x1a_disableClipForFloorOnly = false, 8 lines above), so the term is
+    // 0*x34. 0.f keeps that arithmetic exact and makes the value deterministic
+    // (a NaN pattern in the garbage would make the `dot < elasticForce` compare
+    // immediately below the reader false).
+    options.x34_wallElasticLinear = 0.f;
     options.x38_maxPositiveVerticalVelocity = player.GetMaximumPlayerPositiveVerticalVelocity(mgr);
     materials = MoveObjectAnalytical(mgr, actor, dt, nearList, cache, options, result);
   }

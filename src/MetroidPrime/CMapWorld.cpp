@@ -23,6 +23,7 @@
 #ifdef TARGET_PC
 #include "Kyoto/Graphics/CGX.hpp"
 #include "MetroidPrime/Player/CGameState.hpp"
+#include "port_map_marks.h"
 #include "port_map_pickups.h"
 #include "port_map_batch.h"
 #include <dolphin/gx/GXGet.h>
@@ -404,8 +405,13 @@ void CMapWorld::DrawAreas(const CMapWorldDrawParms& parms, int selArea,
       finalOutline = CColor::Lerp(finalOutline, flashColor, pulse);
     }
 #ifdef TARGET_PC
-    if (PortMapPickups::Mode() == PortDebug::kMapPickups_Rooms &&
-        PortRoomHoldsPickup(parms.GetWorld(), areaIdx)) {
+    if (PortMapMarks::IsMarked(parms.GetWorld().IGetWorldAssetId(), areaIdx)) {
+      // A room the player marked: cyan, over the Rooms amber.
+      const CColor cyan(0x40e0ffffu);
+      finalSurface = CColor::Lerp(finalSurface, cyan, 0.6f).WithAlphaOf(finalSurface.GetAlpha());
+      finalOutline = CColor::Lerp(finalOutline, cyan, 0.8f).WithAlphaOf(finalOutline.GetAlpha());
+    } else if (PortMapPickups::Mode() == PortDebug::kMapPickups_Rooms &&
+               PortRoomHoldsPickup(parms.GetWorld(), areaIdx)) {
       // Amber half way, alpha kept.
       const CColor amber(0xffb030ffu);
       finalSurface = CColor::Lerp(finalSurface, amber, 0.5f).WithAlphaOf(finalSurface.GetAlpha());
@@ -697,10 +703,11 @@ void CMapWorld::DrawPortPickups(const CMapWorldDrawParms& parms,
           const float wz = width * kHalfSqrt2;
           CGraphics::StreamBegin(kP_TriangleStrip);
           CGraphics::StreamColor(pass == 0 ? rim : color);
-          CGraphics::StreamVertex(-ax - wx, 0.f, -az - wz);
+          // Counter-clockwise in x/z like the dots' fans, or culling drops the bar.
           CGraphics::StreamVertex(-ax + wx, 0.f, -az + wz);
-          CGraphics::StreamVertex(ax - wx, 0.f, az - wz);
+          CGraphics::StreamVertex(-ax - wx, 0.f, -az - wz);
           CGraphics::StreamVertex(ax + wx, 0.f, az + wz);
+          CGraphics::StreamVertex(ax - wx, 0.f, az - wz);
           CGraphics::StreamEnd();
         }
       }
@@ -1035,3 +1042,16 @@ static Circle2 MinCircle(int count, const CVector2f* points) {
   result.Radius() = CMath::SqrtF(result.GetRadius());
   return result;
 }
+
+#ifdef TARGET_PC
+void CMapWorld::PortRefreshDoors() {
+  for (size_t i = 0; i < x0_areas.size(); ++i) {
+    CMapAreaData& data = x0_areas[i];
+    if (data.IsLoaded()) {
+      if (CMapArea* area = data.MapArea()) {
+        area->PortSetDoorTypes(data.PortAreaRes());
+      }
+    }
+  }
+}
+#endif

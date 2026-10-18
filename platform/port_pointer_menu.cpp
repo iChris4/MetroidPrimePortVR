@@ -275,5 +275,6 @@ void NoteAdvanced() { sLastAdvanced = true; }
 
 void PressA(CFinalInput& input) { input.PortSetA(true, true); }
 void PressB(CFinalInput& input) { input.PortSetB(true, true); }
+void PressX(CFinalInput& input) { input.PortSetX(true, true); }
 
 } // namespace PortPointerMenu

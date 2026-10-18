@@ -1,26 +1,20 @@
 // The Remastered float drivers of material variables (the Waterfalls' GRDU): the importer finds
 // the RealNumberDriver -> RealValueRelay -> MaterialVariableDriver -> actor chain in a room, and
 // binds the variable to a parameter the port drives only through the model's material.
-// port_remastered_room.cpp is included for its file-local helpers.
+// port_remastered_room.cpp is included for its file-local helpers; the rest of the writer's
+// internals (port_remastered_room_internal.h, in PortRemastered::RoomDetail) are linked in.
 
 #include "../platform/port_remastered_room.cpp"
 
 #include "Kyoto/Graphics/CCubeModel.hpp"
+#include "port_test.h"
 
 #include <cstdio>
 
 using namespace PortRemastered;
+using namespace PortRemastered::RoomDetail;
 
 namespace {
-
-int sFailures = 0;
-
-void Check(bool condition, const char* what) {
-  if (!condition) {
-    std::fprintf(stderr, "FAIL: %s\n", what);
-    ++sFailures;
-  }
-}
 
 using Bytes = std::vector<uint8_t>;
 
@@ -193,7 +187,7 @@ std::map<int, std::vector<SceneryScripts::Driver>> Find(const Fixture& f, std::s
   starts.clear();
   if (!room.Parse(keep, error)) {
     std::fprintf(stderr, "fixture does not parse: %s\n", error.c_str());
-    ++sFailures;
+    port_test::CountFailure();
     return {};
   }
   return FindMaterialDrivers(room, starts);
@@ -202,13 +196,13 @@ std::map<int, std::vector<SceneryScripts::Driver>> Find(const Fixture& f, std::s
 void TestChain() {
   std::set<int> starts;
   const auto found = Find(Chain(), starts);
-  Check(found.size() == 1 && found.count(7) == 1, "the actor's entity is driven");
+  CHECK_MSG(found.size() == 1 && found.count(7) == 1, "the actor's entity is driven");
   if (found.count(7) != 0) {
     const std::vector<SceneryScripts::Driver>& d = found.at(7);
-    Check(d.size() == 1 && d[0].set == "Waterfalls" && d[0].variable == "GRDU", "set and variable named");
-    Check(d.size() == 1 && d[0].spline == Spline() && d[0].start == 4, "spline and start entity");
+    CHECK_MSG(d.size() == 1 && d[0].set == "Waterfalls" && d[0].variable == "GRDU", "set and variable named");
+    CHECK_MSG(d.size() == 1 && d[0].spline == Spline() && d[0].start == 4, "spline and start entity");
   }
-  Check(starts == std::set<int>{4}, "the RealNumberDriver's entity is a start");
+  CHECK_MSG(starts == std::set<int>{4}, "the RealNumberDriver's entity is a start");
 }
 
 // The room files link to the entity that owns a component (its guid), not to the component.
@@ -222,7 +216,7 @@ void TestEntityLinks() {
     }
   }
   const auto found = Find(f, starts);
-  Check(found.size() == 1 && found.count(7) == 1 && starts == std::set<int>{4}, "links to entities");
+  CHECK_MSG(found.size() == 1 && found.count(7) == 1 && starts == std::set<int>{4}, "links to entities");
 }
 
 // Each break in the chain, one at a time, drives nothing.
@@ -230,30 +224,30 @@ void TestFailClosed() {
   std::set<int> starts;
   Fixture f = Chain();
   f.comps[0].links.clear();  // the driver does not feed the relay
-  Check(Find(f, starts).empty() && starts.empty(), "missing driver -> relay link");
+  CHECK_MSG(Find(f, starts).empty() && starts.empty(), "missing driver -> relay link");
   f = Chain();
   f.comps[1].links.clear();  // the relay does not feed the MVD
-  Check(Find(f, starts).empty(), "missing relay -> MVD link");
+  CHECK_MSG(Find(f, starts).empty(), "missing relay -> MVD link");
   f = Chain();
   f.comps[2].links.clear();  // the MVD feeds nothing
-  Check(Find(f, starts).empty(), "MVD without an actor");
+  CHECK_MSG(Find(f, starts).empty(), "MVD without an actor");
   f = Chain();
   f.comps[3].type = kEntity;  // not an actor
-  Check(Find(f, starts).empty(), "target is not an ActorMP1");
+  CHECK_MSG(Find(f, starts).empty(), "target is not an ActorMP1");
   f = Chain();
   f.comps.push_back({kRealValueRelay, {}, {2}});  // a second relay into the MVD
-  Check(Find(f, starts).empty(), "two relays into one MVD");
+  CHECK_MSG(Find(f, starts).empty(), "two relays into one MVD");
   f = Chain();
   f.comps.push_back({kRealNumberDriver, f.comps[0].props, {1}});  // a second driver into the relay
-  Check(Find(f, starts).empty(), "two drivers into one relay");
+  CHECK_MSG(Find(f, starts).empty(), "two drivers into one relay");
   f = Chain();
   Props bad;
   bad.Add(kPropDriverSpline, Bytes{1, 0, 0, 0});  // truncated spline
   f.comps[0].props = bad.b;
-  Check(Find(f, starts).empty(), "unreadable spline");
+  CHECK_MSG(Find(f, starts).empty(), "unreadable spline");
   f = Chain();
   f.strings = {'W', 'a', 't', 'e', 'r', 'f', 'a', 'l', 'l', 's', 0};  // names outside the pool
-  Check(Find(f, starts).empty(), "names outside the string pool");
+  CHECK_MSG(Find(f, starts).empty(), "names outside the string pool");
 }
 
 constexpr uint32_t FourCC(char a, char b, char c, char d) {
@@ -298,50 +292,50 @@ void TestSlot() {
   d.set = "Waterfalls";
   d.variable = "GRDU";
   const ModelMaterial water = WaterfallMaterial();
-  Check(DriverSlot({water}, d) == 3, "GRDU on a Waterfalls material is kind parameter 3");
+  CHECK_MSG(DriverSlot({water}, d) == 3, "GRDU on a Waterfalls material is kind parameter 3");
 
   SceneryScripts::Driver other = d;
   other.variable = "XXXX";
-  Check(DriverSlot({water}, other) == -1, "a variable the material does not bind");
+  CHECK_MSG(DriverSlot({water}, other) == -1, "a variable the material does not bind");
   other = d;
   other.variable = "GRD";
-  Check(DriverSlot({water}, other) == -1, "a variable name that is not four characters");
+  CHECK_MSG(DriverSlot({water}, other) == -1, "a variable name that is not four characters");
   other = d;
   other.set = "Other";
-  Check(DriverSlot({water}, other) == -1, "a set the model lacks");
+  CHECK_MSG(DriverSlot({water}, other) == -1, "a set the model lacks");
 
   ModelMaterial component = water;
   component.renderTypes[0].flag2 = 0;  // CCH0.x: not what the port carries
   ModelMaterial second = water;
   second.name = "Waterfalls2";
-  Check(DriverSlot({water, second}, d) == -1, "a model with a second kind 7 material is not driven");
+  CHECK_MSG(DriverSlot({water, second}, d) == -1, "a model with a second kind 7 material is not driven");
   ModelMaterial plain = water;
   plain.name = "Rock";
   plain.shaderId[0] = 0;
-  Check(DriverSlot({plain, water}, d) == 3, "other kinds beside the driven material do not count");
-  Check(DriverSlot({component}, d) == -1, "an unsupported component");
+  CHECK_MSG(DriverSlot({plain, water}, d) == 3, "other kinds beside the driven material do not count");
+  CHECK_MSG(DriverSlot({component}, d) == -1, "an unsupported component");
   ModelMaterial channel = water;
   channel.renderTypes[0].dataType = FourCC('C', 'C', 'H', '1');
-  Check(DriverSlot({channel}, d) == -1, "an unsupported channel");
+  CHECK_MSG(DriverSlot({channel}, d) == -1, "an unsupported channel");
   ModelMaterial notWater = water;
   notWater.shaderId[0] = 0x01;  // another shader: not kind 7
-  Check(DriverSlot({notWater}, d) == -1, "a material that is not a waterfall");
+  CHECK_MSG(DriverSlot({notWater}, d) == -1, "a material that is not a waterfall");
 }
 
 void TestStart() {
   PortRoomGeo::Link a{0x0c1a01b0, 9, PortRoomGeo::kShow, 1.5f}, b = a;
   PortRoomGeo::Link first;
-  Check(SingleDriverStart({a}, first) && first.sender == a.sender && first.delay == 1.5f, "one start");
-  Check(SingleDriverStart({a, b}, first), "the same start twice");
+  CHECK_MSG(SingleDriverStart({a}, first) && first.sender == a.sender && first.delay == 1.5f, "one start");
+  CHECK_MSG(SingleDriverStart({a, b}, first), "the same start twice");
   b.delay = 2.f;
-  Check(!SingleDriverStart({a, b}, first), "starts at two delays");
+  CHECK_MSG(!SingleDriverStart({a, b}, first), "starts at two delays");
   b = a;
   b.sender = 1;
-  Check(!SingleDriverStart({a, b}, first), "starts from two senders");
+  CHECK_MSG(!SingleDriverStart({a, b}, first), "starts from two senders");
   b = a;
   b.action = PortRoomGeo::kHide;
-  Check(!SingleDriverStart({a, b}, first), "a hide among the starts");
-  Check(!SingleDriverStart({}, first), "no start");
+  CHECK_MSG(!SingleDriverStart({a, b}, first), "a hide among the starts");
+  CHECK_MSG(!SingleDriverStart({}, first), "no start");
 }
 
 // The override a driven instance's draws set: kind 7's parameter only, and nothing once cleared
@@ -353,12 +347,12 @@ void TestOverride() {
   for (int i = 15; i < 19; ++i) {
     water[i] = other[i] = 0.25f;
   }
-  Check(CCubeModel::PortApplyKindParam(3, -0.75f, water) && water[18] == -0.75f && water[15] == 0.25f &&
-            water[16] == 0.25f && water[17] == 0.25f,
-        "kind 7: slot 3 only");
-  Check(!CCubeModel::PortApplyKindParam(3, -0.75f, other) && other[18] == 0.25f, "another kind is left alone");
-  Check(!CCubeModel::PortApplyKindParam(-1, 1.f, water) && water[18] == -0.75f, "cleared: no change");
-  Check(!CCubeModel::PortApplyKindParam(4, 1.f, water), "a slot past 3 is refused");
+  CHECK_MSG(CCubeModel::PortApplyKindParam(3, -0.75f, water) && water[18] == -0.75f && water[15] == 0.25f &&
+                water[16] == 0.25f && water[17] == 0.25f,
+            "kind 7: slot 3 only");
+  CHECK_MSG(!CCubeModel::PortApplyKindParam(3, -0.75f, other) && other[18] == 0.25f, "another kind is left alone");
+  CHECK_MSG(!CCubeModel::PortApplyKindParam(-1, 1.f, water) && water[18] == -0.75f, "cleared: no change");
+  CHECK_MSG(!CCubeModel::PortApplyKindParam(4, 1.f, water), "a slot past 3 is refused");
 }
 } // namespace
 
@@ -369,8 +363,8 @@ int main() {
   TestSlot();
   TestStart();
   TestOverride();
-  if (sFailures == 0) {
+  if (port_test::Failures() == 0) {
     std::printf("port_remastered_driver_tests: ok\n");
   }
-  return sFailures == 0 ? 0 : 1;
+  return PORT_TEST_RESULT();
 }

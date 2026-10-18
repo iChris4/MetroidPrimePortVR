@@ -580,6 +580,8 @@ CTransform4f CCameraManager::GetCurrentCameraTransform(const CStateManager& mgr)
       CTransform4f latest = sCurrentCameraTransform;
       // Look input that arrived since the tick is shown now; the next tick
       // applies the same delta before it fires, so the view shows the shot.
+      // The twin stick is the exception: its turn is drawn after its tick,
+      // trailing the shot by up to one tick (docs/FRAME_INTERPOLATION.md 4).
       CTransform4f look = CTransform4f::Identity();
       if (GetPresentedLookRotation(mgr, look)) {
         latest = look * latest.GetRotation();

@@ -5,6 +5,7 @@
 // all-disc replay is tests/port_skip_rev2.py.
 #include "port_skip_cutscenes.h"
 #include "port_skip_streams.h"
+#include "port_test.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -26,15 +27,6 @@ struct SkipRoom {
 
 using PortDisc::Version;
 using PortSkipCutscenes::SkipStream;
-
-bool sPassed = true;
-
-void Check(bool condition, const char* message) {
-  if (!condition) {
-    std::fprintf(stderr, "[skip-streams] FAILED: %s\n", message);
-    sPassed = false;
-  }
-}
 
 const uint32_t kChapel = 0x40C548E9;
 const uint32_t kDropSender = 0x000E0173, kDropTarget = 0x000E00B2;
@@ -73,12 +65,12 @@ std::vector< Op > Split(const SkipStream& s) {
       break;
     case 6: n = 5; break;
     case 7: n = 6; break;
-    default: Check(false, "op kind"); return ops;
+    default: CHECK_MSG(false, "op kind"); return ops;
     }
     ops.push_back({o, n});
     p += n;
   }
-  Check(p == s.size, "stream splits exactly");
+  CHECK_MSG(p == s.size, "stream splits exactly");
   return ops;
 }
 
@@ -156,12 +148,12 @@ std::vector< uint8_t > BuildRoom(const SkipStream& stream, const Op* omit) {
 
 int main() {
   SkipStream usa, rev2, pal, usa101;
-  Check(PortSkipCutscenes::SkipStreamFor(Version::Usa100, kChapel, usa), "USA 1.00 has the Chapel skip");
-  Check(PortSkipCutscenes::SkipStreamFor(Version::Usa101, kChapel, usa101), "USA 1.01 has the Chapel skip");
-  Check(PortSkipCutscenes::SkipStreamFor(Version::Usa102, kChapel, rev2), "USA 1.02 has the Chapel skip");
-  Check(PortSkipCutscenes::SkipStreamFor(Version::Pal, kChapel, pal), "PAL has the Chapel skip");
-  Check(usa101.ops == usa.ops && usa101.size == usa.size, "1.01 uses the generic stream");
-  Check(rev2.ops != usa.ops && rev2.size != usa.size, "1.02 has its own Chapel stream");
+  CHECK_MSG(PortSkipCutscenes::SkipStreamFor(Version::Usa100, kChapel, usa), "USA 1.00 has the Chapel skip");
+  CHECK_MSG(PortSkipCutscenes::SkipStreamFor(Version::Usa101, kChapel, usa101), "USA 1.01 has the Chapel skip");
+  CHECK_MSG(PortSkipCutscenes::SkipStreamFor(Version::Usa102, kChapel, rev2), "USA 1.02 has the Chapel skip");
+  CHECK_MSG(PortSkipCutscenes::SkipStreamFor(Version::Pal, kChapel, pal), "PAL has the Chapel skip");
+  CHECK_MSG(usa101.ops == usa.ops && usa101.size == usa.size, "1.01 uses the generic stream");
+  CHECK_MSG(rev2.ops != usa.ops && rev2.size != usa.size, "1.02 has its own Chapel stream");
 
   // The override is the generic stream minus exactly the moved remconn.
   const std::vector< Op > base = Split(usa), over = Split(rev2);
@@ -170,10 +162,10 @@ int main() {
     drops += IsConn(op, 3, kDropSender, kDropTarget);
     keeps += IsConn(op, 4, kKeepSender, kDropTarget);
   }
-  Check(drops == 1, "USA Chapel stream has the moved remconn once");
-  Check(keeps == 1, "USA Chapel stream has the addconn 0180 -> 00B2");
-  Check(over.size() + 1 == base.size(), "override has one op fewer");
-  Check(rev2.size + 17 == usa.size, "override is 17 bytes shorter");
+  CHECK_MSG(drops == 1, "USA Chapel stream has the moved remconn once");
+  CHECK_MSG(keeps == 1, "USA Chapel stream has the addconn 0180 -> 00B2");
+  CHECK_MSG(over.size() + 1 == base.size(), "override has one op fewer");
+  CHECK_MSG(rev2.size + 17 == usa.size, "override is 17 bytes shorter");
   size_t j = 0;
   bool inOrder = true, kept = false;
   for (const Op& op : base) {
@@ -184,27 +176,27 @@ int main() {
     kept |= IsConn(op, 4, kKeepSender, kDropTarget);
     ++j;
   }
-  Check(inOrder, "every other op is kept, byte for byte and in order");
-  Check(kept, "the override keeps addconn 0180");
+  CHECK_MSG(inOrder, "every other op is kept, byte for byte and in order");
+  CHECK_MSG(kept, "the override keeps addconn 0180");
   for (const Op& op : over)
-    Check(!IsConn(op, 3, kDropSender, kDropTarget), "override drops the moved remconn");
+    CHECK_MSG(!IsConn(op, 3, kDropSender, kDropTarget), "override drops the moved remconn");
 
   // Replay: a room as 1.00 has it, and as rev2 has it (the connection gone).
   std::vector< uint8_t > out;
   const std::vector< uint8_t > oldRoom = BuildRoom(usa, nullptr);
-  Check(PortSkipCutscenes::ApplyOps(oldRoom.data(), oldRoom.size(), usa.ops, usa.size, out) == 0,
-        "USA stream applies on a 1.00 Chapel");
-  Check(PortSkipCutscenes::ApplyOps(oldRoom.data(), oldRoom.size(), rev2.ops, rev2.size, out) == 0,
-        "override also applies where the connection exists");
+  CHECK_MSG(PortSkipCutscenes::ApplyOps(oldRoom.data(), oldRoom.size(), usa.ops, usa.size, out) == 0,
+            "USA stream applies on a 1.00 Chapel");
+  CHECK_MSG(PortSkipCutscenes::ApplyOps(oldRoom.data(), oldRoom.size(), rev2.ops, rev2.size, out) == 0,
+            "override also applies where the connection exists");
   const Op* dropped = nullptr;
   for (const Op& op : base)
     if (IsConn(op, 3, kDropSender, kDropTarget))
       dropped = &op;
   const std::vector< uint8_t > newRoom = BuildRoom(usa, dropped);
-  Check(PortSkipCutscenes::ApplyOps(newRoom.data(), newRoom.size(), usa.ops, usa.size, out) == 1,
-        "USA stream misses once on a rev2 Chapel");
-  Check(PortSkipCutscenes::ApplyOps(newRoom.data(), newRoom.size(), rev2.ops, rev2.size, out) == 0,
-        "override applies on a rev2 Chapel");
+  CHECK_MSG(PortSkipCutscenes::ApplyOps(newRoom.data(), newRoom.size(), usa.ops, usa.size, out) == 1,
+            "USA stream misses once on a rev2 Chapel");
+  CHECK_MSG(PortSkipCutscenes::ApplyOps(newRoom.data(), newRoom.size(), rev2.ops, rev2.size, out) == 0,
+            "override applies on a rev2 Chapel");
 
   // Only Chapel differs on 1.02; PAL and the other versions are unchanged.
   // Whole tables: PAL's own rooms, rev2's override, then the USA stream.
@@ -237,18 +229,18 @@ int main() {
                        at, size);
       SkipStream got;
       const bool has = PortSkipCutscenes::SkipStreamFor(v, usaRoom.mrea, got);
-      Check(has && found && got.size == size && std::memcmp(got.ops, at, size) == 0,
-            "selection matches the tables for every room and version");
+      CHECK_MSG(has && found && got.size == size && std::memcmp(got.ops, at, size) == 0,
+                "selection matches the tables for every room and version");
       ++checked;
     }
   }
-  Check(checked == 4 * (sizeof(kSkipRooms) / sizeof(SkipRoom)), "every room was checked");
+  CHECK_MSG(checked == 4 * (sizeof(kSkipRooms) / sizeof(SkipRoom)), "every room was checked");
   // Rooms only PAL has a stream for.
   for (const SkipRoom& palRoom : kSkipRoomsPal) {
     SkipStream got;
     const bool has = PortSkipCutscenes::SkipStreamFor(Version::Pal, palRoom.mrea, got);
     const bool other = PortSkipCutscenes::SkipStreamFor(Version::Usa100, palRoom.mrea, got);
-    Check(palRoom.mrea == 0xFFFFFFFF ? !has && !other : has, "PAL-only rooms resolve on PAL");
+    CHECK_MSG(palRoom.mrea == 0xFFFFFFFF ? !has && !other : has, "PAL-only rooms resolve on PAL");
   }
 
   const uint32_t others[] = {0xB2701146 /* Landing Site */, 0xFB54A0CB /* Hall of the Elders */,
@@ -257,14 +249,14 @@ int main() {
     SkipStream a, b;
     const bool ha = PortSkipCutscenes::SkipStreamFor(Version::Usa100, mrea, a);
     const bool hb = PortSkipCutscenes::SkipStreamFor(Version::Usa102, mrea, b);
-    Check(ha == hb && (!ha || (a.ops == b.ops && a.size == b.size)), "other rooms share the USA stream");
+    CHECK_MSG(ha == hb && (!ha || (a.ops == b.ops && a.size == b.size)), "other rooms share the USA stream");
   }
   SkipStream none;
-  Check(!PortSkipCutscenes::SkipStreamFor(Version::Usa102, 0xDEADBEEF, none), "unknown room has no skip");
-  Check(PortSkipCutscenes::LandingStream().size > 0, "landing ops present");
-  Check(pal.ops != rev2.ops, "PAL does not take the 1.02 override");
+  CHECK_MSG(!PortSkipCutscenes::SkipStreamFor(Version::Usa102, 0xDEADBEEF, none), "unknown room has no skip");
+  CHECK_MSG(PortSkipCutscenes::LandingStream().size > 0, "landing ops present");
+  CHECK_MSG(pal.ops != rev2.ops, "PAL does not take the 1.02 override");
 
-  if (sPassed)
+  if (port_test::Failures() == 0)
     std::puts("[skip-streams] OK");
-  return sPassed ? 0 : 1;
+  return PORT_TEST_RESULT();
 }

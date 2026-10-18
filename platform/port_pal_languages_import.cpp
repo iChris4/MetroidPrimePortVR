@@ -1,6 +1,7 @@
 // The PAL language import: the image, the background run and the files it writes.
 
 #include "port_pal_languages.h"
+#include "port_strings.h"
 
 #include "port_disc.h"
 #include "port_gci.h"
@@ -263,7 +264,7 @@ bool ReadFile(const char* format, uint32_t id, std::vector<uint8_t>& out) {
   if (!in) {
     return false;
   }
-  out.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+  out = port::ReadAll(in);
   return !out.empty();
 }
 

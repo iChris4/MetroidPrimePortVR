@@ -7,7 +7,9 @@ import sys
 
 root = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parents[1]
 java = (root / "android/app/src/main/java/org/libsdl/app/SDLActivity.java").read_text()
-cpp = (root / "platform/debug_ui.cpp").read_text()
+# The F1 overlay: debug_ui.cpp and its parts (platform/debug_ui/*.cpp).
+cpp = "\n".join([(root / "platform/debug_ui.cpp").read_text()] +
+                [p.read_text() for p in sorted((root / "platform/debug_ui").glob("*.cpp"))])
 
 show_start = java.index("public static boolean showFileDialog(")
 show_end = java.index("/* Internal class used to track active open file dialog */", show_start)

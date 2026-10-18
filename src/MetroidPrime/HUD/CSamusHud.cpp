@@ -1,4 +1,5 @@
 #include "MetroidPrime/HUD/CSamusHud.hpp"
+#include "port_env.h"
 
 #ifdef TARGET_PC
 #include "aurora/gfx.h"
@@ -1260,7 +1261,7 @@ void CSamusHud::UpdateStateTransition(float dt, const CStateManager& mgr) {
     break;
   }
 
-  static bool sHudLog = std::getenv("MP_LOG_HUD") != nullptr;
+  static bool sHudLog = port::EnvFlag("MP_LOG_HUD");
   static int sLastActive = -1, sLastNext = -1, sLastSet = -1;
   if (sHudLog && (static_cast< int >(x2c4_activeTransState) != sLastActive ||
                   static_cast< int >(x2bc_nextState) != sLastNext ||
@@ -1510,6 +1511,26 @@ void CSamusHud::Update(float dt, const CStateManager& mgr, uint helmetVis, bool 
       transitionFactor = 1.f;
     }
   }
+#ifdef TARGET_PC
+  // Issue #144: the X-Ray, Thermal and Scan HUDs can have their own Visor Opacity, read every
+  // frame so a change in the port's settings shows at once.
+  if (!x29c_decoIntf.null()) {
+    x29c_decoIntf->UpdateHudAlpha();
+  }
+  const float hudAlpha = gpGameState->GameOptions().GetActiveHudAlpha(mgr);
+  if (!x2a4_visorMenu.null()) {
+    x2a4_visorMenu->UpdateHudAlpha(hudAlpha * (gpGameState->GameOptions().GetSwapBeamControls()
+                                                   ? transitionFactor
+                                                   : x2f0_visorBeamMenuAlpha));
+    x2a4_visorMenu->Update(dt, false);
+  }
+  if (!x2a8_beamMenu.null()) {
+    x2a8_beamMenu->UpdateHudAlpha(hudAlpha * (gpGameState->GameOptions().GetSwapBeamControls()
+                                                  ? x2f0_visorBeamMenuAlpha
+                                                  : transitionFactor));
+    x2a8_beamMenu->Update(dt, false);
+  }
+#else
   if (!x2a4_visorMenu.null()) {
     x2a4_visorMenu->UpdateHudAlpha(gpGameState->GameOptions().GetSwapBeamControls()
                                        ? transitionFactor
@@ -1522,6 +1543,7 @@ void CSamusHud::Update(float dt, const CStateManager& mgr, uint helmetVis, bool 
                                       : transitionFactor);
     x2a8_beamMenu->Update(dt, false);
   }
+#endif
   UpdateCameraDebugSettings();
   if (!x29c_decoIntf.null()) {
     x29c_decoIntf->Update(dt, mgr);

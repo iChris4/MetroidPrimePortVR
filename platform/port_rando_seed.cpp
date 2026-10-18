@@ -2,6 +2,7 @@
 #include "port_rando_gen.h"
 
 #include "port_json.h"
+#include "port_json_writer.h"
 #include "port_paths.h"
 
 #include <algorithm>
@@ -20,50 +21,12 @@ namespace {
 
 constexpr int kSeedFileVersion = 1;
 
-// PortJson only parses, and slot_data is kept as JSON text, so a loaded value
-// is written back out here. Whole numbers stay integers (item and location ids).
-void Write(const PortJson::Value& value, std::string& out) {
-  switch (value.GetType()) {
-  case PortJson::Value::Type::Null: out += "null"; break;
-  case PortJson::Value::Type::Bool: out += value.AsBool() ? "true" : "false"; break;
-  case PortJson::Value::Type::Number: {
-    const double number = value.AsNumber();
-    char text[40];
-    if (std::fabs(number) < 9e15 && number == std::floor(number))
-      std::snprintf(text, sizeof(text), "%lld", static_cast< long long >(number));
-    else
-      std::snprintf(text, sizeof(text), "%.17g", number);
-    out += text;
-    break;
-  }
-  case PortJson::Value::Type::String: out += port::JsonQuote(value.AsString()); break;
-  case PortJson::Value::Type::Array: {
-    out.push_back('[');
-    bool first = true;
-    for (const PortJson::Value& element : value.AsArray()) {
-      if (!first)
-        out.push_back(',');
-      first = false;
-      Write(element, out);
-    }
-    out.push_back(']');
-    break;
-  }
-  case PortJson::Value::Type::Object: {
-    out.push_back('{');
-    bool first = true;
-    for (const auto& [key, member] : value.AsObject()) {
-      if (!first)
-        out.push_back(',');
-      first = false;
-      out += port::JsonQuote(key);
-      out.push_back(':');
-      Write(member, out);
-    }
-    out.push_back('}');
-    break;
-  }
-  }
+// slot_data is kept as JSON text, so a loaded value is written back out:
+// compactly, with whole numbers as integers (item and location ids).
+std::string Compact(const PortJson::Value& value) {
+  port::JsonWriter json;
+  json.Value(value);
+  return json.Take();
 }
 
 // A number or a bool (the apworld writes toggles as 0/1), clamped.
@@ -94,14 +57,52 @@ void NamesMember(const PortJson::Value& root, const char* name, std::vector< std
   }
 }
 
-void NamesText(const std::vector< std::string >& names, std::string& out) {
-  out.push_back('[');
-  for (size_t i = 0; i < names.size(); ++i) {
-    if (i != 0)
-      out.push_back(',');
-    out += port::JsonQuote(names[i]);
-  }
-  out.push_back(']');
+void Names(port::JsonWriter& json, const char* key, const std::vector< std::string >& names) {
+  json.Key(key).BeginArray();
+  for (const std::string& name : names)
+    json.String(name);
+  json.EndArray();
+}
+
+// The settings object, under the apworld's option names; toggles are 0/1 as
+// the apworld writes them.
+void WriteSettings(port::JsonWriter& json, const Settings& s) {
+  const auto flag = [](bool value) { return value ? 1 : 0; };
+  json.BeginObject();
+  json.Key("required_artifacts").Number(s.requiredArtifacts);
+  json.Key("final_bosses").Number(s.finalBosses);
+  json.Key("artifact_hints").Number(flag(s.artifactHints));
+  json.Key("missile_launcher").Number(flag(s.missileLauncher));
+  json.Key("main_power_bomb").Number(flag(s.mainPowerBomb));
+  json.Key("shuffle_scan_visor").Number(flag(s.shuffleScanVisor));
+  json.Key("pre_scan_elevators").Number(flag(s.preScanElevators));
+  json.Key("elevator_randomization").Number(flag(s.elevatorRandomization));
+  json.Key("door_color_randomization").Number(s.doorColorRandomization);
+  json.Key("progressive_beam_upgrades").Number(flag(s.progressiveBeams));
+  json.Key("non_varia_heat_damage").Number(flag(s.nonVariaHeatDamage));
+  json.Key("staggered_suit_damage").Number(s.staggeredSuitDamage);
+  json.Key("combat_logic_difficulty").Number(s.combatLogic);
+  json.Key("trick_difficulty").Number(s.trickDifficulty);
+  Names(json, "trick_allow_list", s.trickAllow);
+  Names(json, "trick_deny_list", s.trickDeny);
+  json.Key("flaahgra_power_bombs").Number(flag(s.flaahgraPowerBombs));
+  json.Key("etank_capacity").Number(s.etankCapacity);
+  json.Key("backwards_lower_mines").Number(flag(s.backwardsLowerMines));
+  json.Key("remove_xray_requirements").Number(s.removeXray);
+  json.Key("remove_thermal_requirements").Number(s.removeThermal);
+  json.Key("remove_hive_mecha").Number(flag(s.removeHiveMecha));
+  json.Key("spring_ball").Number(flag(s.springBall));
+  json.Key("shuffle_unlimited_missiles").Number(flag(s.shuffleUnlimitedMissiles));
+  json.Key("shuffle_unlimited_power_bombs").Number(flag(s.shuffleUnlimitedPowerBombs));
+  json.Key("starting_room").Number(s.startingRoom);
+  json.Key("randomize_starting_beam").Number(flag(s.randomizeStartingBeam));
+  json.Key("blast_shield_randomization").Number(s.blastShieldRandomization);
+  json.Key("blast_shield_frequency").Number(s.blastShieldFrequency);
+  json.Key("blast_shield_available_types").Number(s.blastShieldAvailableTypes);
+  json.Key("locked_door_count").Number(s.lockedDoorCount);
+  json.Key("include_power_beam_doors").Number(flag(s.includePowerBeamDoors));
+  json.Key("include_morph_ball_bomb_doors").Number(flag(s.includeMorphBallBombDoors));
+  json.EndObject();
 }
 
 // The name is typed by the player and ends up in a file name.
@@ -127,7 +128,7 @@ bool ReadFile(const std::filesystem::path& path, std::string& out) {
   std::ifstream file(path, std::ios::binary);
   if (!file)
     return false;
-  out.assign(std::istreambuf_iterator< char >(file), std::istreambuf_iterator< char >());
+  out = port::ReadAllText(file);
   return !file.bad();
 }
 
@@ -145,9 +146,12 @@ bool Settings::operator==(const Settings& other) const {
          staggeredSuitDamage == other.staggeredSuitDamage && combatLogic == other.combatLogic &&
          trickDifficulty == other.trickDifficulty && trickAllow == other.trickAllow &&
          trickDeny == other.trickDeny && flaahgraPowerBombs == other.flaahgraPowerBombs &&
+         etankCapacity == other.etankCapacity &&
          backwardsLowerMines == other.backwardsLowerMines && removeXray == other.removeXray &&
          removeThermal == other.removeThermal && removeHiveMecha == other.removeHiveMecha &&
          springBall == other.springBall && startingRoom == other.startingRoom &&
+         shuffleUnlimitedMissiles == other.shuffleUnlimitedMissiles &&
+         shuffleUnlimitedPowerBombs == other.shuffleUnlimitedPowerBombs &&
          randomizeStartingBeam == other.randomizeStartingBeam &&
          blastShieldRandomization == other.blastShieldRandomization &&
          blastShieldFrequency == other.blastShieldFrequency &&
@@ -158,42 +162,9 @@ bool Settings::operator==(const Settings& other) const {
 }
 
 std::string SettingsText(const Settings& s) {
-  const auto flag = [](bool value) { return value ? "1" : "0"; };
-  std::string out = "{";
-  out += "\"required_artifacts\":" + std::to_string(s.requiredArtifacts);
-  out += ",\"final_bosses\":" + std::to_string(s.finalBosses);
-  out += std::string(",\"artifact_hints\":") + flag(s.artifactHints);
-  out += std::string(",\"missile_launcher\":") + flag(s.missileLauncher);
-  out += std::string(",\"main_power_bomb\":") + flag(s.mainPowerBomb);
-  out += std::string(",\"shuffle_scan_visor\":") + flag(s.shuffleScanVisor);
-  out += std::string(",\"pre_scan_elevators\":") + flag(s.preScanElevators);
-  out += std::string(",\"elevator_randomization\":") + flag(s.elevatorRandomization);
-  out += ",\"door_color_randomization\":" + std::to_string(s.doorColorRandomization);
-  out += std::string(",\"progressive_beam_upgrades\":") + flag(s.progressiveBeams);
-  out += std::string(",\"non_varia_heat_damage\":") + flag(s.nonVariaHeatDamage);
-  out += ",\"staggered_suit_damage\":" + std::to_string(s.staggeredSuitDamage);
-  out += ",\"combat_logic_difficulty\":" + std::to_string(s.combatLogic);
-  out += ",\"trick_difficulty\":" + std::to_string(s.trickDifficulty);
-  out += ",\"trick_allow_list\":";
-  NamesText(s.trickAllow, out);
-  out += ",\"trick_deny_list\":";
-  NamesText(s.trickDeny, out);
-  out += std::string(",\"flaahgra_power_bombs\":") + flag(s.flaahgraPowerBombs);
-  out += std::string(",\"backwards_lower_mines\":") + flag(s.backwardsLowerMines);
-  out += ",\"remove_xray_requirements\":" + std::to_string(s.removeXray);
-  out += ",\"remove_thermal_requirements\":" + std::to_string(s.removeThermal);
-  out += std::string(",\"remove_hive_mecha\":") + flag(s.removeHiveMecha);
-  out += std::string(",\"spring_ball\":") + flag(s.springBall);
-  out += ",\"starting_room\":" + std::to_string(s.startingRoom);
-  out += std::string(",\"randomize_starting_beam\":") + flag(s.randomizeStartingBeam);
-  out += ",\"blast_shield_randomization\":" + std::to_string(s.blastShieldRandomization);
-  out += ",\"blast_shield_frequency\":" + std::to_string(s.blastShieldFrequency);
-  out += ",\"blast_shield_available_types\":" + std::to_string(s.blastShieldAvailableTypes);
-  out += ",\"locked_door_count\":" + std::to_string(s.lockedDoorCount);
-  out += std::string(",\"include_power_beam_doors\":") + flag(s.includePowerBeamDoors);
-  out += std::string(",\"include_morph_ball_bomb_doors\":") + flag(s.includeMorphBallBombDoors);
-  out.push_back('}');
-  return out;
+  port::JsonWriter json;
+  WriteSettings(json, s);
+  return json.Take();
 }
 
 namespace {
@@ -218,11 +189,15 @@ void ReadSettings(const PortJson::Value& root, Settings& out) {
   NamesMember(root, "trick_allow_list", s.trickAllow);
   NamesMember(root, "trick_deny_list", s.trickDeny);
   s.flaahgraPowerBombs = BoolMember(root, "flaahgra_power_bombs", s.flaahgraPowerBombs);
+  s.etankCapacity = IntMember(root, "etank_capacity", s.etankCapacity, 10, 200);
   s.backwardsLowerMines = BoolMember(root, "backwards_lower_mines", s.backwardsLowerMines);
   s.removeXray = IntMember(root, "remove_xray_requirements", s.removeXray, 0, 2);
   s.removeThermal = IntMember(root, "remove_thermal_requirements", s.removeThermal, 0, 2);
   s.removeHiveMecha = BoolMember(root, "remove_hive_mecha", s.removeHiveMecha);
   s.springBall = BoolMember(root, "spring_ball", s.springBall);
+  s.shuffleUnlimitedMissiles = BoolMember(root, "shuffle_unlimited_missiles", s.shuffleUnlimitedMissiles);
+  s.shuffleUnlimitedPowerBombs =
+      BoolMember(root, "shuffle_unlimited_power_bombs", s.shuffleUnlimitedPowerBombs);
   s.startingRoom = IntMember(root, "starting_room", s.startingRoom, 0, 2);
   s.randomizeStartingBeam = BoolMember(root, "randomize_starting_beam", s.randomizeStartingBeam);
   s.blastShieldRandomization =
@@ -290,26 +265,24 @@ bool Save(Seed& seed, std::string& error) {
       error = "the seed's slot data is not a JSON object";
       return false;
     }
-    std::string out = "{\"version\":" + std::to_string(kSeedFileVersion);
-    out += ",\"name\":" + port::JsonQuote(seed.name);
-    out += ",\"settings\":" + SettingsText(seed.settings);
-    out += ",\"slot_data\":";
-    Write(slot, out); // normalised, so the file has no stray whitespace
-    out += ",\"start_items\":[";
-    for (size_t i = 0; i < seed.startItems.size(); ++i) {
-      if (i != 0)
-        out.push_back(',');
-      out += std::to_string(seed.startItems[i]);
-    }
-    out += "],\"placements\":{";
-    bool first = true;
-    for (const auto& [location, item] : seed.placements) {
-      if (!first)
-        out.push_back(',');
-      first = false;
-      out += "\"" + std::to_string(location) + "\":" + std::to_string(item);
-    }
-    out += "},\"spoiler\":" + port::JsonQuote(seed.spoiler) + "}\n";
+    port::JsonWriter json;
+    json.BeginObject();
+    json.Key("version").Number(kSeedFileVersion);
+    json.Key("name").String(seed.name);
+    json.Key("settings");
+    WriteSettings(json, seed.settings);
+    json.Key("slot_data").Value(slot); // normalised, so the file has no stray whitespace
+    json.Key("start_items").BeginArray();
+    for (const int64_t item : seed.startItems)
+      json.Number(item);
+    json.EndArray();
+    json.Key("placements").BeginObject();
+    for (const auto& [location, item] : seed.placements)
+      json.Key(std::to_string(location)).Number(item);
+    json.EndObject();
+    json.Key("spoiler").String(seed.spoiler);
+    json.EndObject();
+    const std::string out = json.Take() + "\n";
 
     const std::filesystem::path path = SeedPath(seed.name);
     std::error_code ec;
@@ -372,7 +345,7 @@ bool Load(const std::string& path, Seed& out, std::string& error) {
       seed.name = std::filesystem::path(path).stem().string();
     if (const PortJson::Value* settings = root.Find("settings"); settings != nullptr && settings->IsObject())
       ReadSettings(*settings, seed.settings);
-    Write(*slot, seed.slotData);
+    seed.slotData = Compact(*slot);
     if (const PortJson::Value* items = root.Find("start_items"); items != nullptr && items->IsArray()) {
       for (const PortJson::Value& item : items->AsArray()) {
         if (item.IsNumber())

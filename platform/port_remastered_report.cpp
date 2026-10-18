@@ -35,19 +35,7 @@ std::string Join(const std::vector<std::string>& items) {
   return out;
 }
 
-std::vector<std::string> Split(const std::string& line, char sep) {
-  std::vector<std::string> out;
-  size_t start = 0;
-  for (;;) {
-    const size_t at = line.find(sep, start);
-    if (at == std::string::npos) {
-      out.push_back(line.substr(start));
-      return out;
-    }
-    out.push_back(line.substr(start, at - start));
-    start = at + 1;
-  }
-}
+using port::Split;
 
 const char* const kMaterialColumns[] = {"cmdl",   "mat",      "source",    "srcmat",   "shader",  "role",
                                         "flags",  "tag",      "kind",      "mode",     "path",    "pathReason",

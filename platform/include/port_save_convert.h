@@ -30,9 +30,8 @@ namespace PortSaveConvert {
 enum class Layout { Usa, Pal, Wii };
 enum class Format { Unknown, UsaGci, PalGci, PalLegacyGci, WiiSave, WiiDataBin };
 
-const char* FormatName(Format format);
 // "USA", "PAL", "PAL (earlier port save)", "Wii".
-Layout LayoutOf(Format format);
+const char* FormatName(Format format);
 
 // One scan: its id and the category the game files it under. The Trilogy keys
 // scans by id alone and uses kAnyCategory.
@@ -79,6 +78,8 @@ struct Slot {
   // The port's seen-pickups trailer ("PKSN" plus four words), after the AP one.
   bool hasSeen = false;
   std::array<uint32_t, 4> seen{};
+  // The port's room-marks trailer ("RMMK", port_map_marks.h), after the seen one.
+  std::vector<uint16_t> marks;
   // A Trilogy slot's own cinematics (System::cine has every slot's); dropped
   // by a retarget, after which the slot takes System::cine.
   std::optional<std::set<std::pair<uint32_t, uint32_t>>> cine;

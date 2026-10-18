@@ -3,6 +3,7 @@
 // doubles with the same float roundings the Python applies, so the output matches it.
 
 #include "port_remastered_anim.h"
+#include "port_strings.h"
 #include "port_bytes.h"
 
 #include <algorithm>
@@ -835,7 +836,7 @@ Anim DecodeAnim(const Bytes& d, const Record& rec,
   return anim;
 }
 
-bool StartsWith(const std::string& s, const char* prefix) { return s.rfind(prefix, 0) == 0; }
+using port::StartsWith;
 
 bool ContainsNoCase(const std::string& s, const char* needle) {
   std::string lower = s;

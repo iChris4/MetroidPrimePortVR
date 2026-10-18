@@ -62,7 +62,8 @@ static bool BoxLineTest(const CAABox& box, const CLine& line, float& lT, float& 
 }
 
 void CAreaOctTree::Node::LineTestEx(const CLine& line, const CMaterialFilter& filter,
-                                    SRayResult& res, float length) const {
+                                    SRayResult& res, float length,
+                                    bool frontOnly) const {
   if (x20_nodeType == kTT_Invalid) {
     return;
   }
@@ -75,7 +76,8 @@ void CAreaOctTree::Node::LineTestEx(const CLine& line, const CMaterialFilter& fi
 
   LineTestExInternal(line, filter, res, lT - 0.0001f, hT + 0.0001f, length,
                      CVector3f(1.f / line.GetNormal().GetX(), 1.f / line.GetNormal().GetY(),
-                               1.f / line.GetNormal().GetZ()));
+                               1.f / line.GetNormal().GetZ()),
+                     frontOnly);
 }
 
 bool CAreaOctTree::Node::LineTest(const CLine& line, const CMaterialFilter& filter,
@@ -235,7 +237,7 @@ bool CAreaOctTree::Node::LineTestInternal(const CLine& line, const CMaterialFilt
 
 void CAreaOctTree::Node::LineTestExInternal(const CLine& line, const CMaterialFilter& filter,
                                             SRayResult& result, float lT, float hT, float maxT,
-                                            const CVector3f& dirRecip) const {
+                                            const CVector3f& dirRecip, bool frontOnly) const {
   float lowT = (1.f - FLT_EPSILON * 100.f) * lT;
   float highT = (1.f + FLT_EPSILON * 100.f) * hT;
   if (maxT) {
@@ -262,7 +264,10 @@ void CAreaOctTree::Node::LineTestExInternal(const CLine& line, const CMaterialFi
       CVector3f edge1 = triangle.GetVert(2) - triangle.GetVert(0);
       CVector3f p = CVector3f::Cross(line.GetNormal(), edge1);
       float determinant = CVector3f::Dot(edge0, p);
-      if (CMath::AbsF(determinant) < FLT_EPSILON * 10.f) {
+      // frontOnly: signed test, rays travelling with the face normal (det < 0) are skipped
+      // without ending the search (Remastered TriangleNoBackface 0xbf9360).
+      if (frontOnly ? determinant < FLT_EPSILON * 10.f
+                    : CMath::AbsF(determinant) < FLT_EPSILON * 10.f) {
         continue;
       }
       float invDet = 1.f / determinant;
@@ -301,14 +306,16 @@ void CAreaOctTree::Node::LineTestExInternal(const CLine& line, const CMaterialFi
       float leftLowT = lT;
       float leftHighT = hT;
       if (BoxLineTest(leftBounds, line, leftLowT, leftHighT)) {
-        left.LineTestExInternal(line, filter, leftResult, leftLowT, leftHighT, maxT, dirRecip);
+        left.LineTestExInternal(line, filter, leftResult, leftLowT, leftHighT, maxT, dirRecip,
+                                 frontOnly);
       }
       Node right = GetChild(1);
       CAABox rightBounds = right.GetBoundingBox();
       float rightLowT = lT;
       float rightHighT = hT;
       if (BoxLineTest(rightBounds, line, rightLowT, rightHighT)) {
-        right.LineTestExInternal(line, filter, rightResult, rightLowT, rightHighT, maxT, dirRecip);
+        right.LineTestExInternal(line, filter, rightResult, rightLowT, rightHighT, maxT, dirRecip,
+                                  frontOnly);
       }
       if (!leftResult.x10_surface.valid() && !rightResult.x10_surface.valid()) {
         result = SRayResult();
@@ -416,7 +423,8 @@ void CAreaOctTree::Node::LineTestExInternal(const CLine& line, const CMaterialFi
       if (childHighT > lowT && childLowT <= childHighT) {
         Node child = GetChild(childIndex);
         if (child.GetTreeType() != kTT_Invalid) {
-          child.LineTestExInternal(line, filter, result, childLowT, childHighT, maxT, dirRecip);
+          child.LineTestExInternal(line, filter, result, childLowT, childHighT, maxT, dirRecip,
+                                  frontOnly);
         }
         if (result.x10_surface.valid()) {
           if (result.x3c_t > highT) {

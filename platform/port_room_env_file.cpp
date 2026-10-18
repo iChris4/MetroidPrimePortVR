@@ -1,5 +1,6 @@
 // The .roomenv file: parsing, and picking the probe for a point. See port_room_env.h.
 #include "port_room_env.h"
+#include "port_hash.h"
 #include "port_strings.h"
 #include "port_bytes.h"
 
@@ -57,12 +58,12 @@ float GetHalf(const uint8_t* p) {
 uint32_t GradeLutId(const uint8_t* lut) {
   constexpr uint32_t n = kGradeLutSize;
   bool identity = true;
-  uint32_t hash = 2166136261u;
+  uint32_t hash = port::kFnv32Basis;
   for (uint32_t i = 0; i < n * n * n; ++i) {
     const uint32_t coord[3] = {i % n, i / n % n, i / (n * n)};
     for (int c = 0; c < 4; ++c) {
       const uint8_t v = lut[i * 4 + c];
-      hash = (hash ^ v) * 16777619u;
+      hash = port::Fnv1a32Step(hash, v);
       if (c < 3 && std::fabs(float(v) - float(coord[c]) * (255.f / float(n - 1))) > 4.f) {
         identity = false;
       }

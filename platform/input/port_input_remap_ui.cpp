@@ -1,4 +1,5 @@
 #include "port_input_remap_ui.h"
+#include "port_strings.h"
 
 #include "port_controls.h"
 #include "port_debug.h"
@@ -168,11 +169,7 @@ bool InputStartsAt(const std::string& s, size_t i) {
   return false;
 }
 
-std::string TrimSpaces(std::string s) {
-  s.erase(0, s.find_first_not_of(" \t"));
-  s.erase(s.find_last_not_of(" \t") + 1);
-  return s;
-}
+std::string TrimSpaces(const std::string& s) { return port::Trim(s, " \t"); }
 
 // "a + b + c" (or comma separated) into a binding's inputs.
 bool InputsFromText(const char* text, Binding& b) {
@@ -915,6 +912,7 @@ const std::vector<SGroup>& Groups() {
           Action::VisorPrev},
          true},
         {"Morph Ball", {Action::SpringBall}, true},
+        {"Gyro", {Action::GyroAim}, true},
         // Read instead of the game buttons in menus and on the map ("Separate menu buttons").
         {"Menus and map",
          {Action::MenuA, Action::MenuB, Action::MenuX, Action::MenuY, Action::MenuL, Action::MenuR,
@@ -1479,8 +1477,16 @@ void Draw() {
   if (ImGui::Checkbox("Point and click menus", &pointerMenus)) PortDebug::SetPointerMenus(pointerMenus);
   ImGui::SetItemTooltip("On: the mouse and touch work the game's menus and map. Hovering or tapping selects, "
                         "a click (or a tap on the selected item) confirms, right click backs out, a click on a "
-                        "button hint presses it. Drags set sliders and turn the Samus doll and the map; the "
-                        "wheel or a pinch zooms them; a two-finger twist turns the map.\nOff: menus and the map read only buttons and keys.");
+                        "button hint presses it. Drags set sliders and turn the Samus doll and the map (two "
+                        "fingers or a right drag pan the map, see \"Swap map finger gestures\"); the wheel or a pinch zooms them; a two-finger "
+                        "twist turns the map.\nOff: menus and the map read only buttons and keys.");
+  ImGui::SameLine();
+  bool swapFingers = PortPointer::MapSwapFingers();
+  ImGui::BeginDisabled(!pointerMenus);
+  if (ImGui::Checkbox("Swap map finger gestures", &swapFingers)) PortDebug::SetMapSwapFingers(swapFingers);
+  ImGui::EndDisabled();
+  ImGui::SetItemTooltip("On: on the map one finger pans and two fingers rotate. Off: one finger rotates and two "
+                        "fingers pan. Twist and pinch are unchanged; the mouse is not affected.");
   ImGui::Separator();
 
   const bool editorOnTop = sEditing != kEditNone && !sEditRowShown;

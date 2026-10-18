@@ -86,6 +86,11 @@ TEST_F(GxUniformLimitTest, MaximalPbrConfigNoLongerAborts) {
   EXPECT_GT(pbr.uniformSize, OldLimit);
   EXPECT_GE(pbr.uniformSize - plain.uniformSize, sizeof(Mat3x4<float>) + sizeof(Vec4<float>) * 24);
   EXPECT_LE(pbr.uniformSize, MaxUniformSize);
+  auto hdrConfig = maximal(false);
+  hdrConfig.sceneHdr = true;
+  const auto hdr = build_shader_info(hdrConfig);
+  EXPECT_TRUE(hdr.usesHdrTone);
+  EXPECT_LE(hdr.uniformSize, MaxUniformSize) << "the extra blend vec4 must fit the bound window";
 }
 
 // The three model modulation vectors follow pbr_room_lights in the PBR uniform, in the order the WGSL

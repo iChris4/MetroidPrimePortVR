@@ -278,10 +278,7 @@ bool SameText(const std::vector<std::u16string>& a, const std::vector<std::u16st
   return 4 * 2 * row[b.size()] >= 3 * (a.size() + b.size());
 }
 
-constexpr uint32_t FourCc(const char* code) {
-  return uint32_t(uint8_t(code[0])) << 24 | uint32_t(uint8_t(code[1])) << 16 | uint32_t(uint8_t(code[2])) << 8 |
-         uint32_t(uint8_t(code[3]));
-}
+using port::FourCC;
 
 }  // namespace
 
@@ -708,11 +705,11 @@ bool MergeStringTable(const uint8_t* retail, size_t size, const TableText& text,
     const char* remastered;
     uint32_t disc;
   } kDiscSections[] = {
-      {"EUFR", FourCc("FREN")}, {"USFR", FourCc("FREN")}, {"EUGE", FourCc("GERM")},
-      {"EUSP", FourCc("SPAN")}, {"USSP", FourCc("SPAN")}, {"EUIT", FourCc("ITAL")},
+      {"EUFR", FourCC("FREN")}, {"USFR", FourCC("FREN")}, {"EUGE", FourCC("GERM")},
+      {"EUSP", FourCC("SPAN")}, {"USSP", FourCC("SPAN")}, {"EUIT", FourCC("ITAL")},
   };
   for (size_t k = 0; k < kTextLanguageCount; ++k) {
-    const uint32_t code = FourCc(kTextLanguages[k].code);
+    const uint32_t code = FourCC(kTextLanguages[k].code);
     if (std::find(codes.begin(), codes.end(), code) != codes.end()) {
       continue;
     }

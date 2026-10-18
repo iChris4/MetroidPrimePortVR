@@ -29,6 +29,36 @@ using gfx::hdr::Tone;
 // A room curve shaped like Remastered's: a cubic toe to 0.1, a line to 1.0, a shoulder to 1.0.
 constexpr Tone RoomTone{{{20.f, 3.f, 0.5f, 1.5f}, {0.8f, 0.02f, 0.1f, 1.f}, {0.18f, 1.f, -1.f, 0.82f}}};
 constexpr Tone NoTone{{{0.f, 0.f, 0.f, 1.f}, {0.f, 0.f, 0.f, 0.f}, {0.f, 0.f, 0.f, 0.f}}};
+// Frozen rain frame 404: attribution-final/analysis.json (including the untouched exposure lane).
+constexpr Tone RainTone{{{-25.720172882f, 9.259262085f, 0.555555463f, 1.189207077f},
+                         {1.388888717f, 1.490116119e-8f, 0.180000007f, 0.261000037f},
+                         {0.637499988f, 2.178648949f, -0.568627477f, 0.362500012f}}};
+
+TEST(SceneHdrTone, SrcAlphaAdditiveWeightsDisplayBeforeTheInverse) {
+  for (const Tone* tone : {&RoomTone, &RainTone, &NoTone}) {
+    for (const float a : {0.f, 1e-20f, 1e-8f, 0.05f, 0.1f, 0.5f, 1.f}) {
+      // Per-channel coloured endpoints, black, white and gain (>1) TEV input.
+      for (const float c : {-0.2f, 0.f, 0.02f, 0.25f, 0.65f, 1.f, 4.f}) {
+        const float h = gfx::hdr::tev_srcalpha_add(c, a, *tone);
+        EXPECT_TRUE(std::isfinite(h)) << a << ": " << c;
+        EXPECT_GE(h, 0.f);
+        EXPECT_NEAR(gfx::hdr::post_tone(a * h, *tone), std::clamp(c, 0.f, 1.f) * a, 2e-3f);
+        if (a == 0.f || c <= 0.f)
+          EXPECT_EQ(h, 0.f);
+        if (a == 1.f)
+          EXPECT_FLOAT_EQ(h, gfx::hdr::exposed(c, *tone));
+      }
+    }
+  }
+  for (const float a : {0.05f, 0.1f}) {
+    const float h = gfx::hdr::tev_srcalpha_add(1.f, a, RainTone);
+    EXPECT_LT(h, 1.f); // no inverse-white 65504, nor its ~3276 / ~6550 contribution
+    EXPECT_GT(gfx::hdr::exposed(1.f, RainTone) * a, 3000.f);
+    EXPECT_NEAR(gfx::hdr::post_tone(h * a, RainTone), a, 1e-5f);
+  }
+  EXPECT_EQ(gfx::hdr::tev_srcalpha_add(1.f, -1.f, RainTone), 0.f);
+  EXPECT_EQ(gfx::hdr::tev_srcalpha_add(1.f, 2.f, RainTone), gfx::hdr::exposed(1.f, RainTone));
+}
 
 TEST(SceneHdrTone, TheCurveIsContinuousAndUntoneInvertsIt) {
   for (const float x : {0.1f, 1.f}) {
@@ -358,10 +388,25 @@ TEST(SceneHdrGx, TevSourcesTakeTheDisplayColourBackThroughTheCurve) {
             std::string::npos);
   EXPECT_NE(hdr.find("fn hdr_exposed("), std::string::npos);
   EXPECT_FALSE(has_pbr_lin(hdr));
-  // The tail is the last word on the colour: nothing after it writes prev.rgb.
+  // The conditional conversion is the last word on the colour; both branches preserve alpha.
   const size_t tail = hdr.find("// HDR scene");
   ASSERT_NE(tail, std::string::npos);
-  EXPECT_EQ(hdr.find("prev = vec4f(", hdr.find('\n', tail + 20)), std::string::npos);
+  const size_t fallback = hdr.find("prev = vec4f(hdr_exposed(prev.rgb,", tail);
+  ASSERT_NE(fallback, std::string::npos);
+  EXPECT_EQ(hdr.find("prev = vec4f(", fallback + 1), std::string::npos);
+  EXPECT_NE(hdr.find("if (ubuf.hdr_tev_blend.x > 0.5)"), std::string::npos);
+  EXPECT_NE(hdr.find("prev = vec4f(hdr_tev_srcalpha_add(prev.rgb, prev.a, ubuf.hdr_tone[0], ubuf.hdr_tone[1], "
+                     "ubuf.hdr_tone[2]), prev.a);"),
+            std::string::npos);
+  EXPECT_NE(hdr.find(gfx::hdr::TevBlendWgsl), std::string::npos);
+  EXPECT_NE(gfx::hdr::TevBlendWgsl.find("if (a <= 0.0)"), std::string_view::npos);
+  EXPECT_NE(gfx::hdr::TevBlendWgsl.find("hdr_exposed(clamp(c, vec3f(0.0), vec3f(1.0)) * a, t0, t1, t2) / a"),
+            std::string_view::npos);
+  for (const auto [pbr, kind] : Kinds) {
+    auto config = gxConfig(pbr, kind);
+    config.sceneHdr = true;
+    EXPECT_EQ(build_shader_source(config).find("hdr_tev_"), std::string::npos);
+  }
 }
 
 TEST(SceneHdrGx, TheModeBitIsTheOldPaddingSoLdrKeysKeepTheirBytes) {
@@ -440,6 +485,61 @@ TEST(SceneHdrGx, TheTevToneRowsAreInTheUniformOnlyInHdr) {
   }
 }
 
+TEST(SceneHdrGx, ActualBlendFlagFollowsToneRowsWithinTheBindingWindow) {
+  const auto savedTone = g_gxState.pbrTone;
+  const auto savedMode = g_gxState.blendMode;
+  const auto savedSrc = g_gxState.blendFacSrc;
+  const auto savedDst = g_gxState.blendFacDst;
+  const u32 alignment = gfx::detail::resources().limits.minUniformBufferOffsetAlignment;
+  gfx::detail::resources().limits.minUniformBufferOffsetAlignment = 16;
+  gfx::detail::FramePacket frame;
+  gfx::detail::begin_recording(frame, 0);
+  struct Cleanup {
+    std::array<Vec4<float>, 3> tone;
+    GXBlendMode mode;
+    GXBlendFactor src, dst;
+    u32 alignment;
+    ~Cleanup() {
+      g_gxState.pbrTone = tone;
+      g_gxState.blendMode = mode;
+      g_gxState.blendFacSrc = src;
+      g_gxState.blendFacDst = dst;
+      gfx::detail::shutdown_recording();
+      gfx::detail::resources().limits.minUniformBufferOffsetAlignment = alignment;
+    }
+  } cleanup{savedTone, savedMode, savedSrc, savedDst, alignment};
+  std::memcpy(g_gxState.pbrTone.data(), RainTone.data(), sizeof(RainTone));
+  auto ldr = gxConfig(0, 0);
+  auto hdr = ldr;
+  hdr.sceneHdr = true;
+  const auto info = build_shader_info(hdr);
+  EXPECT_EQ(info.uniformSize, build_shader_info(ldr).uniformSize + 4 * sizeof(Vec4<float>));
+  EXPECT_LE(info.uniformSize, MaxUniformSize);
+  for (const auto mode : {GX_BM_NONE, GX_BM_BLEND, GX_BM_SUBTRACT, GX_BM_LOGIC}) {
+    for (const auto src : {GX_BL_ZERO, GX_BL_ONE, GX_BL_SRCALPHA, GX_BL_INVSRCALPHA}) {
+      for (const auto dst : {GX_BL_ZERO, GX_BL_ONE, GX_BL_SRCALPHA, GX_BL_INVSRCALPHA}) {
+        g_gxState.blendMode = mode;
+        g_gxState.blendFacSrc = src;
+        g_gxState.blendFacDst = dst;
+        const auto range = build_uniform(info);
+        ASSERT_GE(frame.uniforms.size(), range.offset + range.size);
+        ASSERT_LE(range.size, info.uniformSize);
+        size_t at = range.offset;
+        for (; at + sizeof(RainTone) + 16 <= range.offset + range.size; at += 16)
+          if (std::memcmp(frame.uniforms.data() + at, RainTone.data(), sizeof(RainTone)) == 0)
+            break;
+        ASSERT_LE(at + sizeof(RainTone) + 16, range.offset + range.size);
+        std::array<float, 4> flag{};
+        std::memcpy(flag.data(), frame.uniforms.data() + at + sizeof(RainTone), sizeof(flag));
+        EXPECT_EQ(flag[0], mode == GX_BM_BLEND && src == GX_BL_SRCALPHA && dst == GX_BL_ONE ? 1.f : 0.f);
+        EXPECT_EQ(flag[1], 0.f);
+        EXPECT_EQ(flag[2], 0.f);
+        EXPECT_EQ(flag[3], 0.f);
+      }
+    }
+  }
+}
+
 } // namespace
 } // namespace aurora::gx
 
@@ -466,6 +566,21 @@ TEST(SceneHdrVfx, LdrSourcesAreUnchanged) {
     EXPECT_EQ(ldr.find("hdr_"), std::string::npos);
     EXPECT_NE(ldr.find("const BLEND: u32 = " + std::to_string(blend) + "u;"), std::string::npos);
     EXPECT_EQ(BlendSceneHdr & blend, 0u);
+  }
+}
+
+TEST(SceneHdrVfx, OpacityGainBiasUsesSpareUniformLanesInBothForms) {
+  DrawDesc desc;
+  EXPECT_EQ(desc.opacityGain, 1.f);
+  EXPECT_EQ(desc.opacityBias, 0.f);
+  for (bool hdr : {false, true}) {
+    auto config = vfxConfig(2, hdr);
+    config.features = OpacityFade | OpacityFresnel;
+    const std::string source = pipeline_source(config);
+    // Exercise the actual generated source, not a parallel CPU formula. The gain is OUTSIDE sat.
+    EXPECT_NE(source.find("x = x * u.misc2.y * sat(smooth3(select(select(0.0, 1.0, d >= fx), sat((d - fx) / q), q != 0.0)) - u.misc2.z);"), std::string::npos);
+    EXPECT_NE(source.find("x = x * u.misc2.y * sat(smooth3(select(select(0.0, 1.0, fx <= 0.0), sat(-fx / q), q != 0.0)) - u.misc2.z);"), std::string::npos);
+    EXPECT_NE(source.find("misc2: vec4f,"), std::string::npos);
   }
 }
 

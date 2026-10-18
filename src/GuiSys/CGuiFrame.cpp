@@ -1,4 +1,5 @@
 #include "GuiSys/CGuiFrame.hpp"
+#include "port_env.h"
 
 #include "GuiSys/CAuiEnergyBarT01.hpp"
 #include "GuiSys/CGuiCamera.hpp"
@@ -554,7 +555,7 @@ bool CGuiFrame::GetIsFinishedLoading() const {
     }
     if (!(*it)->GetIsFinishedLoading()) {
       x58_24_loaded = false;
-      if (std::getenv("MP_LOG_HUD") != nullptr) {
+      if (port::EnvFlag("MP_LOG_HUD")) {
         static int sLogCount = 0;
         if (sLogCount < 80) {
           ++sLogCount;

@@ -4,6 +4,7 @@
 
 #include "port_remastered_cmdl.h"
 #include "port_bytes.h"
+#include "port_remastered_lzss.h"
 
 #include <cstring>
 #include <functional>
@@ -49,35 +50,31 @@ float HalfToFloat(uint16_t bits) {
   return value;
 }
 
-constexpr uint32_t FourCc(char a, char b, char c, char d) {
-  return (uint32_t(uint8_t(a)) << 24) | (uint32_t(uint8_t(b)) << 16) | (uint32_t(uint8_t(c)) << 8) |
-         uint32_t(uint8_t(d));
-}
 
-const uint32_t kFormRFRM = FourCc('R', 'F', 'R', 'M');
-const uint32_t kFormFoot = FourCc('F', 'O', 'O', 'T');
-const uint32_t kChunkMeta = FourCc('M', 'E', 'T', 'A');
-const uint32_t kFormCmdl = FourCc('C', 'M', 'D', 'L');
-const uint32_t kFormSmdl = FourCc('S', 'M', 'D', 'L');
-const uint32_t kFormWmdl = FourCc('W', 'M', 'D', 'L');
-const uint32_t kChunkHead = FourCc('H', 'E', 'A', 'D');
-const uint32_t kChunkWdhd = FourCc('W', 'D', 'H', 'D');
-const uint32_t kChunkSkhd = FourCc('S', 'K', 'H', 'D');
-const uint32_t kChunkMtrl = FourCc('M', 'T', 'R', 'L');
-const uint32_t kChunkMesh = FourCc('M', 'E', 'S', 'H');
-const uint32_t kChunkVbuf = FourCc('V', 'B', 'U', 'F');
-const uint32_t kChunkIbuf = FourCc('I', 'B', 'U', 'F');
-const uint32_t kChunkGpu = FourCc('G', 'P', 'U', ' ');
+const uint32_t kFormRFRM = port::FourCC('R', 'F', 'R', 'M');
+const uint32_t kFormFoot = port::FourCC('F', 'O', 'O', 'T');
+const uint32_t kChunkMeta = port::FourCC('M', 'E', 'T', 'A');
+const uint32_t kFormCmdl = port::FourCC('C', 'M', 'D', 'L');
+const uint32_t kFormSmdl = port::FourCC('S', 'M', 'D', 'L');
+const uint32_t kFormWmdl = port::FourCC('W', 'M', 'D', 'L');
+const uint32_t kChunkHead = port::FourCC('H', 'E', 'A', 'D');
+const uint32_t kChunkWdhd = port::FourCC('W', 'D', 'H', 'D');
+const uint32_t kChunkSkhd = port::FourCC('S', 'K', 'H', 'D');
+const uint32_t kChunkMtrl = port::FourCC('M', 'T', 'R', 'L');
+const uint32_t kChunkMesh = port::FourCC('M', 'E', 'S', 'H');
+const uint32_t kChunkVbuf = port::FourCC('V', 'B', 'U', 'F');
+const uint32_t kChunkIbuf = port::FourCC('I', 'B', 'U', 'F');
+const uint32_t kChunkGpu = port::FourCC('G', 'P', 'U', ' ');
 
 // Material parameter types. The file stores these as FourCCs (binrw reads the Rust
 // enums by magic), so the discriminants in cmdl.rs are never on disc.
-const uint32_t kDataTexture = FourCc('T', 'X', 'T', 'R');
-const uint32_t kDataColor = FourCc('C', 'O', 'L', 'R');
-const uint32_t kDataScalar = FourCc('S', 'C', 'L', 'R');
-const uint32_t kDataInt1 = FourCc('I', 'N', 'T', '1');
-const uint32_t kDataInt4 = FourCc('I', 'N', 'T', '4');
-const uint32_t kDataMatrix4 = FourCc('M', 'A', 'T', '4');
-const uint32_t kDataComplex = FourCc('C', 'P', 'L', 'X');
+const uint32_t kDataTexture = port::FourCC('T', 'X', 'T', 'R');
+const uint32_t kDataColor = port::FourCC('C', 'O', 'L', 'R');
+const uint32_t kDataScalar = port::FourCC('S', 'C', 'L', 'R');
+const uint32_t kDataInt1 = port::FourCC('I', 'N', 'T', '1');
+const uint32_t kDataInt4 = port::FourCC('I', 'N', 'T', '4');
+const uint32_t kDataMatrix4 = port::FourCC('M', 'A', 'T', '4');
+const uint32_t kDataComplex = port::FourCC('C', 'P', 'L', 'X');
 
 // The EVertexComponent values the port names; the rest go to ModelAttribute.
 const uint32_t kComponentPosition = 0;
@@ -184,8 +181,7 @@ public:
 
   uint32_t FourCC() {
     const uint8_t* p = Bytes(4);
-    return p ? (uint32_t(p[0]) << 24) | (uint32_t(p[1]) << 16) | (uint32_t(p[2]) << 8) | uint32_t(p[3])
-             : 0;
+    return p ? port::ReadBE32(p) : 0;
   }
 
   // Records the first failure only; anything after it is a consequence.
@@ -224,8 +220,7 @@ bool ReadBlockHeader(Cursor& cursor, BlockHeader& out) {
   if (peek == nullptr) {
     return cursor.Fail("truncated block header");
   }
-  out.magic = (uint32_t(peek[0]) << 24) | (uint32_t(peek[1]) << 16) | (uint32_t(peek[2]) << 8) |
-              uint32_t(peek[3]);
+  out.magic = port::ReadBE32(peek);
   if (out.magic == kFormRFRM) {
     cursor.Skip(4);
     const uint64_t size = cursor.U64();
@@ -257,53 +252,6 @@ bool ReadBlockHeader(Cursor& cursor, BlockHeader& out) {
   out.body = cursor.offset() + size_t(skip);
   out.end = out.body + size_t(size);
   return true;
-}
-
-// retrotool's lzss.rs: mode is the log2 of the group's byte count, a clear header
-// bit copies a group verbatim and a set bit copies a back reference.
-bool LzssDecompress(uint32_t mode, const uint8_t* in, size_t inSize, uint8_t* out, size_t outSize) {
-  const size_t groupLen = size_t(1) << (mode - 1);
-  size_t inCur = 0;
-  size_t outCur = 0;
-  uint8_t header = 0;
-  int group = 0;
-  while (inCur < inSize) {
-    if (group == 0) {
-      header = in[inCur++];
-      group = 8;
-    }
-    if ((header & 0x80) == 0) {
-      if (inSize - inCur < groupLen || outSize - outCur < groupLen) {
-        return false;
-      }
-      std::memcpy(out + outCur, in + inCur, groupLen);
-      inCur += groupLen;
-      outCur += groupLen;
-    } else {
-      if (inSize - inCur < 2) {
-        return false;
-      }
-      const size_t count = size_t(in[inCur] >> 4) + (4 - size_t(mode));
-      const size_t length = (size_t(in[inCur] & 0x0F) * 256 + size_t(in[inCur + 1])) << (mode - 1);
-      inCur += 2;
-      if (length > outCur) {
-        return false;
-      }
-      const size_t total = count * groupLen;
-      if (outSize - outCur < total) {
-        return false;
-      }
-      // One byte at a time: a back reference may overlap the bytes it is writing,
-      // which is how the format spells a run of the same byte.
-      for (size_t i = 0; i < total; ++i) {
-        out[outCur + i] = out[outCur - length + i];
-      }
-      outCur += total;
-    }
-    header = uint8_t(header << 1);
-    group -= 1;
-  }
-  return outCur == outSize;
 }
 
 // The largest decompressed vertex or index buffer accepted, well above anything the

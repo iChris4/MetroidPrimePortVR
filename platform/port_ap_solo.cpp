@@ -3,6 +3,7 @@
 
 #include "port_ap_metroidprime.h"
 #include "port_json.h"
+#include "port_json_writer.h"
 
 #include <algorithm>
 #include <chrono>
@@ -18,21 +19,34 @@ constexpr int64_t kSlot = 1;
 constexpr int64_t kGoalComplete = 30; // ClientStatus.CLIENT_GOAL
 constexpr int64_t kStartLocation = -2; // what Archipelago gives a starting item
 
-std::string IdList(const std::vector< int64_t >& ids) {
-  std::string out = "[";
-  for (size_t i = 0; i < ids.size(); ++i) {
-    if (i != 0)
-      out.push_back(',');
-    out += std::to_string(ids[i]);
-  }
-  out.push_back(']');
-  return out;
+void IdList(port::JsonWriter& json, const char* key, const std::vector< int64_t >& ids) {
+  json.Key(key).BeginArray();
+  for (const int64_t id : ids)
+    json.Number(id);
+  json.EndArray();
 }
 
-// One line of server text, the way MultiServer words its PrintJSON.
-std::string PrintJson(const char* type, const std::string& text, const std::string& extra = "") {
-  return std::string("{\"cmd\":\"PrintJSON\",\"type\":\"") + type + "\"," + extra +
-         "\"data\":[{\"type\":\"text\",\"text\":" + port::JsonQuote(text) + "}]}";
+// One line of server text, the way MultiServer words its PrintJSON. A line
+// about the player names its team and slot, and a chat line also carries
+// what was said.
+std::string PrintJson(const char* type, const std::string& text, bool aboutPlayer = false,
+                      const std::string* message = nullptr) {
+  port::JsonWriter json;
+  json.BeginObject().Key("cmd").String("PrintJSON").Key("type").String(type);
+  if (aboutPlayer)
+    json.Key("team").Number(0).Key("slot").Number(kSlot);
+  if (message != nullptr)
+    json.Key("message").String(*message);
+  json.Key("data").BeginArray().BeginObject().Key("type").String("text").Key("text").String(text).EndObject();
+  json.EndArray().EndObject();
+  return json.Take();
+}
+
+// A version object as the server sends it.
+void Version(port::JsonWriter& json, const char* key) {
+  json.Key(key).BeginObject();
+  json.Key("major").Number(0).Key("minor").Number(6).Key("build").Number(0).Key("class").String("Version");
+  json.EndObject();
 }
 
 std::vector< int64_t > Ids(const PortJson::Value* list) {
@@ -114,7 +128,7 @@ bool Server::OpenSeed(const PortRandoGen::Seed& seed, const std::string& statePa
   std::string text;
   if (!mStatePath.empty()) {
     std::ifstream file(mStatePath, std::ios::binary);
-    text.assign(std::istreambuf_iterator< char >(file), std::istreambuf_iterator< char >());
+    text = port::ReadAllText(file);
   }
   PortJson::Value state;
   if (!text.empty() && PortJson::Parse(text, state, offset, &reason) && state.IsObject()) {
@@ -123,12 +137,22 @@ bool Server::OpenSeed(const PortRandoGen::Seed& seed, const std::string& statePa
   }
   mOpen = true;
   // The first thing a server says; the client's Connect answers it.
-  Queue("{\"cmd\":\"RoomInfo\",\"version\":{\"major\":0,\"minor\":6,\"build\":0,\"class\":\"Version\"},"
-        "\"generator_version\":{\"major\":0,\"minor\":6,\"build\":0,\"class\":\"Version\"},"
-        "\"tags\":[],\"password\":false,\"permissions\":{\"release\":0,\"collect\":0,\"remaining\":0},"
-        "\"hint_cost\":0,\"location_check_points\":1,\"games\":[\"Metroid Prime\"],"
-        "\"datapackage_checksums\":{},\"seed_name\":" +
-        port::JsonQuote("solo-" + mSeed.name) + ",\"time\":0}");
+  port::JsonWriter json;
+  json.BeginObject().Key("cmd").String("RoomInfo");
+  Version(json, "version");
+  Version(json, "generator_version");
+  json.Key("tags").BeginArray().EndArray();
+  json.Key("password").Bool(false);
+  json.Key("permissions").BeginObject();
+  json.Key("release").Number(0).Key("collect").Number(0).Key("remaining").Number(0);
+  json.EndObject();
+  json.Key("hint_cost").Number(0);
+  json.Key("location_check_points").Number(1);
+  json.Key("games").BeginArray().String("Metroid Prime").EndArray();
+  json.Key("datapackage_checksums").BeginObject().EndObject();
+  json.Key("seed_name").String("solo-" + mSeed.name);
+  json.Key("time").Number(0);
+  Queue(json.EndObject().Take());
   return true;
 }
 
@@ -173,7 +197,7 @@ bool Server::SendText(const std::string& message) {
     return false;
   }
   if (!PortJson::Parse(message, root, offset, &reason)) {
-    Queue("{\"cmd\":\"InvalidPacket\",\"type\":\"cmd\",\"original_cmd\":null,\"text\":\"not JSON\"}");
+    Queue(R"({"cmd":"InvalidPacket","type":"cmd","original_cmd":null,"text":"not JSON"})");
   } else {
     std::vector< PortJson::Value > commands;
     if (root.IsArray())
@@ -203,21 +227,21 @@ int64_t Server::Flags(int64_t item) const {
   return 1;
 }
 
-std::string Server::ItemJson(const Received& received) const {
-  return "{\"item\":" + std::to_string(received.item) + ",\"location\":" +
-         std::to_string(received.location) + ",\"player\":" + std::to_string(kSlot) +
-         ",\"flags\":" + std::to_string(Flags(received.item)) + "}";
+void Server::WriteItem(port::JsonWriter& json, const Received& received) const {
+  json.BeginObject();
+  json.Key("item").Number(received.item);
+  json.Key("location").Number(received.location);
+  json.Key("player").Number(kSlot);
+  json.Key("flags").Number(Flags(received.item));
+  json.EndObject();
 }
 
 std::string Server::ReceivedItemsJson(size_t from) const {
-  std::string out = "{\"cmd\":\"ReceivedItems\",\"index\":" + std::to_string(from) + ",\"items\":[";
-  for (size_t i = from; i < mReceived.size(); ++i) {
-    if (i != from)
-      out.push_back(',');
-    out += ItemJson(mReceived[i]);
-  }
-  out += "]}";
-  return out;
+  port::JsonWriter json;
+  json.BeginObject().Key("cmd").String("ReceivedItems").Key("index").Number(from).Key("items").BeginArray();
+  for (size_t i = from; i < mReceived.size(); ++i)
+    WriteItem(json, mReceived[i]);
+  return json.EndArray().EndObject().Take();
 }
 
 bool Server::Check(int64_t location) {
@@ -235,7 +259,10 @@ void Server::SaveState() {
     return;
   // Items are numbered in check order, so a lost state file renumbers them
   // on the next launch: say so rather than lose it quietly.
-  if (!WriteAtomic(mStatePath, "{\"checked\":" + IdList(mChecked) + "}\n"))
+  port::JsonWriter json;
+  json.BeginObject();
+  IdList(json, "checked", mChecked);
+  if (!WriteAtomic(mStatePath, json.EndObject().Take() + "\n"))
     Queue(PrintJson("Tutorial", "Could not save the seed's progress to " + mStatePath));
 }
 
@@ -243,11 +270,11 @@ void Server::Handle(const PortJson::Value& packet) {
   const std::string command = packet.StringOr("cmd");
   if (command == "Connect") {
     if (packet.StringOr("name") != kSlotName) {
-      Queue("{\"cmd\":\"ConnectionRefused\",\"errors\":[\"InvalidSlot\"]}");
+      Queue(R"({"cmd":"ConnectionRefused","errors":["InvalidSlot"]})");
       return;
     }
     if (packet.StringOr("game") != "Metroid Prime") {
-      Queue("{\"cmd\":\"ConnectionRefused\",\"errors\":[\"InvalidGame\"]}");
+      Queue(R"({"cmd":"ConnectionRefused","errors":["InvalidGame"]})");
       return;
     }
     std::vector< int64_t > missing;
@@ -256,10 +283,15 @@ void Server::Handle(const PortJson::Value& packet) {
         missing.push_back(location);
     }
     // No slot_info: it only exists to have the client fetch other games' names.
-    Queue("{\"cmd\":\"Connected\",\"team\":0,\"slot\":" + std::to_string(kSlot) +
-          ",\"players\":[{\"team\":0,\"slot\":" + std::to_string(kSlot) + ",\"alias\":" + port::JsonQuote(kSlotName) +
-          ",\"name\":" + port::JsonQuote(kSlotName) + "}],\"missing_locations\":" + IdList(missing) +
-          ",\"checked_locations\":" + IdList(mChecked) + ",\"slot_data\":" + mSeed.slotData + "}");
+    port::JsonWriter json;
+    json.BeginObject().Key("cmd").String("Connected").Key("team").Number(0).Key("slot").Number(kSlot);
+    json.Key("players").BeginArray().BeginObject();
+    json.Key("team").Number(0).Key("slot").Number(kSlot).Key("alias").String(kSlotName).Key("name").String(kSlotName);
+    json.EndObject().EndArray();
+    IdList(json, "missing_locations", missing);
+    IdList(json, "checked_locations", mChecked);
+    json.Key("slot_data").Raw(mSeed.slotData); // JSON text already, as generated or loaded
+    Queue(json.EndObject().Take());
     Queue(ReceivedItemsJson(0));
   } else if (command == "LocationChecks") {
     const size_t before = mReceived.size();
@@ -273,61 +305,51 @@ void Server::Handle(const PortJson::Value& packet) {
   } else if (command == "Sync") {
     Queue(ReceivedItemsJson(0));
   } else if (command == "LocationScouts") {
-    std::string out = "{\"cmd\":\"LocationInfo\",\"locations\":[";
-    bool first = true;
+    port::JsonWriter json;
+    json.BeginObject().Key("cmd").String("LocationInfo").Key("locations").BeginArray();
     for (const int64_t location : Ids(packet.Find("locations"))) {
       const auto placed = mSeed.placements.find(location);
-      if (placed == mSeed.placements.end())
-        continue;
-      if (!first)
-        out.push_back(',');
-      first = false;
-      out += ItemJson({placed->second, location});
+      if (placed != mSeed.placements.end())
+        WriteItem(json, {placed->second, location});
     }
-    out += "]}";
-    Queue(out);
+    Queue(json.EndArray().EndObject().Take());
   } else if (command == "StatusUpdate") {
     const PortJson::Value* status = packet.Find("status");
     if (status != nullptr && status->AsInt() == kGoalComplete) {
-      Queue(PrintJson("Goal", std::string(kSlotName) + " has completed their goal.",
-                      "\"team\":0,\"slot\":" + std::to_string(kSlot) + ","));
+      Queue(PrintJson("Goal", std::string(kSlotName) + " has completed their goal.", true));
     }
   } else if (command == "Say") {
     const std::string text = packet.StringOr("text");
     if (!text.empty() && text[0] == '!') {
       Queue(PrintJson("CommandResult", "Commands are not available in a solo game."));
     } else {
-      Queue(PrintJson("Chat", std::string(kSlotName) + ": " + text,
-                      "\"team\":0,\"slot\":" + std::to_string(kSlot) + ",\"message\":" + port::JsonQuote(text) + ","));
+      Queue(PrintJson("Chat", std::string(kSlotName) + ": " + text, true, &text));
     }
   } else if (command == "Get" || command == "SetNotify") {
     // Nothing is stored in a solo game; a key asked for is just empty.
-    std::string out = "{\"cmd\":\"Retrieved\",\"keys\":{";
+    port::JsonWriter json;
+    json.BeginObject().Key("cmd").String("Retrieved").Key("keys").BeginObject();
     const PortJson::Value* keys = packet.Find("keys");
-    bool first = true;
     if (keys != nullptr && keys->IsArray()) {
       for (const PortJson::Value& key : keys->AsArray()) {
-        if (!key.IsString())
-          continue;
-        if (!first)
-          out.push_back(',');
-        first = false;
-        out += port::JsonQuote(key.AsString()) + ":null";
+        if (key.IsString())
+          json.Key(key.AsString()).Null();
       }
     }
-    out += "}}";
-    Queue(out);
+    Queue(json.EndObject().EndObject().Take());
   } else if (command == "Set") {
     // Only the client's room name is ever set (PortAp's RoomKey). A seed file
     // is one room for good, so the name is fixed rather than stored.
     const PortJson::Value* wantReply = packet.Find("want_reply");
-    if (wantReply != nullptr && wantReply->IsBool() && wantReply->AsBool())
-      Queue("{\"cmd\":\"SetReply\",\"key\":" + port::JsonQuote(packet.StringOr("key")) +
-            ",\"value\":\"solo\",\"original_value\":\"solo\",\"slot\":" + std::to_string(kSlot) +
-            "}");
+    if (wantReply != nullptr && wantReply->IsBool() && wantReply->AsBool()) {
+      port::JsonWriter json;
+      json.BeginObject().Key("cmd").String("SetReply").Key("key").String(packet.StringOr("key"));
+      json.Key("value").String("solo").Key("original_value").String("solo").Key("slot").Number(kSlot);
+      Queue(json.EndObject().Take());
+    }
   } else if (command == "GetDataPackage") {
     // The client has the built-in names for Metroid Prime already.
-    Queue("{\"cmd\":\"DataPackage\",\"data\":{\"games\":{}}}");
+    Queue(R"({"cmd":"DataPackage","data":{"games":{}}})");
   }
   // Bounce, ConnectUpdate and the rest have nobody to be relayed to.
 }

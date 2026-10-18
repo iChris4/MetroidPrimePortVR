@@ -3,6 +3,7 @@
 
 #include "port_pbr_record.h"
 #include "port_remastered_convert.h"
+#include "port_test.h"
 
 #include <cmath>
 #include <cstdint>
@@ -14,15 +15,6 @@
 using namespace PortRemastered;
 
 namespace {
-
-int sFailures = 0;
-
-void Check(bool condition, const char* what) {
-  if (!condition) {
-    std::fprintf(stderr, "FAIL: %s\n", what);
-    ++sFailures;
-  }
-}
 
 constexpr uint32_t FourCC(char a, char b, char c, char d) {
   return (uint32_t(uint8_t(a)) << 24) | (uint32_t(uint8_t(b)) << 16) | (uint32_t(uint8_t(c)) << 8) | uint8_t(d);
@@ -122,7 +114,7 @@ std::vector<uint8_t> RetailFixture() {
   std::string error;
   if (!converter.Convert(BuildModel(material), opt, error)) {
     std::fprintf(stderr, "FAIL: retail fixture conversion failed: %s\n", error.c_str());
-    ++sFailures;
+    port_test::CountFailure();
   }
   return cmdl;
 }
@@ -162,7 +154,7 @@ bool Convert(const ModelMaterial& material, std::vector<uint8_t>& cmdl, std::vec
   std::string error;
   if (converter.Convert(BuildModel(material), opt, error)) return true;
   std::fprintf(stderr, "FAIL: conversion failed: %s\n", error.c_str());
-  ++sFailures;
+  port_test::CountFailure();
   return false;
 }
 
@@ -225,38 +217,38 @@ void CheckFallback(const ModelMaterial& material, const char* label, bool standa
   std::vector<uint8_t> cmdl;
   std::vector<MaterialDecision> decisions;
   if (!Convert(material, cmdl, decisions, standalone)) return;
-  Check(decisions.size() == 1 && decisions[0].kind == 0, label);
+  CHECK_MSG(decisions.size() == 1 && decisions[0].kind == 0, label);
   size_t start = 0, size = 0;
   const bool readable = FirstBlob(cmdl, start, size);
-  Check(readable, "fallback material blob is readable");
-  if (readable) Check(BlobTag(cmdl, start, size) != "PBR8", "fallback has no kind-28 PBR8 rows");
+  CHECK_MSG(readable, "fallback material blob is readable");
+  if (readable) CHECK_MSG(BlobTag(cmdl, start, size) != "PBR8", "fallback has no kind-28 PBR8 rows");
 }
 
 void TestCompleteSingleLayerIce() {
   std::vector<uint8_t> cmdl;
   std::vector<MaterialDecision> decisions;
   if (!Convert(IceMaterial(), cmdl, decisions)) return;
-  Check(decisions.size() == 1, "complete ice: one decision");
+  CHECK_MSG(decisions.size() == 1, "complete ice: one decision");
   if (decisions.empty()) return;
-  Check(decisions[0].kind == 28 && decisions[0].path == "pbr", "complete single-layer ice keeps kind 28 on PBR");
-  Check(decisions[0].tag == "PBR8" && decisions[0].cube != "-", "ice retains its own reflection cube record");
-  Check((decisions[0].mode & 32) != 0, "ice retains inverse-exposed emissive mode");
+  CHECK_MSG(decisions[0].kind == 28 && decisions[0].path == "pbr", "complete single-layer ice keeps kind 28 on PBR");
+  CHECK_MSG(decisions[0].tag == "PBR8" && decisions[0].cube != "-", "ice retains its own reflection cube record");
+  CHECK_MSG((decisions[0].mode & 32) != 0, "ice retains inverse-exposed emissive mode");
   size_t start = 0, size = 0;
   const bool readable = FirstBlob(cmdl, start, size);
-  Check(readable, "complete ice: material blob is readable");
+  CHECK_MSG(readable, "complete ice: material blob is readable");
   if (!readable) return;
   const BlobInfo b = ReadBlob(cmdl, start, size);
-  Check(b.nmaps == 4, "complete ice: single-layer PBR has four standard slots");
-  Check(b.hasRows && Near(b.kind, 28.f), "complete ice: PBR8 contains kind 28");
+  CHECK_MSG(b.nmaps == 4, "complete ice: single-layer PBR has four standard slots");
+  CHECK_MSG(b.hasRows && Near(b.kind, 28.f), "complete ice: PBR8 contains kind 28");
   if (!b.hasRows) return;
-  Check(Near(b.rows[0], .25f) && Near(b.rows[1], .5f) && Near(b.rows[2], .75f) && Near(b.rows[3], .125f),
-        "ice: CCH0 row retained");
-  Check(Near(b.rows[4], .2f) && Near(b.rows[5], .125f) && Near(b.rows[6], 3.f) && Near(b.rows[7], .4f),
-        "ice: CCH1 rim gain and power retained");
-  Check(Near(b.rows[8], .1f) && Near(b.rows[9], .2f) && Near(b.rows[10], .3f) && Near(b.rows[11], .375f),
-        "ice: CCH2 cube tint and CCH5 cube gain retained");
-  Check(Near(b.rows[12], .531f) && Near(b.rows[13], .801f) && Near(b.rows[14], 1.f),
-         "ice: CCH3 inverse-exposure rim colour retained");
+  CHECK_MSG(Near(b.rows[0], .25f) && Near(b.rows[1], .5f) && Near(b.rows[2], .75f) && Near(b.rows[3], .125f),
+            "ice: CCH0 row retained");
+  CHECK_MSG(Near(b.rows[4], .2f) && Near(b.rows[5], .125f) && Near(b.rows[6], 3.f) && Near(b.rows[7], .4f),
+            "ice: CCH1 rim gain and power retained");
+  CHECK_MSG(Near(b.rows[8], .1f) && Near(b.rows[9], .2f) && Near(b.rows[10], .3f) && Near(b.rows[11], .375f),
+            "ice: CCH2 cube tint and CCH5 cube gain retained");
+  CHECK_MSG(Near(b.rows[12], .531f) && Near(b.rows[13], .801f) && Near(b.rows[14], 1.f),
+             "ice: CCH3 inverse-exposure rim colour retained");
 }
 
 void TestMissingOptionalCch5DefaultsCubeGain() {
@@ -269,29 +261,29 @@ void TestMissingOptionalCch5DefaultsCubeGain() {
       break;
     }
   }
-  Check(removedCch5, "ice fixture: optional CCH5 is omitted");
+  CHECK_MSG(removedCch5, "ice fixture: optional CCH5 is omitted");
 
   std::vector<uint8_t> cmdl;
   std::vector<MaterialDecision> decisions;
   if (!Convert(noCch5, cmdl, decisions)) return;
-  Check(decisions.size() == 1 && decisions[0].kind == 28 && decisions[0].path == "pbr",
+  CHECK_MSG(decisions.size() == 1 && decisions[0].kind == 28 && decisions[0].path == "pbr",
         "ice: missing optional CCH5 retains kind 28 on PBR");
   if (decisions.empty()) return;
 
   size_t start = 0, size = 0;
   const bool readable = FirstBlob(cmdl, start, size);
-  Check(readable, "ice without CCH5: material blob is readable");
+  CHECK_MSG(readable, "ice without CCH5: material blob is readable");
   if (!readable) return;
   const BlobInfo b = ReadBlob(cmdl, start, size);
-  Check(b.nmaps == 4 && b.hasRows && Near(b.kind, 28.f),
-        "ice without CCH5: complete required maps and CCH0-CCH3 keep kind 28 in PBR8");
+  CHECK_MSG(b.nmaps == 4 && b.hasRows && Near(b.kind, 28.f),
+            "ice without CCH5: complete required maps and CCH0-CCH3 keep kind 28 in PBR8");
   if (!b.hasRows) return;
-  Check(Near(b.rows[0], .25f) && Near(b.rows[1], .5f) && Near(b.rows[2], .75f) && Near(b.rows[3], .125f) &&
-            Near(b.rows[4], .2f) && Near(b.rows[5], .125f) && Near(b.rows[6], 3.f) && Near(b.rows[7], .4f) &&
-            Near(b.rows[8], .1f) && Near(b.rows[9], .2f) && Near(b.rows[10], .3f) && Near(b.rows[12], .531f) &&
-            Near(b.rows[13], .801f) && Near(b.rows[14], 1.f) && Near(b.rows[15], 1.f),
-        "ice without CCH5: required CCH0-CCH3 remain in PBR8");
-  Check(Near(b.rows[11], 1.f), "ice without CCH5: shieldRows[11] defaults cube gain to 1");
+  CHECK_MSG(Near(b.rows[0], .25f) && Near(b.rows[1], .5f) && Near(b.rows[2], .75f) && Near(b.rows[3], .125f) &&
+                Near(b.rows[4], .2f) && Near(b.rows[5], .125f) && Near(b.rows[6], 3.f) && Near(b.rows[7], .4f) &&
+                Near(b.rows[8], .1f) && Near(b.rows[9], .2f) && Near(b.rows[10], .3f) && Near(b.rows[12], .531f) &&
+                Near(b.rows[13], .801f) && Near(b.rows[14], 1.f) && Near(b.rows[15], 1.f),
+            "ice without CCH5: required CCH0-CCH3 remain in PBR8");
+  CHECK_MSG(Near(b.rows[11], 1.f), "ice without CCH5: shieldRows[11] defaults cube gain to 1");
 }
 
 void TestNegativeControls() {
@@ -345,10 +337,10 @@ void TestLayeredIceUnchanged() {
   std::vector<uint8_t> cmdl;
   std::vector<MaterialDecision> decisions;
   if (!Convert(layered, cmdl, decisions)) return;
-  Check(decisions.size() == 1 && decisions[0].kind == 28, "layered ice keeps its existing kind-28 behavior");
+  CHECK_MSG(decisions.size() == 1 && decisions[0].kind == 28, "layered ice keeps its existing kind-28 behavior");
   size_t start = 0, size = 0;
-  if (FirstBlob(cmdl, start, size)) Check(ReadBlob(cmdl, start, size).nmaps == 7, "layered ice still binds its second layer");
-  else Check(false, "layered ice material blob is readable");
+  if (FirstBlob(cmdl, start, size)) CHECK_MSG(ReadBlob(cmdl, start, size).nmaps == 7, "layered ice still binds its second layer");
+  else CHECK_MSG(false, "layered ice material blob is readable");
 }
 
 } // namespace
@@ -358,6 +350,5 @@ int main() {
   TestMissingOptionalCch5DefaultsCubeGain();
   TestNegativeControls();
   TestLayeredIceUnchanged();
-  if (sFailures != 0) std::fprintf(stderr, "%d Ice converter checks failed\n", sFailures);
-  return sFailures == 0 ? 0 : 1;
+  return PORT_TEST_RESULT();
 }

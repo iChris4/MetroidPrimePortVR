@@ -78,6 +78,25 @@ fn hdr_exposed(c: vec3f, t0: vec4f, t1: vec4f, t2: vec4f) -> vec3f {
 }
 )""";
 
+// Legacy GX SRCALPHA/ONE only: weight in display space BEFORE the nonlinear inverse.
+// With local a = clamp(alpha,0,1), post_tone(a * H_add(c,alpha)) equals clamp(c,0,1) * a,
+// within inverse/target precision. Hardware multiplies by the preserved TEV alpha once, so
+// this over-black display identity assumes normalized alpha in [0,1] and an isolated,
+// unfogged contribution: TEV alpha can slightly exceed 1, and later volumetric fog attenuates light.
+// Other legacy SRCALPHA/ONE effects intentionally share this policy; this is not full visual
+// certification, exact LDR compositing over nonblack backgrounds (the curve is nonlinear),
+// or Remastered parity.
+// Separate from ToneWgsl so PBR and native HDR writers keep their existing shader source.
+inline constexpr std::string_view TevBlendWgsl = R"""(
+fn hdr_tev_srcalpha_add(c: vec3f, alpha: f32, t0: vec4f, t1: vec4f, t2: vec4f) -> vec3f {
+  let a = clamp(alpha, 0.0, 1.0);
+  if (a <= 0.0) {
+    return vec3f(0.0);
+  }
+  return hdr_exposed(clamp(c, vec3f(0.0), vec3f(1.0)) * a, t0, t1, t2) / a;
+}
+)""";
+
 // The single post-tone (post_tone below) for a shader that turns exposed scene light into display
 // colour, as an EFB copy of the HDR scene does. Needs ToneWgsl before it. A separate string so the
 // HDR writers that only need ToneWgsl keep their bytes.
@@ -151,6 +170,15 @@ inline float srgb_enc(float l) noexcept {
 inline float exposed(float c, const Tone& t) noexcept {
   const float y = srgb_dec(c);
   return t[1][0] <= 0.f ? y : std::clamp(untone(y, t), 0.f, HdrMax);
+}
+
+// CPU reference for hdr_tev_srcalpha_add; alpha itself is never rewritten by the writer.
+inline float tev_srcalpha_add(float c, float alpha, const Tone& t) noexcept {
+  const float a = std::clamp(alpha, 0.f, 1.f);
+  if (a <= 0.f) {
+    return 0.f;
+  }
+  return exposed(std::clamp(c, 0.f, 1.f) * a, t) / a;
 }
 
 // What the single post-tone after the HDR scene draws for an exposed level: the LDR PBR encode

@@ -19,6 +19,10 @@
 // It speaks only what the client sends: one player ("Samus"), whose
 // locations hold the seed's placements. Every method may be called from
 // different threads; the client's socket thread is the one that uses it.
+namespace port {
+class JsonWriter;
+}
+
 namespace PortApSolo {
 
 // The slot name a solo game is played as, and the server string that selects
@@ -62,7 +66,7 @@ private:
   void Handle(const PortJson::Value& packet);
   void Queue(const std::string& packet);
   int64_t Flags(int64_t item) const;
-  std::string ItemJson(const Received& received) const;
+  void WriteItem(port::JsonWriter& json, const Received& received) const;
   std::string ReceivedItemsJson(size_t from) const;
   bool Check(int64_t location);
   void SaveState();

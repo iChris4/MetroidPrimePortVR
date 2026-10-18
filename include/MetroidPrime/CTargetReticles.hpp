@@ -107,6 +107,10 @@ public:
 private:
 #ifdef TARGET_PC
   static void PortPresentGroup(CTargetReticleRenderState& state, const CStateManager& mgr);
+  void PortUpdateRemasteredCrosshair(float dt, const CStateManager& mgr);
+  float xPortXhairArmScale = 1.f;
+  float xPortXhairCentreScale = 1.f;
+  float xPortXhairTargetT = 0.f;
 #endif
   CQuaternion x0_leadingOrientation;
   CQuaternion x10_laggingOrientation;

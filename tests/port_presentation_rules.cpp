@@ -2,24 +2,13 @@
 // tick that wrote them, and the rolling ball blends about its centre.
 
 #include "port_presentation_rules.h"
+#include "port_test.h"
 
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 
 namespace {
-int sLine = 0;
-void Check(bool condition) {
-  if (!condition) {
-    std::fprintf(stderr, "presentation rules regression failed at line %d\n", sLine);
-    std::abort();
-  }
-}
-#define CHECK(cond)                                                                                \
-  do {                                                                                             \
-    sLine = __LINE__;                                                                              \
-    Check(cond);                                                                                   \
-  } while (0)
 
 struct V {
   double x = 0, y = 0, z = 0;
@@ -55,26 +44,26 @@ struct Ops {
 
 int main() {
   // Snapshots: fresh only in their own tick; generation 0 is never current.
-  CHECK(PortSnapshotFresh(5, 5));
-  CHECK(!PortSnapshotFresh(5, 6)); // a tick that skipped the camera Update
-  CHECK(!PortSnapshotFresh(5, 9));
-  CHECK(!PortSnapshotFresh(0, 0));
-  CHECK(!PortSnapshotFresh(3, 0));
+  REQUIRE(PortSnapshotFresh(5, 5));
+  REQUIRE(!PortSnapshotFresh(5, 6)); // a tick that skipped the camera Update
+  REQUIRE(!PortSnapshotFresh(5, 9));
+  REQUIRE(!PortSnapshotFresh(0, 0));
+  REQUIRE(!PortSnapshotFresh(3, 0));
 
   // Rules: teleports always cut; turns cut ordinary actors only.
-  CHECK(PortClassifyRigidBlend(0.f, 1.f, false) == PortRigidBlendKind::Full);
-  CHECK(PortClassifyRigidBlend(16.1f, 1.f, false) == PortRigidBlendKind::Cut);
-  CHECK(PortClassifyRigidBlend(16.1f, 1.f, true) == PortRigidBlendKind::Cut);
-  CHECK(PortClassifyRigidBlend(0.01f, 0.5f, false) == PortRigidBlendKind::Cut);
-  CHECK(PortClassifyRigidBlend(0.01f, 0.5f, true) == PortRigidBlendKind::TranslateOnly);
-  CHECK(PortClassifyRigidBlend(0.01f, 0.95f, true) == PortRigidBlendKind::Full);
+  REQUIRE(PortClassifyRigidBlend(0.f, 1.f, false) == PortRigidBlendKind::Full);
+  REQUIRE(PortClassifyRigidBlend(16.1f, 1.f, false) == PortRigidBlendKind::Cut);
+  REQUIRE(PortClassifyRigidBlend(16.1f, 1.f, true) == PortRigidBlendKind::Cut);
+  REQUIRE(PortClassifyRigidBlend(0.01f, 0.5f, false) == PortRigidBlendKind::Cut);
+  REQUIRE(PortClassifyRigidBlend(0.01f, 0.5f, true) == PortRigidBlendKind::TranslateOnly);
+  REQUIRE(PortClassifyRigidBlend(0.01f, 0.95f, true) == PortRigidBlendKind::Full);
   // Issue #99: a body already moving fast keeps blending; a jump far beyond
   // its last step still cuts.
-  CHECK(PortClassifyRigidBlend(36.f, 1.f, false, 25.f) == PortRigidBlendKind::Full);
-  CHECK(PortClassifyRigidBlend(25.f, 1.f, false, 36.f) == PortRigidBlendKind::Full);
-  CHECK(PortClassifyRigidBlend(400.f, 1.f, false, 25.f) == PortRigidBlendKind::Cut);
-  CHECK(PortClassifyRigidBlend(36.f, 1.f, false, 0.f) == PortRigidBlendKind::Cut);
-  CHECK(!PortIsTeleport(16.f, 0.f));
+  REQUIRE(PortClassifyRigidBlend(36.f, 1.f, false, 25.f) == PortRigidBlendKind::Full);
+  REQUIRE(PortClassifyRigidBlend(25.f, 1.f, false, 36.f) == PortRigidBlendKind::Full);
+  REQUIRE(PortClassifyRigidBlend(400.f, 1.f, false, 25.f) == PortRigidBlendKind::Cut);
+  REQUIRE(PortClassifyRigidBlend(36.f, 1.f, false, 0.f) == PortRigidBlendKind::Cut);
+  REQUIRE(!PortIsTeleport(16.f, 0.f));
 
   // Production blend (PortBlendRigidGeneric, the body of CActor::PortBlendRigid).
   const Ops ops;
@@ -91,36 +80,36 @@ int main() {
   for (int i = 0; i <= 10; ++i) {
     const float t = i / 10.f;
     Xf bl, cur;
-    CHECK(blend(a, b, t, bl, cur, true));
-    CHECK(std::fabs(bl.pos.y - 0.4 * t) < 1e-6);
-    CHECK(std::fabs(bl.pos.z - r) < 1e-6);
-    CHECK(std::fabs(bl.rollX - 0.6 * t) < 1e-6);
+    REQUIRE(blend(a, b, t, bl, cur, true));
+    REQUIRE(std::fabs(bl.pos.y - 0.4 * t) < 1e-6);
+    REQUIRE(std::fabs(bl.pos.z - r) < 1e-6);
+    REQUIRE(std::fabs(bl.rollX - 0.6 * t) < 1e-6);
     // Endpoints: t=0 = previous pose, t=1 = current pose.
     if (i == 0)
-      CHECK(std::fabs(bl.pos.y) < 1e-6 && std::fabs(bl.rollX) < 1e-9);
+      REQUIRE(std::fabs(bl.pos.y) < 1e-6 && std::fabs(bl.rollX) < 1e-9);
     if (i == 10)
-      CHECK(std::fabs(bl.pos.y - 0.4) < 1e-6 && std::fabs(bl.rollX - 0.6) < 1e-9);
+      REQUIRE(std::fabs(bl.pos.y - 0.4) < 1e-6 && std::fabs(bl.rollX - 0.6) < 1e-9);
     // The old origin pivot: centre = blend origin + R_blend R_cur^-1 lift.
     const V off = RotX(lift, bl.rollX - cur.rollX);
     const double oldZ = off.z, oldY = 0.4 * t + off.y;
     if (i > 0 && i < 10)
-      CHECK(std::fabs(oldY - 0.4 * t) > 1e-3 || std::fabs(oldZ - r) > 1e-3);
+      REQUIRE(std::fabs(oldY - 0.4 * t) > 1e-3 || std::fabs(oldZ - r) > 1e-3);
   }
   // Big roll (>45 degrees, 2 rad): pivoted keeps translation, current rotation.
   {
     const Xf big{{0, 0.4, 0}, 2.0};
     Xf bl, cur;
-    CHECK(blend(a, big, 0.5f, bl, cur, true));
-    CHECK(std::fabs(bl.pos.y - 0.2) < 1e-6);
-    CHECK(std::fabs(bl.rollX - 2.0) < 1e-9); // TranslateOnly: sim rotation
+    REQUIRE(blend(a, big, 0.5f, bl, cur, true));
+    REQUIRE(std::fabs(bl.pos.y - 0.2) < 1e-6);
+    REQUIRE(std::fabs(bl.rollX - 2.0) < 1e-9); // TranslateOnly: sim rotation
     // The same turn cuts an ordinary actor.
-    CHECK(!blend(a, big, 0.5f, bl, cur, false));
+    REQUIRE(!blend(a, big, 0.5f, bl, cur, false));
   }
   // Teleport cuts even when pivoted.
   {
     const Xf far{{0, 10, 0}, 0.0};
     Xf bl, cur;
-    CHECK(!blend(a, far, 0.5f, bl, cur, true));
+    REQUIRE(!blend(a, far, 0.5f, bl, cur, true));
   }
   return 0;
 }

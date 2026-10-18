@@ -77,5 +77,6 @@ void NoteAdvanced();
 
 void PressA(CFinalInput& input);
 void PressB(CFinalInput& input);
+void PressX(CFinalInput& input);
 
 } // namespace PortPointerMenu

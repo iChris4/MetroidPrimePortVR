@@ -7,6 +7,20 @@ namespace PortMouse {
 constexpr float kMaxPitch = 1.52f; // approximately 87 degrees, short of the pole
 constexpr float kPi = 3.14159265358979323846f;
 
+// Quake/Source/Apex sensitivity scale: one count turns 0.022 degrees per unit
+// (m_yaw), so the same number gives the same turn per count as those games.
+// The setting itself stays in radians per count.
+constexpr double kSourceRadiansPerUnit = 0.022 * 3.14159265358979323846 / 180.0;
+inline float SourceFromRadians(float radiansPerCount) {
+  return float(radiansPerCount / kSourceRadiansPerUnit);
+}
+inline float RadiansFromSource(float source) { return float(source * kSourceRadiansPerUnit); }
+// Hand travel for a full turn at a mouse's counts per inch.
+inline float CentimetresPer360(float radiansPerCount, float dpi) {
+  if (!(radiansPerCount > 0.f) || !(dpi > 0.f)) return 0.f;
+  return float(2.0 * 3.14159265358979323846 / radiansPerCount / dpi * 2.54);
+}
+
 struct Planar {
   float right;
   float forward;
@@ -72,8 +86,17 @@ struct AimState {
   float yaw = 0.f;
   float pitch = 0.f;
   bool initialized = false;
+  // The turn the last Update made from its lagged travel (lagDx, lagDy), after
+  // the pitch clamp. Frames between ticks draw that part of the turn after its
+  // tick rather than before it (Preview's lag), so a clamp that ate the travel
+  // draws no motion.
+  float lagYaw = 0.f;
+  float lagPitch = 0.f;
 
-  void Reset() { initialized = false; }
+  void Reset() {
+    initialized = false;
+    lagYaw = lagPitch = 0.f;
+  }
 
   void Synchronize(float x, float y, float z) {
     const float length = std::sqrt(x * x + y * y + z * z);
@@ -91,25 +114,41 @@ struct AimState {
 
   // A locked camera owns orientation. Track its effective direction, but never
   // consume hidden mouse movement or rotate the player's body underneath it.
+  // (lagDx, lagDy) is the part of (dx, dy) whose turn is drawn after the tick
+  // (the twin stick's), recorded in lagYaw/lagPitch.
   bool Update(bool active, bool locked, float x, float y, float z,
-              float dx, float dy, float sensitivity, bool invertX, bool invertY) {
+              float dx, float dy, float sensitivity, bool invertX, bool invertY,
+              float lagDx = 0.f, float lagDy = 0.f) {
+    lagYaw = lagPitch = 0.f;
     if (!active) {
       Reset();
       return false;
     }
     if (!initialized || locked) Synchronize(x, y, z);
     if (!initialized || locked) return false;
+    float restYaw = yaw;
+    float restPitch = pitch;
+    Apply(dx - lagDx, dy - lagDy, sensitivity, invertX, invertY, restYaw, restPitch);
     Apply(dx, dy, sensitivity, invertX, invertY, yaw, pitch);
+    lagYaw = static_cast<float>(std::remainder(double(yaw) - restYaw, 2.0 * kPi));
+    lagPitch = pitch - restPitch;
     return true;
   }
 
   // The angles Update would reach with (dx, dy), leaving the state alone.
-  // Frames drawn between ticks show look input the next tick will apply.
+  // Frames drawn between ticks show look input the next tick will apply, on top
+  // of the last tick's lagged turn with the share lag (0..1) of it not yet shown
+  // taken back.
   bool Preview(float dx, float dy, float sensitivity, bool invertX, bool invertY,
-               float& outYaw, float& outPitch) const {
+               float& outYaw, float& outPitch, float lag = 0.f) const {
     outYaw = yaw;
     outPitch = pitch;
     if (!initialized) return false;
+    if (std::isfinite(lag) && lag > 0.f) {
+      lag = lag > 1.f ? 1.f : lag;
+      outYaw = static_cast<float>(std::remainder(double(yaw) - double(lag) * lagYaw, 2.0 * kPi));
+      outPitch = pitch - lag * lagPitch;
+    }
     Apply(dx, dy, sensitivity, invertX, invertY, outYaw, outPitch);
     return true;
   }
@@ -145,8 +184,12 @@ private:
 struct PointerAim {
   float x = 0.f;
   float y = 0.f;
+  // How far the last MoveLagged's lagged travel moved the pointer, after the
+  // edge clamp (see AimState::lagYaw).
+  float lagX = 0.f;
+  float lagY = 0.f;
 
-  void Center() { x = y = 0.f; }
+  void Center() { x = y = lagX = lagY = 0.f; }
 
   // dx, dy: window-space travel already scaled to the -1..1 range.
   static void Move(float dx, float dy, float& outX, float& outY) {
@@ -154,7 +197,29 @@ struct PointerAim {
     outX = Clamp1(outX + dx);
     outY = Clamp1(outY + dy);
   }
-  void Move(float dx, float dy) { Move(dx, dy, x, y); }
+  void Move(float dx, float dy) { MoveLagged(dx, dy, 0.f, 0.f); }
+  // (lagDx, lagDy) is the part of (dx, dy) drawn after the tick.
+  void MoveLagged(float dx, float dy, float lagDx, float lagDy) {
+    float restX = x;
+    float restY = y;
+    Move(dx - lagDx, dy - lagDy, restX, restY);
+    Move(dx, dy, x, y);
+    lagX = x - restX;
+    lagY = y - restY;
+  }
+  // Where a frame between ticks draws the pointer: the travel (dx, dy) since the
+  // tick on top of the last move, with the share lag (0..1) of its lagged travel
+  // not yet shown taken back.
+  void Presented(float lag, float dx, float dy, float& outX, float& outY) const {
+    outX = x;
+    outY = y;
+    if (std::isfinite(lag) && lag > 0.f) {
+      lag = lag > 1.f ? 1.f : lag;
+      outX -= lag * lagX;
+      outY -= lag * lagY;
+    }
+    Move(dx, dy, outX, outY);
+  }
 
   // How far past the dead box (0..1) the pointer is on one axis, signed.
   static float Overshoot(float value, float box) {
@@ -201,6 +266,37 @@ struct PointerAim {
 
 private:
   static float Clamp1(float v) { return v < -1.f ? -1.f : v > 1.f ? 1.f : v; }
+};
+
+// The game applies the aim twice a tick: CPlayer::ProcessInput with the tick's
+// travel, then CPlayer::Update to revalidate it with none left. Only the first
+// applied update of a tick records the turn drawn after it (AimState::lagYaw,
+// PointerAim::lagX); the second would clear it, and the twin stick would turn
+// the view once a tick between smooth frames (issue #140). Only the first makes
+// the tick's pointer edge turn too: a second turned the view twice the set
+// speed, and the frames between ticks, which draw one tick's turn, jumped by
+// the other half at each tick.
+class TickAim {
+public:
+  void BeginTick() { mRecorded = false; }
+  // No update has been applied yet this tick.
+  bool First() const { return !mRecorded; }
+  // After an applied update; `aim` and `pointer` were `aimBefore` and
+  // `pointerBefore` ahead of it. pointerFree: the update left pointer aim free.
+  void Applied(AimState& aim, const AimState& aimBefore, PointerAim& pointer,
+               const PointerAim& pointerBefore, bool pointerFree) {
+    if (mRecorded) {
+      aim.lagYaw = aimBefore.lagYaw;
+      aim.lagPitch = aimBefore.lagPitch;
+      if (pointerFree) {
+        pointer.lagX = pointerBefore.lagX;
+        pointer.lagY = pointerBefore.lagY;
+      }
+    }
+    mRecorded = true;
+  }
+private:
+  bool mRecorded = false;
 };
 
 class ButtonGate {

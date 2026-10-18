@@ -29,6 +29,47 @@
 #include "rstl/StringExtras.hpp"
 #include "rstl/math.hpp"
 
+#ifdef TARGET_PC
+#include "port_debug.h"
+
+// The credits background is a 4:3 movie with a 16:9 picture band, and the text and cinema bars
+// are laid out for it. A wider viewport draws the movie pillarboxed at its 4:3 width, so lay
+// the text and bars out in that width rather than the viewport's.
+static int PortCreditsWidth() {
+  const CViewport& vp = CGraphics::GetViewport();
+  return rstl::min_val(vp.mWidth, PortDebug::FourThreeWidth(vp.mWidth, vp.mHeight));
+}
+
+// CCameraFilterPass::DrawWideScreen for a 16:9 band of PortCreditsWidth(): its bars are sized
+// from the viewport's width and vanish at 16:9 and wider.
+static void PortDrawCreditsBars() {
+  const rstl::pair< CVector2f, CVector2f > vp = gpRender->SetViewportOrtho(true, -4096.f, 4096.f);
+  const float left = vp.first.GetX() - 10.f;
+  const float right = vp.second.GetX() + 10.f;
+  const float top = vp.first.GetY();
+  const float bottom = vp.second.GetY();
+  const float barHeight = ((bottom - top) - PortCreditsWidth() / 16.f * 9.f) * 0.5f;
+  if (barHeight <= 0.f) {
+    return;
+  }
+  gpRender->SetDepthReadWrite(false, false);
+  gpRender->SetModelMatrix(CTransform4f::Identity());
+  gpRender->SetBlendMode_ColorMultiply();
+  for (int i = 0; i < 2; ++i) {
+    const float z0 = i == 0 ? top : bottom - barHeight;
+    const float z1 = z0 + barHeight;
+    gpRender->BeginTriangleStrip(4);
+    gpRender->PrimColor(CColor::Black());
+    gpRender->PrimVertex(CVector3f(left, 0.f, z1));
+    gpRender->PrimVertex(CVector3f(left, 0.f, z0));
+    gpRender->PrimVertex(CVector3f(right, 0.f, z1));
+    gpRender->PrimVertex(CVector3f(right, 0.f, z0));
+    gpRender->EndPrimitive();
+  }
+  gpRender->SetBlendMode_AlphaBlended();
+}
+#endif
+
 static const char* const skMovieNames[] = {"Video/wingame.thp",       "Video/wingame_best.thp",
                                            "Video/wingame_best.thp",  "Video/losegame.thp",
                                            "Video/05_tallonText.thp", "Video/AfterCredits.thp",
@@ -503,7 +544,11 @@ CIOWin::EMessageReturn CCredits::Update(float dt, CArchitectureQueue& queue) {
       return kMR_Exit;
     }
     int height = CGraphics::GetViewport().mHeight;
+#ifdef TARGET_PC
+    int width = PortCreditsWidth() - 64;
+#else
     int width = CGraphics::GetViewport().mWidth - 64;
+#endif
     if (x30_text.empty()) {
       const CStringTable& table = **x18_creditsTable;
       for (int i = 0; i < table.GetStringCount(); ++i) {
@@ -648,8 +693,12 @@ void CCredits::DrawText() const {
                                      x48_scrollPosition - it->second.GetX()));
     }
   }
+#ifdef TARGET_PC
+  PortDrawCreditsBars();
+#else
   CCameraFilterPass::DrawFilter(CCameraFilterPass::kFT_Multiply, CCameraFilterPass::kFS_CinemaBars,
                                 CColor::Black(), nullptr, 1.f);
+#endif
 }
 
 void CCredits::DrawVideo() const {

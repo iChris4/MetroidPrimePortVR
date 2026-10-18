@@ -65,7 +65,7 @@ public:
 
     bool LineTest(const CLine& line, const CMaterialFilter& filter, float length) const;
     void LineTestEx(const CLine& line, const CMaterialFilter& filter, SRayResult& res,
-                    float length) const;
+                    float length, bool frontOnly = false) const;
 
     const CAreaOctTree& GetOwner() const { return x1c_owner; }
     const CAABox& GetBoundingBox() const { return x0_aabb; }
@@ -89,7 +89,8 @@ public:
     bool LineTestInternal(const CLine& line, const CMaterialFilter& filter, float lT, float hT,
                           float maxT, const CVector3f& vec) const;
     void LineTestExInternal(const CLine& line, const CMaterialFilter& filter, SRayResult& res,
-                            float lT, float hT, float maxT, const CVector3f& dirRecip) const;
+                            float lT, float hT, float maxT, const CVector3f& dirRecip,
+                            bool frontOnly) const;
   };
 
   CAreaOctTree(const CAABox& bounds, Node::ETreeType treeType, uchar* buf, void* treeBuf,

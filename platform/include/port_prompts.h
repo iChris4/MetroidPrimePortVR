@@ -18,6 +18,11 @@ namespace PortPrompts {
 // texture set follow this.
 const char* ActiveDevice();
 
+// True while the keyboard or mouse is the input the player last used, ignoring
+// the MP_TEXTURE_DEVICE and prompt glyph overrides. Rumble is held off then, so a
+// pad left plugged in does not shake while the game is played on keyboard/mouse.
+bool KeyboardActive();
+
 // Call once after Aurora is up, with the same texture root the replacements
 // came from (null or empty disables the module).
 void Initialize(const char* textureRoot);

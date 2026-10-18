@@ -33,12 +33,46 @@ class SWeaponInfo;
 
 #ifdef TARGET_PC
 namespace NPortChargeFxDetail {
+// CGunWeapon's muzzle-effect slots: 0 is the normal muzzle flash and 1 the charge effect
+// (`ActivateCharge` switches between them; see `GetChargeMuzzleFx`).
+inline constexpr unsigned kMuzzleEffectChargeSlot = 1;
+
+// Preserve the existing Rx(+90) policy for converted non-Power charge effects. Their effective
+// native attachment frames have not been established by the Power-only source audit below.
+// Compose on the sampled locator's own side, keeping its animated translation unchanged.
+inline CTransform4f ConvertedChargeMuzzleFrame(const CTransform4f& locator) {
+  const CVector3f translation = locator.GetTranslation();
+  return CTransform4f(locator.Get00(), locator.Get02(), -locator.Get01(), translation.GetX(),
+                      locator.Get10(), locator.Get12(), -locator.Get11(), translation.GetY(),
+                      locator.Get20(), locator.Get22(), -locator.Get21(), translation.GetZ());
+}
+
+// Power's effective native LBEAM includes the legacy wrapper's right-multiplied rotation
+// correction; raw/bind bone axes alone incorrectly suggested authored EMTR +Z pointed back.
+// The corrected native frame is X left, Y up, Z forward; retail is X right, Y forward, Z up.
+// R_sampled * B, B = [-1 0 0; 0 0 1; 0 1 0], therefore has columns (-col0,col2,col1).
+// B is a proper rotation (det +1): EMTR (0,0,.15) at scale 2 goes .30 forward, not backward.
+// This is only a Power charge-slot policy, not native animation retargeting or pose parity.
+// Source contract: build/s-powercharge-native-20261017/{legacy-locator,emitter-sign}/REPORT.md.
+inline CTransform4f ConvertedPowerChargeMuzzleFrame(const CTransform4f& locator) {
+  const CVector3f translation = locator.GetTranslation();
+  return CTransform4f(-locator.Get00(), locator.Get02(), locator.Get01(), translation.GetX(),
+                      -locator.Get10(), locator.Get12(), locator.Get11(), translation.GetY(),
+                      -locator.Get20(), locator.Get22(), locator.Get21(), translation.GetZ());
+}
+
+// Retail keeps translation only; converted normal flashes keep the full sampled locator.
 template < typename Generator >
-void SetLocalLocator(Generator& generator, const CTransform4f& locator) {
-  if (generator.PortIsRemastered()) {
-    generator.SetGlobalOrientAndTrans(locator);
-  } else {
+void SetLocalLocator(Generator& generator, const CTransform4f& locator, const bool chargeEffect,
+                     const bool isPowerBeam) {
+  if (!generator.PortIsRemastered()) {
     generator.SetGlobalTranslation(locator.GetTranslation());
+  } else if (chargeEffect) {
+    generator.SetGlobalOrientAndTrans(isPowerBeam ? ConvertedPowerChargeMuzzleFrame(locator)
+                                                 : ConvertedChargeMuzzleFrame(locator));
+  } else {
+    // The sampled locator itself, no copy.
+    generator.SetGlobalOrientAndTrans(locator);
   }
 }
 } // namespace NPortChargeFxDetail

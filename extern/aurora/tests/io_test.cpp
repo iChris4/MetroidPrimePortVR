@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <filesystem>
 #include <span>
 #include <string>
@@ -18,7 +19,8 @@ protected:
   void SetUp() override {
     static std::atomic_uint64_t counter{0};
     m_directory = std::filesystem::temp_directory_path() /
-                  ("aurora-io-test-" + std::to_string(counter.fetch_add(1, std::memory_order_relaxed)));
+                  ("aurora-io-test-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) +
+                   "-" + std::to_string(counter.fetch_add(1, std::memory_order_relaxed)));
     ASSERT_TRUE(aurora::io::create_directories(m_directory)) << SDL_GetError();
   }
 

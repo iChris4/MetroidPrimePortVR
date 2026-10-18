@@ -1,5 +1,6 @@
 // #include "dolphin/os/OSArena.h"
 #include "dolphin/types.h"
+#include "port_env.h"
 #include "stddef.h"
 #include <stdio.h>
 #include <dolphin/os.h>
@@ -448,10 +449,7 @@ bool CGameAllocator::Free(const void* ptr) {
 
 #ifdef TARGET_PC
 bool CGameAllocator::HeapCheckEnabled() {
-  static const bool sEnabled = [] {
-    const char* env = getenv("MP_HEAP_CHECK");
-    return env != nullptr && env[0] != '\0' && env[0] != '0';
-  }();
+  static const bool sEnabled = port::EnvFlag("MP_HEAP_CHECK");
   return sEnabled;
 }
 

@@ -403,6 +403,8 @@ final class TouchControlsView extends View {
     // nativePointerMenuActive() as of the last draw: then only the back button
     // shows, and every other finger goes to the SDL surface for the game.
     private boolean pointerMenuNow;
+    // nativeTouchControlsEnabled() as of the last draw or poll; touches go by it.
+    private boolean controlsOnNow = true;
     private final RectF backButtonRect = new RectF();
     private final RectF cogButtonRect = new RectF();
     private final Runnable mapButtonPoll = new Runnable() {
@@ -412,9 +414,12 @@ final class TouchControlsView extends View {
             if (editing) {
                 return;
             }
-            if ((mapTap && mapButtonState(getWidth(), getHeight()) != mapButtonShown) ||
-                (wheels && ((nativeWheelOwned() & WHEEL_VALID_BIT) != 0) != wheelButtonsShown) ||
-                rHidden() != rHiddenNow || nativePointerMenuActive() != pointerMenuNow) {
+            if (nativeTouchControlsEnabled() != controlsOnNow ||
+                (controlsOnNow &&
+                 ((mapTap && mapButtonState(getWidth(), getHeight()) != mapButtonShown) ||
+                  (wheels && ((nativeWheelOwned() & WHEEL_VALID_BIT) != 0) != wheelButtonsShown) ||
+                  rHidden() != rHiddenNow)) ||
+                nativePointerMenuActive() != pointerMenuNow) {
                 invalidate();
             } else {
                 postDelayed(this, MAP_BUTTON_POLL_MS);
@@ -447,6 +452,10 @@ final class TouchControlsView extends View {
     private static native float nativeTouchStickInsetDp();
     // The face buttons' and C-stick's extra inset from the right edge, in dp.
     private static native float nativeTouchButtonInsetDp();
+    // F1's opacity for the gameplay controls, in percent (10-100).
+    private static native float nativeTouchOpacity();
+    // F1's "On-screen controls": false leaves only the MENU and START pills.
+    private static native boolean nativeTouchControlsEnabled();
     // The saved per-control layout (`<id>:<dx>,<dy>,<scale>;...`), and its writer, which
     // also saves F1's config.
     private static native String nativeTouchLayout();
@@ -533,9 +542,14 @@ final class TouchControlsView extends View {
         public void run() {
             // Always drained, so input from while the controls were already
             // hidden cannot hide them again the moment they come back.
-            if (nativeTakePhysicalInput() && !hidden && !autoHidden && !editing) {
+            // With the controls off only MENU and START are left and they stay up.
+            if (nativeTakePhysicalInput() && !hidden && !autoHidden && !editing &&
+                nativeTouchControlsEnabled()) {
                 autoHidden = true;
                 releaseAll();
+            }
+            if (syncControlsOn()) {
+                invalidate();
             }
             if (nativeTouchEditRequested()) {
                 editPending = true;
@@ -606,7 +620,8 @@ final class TouchControlsView extends View {
             postInvalidateDelayed(150);
             return;
         }
-        if ((autoHidden || hidden) && !editing) {
+        syncControlsOn();
+        if ((autoHidden || hidden) && !editing && controlsOnNow) {
             return;
         }
 
@@ -635,6 +650,63 @@ final class TouchControlsView extends View {
             postDelayed(mapButtonPoll, MAP_BUTTON_POLL_MS);
             return;
         }
+        if (!controlsOnNow && !editing) {
+            drawMenuPills(canvas, width, height);
+            removeCallbacks(mapButtonPoll);
+            postDelayed(mapButtonPoll, MAP_BUTTON_POLL_MS);
+            return;
+        }
+        // F1's opacity for the on-screen controls: the gameplay controls (and the
+        // layout editor over them) fade together. The pointer menu's back and cog
+        // buttons were drawn above this and stay fully visible.
+        final float touchOpacity = editing ? 100f : nativeTouchOpacity();
+        final int controlsAlpha = Math.round(touchOpacity * 2.55f);
+        // 255 means no layer at all, the default, so nothing changes (and nothing
+        // is paid for) at 100%.
+        final int savedLayer = controlsAlpha < 255
+                ? canvas.saveLayerAlpha(0f, 0f, width, height, controlsAlpha) : -1;
+        try {
+            drawControls(canvas, width, height, classic);
+        } finally {
+            // Every path back out of the controls, including an exception, puts the
+            // canvas back.
+            if (savedLayer >= 0) {
+                canvas.restoreToCount(savedLayer);
+            }
+        }
+    }
+
+    // Re-reads F1's "On-screen controls"; true when it changed. Nothing held may
+    // outlive the controls it came from, so a change lets go of everything.
+    private boolean syncControlsOn() {
+        final boolean on = nativeTouchControlsEnabled();
+        if (on == controlsOnNow) {
+            return false;
+        }
+        controlsOnNow = on;
+        releaseAll();
+        return true;
+    }
+
+    // The controls-off view: only START and MENU, fully opaque and at their default
+    // spots (applyOverride skips a saved layout), so MENU is always reachable.
+    private void drawMenuPills(Canvas canvas, float width, float height) {
+        colored = false;
+        labels = false;
+        pills = GAMECUBE_PILLS;
+        wheels = false;
+        mapTap = false;
+        mapButtonShown = false;
+        for (PillButton pill : pills) {
+            if (isMenuPill(pill)) {
+                drawPillButton(canvas, pill, width, height);
+            }
+        }
+    }
+
+    // The gameplay controls and the layout editor, without the pointer menu's own
+    // buttons, which onDraw draws before this (outside the opacity layer).
+    private void drawControls(Canvas canvas, float width, float height, boolean classic) {
         // Classic and twin stick are exclusive (the native side keeps them so).
         twin = !classic && nativeTouchTwinStick();
         face = twin ? TWIN_FACE : GAMECUBE_FACE;
@@ -735,6 +807,9 @@ final class TouchControlsView extends View {
 
     // Moves and scales a control's default rect by its override, round its centre.
     private void applyOverride(int control, RectF rect, float height) {
+        if (!controlsOnNow && !editing) {
+            return; // MENU and START stay put and reachable
+        }
         if (ovDx[control] == 0f && ovDy[control] == 0f && ovScale[control] == 1f) {
             return; // the default layout stays bit-for-bit what it was
         }
@@ -748,12 +823,12 @@ final class TouchControlsView extends View {
 
     // The back button of a pointer menu, where START sits; hiding the controls hides it.
     private boolean onBackButton(float x, float y) {
-        return pointerMenuNow && !hidden && !autoHidden && backButtonRect.contains(x, y);
+        return pointerMenuNow && (!controlsOnNow || (!hidden && !autoHidden)) && backButtonRect.contains(x, y);
     }
 
     // The cog beside it, where MENU sits.
     private boolean onCogButton(float x, float y) {
-        return pointerMenuNow && !hidden && !autoHidden && cogButtonRect.contains(x, y);
+        return pointerMenuNow && (!controlsOnNow || (!hidden && !autoHidden)) && cogButtonRect.contains(x, y);
     }
 
     // A round button with a left arrow: B in the game's menus and map.
@@ -838,6 +913,7 @@ final class TouchControlsView extends View {
         // Anything still held has to go first: once this view stops claiming
         // touches the matching releases never arrive, which left whatever was
         // down (a trigger, say) held for the rest of the session.
+        syncControlsOn();
         final boolean overlayVisible = nativeDebugOverlayVisible();
         if (overlayVisible && (!targets.isEmpty() || !held.isEmpty())) {
             releaseAll();
@@ -868,7 +944,8 @@ final class TouchControlsView extends View {
             }
         }
 
-        if (autoHidden) {
+        // With the controls off nothing is hidden and no touch brings anything back.
+        if (autoHidden && controlsOnNow) {
             // The touch that brings them back is not also a press.
             if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN) {
                 autoHidden = false;
@@ -879,7 +956,7 @@ final class TouchControlsView extends View {
             return true;
         }
 
-        if (hidden) {
+        if (hidden && controlsOnNow) {
             // Any touch brings the controls back, and is not also a press.
             if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN) {
                 setHidden(false);
@@ -903,11 +980,11 @@ final class TouchControlsView extends View {
                 invalidate();
                 return true;
             }
-            if (hideBounds.contains(x, y)) {
+            if (controlsOnNow && hideBounds.contains(x, y)) {
                 targets.put(pointerId, new TouchTarget(HIDE, 0));
                 return true;
             }
-            if (mapButtonShown && mapButtonRect.contains(x, y)) {
+            if (controlsOnNow && mapButtonShown && mapButtonRect.contains(x, y)) {
                 targets.put(pointerId, TouchTarget.begin(MAP_TAP, 0, x, y));
                 return true;
             }
@@ -1085,6 +1162,9 @@ final class TouchControlsView extends View {
                 pressTarget(target, pillControl(pill), pill.id() != TOGGLE_DEBUG_OVERLAY);
                 return;
             }
+        }
+        if (!controlsOnNow) {
+            return; // only the two menu pills above; the rest of the screen does nothing
         }
         for (ControlButton button : face) {
             if (hitButton(button, x, y, width, height)) {
@@ -1885,6 +1965,9 @@ final class TouchControlsView extends View {
     }
 
     private boolean pillShown(PillButton pill) {
+        if (!controlsOnNow && !editing) {
+            return isMenuPill(pill);
+        }
         return !pillHidden(pill) && !(pill.axis == AXIS_TRIGGER_R && rHiddenNow);
     }
 

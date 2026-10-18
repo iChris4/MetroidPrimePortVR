@@ -1,4 +1,6 @@
 #include "port_save_convert.h"
+#include "port_map_marks.h"
+#include "port_test.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -16,14 +18,6 @@ namespace fs = std::filesystem;
 using namespace PortSaveConvert;
 
 namespace {
-int sFailures = 0;
-
-void Check(bool condition, const std::string& what) {
-  if (!condition) {
-    std::fprintf(stderr, "FAIL: %s\n", what.c_str());
-    ++sFailures;
-  }
-}
 
 bool ReadFile(const fs::path& path, std::vector<uint8_t>& out) {
   std::ifstream in(path, std::ios::binary);
@@ -55,7 +49,7 @@ void TestPrimitives() {
   uint8_t iv[16] = {};
   uint8_t out[16];
   AesCbcDecrypt(key, iv, cipher, 16, out);
-  Check(std::memcmp(out, plain, 16) == 0, "AES-128 decrypts the FIPS-197 vector");
+  CHECK_MSG(std::memcmp(out, plain, 16) == 0, "AES-128 decrypts the FIPS-197 vector");
   // CBC chains: two copies of the block decrypt to plain and plain ^ cipher.
   uint8_t two[32], outTwo[32];
   std::memcpy(two, cipher, 16);
@@ -64,8 +58,8 @@ void TestPrimitives() {
   bool chained = std::memcmp(outTwo, plain, 16) == 0;
   for (int i = 0; i < 16; ++i)
     chained = chained && outTwo[16 + i] == uint8_t(plain[i] ^ cipher[i]);
-  Check(chained, "AES-CBC chains blocks");
-  Check(Crc32(reinterpret_cast<const uint8_t*>("123456789"), 9) == 0xCBF43926u, "CRC32 check value");
+  CHECK_MSG(chained, "AES-CBC chains blocks");
+  CHECK_MSG(Crc32(reinterpret_cast<const uint8_t*>("123456789"), 9) == 0xCBF43926u, "CRC32 check value");
 }
 
 Save SyntheticSave(Layout layout) {
@@ -122,6 +116,7 @@ Save SyntheticSave(Layout layout) {
     s.ap[i] = i < 11 ? 0x01010101u * uint32_t(i) : uint32_t(i * 99);
   s.hasSeen = true;
   s.seen = {0x80000001u, 0, 0x12345678u, 0x7Fu};
+  s.marks = {PortMapMarks::Pack(1, 5), PortMapMarks::Pack(4, 60)};
   return save;
 }
 
@@ -133,45 +128,46 @@ bool RoundTrip(Save& save, bool pal, const char* what) {
   std::string error;
   std::vector<uint8_t> art(5120, 0xA5);
   if (!WriteGci(save, pal, art, 1000000000, gci, stats, error)) {
-    Check(false, std::string(what) + ": write: " + error);
+    CHECK_MSG(false, std::string(what) + ": write: " + error);
     return false;
   }
   Format format;
   Save back, back2;
   if (!Read(gci.data(), gci.size(), format, back, nullptr, error)) {
-    Check(false, std::string(what) + ": read: " + error);
+    CHECK_MSG(false, std::string(what) + ": read: " + error);
     return false;
   }
-  Check(format == NativeFormat(pal), std::string(what) + ": format detected");
+  CHECK_MSG(format == NativeFormat(pal), std::string(what) + ": format detected");
   if (!WriteGci(back, pal, art, 1000000000, gci2, stats, error)) {
-    Check(false, std::string(what) + ": rewrite: " + error);
+    CHECK_MSG(false, std::string(what) + ": rewrite: " + error);
     return false;
   }
-  Check(gci == gci2, std::string(what) + ": write(read(write)) is byte-identical");
-  Check(Read(gci2.data(), gci2.size(), format, back2, nullptr, error) && back == back2,
-        std::string(what) + ": re-read is equal");
+  CHECK_MSG(gci == gci2, std::string(what) + ": write(read(write)) is byte-identical");
+  CHECK_MSG(Read(gci2.data(), gci2.size(), format, back2, nullptr, error) && back == back2,
+            std::string(what) + ": re-read is equal");
   const Slot& a = save.slots[1];
   const Slot& b = back.slots[1];
-  Check(b.present && !back.slots[0].present && !back.slots[2].present, std::string(what) + ": slot presence");
-  Check(a.timestamp == b.timestamp && a.hard == b.hard && a.init == b.init && a.mlvl == b.mlvl &&
-            a.playHi == b.playHi && a.playLo == b.playLo && a.enabled == b.enabled && a.health == b.health &&
-            a.beam == b.beam && a.suit == b.suit,
-        std::string(what) + ": slot header fields");
-  Check(a.amount == b.amount && a.capacity == b.capacity && a.rates == b.rates && a.opts == b.opts,
-        std::string(what) + ": items, rates, options");
-  Check(a.sound == b.sound && a.bright == b.bright && a.xoff == b.xoff && a.yoff == b.yoff &&
-            a.stretch == b.stretch && a.sfx == b.sfx && a.music == b.music && a.hud == b.hud &&
-            a.helmet == b.helmet && a.flags == b.flags,
-        std::string(what) + ": option values");
-  Check(a.hintState == b.hintState && a.hintTime == b.hintTime, std::string(what) + ": hints");
-  Check(b.hasAp && a.ap == b.ap, std::string(what) + ": Archipelago trailer");
-  Check(b.hasSeen && a.seen == b.seen, std::string(what) + ": seen-pickups trailer");
-  Check(back.system.fps == 2 && back.system.ball == 1 && back.system.powerBombs == 1 &&
-            back.system.logScan == 77 && back.system.flags == save.system.flags &&
-            back.system.autoMapper == 2 && back.system.palField == save.system.palField,
-        std::string(what) + ": system fields");
-  Check(back.system.leadBytes == save.system.leadBytes, std::string(what) + ": lead bytes");
-  Check(ArtOf(gci.data(), gci.size()) == art, std::string(what) + ": art");
+  CHECK_MSG(b.present && !back.slots[0].present && !back.slots[2].present, std::string(what) + ": slot presence");
+  CHECK_MSG(a.timestamp == b.timestamp && a.hard == b.hard && a.init == b.init && a.mlvl == b.mlvl &&
+                a.playHi == b.playHi && a.playLo == b.playLo && a.enabled == b.enabled && a.health == b.health &&
+                a.beam == b.beam && a.suit == b.suit,
+            std::string(what) + ": slot header fields");
+  CHECK_MSG(a.amount == b.amount && a.capacity == b.capacity && a.rates == b.rates && a.opts == b.opts,
+            std::string(what) + ": items, rates, options");
+  CHECK_MSG(a.sound == b.sound && a.bright == b.bright && a.xoff == b.xoff && a.yoff == b.yoff &&
+                a.stretch == b.stretch && a.sfx == b.sfx && a.music == b.music && a.hud == b.hud &&
+                a.helmet == b.helmet && a.flags == b.flags,
+            std::string(what) + ": option values");
+  CHECK_MSG(a.hintState == b.hintState && a.hintTime == b.hintTime, std::string(what) + ": hints");
+  CHECK_MSG(b.hasAp && a.ap == b.ap, std::string(what) + ": Archipelago trailer");
+  CHECK_MSG(b.hasSeen && a.seen == b.seen, std::string(what) + ": seen-pickups trailer");
+  CHECK_MSG(a.marks == b.marks, std::string(what) + ": room-marks trailer");
+  CHECK_MSG(back.system.fps == 2 && back.system.ball == 1 && back.system.powerBombs == 1 &&
+                back.system.logScan == 77 && back.system.flags == save.system.flags &&
+                back.system.autoMapper == 2 && back.system.palField == save.system.palField,
+            std::string(what) + ": system fields");
+  CHECK_MSG(back.system.leadBytes == save.system.leadBytes, std::string(what) + ": lead bytes");
+  CHECK_MSG(ArtOf(gci.data(), gci.size()) == art, std::string(what) + ": art");
   save = back;
   return true;
 }
@@ -186,19 +182,19 @@ void TestSynthetic() {
   std::vector<uint8_t> head(0x40 + 0x2000, 0);
   std::memcpy(head.data(), "GM8P01", 6);
   std::memcpy(head.data() + 8, "MetroidPrime A", 14);
-  Check(Detect(head.data(), head.size()) == Format::PalLegacyGci, "legacy PAL save detected by name");
+  CHECK_MSG(Detect(head.data(), head.size()) == Format::PalLegacyGci, "legacy PAL save detected by name");
   std::memcpy(head.data() + 8, "MetroidPrime\0\0", 14);
-  Check(Detect(head.data(), head.size()) == Format::Unknown, "cut-short PAL save is not legacy");
+  CHECK_MSG(Detect(head.data(), head.size()) == Format::Unknown, "cut-short PAL save is not legacy");
 
   // USA -> PAL -> USA keeps everything the formats share.
   Stats stats;
   Save viaPal = usa;
   Retarget(viaPal, Layout::Pal, stats);
-  Check(viaPal.layout == Layout::Pal, "retarget changes the layout");
+  CHECK_MSG(viaPal.layout == Layout::Pal, "retarget changes the layout");
   Retarget(viaPal, Layout::Usa, stats);
-  Check(viaPal.slots[1].amount == usa.slots[1].amount && viaPal.slots[1].hintTime == usa.slots[1].hintTime &&
-            viaPal.slots[1].worlds.size() == usa.slots[1].worlds.size(),
-        "USA -> PAL -> USA keeps the slot");
+  CHECK_MSG(viaPal.slots[1].amount == usa.slots[1].amount && viaPal.slots[1].hintTime == usa.slots[1].hintTime &&
+                viaPal.slots[1].worlds.size() == usa.slots[1].worlds.size(),
+            "USA -> PAL -> USA keeps the slot");
 
   // Garbage never crashes: every prefix of a valid file, and noisy copies.
   std::vector<uint8_t> gci;
@@ -228,25 +224,25 @@ void TestSynthetic() {
     Conversion conversion;
     Format got;
     Save back;
-    Check(ConvertTo(gci.data(), gci.size(), target, {}, conversion, error) &&
-              Read(conversion.gci.data(), conversion.gci.size(), got, back, nullptr, error) && got == target &&
-              back.slots[1].amount == saved.slots[1].amount,
-          std::string("USA -> ") + FormatName(target) + ": " + error);
+    CHECK_MSG(ConvertTo(gci.data(), gci.size(), target, {}, conversion, error) &&
+                  Read(conversion.gci.data(), conversion.gci.size(), got, back, nullptr, error) && got == target &&
+                  back.slots[1].amount == saved.slots[1].amount,
+              std::string("USA -> ") + FormatName(target) + ": " + error);
   }
   for (const Format target : {Format::PalLegacyGci, Format::WiiSave, Format::WiiDataBin, Format::Unknown}) {
     Conversion conversion;
-    Check(!ConvertTo(gci.data(), gci.size(), target, {}, conversion, error),
-          std::string("ConvertTo refuses ") + FormatName(target));
+    CHECK_MSG(!ConvertTo(gci.data(), gci.size(), target, {}, conversion, error),
+              std::string("ConvertTo refuses ") + FormatName(target));
   }
   std::vector<uint8_t> junk(0x1C000, 0xFF);
   Format format;
   Save out;
-  Check(!Read(junk.data(), junk.size(), format, out, nullptr, error), "junk of the Trilogy's size is refused");
+  CHECK_MSG(!Read(junk.data(), junk.size(), format, out, nullptr, error), "junk of the Trilogy's size is refused");
   std::vector<uint8_t> bk(0xF0C0 + 0x100, 0);
   bk[0xF0C4] = 'B';
   bk[0xF0C5] = 'k';
   std::vector<uint8_t> bin;
-  Check(!DecryptDataBin(bk.data(), bk.size(), bin, error), "an empty data.bin is refused");
+  CHECK_MSG(!DecryptDataBin(bk.data(), bk.size(), bin, error), "an empty data.bin is refused");
 }
 
 // ---- fixtures -----------------------------------------------------------------------
@@ -284,92 +280,92 @@ bool Subset(const Save& small, const Save& big) {
 void TestPalFixture(const fs::path& file) {
   std::vector<uint8_t> bytes;
   if (!ReadFile(file, bytes)) {
-    Check(false, "read " + file.string());
+    CHECK_MSG(false, "read " + file.string());
     return;
   }
   Format format;
   Save save;
   std::string error;
-  Check(Read(bytes.data(), bytes.size(), format, save, nullptr, error), "PAL fixture reads: " + error);
-  Check(format == Format::PalGci, "PAL fixture is detected as PAL");
+  CHECK_MSG(Read(bytes.data(), bytes.size(), format, save, nullptr, error), "PAL fixture reads: " + error);
+  CHECK_MSG(format == Format::PalGci, "PAL fixture is detected as PAL");
   int slots = 0;
   for (const Slot& s : save.slots)
     slots += s.present ? 1 : 0;
   std::fprintf(stderr, "PAL fixture: %d slots\n", slots);
-  Check(slots > 0, "PAL fixture has slots");
+  CHECK_MSG(slots > 0, "PAL fixture has slots");
 
   Stats stats;
   std::vector<uint8_t> gci;
-  Check(WriteGci(save, true, ArtOf(bytes.data(), bytes.size()), 1000000000, gci, stats, error),
-        "PAL writes: " + error);
+  CHECK_MSG(WriteGci(save, true, ArtOf(bytes.data(), bytes.size()), 1000000000, gci, stats, error),
+            "PAL writes: " + error);
   Format format2;
   Save again;
-  Check(Read(gci.data(), gci.size(), format2, again, nullptr, error) && again == save,
-        "PAL -> intermediate -> PAL is identical in every field, and re-parses");
-  Check(gci.size() == bytes.size(), "PAL file size is kept");
+  CHECK_MSG(Read(gci.data(), gci.size(), format2, again, nullptr, error) && again == save,
+            "PAL -> intermediate -> PAL is identical in every field, and re-parses");
+  CHECK_MSG(gci.size() == bytes.size(), "PAL file size is kept");
 
   Conversion usa, back;
-  Check(ConvertToDisc(bytes.data(), bytes.size(), false, {}, usa, error), "PAL -> USA: " + error);
+  CHECK_MSG(ConvertToDisc(bytes.data(), bytes.size(), false, {}, usa, error), "PAL -> USA: " + error);
   std::fprintf(stderr, "PAL -> USA: %s\n", usa.stats.Summary().c_str());
-  Check(ConvertToDisc(usa.gci.data(), usa.gci.size(), true, {}, back, error), "USA -> PAL: " + error);
+  CHECK_MSG(ConvertToDisc(usa.gci.data(), usa.gci.size(), true, {}, back, error), "USA -> PAL: " + error);
   std::fprintf(stderr, "USA -> PAL: %s\n", back.stats.Summary().c_str());
   Save viaUsa, middle;
   Format f3;
-  Check(Read(back.gci.data(), back.gci.size(), f3, viaUsa, nullptr, error), "PAL re-read: " + error);
-  Check(Read(usa.gci.data(), usa.gci.size(), f3, middle, nullptr, error), "USA re-read: " + error);
-  Check(Subset(viaUsa, save), "PAL -> USA -> PAL only keeps ids it had");
-  Check(CountIds(save) - CountIds(viaUsa) ==
-            usa.stats.relays + usa.stats.doors + usa.stats.cinematics + usa.stats.scans + usa.stats.areas +
-                back.stats.relays + back.stats.doors + back.stats.cinematics + back.stats.scans +
-                back.stats.areas,
-        "every id lost in PAL -> USA -> PAL is counted as dropped");
+  CHECK_MSG(Read(back.gci.data(), back.gci.size(), f3, viaUsa, nullptr, error), "PAL re-read: " + error);
+  CHECK_MSG(Read(usa.gci.data(), usa.gci.size(), f3, middle, nullptr, error), "USA re-read: " + error);
+  CHECK_MSG(Subset(viaUsa, save), "PAL -> USA -> PAL only keeps ids it had");
+  CHECK_MSG(CountIds(save) - CountIds(viaUsa) ==
+                usa.stats.relays + usa.stats.doors + usa.stats.cinematics + usa.stats.scans + usa.stats.areas +
+                    back.stats.relays + back.stats.doors + back.stats.cinematics + back.stats.scans +
+                    back.stats.areas,
+            "every id lost in PAL -> USA -> PAL is counted as dropped");
   for (int i = 0; i < 3; ++i) {
     if (!save.slots[i].present)
       continue;
     const Slot &a = save.slots[i], &b = viaUsa.slots[i];
-    Check(a.timestamp == b.timestamp && a.mlvl == b.mlvl && a.amount == b.amount && a.capacity == b.capacity &&
-              a.hintState == b.hintState && a.hintTime == b.hintTime && a.opts == b.opts && a.flags == b.flags,
-          "PAL -> USA -> PAL keeps the slot's scalars");
+    CHECK_MSG(a.timestamp == b.timestamp && a.mlvl == b.mlvl && a.amount == b.amount && a.capacity == b.capacity &&
+                  a.hintState == b.hintState && a.hintTime == b.hintTime && a.opts == b.opts && a.flags == b.flags,
+              "PAL -> USA -> PAL keeps the slot's scalars");
   }
 }
 
 void TestUsaFixture(const fs::path& file) {
   std::vector<uint8_t> bytes;
   if (!ReadFile(file, bytes)) {
-    Check(false, "read " + file.string());
+    CHECK_MSG(false, "read " + file.string());
     return;
   }
   Format format;
   Save save;
   std::string error;
-  Check(Read(bytes.data(), bytes.size(), format, save, nullptr, error), "USA fixture reads: " + error);
-  Check(format == Format::UsaGci, "USA fixture is detected as USA");
+  CHECK_MSG(Read(bytes.data(), bytes.size(), format, save, nullptr, error), "USA fixture reads: " + error);
+  CHECK_MSG(format == Format::UsaGci, "USA fixture is detected as USA");
   std::vector<uint8_t> gci;
   Stats stats;
-  Check(WriteGci(save, false, ArtOf(bytes.data(), bytes.size()), 1000000000, gci, stats, error),
-        "USA writes: " + error);
+  CHECK_MSG(WriteGci(save, false, ArtOf(bytes.data(), bytes.size()), 1000000000, gci, stats, error),
+            "USA writes: " + error);
   const size_t diff = bytes.size() >= kSaveOffset + kSaveSize && gci.size() == bytes.size()
                           ? FirstDiff(bytes.data() + kSaveOffset, gci.data() + kSaveOffset, kSaveSize)
                           : 0;
   if (diff != kSaveSize)
     std::fprintf(stderr, "USA save region first differs at byte %zu\n", diff);
-  Check(diff == kSaveSize, "USA -> intermediate -> USA is byte-identical (save region)");
+  CHECK_MSG(diff == kSaveSize, "USA -> intermediate -> USA is byte-identical (save region)");
   Conversion same;
-  Check(ConvertToDisc(bytes.data(), bytes.size(), false, {}, same, error), "USA -> USA: " + error);
-  Check(!same.stats.Any(), "USA -> USA drops nothing");
+  CHECK_MSG(ConvertToDisc(bytes.data(), bytes.size(), false, {}, same, error), "USA -> USA: " + error);
+  CHECK_MSG(!same.stats.Any(), "USA -> USA drops nothing");
 
   Conversion pal, back;
-  Check(ConvertToDisc(bytes.data(), bytes.size(), true, {}, pal, error), "USA -> PAL: " + error);
+  CHECK_MSG(ConvertToDisc(bytes.data(), bytes.size(), true, {}, pal, error), "USA -> PAL: " + error);
   std::fprintf(stderr, "USA -> PAL: %s\n", pal.stats.Summary().c_str());
-  Check(ConvertToDisc(pal.gci.data(), pal.gci.size(), false, {}, back, error), "PAL -> USA: " + error);
+  CHECK_MSG(ConvertToDisc(pal.gci.data(), pal.gci.size(), false, {}, back, error), "PAL -> USA: " + error);
   std::fprintf(stderr, "PAL -> USA: %s\n", back.stats.Summary().c_str());
   Save viaPal;
-  Check(Read(back.gci.data(), back.gci.size(), format, viaPal, nullptr, error), "USA re-read: " + error);
-  Check(Subset(viaPal, save), "USA -> PAL -> USA only keeps ids it had");
+  CHECK_MSG(Read(back.gci.data(), back.gci.size(), format, viaPal, nullptr, error), "USA re-read: " + error);
+  CHECK_MSG(Subset(viaPal, save), "USA -> PAL -> USA only keeps ids it had");
   for (int i = 0; i < 3; ++i) {
     if (save.slots[i].present) {
-      Check(viaPal.slots[i].amount == save.slots[i].amount && viaPal.slots[i].hintTime == save.slots[i].hintTime,
-            "USA -> PAL -> USA keeps the slot's scalars");
+      CHECK_MSG(viaPal.slots[i].amount == save.slots[i].amount && viaPal.slots[i].hintTime == save.slots[i].hintTime,
+                "USA -> PAL -> USA keeps the slot's scalars");
     }
   }
 }
@@ -405,10 +401,10 @@ void TestWiiFixtures(const fs::path& root) {
       std::fprintf(stderr, "%s: empty Trilogy save, rejected as intended\n", name.c_str());
       continue;
     }
-    Check(converted, name + ": convert: " + error);
-    Check(conversion.from == Format::WiiSave, name + ": detected as a Trilogy save");
+    CHECK_MSG(converted, name + ": convert: " + error);
+    CHECK_MSG(conversion.from == Format::WiiSave, name + ": detected as a Trilogy save");
     if (conversion.gci.size() != expected.size() || expected.size() < kSaveOffset + kSaveSize) {
-      Check(false, name + ": output size");
+      CHECK_MSG(false, name + ": output size");
       continue;
     }
     const size_t diff = FirstDiff(expected.data() + kSaveOffset, conversion.gci.data() + kSaveOffset, kSaveSize);
@@ -422,16 +418,16 @@ void TestWiiFixtures(const fs::path& root) {
         std::fprintf(stderr, "\n");
       }
     }
-    Check(diff == kSaveSize, name + ": matches wii2gci.py (3004-byte save region)");
+    CHECK_MSG(diff == kSaveSize, name + ": matches wii2gci.py (3004-byte save region)");
     std::fprintf(stderr, "%s -> USA: %s\n", name.c_str(), conversion.stats.Summary().c_str());
     ++compared;
     // The same save for a PAL disc must at least be a valid PAL file.
     Conversion pal;
-    Check(ConvertToDisc(bytes.data(), bytes.size(), true, {}, pal, error), name + ": to PAL: " + error);
+    CHECK_MSG(ConvertToDisc(bytes.data(), bytes.size(), true, {}, pal, error), name + ": to PAL: " + error);
     Format format;
     Save back;
-    Check(Read(pal.gci.data(), pal.gci.size(), format, back, nullptr, error) && format == Format::PalGci,
-          name + ": the PAL output re-reads");
+    CHECK_MSG(Read(pal.gci.data(), pal.gci.size(), format, back, nullptr, error) && format == Format::PalGci,
+              name + ": the PAL output re-reads");
   }
   fs::remove_all(tmp, ec);
   std::fprintf(stderr, "compared %d Trilogy saves with wii2gci.py\n", compared);
@@ -466,22 +462,22 @@ void TestTrilogyWrite(const fs::path& root) {
       continue;
     std::vector<uint8_t> same;
     Stats stats;
-    Check(WriteWii(save, bin.data(), bin.size(), same, stats, error), name + ": write into itself: " + error);
+    CHECK_MSG(WriteWii(save, bin.data(), bin.size(), same, stats, error), name + ": write into itself: " + error);
     const size_t diff = FirstDiff(bin.data(), same.data(), std::min(bin.size(), same.size()));
     if (diff != bin.size())
       std::fprintf(stderr, "%s: rewritten save.bin first differs at 0x%zx (%02x, got %02x)\n", name.c_str(), diff,
                    bin[diff], same[diff]);
-    Check(same == bin, name + ": written into itself gives the same bytes");
+    CHECK_MSG(same == bin, name + ": written into itself gives the same bytes");
 
     Conversion usa, back;
-    Check(ConvertToDisc(bin.data(), bin.size(), false, {}, usa, error), name + ": to USA: " + error);
-    Check(!ConvertToTrilogy(usa.gci.data(), usa.gci.size(), empty.data(), empty.size(), back, error),
-          name + ": a Trilogy save without an MP1 file is refused");
-    Check(ConvertToTrilogy(usa.gci.data(), usa.gci.size(), bin.data(), bin.size(), back, error),
-          name + ": USA back into the Trilogy save: " + error);
+    CHECK_MSG(ConvertToDisc(bin.data(), bin.size(), false, {}, usa, error), name + ": to USA: " + error);
+    CHECK_MSG(!ConvertToTrilogy(usa.gci.data(), usa.gci.size(), empty.data(), empty.size(), back, error),
+              name + ": a Trilogy save without an MP1 file is refused");
+    CHECK_MSG(ConvertToTrilogy(usa.gci.data(), usa.gci.size(), bin.data(), bin.size(), back, error),
+              name + ": USA back into the Trilogy save: " + error);
     Save reread;
-    Check(Read(back.gci.data(), back.gci.size(), format, reread, nullptr, error) && format == Format::WiiSave,
-          name + ": the written save.bin re-reads: " + error);
+    CHECK_MSG(Read(back.gci.data(), back.gci.size(), format, reread, nullptr, error) && format == Format::WiiSave,
+              name + ": the written save.bin re-reads: " + error);
     // The newest slot lands in the file a Mii owns (its summary carries the
     // Mii's id, all 0xFF otherwise); the others keep theirs.
     const auto owned = [&](uint32_t i) {
@@ -515,10 +511,10 @@ void TestTrilogyWrite(const fs::path& root) {
         return it == want.worlds.end() || it->second.layers.count(l.first) == 0;
       });
     }
-    Check(got == want, name + ": slot " + std::to_string(newest + 1) + " survives Trilogy -> USA -> Trilogy");
+    CHECK_MSG(got == want, name + ": slot " + std::to_string(newest + 1) + " survives Trilogy -> USA -> Trilogy");
     for (int i = 0; i < 3; ++i) {
       if (i != target)
-        Check(reread.slots[i] == save.slots[i], name + ": file " + std::to_string(i + 1) + " is kept");
+        CHECK_MSG(reread.slots[i] == save.slots[i], name + ": file " + std::to_string(i + 1) + " is kept");
     }
     ++written;
   }
@@ -550,11 +546,11 @@ void TestDataBinFixtures(const fs::path& root) {
       continue;
     }
     std::string error;
-    Check(DecryptDataBin(bytes.data(), bytes.size(), got, error), name + ": decrypt: " + error);
-    Check(got == expected, name + ": save.bin matches wiisave.py");
+    CHECK_MSG(DecryptDataBin(bytes.data(), bytes.size(), got, error), name + ": decrypt: " + error);
+    CHECK_MSG(got == expected, name + ": save.bin matches wiisave.py");
     Conversion conversion;
     const bool converted = ConvertToDisc(bytes.data(), bytes.size(), false, {}, conversion, error);
-    Check(converted || error == "the save has no used slots", name + ": convert: " + error);
+    CHECK_MSG(converted || error == "the save has no used slots", name + ": convert: " + error);
     if (converted)
       std::fprintf(stderr, "%s -> USA: %s\n", name.c_str(), conversion.stats.Summary().c_str());
     ++compared;
@@ -591,10 +587,8 @@ int main(int argc, char** argv) {
     TestTrilogyWrite(root);
     TestDataBinFixtures(root);
   }
-  if (sFailures != 0) {
-    std::fprintf(stderr, "%d check(s) failed\n", sFailures);
-    return 1;
+  if (port_test::Failures() == 0) {
+    std::printf("port_save_convert_tests: ok\n");
   }
-  std::printf("port_save_convert_tests: ok\n");
-  return 0;
+  return PORT_TEST_RESULT();
 }

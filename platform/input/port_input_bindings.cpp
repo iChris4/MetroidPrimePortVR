@@ -1,4 +1,5 @@
 #include "port_input_bindings.h"
+#include "port_strings.h"
 
 #include <algorithm>
 #include <cctype>
@@ -59,15 +60,10 @@ bool EqualsNoCase(std::string_view a, std::string_view b) {
   return true;
 }
 
-bool StartsWith(std::string_view s, std::string_view prefix) { return s.substr(0, prefix.size()) == prefix; }
+using port::StartsWith;
 
-std::string_view Trim(std::string_view s) {
-  while (!s.empty() && (s.front() == ' ' || s.front() == '\t' || s.front() == '\r'))
-    s.remove_prefix(1);
-  while (!s.empty() && (s.back() == ' ' || s.back() == '\t' || s.back() == '\r'))
-    s.remove_suffix(1);
-  return s;
-}
+// A line of the bindings file without the spaces, tabs and carriage return around it.
+std::string_view Trim(std::string_view s) { return port::TrimView(s, " \t\r"); }
 
 // A whole decimal number (no sign) into out.
 bool ParseUInt(std::string_view s, long& out) {

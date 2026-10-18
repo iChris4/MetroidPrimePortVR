@@ -1,4 +1,5 @@
 #include "port_ws.h"
+#include "port_test.h"
 
 #include <algorithm>
 #include <array>
@@ -45,15 +46,6 @@
 #endif
 
 namespace {
-
-bool sPassed = true;
-
-void Check(bool condition, const char* message) {
-  if (!condition) {
-    std::fprintf(stderr, "[ws-tests] FAILED: %s\n", message);
-    sPassed = false;
-  }
-}
 
 std::string Hex(const uint8_t* bytes, size_t size) {
   static constexpr char digits[] = "0123456789abcdef";
@@ -129,47 +121,47 @@ void CheckDeflate() {
   {
     PortWs::Inflater inflater;
     std::string out;
-    Check(inflater.InflateMessage(FromHex(kFixedHello), out, limit) && out == "hello hello hello",
-          "inflate a fixed-Huffman message");
-    Check(inflater.InflateMessage(FromHex(kStored), out, limit) && out == "stored!", "inflate a stored block");
-    Check(inflater.InflateMessage(FromHex("00"), out, limit) && out.empty(), "inflate an empty message");
+    CHECK_MSG(inflater.InflateMessage(FromHex(kFixedHello), out, limit) && out == "hello hello hello",
+              "inflate a fixed-Huffman message");
+    CHECK_MSG(inflater.InflateMessage(FromHex(kStored), out, limit) && out == "stored!", "inflate a stored block");
+    CHECK_MSG(inflater.InflateMessage(FromHex("00"), out, limit) && out.empty(), "inflate an empty message");
   }
   {
     PortWs::Inflater inflater;
     std::string out;
-    Check(inflater.InflateMessage(FromHex(kDynamic), out, limit) && out == DynamicText(),
-          "inflate a dynamic-Huffman message");
+    CHECK_MSG(inflater.InflateMessage(FromHex(kDynamic), out, limit) && out == DynamicText(),
+              "inflate a dynamic-Huffman message");
     PortWs::Inflater limited;
-    Check(!limited.InflateMessage(FromHex(kDynamic), out, 100), "inflate refuses output past the size limit");
+    CHECK_MSG(!limited.InflateMessage(FromHex(kDynamic), out, 100), "inflate refuses output past the size limit");
   }
   {
     PortWs::Inflater inflater;
     std::string first;
     std::string second;
-    Check(inflater.InflateMessage(FromHex(kRoomInfo), first, limit) &&
-              inflater.InflateMessage(FromHex(kRoomInfoAgain), second, limit) && first == "{\"cmd\":\"RoomInfo\"}" &&
-              second == first,
-          "context takeover: the second message reaches into the first's window");
+    CHECK_MSG(inflater.InflateMessage(FromHex(kRoomInfo), first, limit) &&
+                  inflater.InflateMessage(FromHex(kRoomInfoAgain), second, limit) && first == "{\"cmd\":\"RoomInfo\"}" &&
+                  second == first,
+              "context takeover: the second message reaches into the first's window");
     PortWs::Inflater noWindow;
     noWindow.SetKeepWindow(false);
-    Check(noWindow.InflateMessage(FromHex(kRoomInfo), first, limit) &&
-              !noWindow.InflateMessage(FromHex(kRoomInfoAgain), second, limit),
-          "without the window a back-reference into the previous message fails");
+    CHECK_MSG(noWindow.InflateMessage(FromHex(kRoomInfo), first, limit) &&
+                  !noWindow.InflateMessage(FromHex(kRoomInfoAgain), second, limit),
+              "without the window a back-reference into the previous message fails");
   }
   {
     PortWs::Inflater inflater;
     std::string out;
-    Check(!inflater.InflateMessage(FromHex("ffffffff"), out, limit), "reserved block type fails");
+    CHECK_MSG(!inflater.InflateMessage(FromHex("ffffffff"), out, limit), "reserved block type fails");
     std::string truncated = FromHex(kDynamic);
     truncated.resize(40);
-    Check(!inflater.InflateMessage(truncated, out, limit), "truncated dynamic block fails");
+    CHECK_MSG(!inflater.InflateMessage(truncated, out, limit), "truncated dynamic block fails");
   }
 
   PortWs::FrameDecoder plain;
   std::vector<PortWs::Frame> frames;
   const std::string hello = CompressedFrame(1, true, FromHex(kFixedHello));
   plain.Feed(hello.data(), hello.size(), frames);
-  Check(plain.Failed() && frames.empty(), "RSV1 without negotiated deflate fails");
+  CHECK_MSG(plain.Failed() && frames.empty(), "RSV1 without negotiated deflate fails");
 
   PortWs::FrameDecoder decoder;
   decoder.EnableDeflate(false);
@@ -183,10 +175,10 @@ void CheckDeflate() {
   frames.clear();
   for (size_t i = 0; i < stream.size(); i += 7)
     decoder.Feed(stream.data() + i, std::min<size_t>(7, stream.size() - i), frames);
-  Check(!decoder.Failed() && frames.size() == 4 && frames[0].payload == "hello hello hello" &&
-            frames[1].payload == "plain" && frames[2].opcode == 9 && frames[3].opcode == 1 &&
-            frames[3].payload == DynamicText(),
-        "decoder inflates compressed messages, fragmented or not, beside uncompressed ones");
+  CHECK_MSG(!decoder.Failed() && frames.size() == 4 && frames[0].payload == "hello hello hello" &&
+                frames[1].payload == "plain" && frames[2].opcode == 9 && frames[3].opcode == 1 &&
+                frames[3].payload == DynamicText(),
+            "decoder inflates compressed messages, fragmented or not, beside uncompressed ones");
 
   const std::string badFrames[] = {
       ServerFrame(1, false, "a") + CompressedFrame(0, true, "b"), // RSV1 on a continuation
@@ -199,12 +191,12 @@ void CheckDeflate() {
     strict.EnableDeflate(false);
     std::vector<PortWs::Frame> ignored;
     strict.Feed(bad.data(), bad.size(), ignored);
-    Check(strict.Failed(), "misplaced RSV bits and bad compressed data fail the decoder");
+    CHECK_MSG(strict.Failed(), "misplaced RSV bits and bad compressed data fail the decoder");
   }
   decoder.Reset();
   frames.clear();
   decoder.Feed(hello.data(), hello.size(), frames);
-  Check(decoder.Failed(), "Reset turns deflate back off");
+  CHECK_MSG(decoder.Failed(), "Reset turns deflate back off");
 
   struct ExtensionCase {
     const char* header;
@@ -228,10 +220,10 @@ void CheckDeflate() {
     bool deflate = false;
     bool noContextTakeover = false;
     const bool accepted = PortWs::ParseDeflateResponse(test.header, deflate, noContextTakeover);
-    Check(accepted == test.accepted, "ParseDeflateResponse acceptance table");
+    CHECK_MSG(accepted == test.accepted, "ParseDeflateResponse acceptance table");
     if (accepted)
-      Check(deflate == test.deflate && noContextTakeover == test.noContextTakeover,
-            "ParseDeflateResponse values");
+      CHECK_MSG(deflate == test.deflate && noContextTakeover == test.noContextTakeover,
+                "ParseDeflateResponse values");
   }
 }
 
@@ -248,9 +240,9 @@ void CheckRoundTrip(size_t size) {
     decoder.Feed(encoded.data() + consumed, count, frames);
     consumed += count;
   }
-  Check(!decoder.Failed() && frames.size() == 1 && frames[0].opcode == 1 &&
-            frames[0].payload == payload,
-        "masked encode/decode round trip at each length encoding boundary");
+  CHECK_MSG(!decoder.Failed() && frames.size() == 1 && frames[0].opcode == 1 &&
+                frames[0].payload == payload,
+            "masked encode/decode round trip at each length encoding boundary");
 }
 
 #if defined(MP_HAVE_OPENSSL)
@@ -486,7 +478,7 @@ void CheckTlsEndToEnd() {
   std::error_code ignored;
   const std::string dir = MakeTempDir();
   if (dir.empty()) {
-    Check(false, "TLS test temp directory");
+    CHECK_MSG(false, "TLS test temp directory");
     return;
   }
   {
@@ -505,7 +497,7 @@ void CheckTlsEndToEnd() {
       Run(prefix + newKey + "-subj /CN=127.0.0.1 -keyout server.key -out server.csr" + quiet) &&
       Run(prefix + "openssl x509 -req -days 1 -in server.csr -CA ca.pem -CAkey ca.key " +
           "-CAcreateserial -extfile server.ext -out server.pem" + quiet);
-  Check(generated, "openssl CLI generates the test CA and server certificate");
+  CHECK_MSG(generated, "openssl CLI generates the test CA and server certificate");
   // Starting four openssl processes and a python server is not instant on a
   // loaded CI machine, and the whole test has a timeout of its own.
   if (!generated) {
@@ -513,7 +505,7 @@ void CheckTlsEndToEnd() {
     return;
   }
   const uint16_t port = FreeLoopbackPort();
-  Check(port != 0, "a free loopback port for the TLS server");
+  CHECK_MSG(port != 0, "a free loopback port for the TLS server");
   if (port == 0) {
     std::filesystem::remove_all(dir, ignored);
     return;
@@ -531,7 +523,7 @@ void CheckTlsEndToEnd() {
   Server server({"python3", script, "--tls", "--cert", cert, "--key", key,
                  "--host", "0.0.0.0", "--port", std::to_string(port)},
                 logPath);
-  Check(server.started(), "start the TLS fake server");
+  CHECK_MSG(server.started(), "start the TLS fake server");
   if (!server.started()) {
     std::filesystem::remove_all(dir, ignored);
     return;
@@ -565,34 +557,34 @@ void CheckTlsEndToEnd() {
     std::fprintf(stderr, "[ws-tests] fake server log:\n%s\n",
                  std::string(std::istreambuf_iterator<char>(earlyLog), {}).c_str());
   }
-  Check(connected, "wss:// connects and verifies against the test CA");
+  CHECK_MSG(connected, "wss:// connects and verifies against the test CA");
 
   std::string roomInfo;
   std::string reply;
   if (connected) {
-    Check(client.Compressed(), "the fake server accepts permessage-deflate");
-    Check(client.ReceiveText(roomInfo, 3000) && Contains(roomInfo, "\"RoomInfo\""),
-          "RoomInfo arrives over TLS");
-    Check(client.SendText(R"([{"cmd":"Connect","name":"Player1","password":"","game":"Metroid Prime",)"
+    CHECK_MSG(client.Compressed(), "the fake server accepts permessage-deflate");
+    CHECK_MSG(client.ReceiveText(roomInfo, 3000) && Contains(roomInfo, "\"RoomInfo\""),
+              "RoomInfo arrives over TLS");
+    CHECK_MSG(client.SendText(R"([{"cmd":"Connect","name":"Player1","password":"","game":"Metroid Prime",)"
                           R"("uuid":"test","version":{"major":0,"minor":6,"build":0,"class":"Version"},)"
                           R"("items_handling":7,"tags":[],"slot_data":false}])"),
           "text frame sends over TLS");
-    Check(client.ReceiveText(reply, 3000) && Contains(reply, "\"Connected\""),
-          "the server's Connected reply arrives over TLS");
+    CHECK_MSG(client.ReceiveText(reply, 3000) && Contains(reply, "\"Connected\""),
+              "the server's Connected reply arrives over TLS");
     std::string items;
-    Check(client.ReceiveText(items, 3000) && Contains(items, "\"ReceivedItems\""),
-          "ReceivedItems follows over TLS");
+    CHECK_MSG(client.ReceiveText(items, 3000) && Contains(items, "\"ReceivedItems\""),
+              "ReceivedItems follows over TLS");
     // Nothing else is queued now, so the receive timeout must fire rather
     // than block on a TLS read.
     std::string nothing;
     const auto before = std::chrono::steady_clock::now();
     const bool idle = client.ReceiveText(nothing, 300);
     const auto waited = std::chrono::steady_clock::now() - before;
-    Check(!idle && client.IsOpen() && Contains(client.Error(), "timed out") &&
-              waited < std::chrono::seconds(2),
-          "an idle TLS receive times out and keeps the connection");
+    CHECK_MSG(!idle && client.IsOpen() && Contains(client.Error(), "timed out") &&
+                  waited < std::chrono::seconds(2),
+              "an idle TLS receive times out and keeps the connection");
     client.Close();
-    Check(!client.IsOpen(), "Close releases the TLS connection");
+    CHECK_MSG(!client.IsOpen(), "Close releases the TLS connection");
   }
   std::printf("[ws-tests] tls round trip: %s\n", reply.empty() ? "(none)" : reply.c_str());
 
@@ -624,8 +616,8 @@ void CheckTlsEndToEnd() {
     const bool accepted = rejected.Connect(rejection.host, port, "/", 3000, true, options);
     const std::string error = rejected.Error();
     std::printf("[ws-tests] tls %s rejected: %s\n", rejection.label, error.c_str());
-    Check(!accepted && !rejected.IsOpen() && Contains(error, rejection.wanted),
-          "TLS rejects an unverifiable server with a readable error");
+    CHECK_MSG(!accepted && !rejected.IsOpen() && Contains(error, rejection.wanted),
+              "TLS rejects an unverifiable server with a readable error");
   }
 
   // caDirs, laid out the way Android lays out its store: one PEM per file,
@@ -666,35 +658,35 @@ void CheckTlsEndToEnd() {
     return ok;
   };
   std::string dirError;
-  Check(connectWith({goodDir}, "", dirError),
-        "caDirs: a <hash>.0 CA beside a junk file and a text dump loads and verifies");
-  Check(!connectWith({emptyDir, missingDir}, "", dirError) &&
-            Contains(dirError, "no TLS root certificates") && Contains(dirError, emptyDir.c_str()) &&
-            Contains(dirError, missingDir.c_str()) && Contains(dirError, "loaded 0") &&
-            !Contains(dirError, "certificate verification failed"),
-        "caDirs: no certificate anywhere is a loud error naming every directory");
+  CHECK_MSG(connectWith({goodDir}, "", dirError),
+            "caDirs: a <hash>.0 CA beside a junk file and a text dump loads and verifies");
+  CHECK_MSG(!connectWith({emptyDir, missingDir}, "", dirError) &&
+                Contains(dirError, "no TLS root certificates") && Contains(dirError, emptyDir.c_str()) &&
+                Contains(dirError, missingDir.c_str()) && Contains(dirError, "loaded 0") &&
+                !Contains(dirError, "certificate verification failed"),
+            "caDirs: no certificate anywhere is a loud error naming every directory");
   std::printf("[ws-tests] tls empty caDirs rejected: %s\n", dirError.c_str());
-  Check(!connectWith({junkDir}, "", dirError) && Contains(dirError, "no TLS root certificates"),
-        "caDirs: a directory of junk holds no certificates");
-  Check(!connectWith({wrongDir}, "", dirError) && Contains(dirError, "certificate verification failed"),
-        "caDirs: the wrong CA fails verification");
-  Check(connectWith({emptyDir, goodDir}, "", dirError),
-        "caDirs: an empty directory falls through to the next");
-  Check(!connectWith({wrongDir, goodDir}, "", dirError) &&
-            Contains(dirError, "certificate verification failed"),
-        "caDirs: the first directory with a certificate wins; later ones are not merged");
-  Check(!connectWith({goodDir}, dir + "/wrong-ca.pem", dirError) &&
-            Contains(dirError, "certificate verification failed"),
-        "caFile takes precedence over caDirs");
+  CHECK_MSG(!connectWith({junkDir}, "", dirError) && Contains(dirError, "no TLS root certificates"),
+            "caDirs: a directory of junk holds no certificates");
+  CHECK_MSG(!connectWith({wrongDir}, "", dirError) && Contains(dirError, "certificate verification failed"),
+            "caDirs: the wrong CA fails verification");
+  CHECK_MSG(connectWith({emptyDir, goodDir}, "", dirError),
+            "caDirs: an empty directory falls through to the next");
+  CHECK_MSG(!connectWith({wrongDir, goodDir}, "", dirError) &&
+                Contains(dirError, "certificate verification failed"),
+            "caDirs: the first directory with a certificate wins; later ones are not merged");
+  CHECK_MSG(!connectWith({goodDir}, dir + "/wrong-ca.pem", dirError) &&
+                Contains(dirError, "certificate verification failed"),
+            "caFile takes precedence over caDirs");
 
   // The server is still healthy after turning away bad handshakes.
   PortWs::Client again;
-  Check(again.Connect("127.0.0.1", port, "/", 3000, true, goodCa) && again.ReceiveText(roomInfo, 3000),
-        "the TLS server still serves a verified client after rejections");
+  CHECK_MSG(again.Connect("127.0.0.1", port, "/", 3000, true, goodCa) && again.ReceiveText(roomInfo, 3000),
+            "the TLS server still serves a verified client after rejections");
   again.Close();
 
   server.Stop();
-  if (!sPassed) {
+  if (port_test::Failures() != 0) {
     std::ifstream log(logPath);
     std::fprintf(stderr, "[ws-tests] fake server log:\n%s\n",
                  std::string(std::istreambuf_iterator<char>(log), {}).c_str());
@@ -708,26 +700,26 @@ void CheckTlsEndToEnd() {
 int main() {
   uint8_t digest[20];
   PortWs::Sha1("", 0, digest);
-  Check(Hex(digest, sizeof(digest)) == "da39a3ee5e6b4b0d3255bfef95601890afd80709",
-        "SHA-1 empty-string vector");
+  CHECK_MSG(Hex(digest, sizeof(digest)) == "da39a3ee5e6b4b0d3255bfef95601890afd80709",
+            "SHA-1 empty-string vector");
   PortWs::Sha1("abc", 3, digest);
-  Check(Hex(digest, sizeof(digest)) == "a9993e364706816aba3e25717850c26c9cd0d89d",
-        "SHA-1 abc vector");
+  CHECK_MSG(Hex(digest, sizeof(digest)) == "a9993e364706816aba3e25717850c26c9cd0d89d",
+            "SHA-1 abc vector");
   const std::string rfc448 = "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq";
   PortWs::Sha1(rfc448.data(), rfc448.size(), digest);
-  Check(Hex(digest, sizeof(digest)) == "84983e441c3bd26ebaae4aa1f95129e5e54670f1",
-        "SHA-1 RFC 3174 448-bit padding vector");
+  CHECK_MSG(Hex(digest, sizeof(digest)) == "84983e441c3bd26ebaae4aa1f95129e5e54670f1",
+            "SHA-1 RFC 3174 448-bit padding vector");
 
-  Check(PortWs::Base64Encode("", 0).empty(), "base64 empty vector");
-  Check(PortWs::Base64Encode("f", 1) == "Zg==" && PortWs::Base64Encode("fo", 2) == "Zm8=" &&
-            PortWs::Base64Encode("foo", 3) == "Zm9v" &&
-            PortWs::Base64Encode("foob", 4) == "Zm9vYg==" &&
-            PortWs::Base64Encode("fooba", 5) == "Zm9vYmE=" &&
-            PortWs::Base64Encode("foobar", 6) == "Zm9vYmFy",
-        "base64 standard vectors and padding");
-  Check(PortWs::AcceptKey("dGhlIHNhbXBsZSBub25jZQ==") ==
-            "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=",
-        "RFC 6455 Sec-WebSocket-Accept example");
+  CHECK_MSG(PortWs::Base64Encode("", 0).empty(), "base64 empty vector");
+  CHECK_MSG(PortWs::Base64Encode("f", 1) == "Zg==" && PortWs::Base64Encode("fo", 2) == "Zm8=" &&
+                PortWs::Base64Encode("foo", 3) == "Zm9v" &&
+                PortWs::Base64Encode("foob", 4) == "Zm9vYg==" &&
+                PortWs::Base64Encode("fooba", 5) == "Zm9vYmE=" &&
+                PortWs::Base64Encode("foobar", 6) == "Zm9vYmFy",
+            "base64 standard vectors and padding");
+  CHECK_MSG(PortWs::AcceptKey("dGhlIHNhbXBsZSBub25jZQ==") ==
+                "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=",
+            "RFC 6455 Sec-WebSocket-Accept example");
 
   struct UrlCase {
     const char* url;
@@ -758,10 +750,10 @@ int main() {
     uint16_t port = 444;
     std::string path = "unchanged";
     const bool accepted = PortWs::ParseUrl(test.url, host, port, path);
-    Check(accepted == test.accepted, "ParseUrl acceptance table");
+    CHECK_MSG(accepted == test.accepted, "ParseUrl acceptance table");
     if (accepted)
-      Check(host == test.host && port == test.port && path == test.path,
-            "ParseUrl host, port, and path values");
+      CHECK_MSG(host == test.host && port == test.port && path == test.path,
+                "ParseUrl host, port, and path values");
     // The scheme-reporting overload agrees on every ws:// form.
     if (std::string(test.url).rfind("ws://", 0) == 0) {
       std::string secureHost;
@@ -769,9 +761,9 @@ int main() {
       std::string securePath;
       bool secure = true;
       const bool secureAccepted = PortWs::ParseUrl(test.url, secureHost, securePort, securePath, secure);
-      Check(secureAccepted == test.accepted && (!secureAccepted ||
-                (!secure && secureHost == host && securePort == port && securePath == path)),
-            "ParseUrl secure overload matches the ws:// table");
+      CHECK_MSG(secureAccepted == test.accepted && (!secureAccepted ||
+                    (!secure && secureHost == host && securePort == port && securePath == path)),
+                "ParseUrl secure overload matches the ws:// table");
     }
   }
 
@@ -808,27 +800,27 @@ int main() {
     std::string path = "unchanged";
     bool secure = !test.secure;
     const bool accepted = PortWs::ParseUrl(test.url, host, port, path, secure);
-    Check(accepted == test.accepted, "ParseUrl wss:// acceptance table");
+    CHECK_MSG(accepted == test.accepted, "ParseUrl wss:// acceptance table");
     if (accepted)
-      Check(secure == test.secure && host == test.host && port == test.port && path == test.path,
-            "ParseUrl wss:// scheme, host, port, and path values");
+      CHECK_MSG(secure == test.secure && host == test.host && port == test.port && path == test.path,
+                "ParseUrl wss:// scheme, host, port, and path values");
     else
-      Check(host == "unchanged" && port == 444 && path == "unchanged",
-            "rejected URLs leave the outputs alone");
+      CHECK_MSG(host == "unchanged" && port == 444 && path == "unchanged",
+                "rejected URLs leave the outputs alone");
   }
 
   if (!PortWs::TlsAvailable()) {
     PortWs::Client client;
-    Check(!client.Connect("127.0.0.1", 9, "/", 500, true) && !client.IsOpen() &&
-              std::string(client.Error()).find("no TLS") != std::string::npos,
-          "a build without OpenSSL refuses wss:// instead of connecting in plaintext");
+    CHECK_MSG(!client.Connect("127.0.0.1", 9, "/", 500, true) && !client.IsOpen() &&
+                  std::string(client.Error()).find("no TLS") != std::string::npos,
+              "a build without OpenSSL refuses wss:// instead of connecting in plaintext");
   }
 
   const std::string encodedSmall = PortWs::EncodeFrame(1, "HI", 0x04030201);
   const std::string handComputed("\x81\x82\x01\x02\x03\x04\x49\x4b", 8);
-  Check(encodedSmall == handComputed &&
-            encodedSmall == PortWs::EncodeFrame(1, "HI", 0x04030201),
-        "deterministic masked frame matches hand-computed bytes");
+  CHECK_MSG(encodedSmall == handComputed &&
+                encodedSmall == PortWs::EncodeFrame(1, "HI", 0x04030201),
+            "deterministic masked frame matches hand-computed bytes");
 
   CheckRoundTrip(0);
   CheckRoundTrip(125);
@@ -844,18 +836,18 @@ int main() {
   std::vector<PortWs::Frame> fragmentFrames;
   for (size_t i = 0; i < fragments.size(); ++i)
     fragmented.Feed(fragments.data() + i, 1, fragmentFrames);
-  Check(!fragmented.Failed() && fragmentFrames.size() == 2 &&
-            fragmentFrames[0].opcode == 9 && fragmentFrames[0].payload == "p" &&
-            fragmentFrames[1].opcode == 1 && fragmentFrames[1].payload == "hello",
-        "fragment reassembly with interleaved ping frame");
+  CHECK_MSG(!fragmented.Failed() && fragmentFrames.size() == 2 &&
+                fragmentFrames[0].opcode == 9 && fragmentFrames[0].payload == "p" &&
+                fragmentFrames[1].opcode == 1 && fragmentFrames[1].payload == "hello",
+            "fragment reassembly with interleaved ping frame");
 
   const std::string maskedServer = PortWs::EncodeFrame(1, "masked", 0xdeadbeef);
   PortWs::FrameDecoder maskedDecoder;
   std::vector<PortWs::Frame> maskedFrames;
   maskedDecoder.Feed(maskedServer.data(), maskedServer.size(), maskedFrames);
-  Check(!maskedDecoder.Failed() && maskedFrames.size() == 1 &&
-            maskedFrames[0].opcode == 1 && maskedFrames[0].payload == "masked",
-        "decoder accepts masked server frames");
+  CHECK_MSG(!maskedDecoder.Failed() && maskedFrames.size() == 1 &&
+                maskedFrames[0].opcode == 1 && maskedFrames[0].payload == "masked",
+            "decoder accepts masked server frames");
 
   std::string oversized("\x81\x7f", 2);
   const uint64_t overLimit = PortWs::FrameDecoder::kMaxMessageSize + 1;
@@ -864,7 +856,7 @@ int main() {
   PortWs::FrameDecoder oversizedDecoder;
   std::vector<PortWs::Frame> oversizedFrames;
   oversizedDecoder.Feed(oversized.data(), oversized.size(), oversizedFrames);
-  Check(oversizedDecoder.Failed(), "oversized message latches decoder failure");
+  CHECK_MSG(oversizedDecoder.Failed(), "oversized message latches decoder failure");
 
   CheckDeflate();
 
@@ -882,7 +874,7 @@ int main() {
         listener >= 0 && ::bind(listener, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0 &&
         ::listen(listener, 1) == 0 &&
         ::getsockname(listener, reinterpret_cast<sockaddr*>(&address), &length) == 0;
-    Check(listening, "a silent loopback listener for the cancel test");
+    CHECK_MSG(listening, "a silent loopback listener for the cancel test");
     if (listening) {
       std::atomic<bool> cancel{false};
       PortWs::Client client;
@@ -895,8 +887,8 @@ int main() {
       const bool connected = client.Connect("127.0.0.1", ntohs(address.sin_port), "/", 10000);
       const auto elapsed = std::chrono::steady_clock::now() - start;
       canceller.join();
-      Check(!connected && !client.IsOpen() && elapsed < std::chrono::seconds(2),
-            "a set cancel flag ends a stalled handshake well before its timeout");
+      CHECK_MSG(!connected && !client.IsOpen() && elapsed < std::chrono::seconds(2),
+                "a set cancel flag ends a stalled handshake well before its timeout");
     }
     if (listener >= 0)
       ::close(listener);
@@ -907,8 +899,8 @@ int main() {
   CheckTlsEndToEnd();
 #endif
 
-  if (!sPassed)
-    return 1;
-  std::puts("[ws-tests] passed");
-  return 0;
+  if (port_test::Failures() == 0) {
+    std::puts("[ws-tests] passed");
+  }
+  return PORT_TEST_RESULT();
 }

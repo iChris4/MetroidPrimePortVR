@@ -1,5 +1,6 @@
 #include "port_remastered_jpeg.h"
 #include "port_remastered_movie.h"
+#include "port_test.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -8,14 +9,6 @@
 #include <vector>
 
 namespace {
-int sFailures = 0;
-
-void Check(bool condition, const char* what) {
-  if (!condition) {
-    std::fprintf(stderr, "FAIL: %s\n", what);
-    ++sFailures;
-  }
-}
 
 uint32_t BE32(const std::string& data, size_t at) {
   return uint32_t(uint8_t(data[at])) << 24 | uint32_t(uint8_t(data[at + 1])) << 16 |
@@ -50,25 +43,25 @@ void TestSplitter() {
         return true;
       });
     }
-    Check(ok && splitter.Idle(), "a stream of two pictures parses");
-    Check(frames.size() == 2, "two pictures");
+    CHECK_MSG(ok && splitter.Idle(), "a stream of two pictures parses");
+    CHECK_MSG(frames.size() == 2, "two pictures");
     if (frames.size() == 2) {
       const std::vector<uint8_t> unstuffed = {0xFF, 0xD8, 0xFF, 0xDB, 0x00, 0x04, 0xFF, 0xD9, 0xFF,
                                               0xDA, 0x00, 0x03, 0x01, 0x11, 0xFF, 0x22, 0xFF, 0xD9};
-      Check(frames[0] == unstuffed, "the scan loses its stuffing, the header keeps its bytes");
-      Check(frames[1] == second, "a scan without stuffing is unchanged");
+      CHECK_MSG(frames[0] == unstuffed, "the scan loses its stuffing, the header keeps its bytes");
+      CHECK_MSG(frames[1] == second, "a scan without stuffing is unchanged");
     }
   }
 
   PortRemastered::JpegSplitter splitter;
   const auto ignore = [](const std::vector<uint8_t>&) { return true; };
-  Check(splitter.Feed(first.data(), first.size() - 1, ignore) && !splitter.Idle(), "a cut picture is not idle");
+  CHECK_MSG(splitter.Feed(first.data(), first.size() - 1, ignore) && !splitter.Idle(), "a cut picture is not idle");
   const uint8_t text[] = {'n', 'o', 'p', 'e'};
   PortRemastered::JpegSplitter other;
-  Check(!other.Feed(text, sizeof(text), ignore), "text is refused");
+  CHECK_MSG(!other.Feed(text, sizeof(text), ignore), "text is refused");
   PortRemastered::JpegSplitter stopping;
-  Check(!stopping.Feed(stream.data(), stream.size(), [](const std::vector<uint8_t>&) { return false; }),
-        "a failing sink stops the stream");
+  CHECK_MSG(!stopping.Feed(stream.data(), stream.size(), [](const std::vector<uint8_t>&) { return false; }),
+            "a failing sink stops the stream");
 
   // A scan that never ends is refused once it outgrows any picture, not held.
   PortRemastered::JpegSplitter endless;
@@ -81,7 +74,7 @@ void TestSplitter() {
     total += filler.size();
   }
   const size_t limit = PortRemastered::JpegSplitter::kMaxPicture;
-  Check(!fed && total > limit && total <= limit + filler.size(), "a picture without an end is refused past the limit");
+  CHECK_MSG(!fed && total > limit && total <= limit + filler.size(), "a picture without an end is refused past the limit");
   // Many pictures in one call are not one picture, however many bytes they add up to.
   std::vector<uint8_t> many;
   const std::vector<uint8_t> big = Jpeg(std::vector<uint8_t>(1 << 20, 0x55));
@@ -90,12 +83,12 @@ void TestSplitter() {
   }
   PortRemastered::JpegSplitter bulk;
   size_t pictures = 0;
-  Check(bulk.Feed(many.data(), many.size(), [&](const std::vector<uint8_t>& frame) {
-          pictures += frame == big ? 1 : 0;
-          return true;
-        }) && bulk.Idle(),
-        "pictures past the limit in one call parse");
-  Check(pictures == many.size() / big.size(), "every picture of a large call comes out");
+  CHECK_MSG(bulk.Feed(many.data(), many.size(), [&](const std::vector<uint8_t>& frame) {
+              pictures += frame == big ? 1 : 0;
+              return true;
+            }) && bulk.Idle(),
+            "pictures past the limit in one call parse");
+  CHECK_MSG(pictures == many.size() / big.size(), "every picture of a large call comes out");
   // A picture split across calls, after one that ended in the same call.
   PortRemastered::JpegSplitter carried;
   std::vector<uint8_t> partial = second;
@@ -107,8 +100,8 @@ void TestSplitter() {
   };
   bool carriedOk = carried.Feed(partial.data(), partial.size(), keep) && !carried.Idle();
   carriedOk = carriedOk && carried.Feed(first.data() + 15, first.size() - 15, keep) && carried.Idle();
-  Check(carriedOk && carriedFrames.size() == 2 && carriedFrames[0] == second,
-        "a picture carried over a call comes out whole");
+  CHECK_MSG(carriedOk && carriedFrames.size() == 2 && carriedFrames[0] == second,
+            "a picture carried over a call comes out whole");
 }
 
 void TestWriter() {
@@ -119,46 +112,46 @@ void TestWriter() {
   for (const size_t size : sizes) {
     writer.Add(std::vector<uint8_t>(size, uint8_t(size)));
   }
-  Check(writer.Finish() && writer.Frames() == 3, "three frames written");
+  CHECK_MSG(writer.Finish() && writer.Frames() == 3, "three frames written");
   const std::string data = out.str();
-  Check(data.size() == 0x4C + 32 + 64 + 32, "frames are padded to 32 bytes");
-  Check(std::memcmp(data.data(), "THP\0", 4) == 0 && BE32(data, 0x04) == 0x00010000, "magic and version");
-  Check(BE32(data, 0x08) == 64, "largest frame");
-  Check(BE32(data, 0x0C) == 0, "no audio");
-  Check(BE32(data, 0x10) == 0x41F00000, "30 frames a second");
-  Check(BE32(data, 0x14) == 3, "frame count");
-  Check(BE32(data, 0x18) == 32, "first frame size");
-  Check(BE32(data, 0x1C) == 128, "data size");
-  Check(BE32(data, 0x20) == 0x30 && BE32(data, 0x24) == 0 && BE32(data, 0x28) == 0x4C, "offsets");
-  Check(BE32(data, 0x2C) == 0x4C + 96, "last frame offset");
-  Check(BE32(data, 0x30) == 1 && uint8_t(data[0x34]) == 0 && uint8_t(data[0x35]) == 0xFF &&
-            uint8_t(data[0x43]) == 0xFF,
-        "one video component");
-  Check(BE32(data, 0x44) == 1600 && BE32(data, 0x48) == 900, "picture size");
+  CHECK_MSG(data.size() == 0x4C + 32 + 64 + 32, "frames are padded to 32 bytes");
+  CHECK_MSG(std::memcmp(data.data(), "THP\0", 4) == 0 && BE32(data, 0x04) == 0x00010000, "magic and version");
+  CHECK_MSG(BE32(data, 0x08) == 64, "largest frame");
+  CHECK_MSG(BE32(data, 0x0C) == 0, "no audio");
+  CHECK_MSG(BE32(data, 0x10) == 0x41F00000, "30 frames a second");
+  CHECK_MSG(BE32(data, 0x14) == 3, "frame count");
+  CHECK_MSG(BE32(data, 0x18) == 32, "first frame size");
+  CHECK_MSG(BE32(data, 0x1C) == 128, "data size");
+  CHECK_MSG(BE32(data, 0x20) == 0x30 && BE32(data, 0x24) == 0 && BE32(data, 0x28) == 0x4C, "offsets");
+  CHECK_MSG(BE32(data, 0x2C) == 0x4C + 96, "last frame offset");
+  CHECK_MSG(BE32(data, 0x30) == 1 && uint8_t(data[0x34]) == 0 && uint8_t(data[0x35]) == 0xFF &&
+                uint8_t(data[0x43]) == 0xFF,
+            "one video component");
+  CHECK_MSG(BE32(data, 0x44) == 1600 && BE32(data, 0x48) == 900, "picture size");
   // next, previous (both wrapping around), picture size
-  Check(BE32(data, 0x4C) == 64 && BE32(data, 0x50) == 32 && BE32(data, 0x54) == 20, "first frame");
-  Check(BE32(data, 0x6C) == 32 && BE32(data, 0x70) == 32 && BE32(data, 0x74) == 21, "second frame");
-  Check(BE32(data, 0xAC) == 32 && BE32(data, 0xB0) == 64 && BE32(data, 0xB4) == 5, "third frame");
-  Check(uint8_t(data[0x78]) == 21 && uint8_t(data[0x78 + 20]) == 21 && data[0x78 + 21] == 0, "picture, then padding");
+  CHECK_MSG(BE32(data, 0x4C) == 64 && BE32(data, 0x50) == 32 && BE32(data, 0x54) == 20, "first frame");
+  CHECK_MSG(BE32(data, 0x6C) == 32 && BE32(data, 0x70) == 32 && BE32(data, 0x74) == 21, "second frame");
+  CHECK_MSG(BE32(data, 0xAC) == 32 && BE32(data, 0xB0) == 64 && BE32(data, 0xB4) == 5, "third frame");
+  CHECK_MSG(uint8_t(data[0x78]) == 21 && uint8_t(data[0x78 + 20]) == 21 && data[0x78 + 21] == 0, "picture, then padding");
 
   std::stringstream empty;
   PortRemastered::ThpWriter none(empty, 16, 16, 30.f);
-  Check(!none.Finish(), "a movie needs a frame");
+  CHECK_MSG(!none.Finish(), "a movie needs a frame");
 }
 
 void TestFormat() {
   PortRemastered::MovieFormat format;
-  Check(format.width == 1600 && format.height == 900 && format.fps == 30, "default format");
-  Check(PortRemastered::ParseMovieFormat("1280x720@60", format) && format.width == 1280 && format.height == 720 &&
-            format.fps == 60,
-        "size and rate");
-  Check(PortRemastered::ParseMovieFormat("640x480", format) && format.width == 640 && format.fps == 60, "size alone");
-  Check(PortRemastered::ParseMovieFormat("@30", format) && format.width == 640 && format.fps == 30, "rate alone");
-  Check(!PortRemastered::ParseMovieFormat("", format), "nothing");
-  Check(!PortRemastered::ParseMovieFormat("641x480", format), "odd width");
-  Check(!PortRemastered::ParseMovieFormat("640x480@0", format), "no rate");
-  Check(!PortRemastered::ParseMovieFormat("640@30", format), "no height");
-  Check(format.width == 640 && format.height == 480 && format.fps == 30, "a bad format changes nothing");
+  CHECK_MSG(format.width == 1600 && format.height == 900 && format.fps == 30, "default format");
+  CHECK_MSG(PortRemastered::ParseMovieFormat("1280x720@60", format) && format.width == 1280 && format.height == 720 &&
+                format.fps == 60,
+            "size and rate");
+  CHECK_MSG(PortRemastered::ParseMovieFormat("640x480", format) && format.width == 640 && format.fps == 60, "size alone");
+  CHECK_MSG(PortRemastered::ParseMovieFormat("@30", format) && format.width == 640 && format.fps == 30, "rate alone");
+  CHECK_MSG(!PortRemastered::ParseMovieFormat("", format), "nothing");
+  CHECK_MSG(!PortRemastered::ParseMovieFormat("641x480", format), "odd width");
+  CHECK_MSG(!PortRemastered::ParseMovieFormat("640x480@0", format), "no rate");
+  CHECK_MSG(!PortRemastered::ParseMovieFormat("640@30", format), "no height");
+  CHECK_MSG(format.width == 640 && format.height == 480 && format.fps == 30, "a bad format changes nothing");
 }
 
 void TestStream() {
@@ -168,22 +161,22 @@ void TestStream() {
   std::memcpy(asset.data() + 20, "FMV0", 4);
   size_t offset = 0;
   size_t length = 0;
-  Check(PortRemastered::MovieStream(asset.data(), asset.size(), offset, length) && offset == 32 && length == 12,
-        "the stream is the form's body");
+  CHECK_MSG(PortRemastered::MovieStream(asset.data(), asset.size(), offset, length) && offset == 32 && length == 12,
+            "the stream is the form's body");
   asset[4] = 17;
-  Check(!PortRemastered::MovieStream(asset.data(), asset.size(), offset, length), "a form longer than the asset");
+  CHECK_MSG(!PortRemastered::MovieStream(asset.data(), asset.size(), offset, length), "a form longer than the asset");
   asset[4] = 12;
   asset[23] = '1';
-  Check(!PortRemastered::MovieStream(asset.data(), asset.size(), offset, length), "another asset type");
+  CHECK_MSG(!PortRemastered::MovieStream(asset.data(), asset.size(), offset, length), "another asset type");
 }
 
 void TestTable() {
   int names = 0;
   for (const PortRemastered::Movie& movie : PortRemastered::Movies()) {
-    Check(std::strlen(movie.id) == 36 && !movie.names.empty(), "an id and a name");
+    CHECK_MSG(std::strlen(movie.id) == 36 && !movie.names.empty(), "an id and a name");
     names += int(movie.names.size());
   }
-  Check(names == 16, "sixteen disc movies replaced");
+  CHECK_MSG(names == 16, "sixteen disc movies replaced");
 }
 
 void TestPacer() {
@@ -197,14 +190,14 @@ void TestPacer() {
     alternate = alternate && copies == (i % 2 == 0 ? 1 : 0);
     kept += copies;
   }
-  Check(alternate && kept == 60, "half the rate keeps every other picture");
+  CHECK_MSG(alternate && kept == 60, "half the rate keeps every other picture");
   // 24 played at 30 repeats one in four.
   PortRemastered::FramePacer faster(30);
   kept = 0;
   for (int i = 0; i < 24; ++i) {
     kept += faster.Copies(int64_t(i) * 1000000 / 24);
   }
-  Check(kept == 29, "a slower stream has pictures repeated");
+  CHECK_MSG(kept == 29, "a slower stream has pictures repeated");
 }
 
 // A picture of one colour, with its chroma as planes or interleaved.
@@ -248,32 +241,32 @@ void TestEncoder() {
   format.height = 26;
   PortRemastered::MovieEncoder encoder(format);
   const std::vector<uint8_t> jpeg = Encode(encoder, 40, 26, false, 90);
-  Check(jpeg.size() > 600 && jpeg[0] == 0xFF && jpeg[1] == 0xD8 && jpeg[jpeg.size() - 2] == 0xFF &&
-            jpeg[jpeg.size() - 1] == 0xD9,
-        "a picture from start marker to end marker");
+  CHECK_MSG(jpeg.size() > 600 && jpeg[0] == 0xFF && jpeg[1] == 0xD8 && jpeg[jpeg.size() - 2] == 0xFF &&
+                jpeg[jpeg.size() - 1] == 0xD9,
+            "a picture from start marker to end marker");
   // Tables (2 + 2 + 130), then the frame header: 8 bits, 26 by 40, 4:2:0.
   const std::vector<uint8_t> frame = {0xFF, 0xC0, 0x00, 0x11, 8, 0, 26, 0, 40, 3, 1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1};
-  Check(jpeg.size() > 136 + frame.size() && std::equal(frame.begin(), frame.end(), jpeg.begin() + 136),
-        "the frame header says what the game's decoder takes");
-  Check(Encode(encoder, 40, 26, true, 90) == jpeg, "interleaved chroma reads the same as planes");
-  Check(Encode(encoder, 40, 26, false, 160) != jpeg, "a brighter picture is another picture");
+  CHECK_MSG(jpeg.size() > 136 + frame.size() && std::equal(frame.begin(), frame.end(), jpeg.begin() + 136),
+            "the frame header says what the game's decoder takes");
+  CHECK_MSG(Encode(encoder, 40, 26, true, 90) == jpeg, "interleaved chroma reads the same as planes");
+  CHECK_MSG(Encode(encoder, 40, 26, false, 160) != jpeg, "a brighter picture is another picture");
   // The splitter that reads ffmpeg's output takes these too.
   PortRemastered::JpegSplitter splitter;
   int pictures = 0;
-  Check(splitter.Feed(jpeg.data(), jpeg.size(),
-                      [&](const std::vector<uint8_t>& picture) {
-                        ++pictures;
-                        return picture.size() <= jpeg.size();
-                      }) &&
-            splitter.Idle() && pictures == 1,
-        "the splitter takes the encoder's picture");
+  CHECK_MSG(splitter.Feed(jpeg.data(), jpeg.size(),
+                          [&](const std::vector<uint8_t>& picture) {
+                            ++pictures;
+                            return picture.size() <= jpeg.size();
+                          }) &&
+                splitter.Idle() && pictures == 1,
+            "the splitter takes the encoder's picture");
   // Another size than the stream's: the header carries the format's.
   const std::vector<uint8_t> shrunk = Encode(encoder, 80, 50, false, 90);
-  Check(shrunk.size() > 136 + frame.size() && std::equal(frame.begin(), frame.end(), shrunk.begin() + 136),
-        "a larger stream is brought to the format's size");
+  CHECK_MSG(shrunk.size() > 136 + frame.size() && std::equal(frame.begin(), frame.end(), shrunk.begin() + 136),
+            "a larger stream is brought to the format's size");
   const std::vector<uint8_t> grown = Encode(encoder, 18, 14, true, 90);
-  Check(grown.size() > 136 + frame.size() && std::equal(frame.begin(), frame.end(), grown.begin() + 136),
-        "and a smaller one too");
+  CHECK_MSG(grown.size() > 136 + frame.size() && std::equal(frame.begin(), frame.end(), grown.begin() + 136),
+            "and a smaller one too");
 }
 } // namespace
 
@@ -285,8 +278,8 @@ int main() {
   TestFormat();
   TestStream();
   TestTable();
-  if (sFailures == 0) {
+  if (port_test::Failures() == 0) {
     std::printf("port_remastered_movie: ok\n");
   }
-  return sFailures == 0 ? 0 : 1;
+  return PORT_TEST_RESULT();
 }

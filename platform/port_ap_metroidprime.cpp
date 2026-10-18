@@ -178,6 +178,16 @@ const char* ItemName(int64_t itemId) {
   return nullptr;
 }
 
+bool CanonicalItemId(const std::string& name, int64_t& itemId) {
+  for (const ItemInfo& item : kItems) {
+    if (name == item.name) {
+      itemId = item.id + kItemBase;
+      return true;
+    }
+  }
+  return false;
+}
+
 bool ApplyDefaults(Protocol::Config& config) {
   // A config can bring its own location table (tools/make_ap_config.py joins
   // one from a pickup dump) and still take the world's item rules. Items it

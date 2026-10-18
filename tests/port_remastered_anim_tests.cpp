@@ -2,6 +2,7 @@
 // stream and a bool-only stream whose op stream holds a sub-op 4), an init-dequant offset
 // other than 0x28, and a record chain followed by a false record with a tiny length.
 #include "port_remastered_anim.h"
+#include "port_test.h"
 
 #include <array>
 #include <cstdint>
@@ -11,14 +12,6 @@
 #include <vector>
 
 namespace {
-int sFailures = 0;
-
-void Check(bool condition, const char* message) {
-  if (!condition) {
-    std::fprintf(stderr, "FAIL: %s\n", message);
-    ++sFailures;
-  }
-}
 
 // LSB-first bit writer, the order the game's bit streams are read in.
 struct Bits {
@@ -173,11 +166,11 @@ void Run(const char* what, int records, bool tinyTail, bool pools = false, bool 
   if (!ok) {
     std::fprintf(stderr, "%s: %s\n", what, error.c_str());
   }
-  Check(ok, what);
+  CHECK_MSG(ok, what);
   if (ok) {
-    Check(c.anims.size() == size_t(records), "one animation per record");
-    Check(!c.anims.empty() && c.anims[0].frames == 1 && c.anims[0].fps == 60.0f, "frames and rate");
-    Check(!c.anims.empty() && !c.anims[0].tracked.empty() && c.anims[0].tracked[0], "bone 0 is driven");
+    CHECK_MSG(c.anims.size() == size_t(records), "one animation per record");
+    CHECK_MSG(!c.anims.empty() && c.anims[0].frames == 1 && c.anims[0].fps == 60.0f, "frames and rate");
+    CHECK_MSG(!c.anims.empty() && !c.anims[0].tracked.empty() && c.anims[0].tracked[0], "bone 0 is driven");
   }
 }
 
@@ -212,16 +205,16 @@ std::vector<uint8_t> ModelFile(size_t anchors, size_t headerAnims, bool nameFlag
 void RunAnchors(size_t anchors, bool nameFlag) {
   PortRemasteredAnim::Character c;
   std::string error;
-  Check(PortRemasteredAnim::ReadCharacter(ModelFile(anchors, 4, nameFlag), c, error), "anchor test reads");
-  Check(c.skinnedModel[0] == 0xa0 && c.skinnedModel[15] == 0xaf, "SMDL is the node's second guid");
+  CHECK_MSG(PortRemasteredAnim::ReadCharacter(ModelFile(anchors, 4, nameFlag), c, error), "anchor test reads");
+  CHECK_MSG(c.skinnedModel[0] == 0xa0 && c.skinnedModel[15] == 0xaf, "SMDL is the node's second guid");
 }
 
 // A header with fewer animations than records leaves no model instead of guessing one.
 void RunMismatch() {
   PortRemasteredAnim::Character c;
   std::string error;
-  Check(PortRemasteredAnim::ReadCharacter(ModelFile(2, 0, true), c, error), "mismatch test reads");
-  Check(c.skinnedModel[0] == 0 && c.skinnedModel[15] == 0, "no SMDL when the header counts fewer animations than records");
+  CHECK_MSG(PortRemasteredAnim::ReadCharacter(ModelFile(2, 0, true), c, error), "mismatch test reads");
+  CHECK_MSG(c.skinnedModel[0] == 0 && c.skinnedModel[15] == 0, "no SMDL when the header counts fewer animations than records");
 }
 
 // Joint scale in SkinPose: a parent scaled by 2 along x carries its child's matrix with it
@@ -246,14 +239,14 @@ void RunScale() {
     a.tracked = {true, true};
     a.bones[0][0].scale[0] = 2.0f;
     std::vector<std::array<float, 12>> out;
-    Check(SkinPose(c, a, 0, out) && out.size() == 1, "scaled pose resolves");
+    CHECK_MSG(SkinPose(c, a, 0, out) && out.size() == 1, "scaled pose resolves");
     if (out.size() != 1) {
       continue;
     }
     // Translation: the parent's scaled x on the child's bind offset.
-    Check(out[0][3] == 2.0f, "the child's offset is scaled by the parent");
-    Check(out[0][0] == (inverse ? 1.0f : 2.0f), inverse ? "inverse scale cancels the parent's" : "scale is inherited");
-    Check(out[0][5] == 1.0f && out[0][10] == 1.0f, "unscaled axes stay");
+    CHECK_MSG(out[0][3] == 2.0f, "the child's offset is scaled by the parent");
+    CHECK_MSG(out[0][0] == (inverse ? 1.0f : 2.0f), inverse ? "inverse scale cancels the parent's" : "scale is inherited");
+    CHECK_MSG(out[0][5] == 1.0f && out[0][10] == 1.0f, "unscaled axes stay");
   }
 }
 }  // namespace
@@ -268,5 +261,5 @@ int main() {
   RunAnchors(1, true);
   RunAnchors(2, false);
   RunMismatch();
-  return sFailures == 0 ? 0 : 1;
+  return PORT_TEST_RESULT();
 }

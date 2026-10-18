@@ -1,4 +1,6 @@
 #include "port_env.h"
+#include "port_strings.h"
+#include "port_json.h"
 #include "port_randomizer.h"
 #include "port_log.h"
 #include "port_paths.h"
@@ -7,6 +9,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdio>
 #include <cstdint>
 #include <cstdlib>
@@ -48,13 +51,7 @@ constexpr ItemEntry kItems[] = {
     {"Spirit", 39},        {"Newborn", 40},
 };
 
-struct Placement {
-  int itemType = -1;
-  int amount = 0;
-  int capacity = 0;
-  bool hasAmount = false;
-  bool hasCapacity = false;
-};
+using Placement = SeedPlacement;
 
 struct State {
   std::map<std::string, Placement> placements;
@@ -77,7 +74,7 @@ std::string UserDirectory() {
 }
 
 std::string SeedPath() {
-  if (const char* env = std::getenv("MP_RANDO_SEED")) {
+  if (const char* env = port::EnvString("MP_RANDO_SEED")) {
     if (env[0] != '\0')
       return env;
   }
@@ -86,385 +83,152 @@ std::string SeedPath() {
 
 std::string LogPath(const char* name) { return UserDirectory() + name; }
 
-struct ParseError {
-  size_t offset;
-  const char* reason;
-};
+// Whole numbers that fit an int: the seed grammar has no fractions.
+bool SeedInteger(const PortJson::Value& value, int& out) {
+  if (!value.IsNumber())
+    return false;
+  const double number = value.AsNumber();
+  if (!(number >= std::numeric_limits< int >::min() && number <= std::numeric_limits< int >::max()) ||
+      number != std::floor(number))
+    return false;
+  out = static_cast< int >(number);
+  return true;
+}
 
-// Seed grammar: a top-level object may contain "seed": string and
-// "locations": object; each location maps to an object with required "item":
-// string and optional integer "amount"/"capacity". Unknown keys at either
-// level are ignored after validating their values. Values may be strings,
-// integers, booleans, or objects; arrays, null, comments, and trailing commas
-// are not accepted. Whitespace is insignificant.
-class Parser {
-  const std::string& mText;
-  size_t mPos = 0;
-
-  [[noreturn]] void Fail(const char* reason) const { throw ParseError{mPos, reason}; }
-
-  void SkipWhitespace() {
-    while (mPos < mText.size() && (mText[mPos] == ' ' || mText[mPos] == '\t' ||
-                                   mText[mPos] == '\r' || mText[mPos] == '\n'))
-      ++mPos;
+// Asset ids are written as 1-8 hexadecimal digits, optionally prefixed with
+// "0x", so a seed reads like the location keys and the LOC dump lines.
+bool SeedHexAsset(const PortJson::Value& value, uint32_t& out) {
+  if (!value.IsString())
+    return false;
+  const std::string& text = value.AsString();
+  size_t i = 0;
+  if (text.size() > 2 && text[0] == '0' && (text[1] == 'x' || text[1] == 'X'))
+    i = 2;
+  if (i >= text.size() || text.size() - i > 8)
+    return false;
+  uint32_t result = 0;
+  for (; i < text.size(); ++i) {
+    const char c = text[i];
+    result <<= 4;
+    if (c >= '0' && c <= '9')
+      result |= static_cast< uint32_t >(c - '0');
+    else if (c >= 'a' && c <= 'f')
+      result |= static_cast< uint32_t >(c - 'a' + 10);
+    else if (c >= 'A' && c <= 'F')
+      result |= static_cast< uint32_t >(c - 'A' + 10);
+    else
+      return false;
   }
+  out = result;
+  return true;
+}
 
-  bool Consume(char c) {
-    SkipWhitespace();
-    if (mPos < mText.size() && mText[mPos] == c) {
-      ++mPos;
-      return true;
-    }
+// Bounded well inside int so the game's own sums (amount plus what the
+// player already has) cannot overflow.
+bool SeedGrantValue(const PortJson::Value& value, int& out, std::string& reason, const std::string& where) {
+  if (!SeedInteger(value, out)) {
+    reason = where + ": amount and capacity must be whole numbers";
     return false;
   }
-
-  void Expect(char c) {
-    SkipWhitespace();
-    if (mPos >= mText.size() || mText[mPos] != c)
-      Fail("unexpected token");
-    ++mPos;
+  if (out < -9999 || out > 9999) {
+    reason = where + ": amount and capacity must be between -9999 and 9999";
+    return false;
   }
+  return true;
+}
 
-  static void AppendUtf8(std::string& out, unsigned int codepoint) {
-    if (codepoint <= 0x7f) {
-      out.push_back(static_cast<char>(codepoint));
-    } else if (codepoint <= 0x7ff) {
-      out.push_back(static_cast<char>(0xc0 | (codepoint >> 6)));
-      out.push_back(static_cast<char>(0x80 | (codepoint & 0x3f)));
-    } else if (codepoint <= 0xffff) {
-      out.push_back(static_cast<char>(0xe0 | (codepoint >> 12)));
-      out.push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3f)));
-      out.push_back(static_cast<char>(0x80 | (codepoint & 0x3f)));
-    } else {
-      out.push_back(static_cast<char>(0xf0 | (codepoint >> 18)));
-      out.push_back(static_cast<char>(0x80 | ((codepoint >> 12) & 0x3f)));
-      out.push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3f)));
-      out.push_back(static_cast<char>(0x80 | (codepoint & 0x3f)));
-    }
+bool ReadPlacement(const PortJson::Value& value, Placement& out, std::string& reason, const std::string& where) {
+  if (!value.IsObject()) {
+    reason = where + ": a placement is an object";
+    return false;
   }
-
-  unsigned int ParseHex4() {
-    if (mText.size() - mPos < 4)
-      Fail("incomplete unicode escape");
-    unsigned int value = 0;
-    for (int i = 0; i < 4; ++i) {
-      const char c = mText[mPos++];
-      value <<= 4;
-      if (c >= '0' && c <= '9')
-        value |= static_cast<unsigned int>(c - '0');
-      else if (c >= 'a' && c <= 'f')
-        value |= static_cast<unsigned int>(c - 'a' + 10);
-      else if (c >= 'A' && c <= 'F')
-        value |= static_cast<unsigned int>(c - 'A' + 10);
-      else
-        Fail("invalid unicode escape");
-    }
-    return value;
-  }
-
-  std::string ParseString() {
-    SkipWhitespace();
-    Expect('"');
-    std::string result;
-    while (mPos < mText.size()) {
-      const unsigned char c = static_cast<unsigned char>(mText[mPos++]);
-      if (c == '"')
-        return result;
-      if (c < 0x20)
-        Fail("unescaped control character in string");
-      if (c != '\\') {
-        result.push_back(static_cast<char>(c));
-        continue;
+  Placement placement;
+  bool hasItem = false;
+  // Members in file order, so a repeated field keeps its last value.
+  for (const auto& [key, field] : value.AsObject()) {
+    if (key == "item") {
+      if (!field.IsString()) {
+        reason = where + ": item must be a string";
+        return false;
       }
-      if (mPos >= mText.size())
-        Fail("incomplete string escape");
-      const char escape = mText[mPos++];
-      switch (escape) {
-      case '"': result.push_back('"'); break;
-      case '\\': result.push_back('\\'); break;
-      case '/': result.push_back('/'); break;
-      case 'b': result.push_back('\b'); break;
-      case 'f': result.push_back('\f'); break;
-      case 'n': result.push_back('\n'); break;
-      case 'r': result.push_back('\r'); break;
-      case 't': result.push_back('\t'); break;
-      case 'u': {
-        unsigned int cp = ParseHex4();
-        if (cp >= 0xd800 && cp <= 0xdbff) {
-          if (mText.size() - mPos < 6 || mText[mPos] != '\\' || mText[mPos + 1] != 'u')
-            Fail("missing low surrogate");
-          mPos += 2;
-          const unsigned int low = ParseHex4();
-          if (low < 0xdc00 || low > 0xdfff)
-            Fail("invalid low surrogate");
-          cp = 0x10000 + ((cp - 0xd800) << 10) + (low - 0xdc00);
-        } else if (cp >= 0xdc00 && cp <= 0xdfff) {
-          Fail("unexpected low surrogate");
-        }
-        AppendUtf8(result, cp);
-        break;
+      placement.itemType = PortRandomizer::ItemFromName(field.AsString().c_str());
+      if (placement.itemType < 0) {
+        reason = where + ": unknown item name \"" + field.AsString() + "\"";
+        return false;
       }
-      default: Fail("invalid string escape");
+      hasItem = true;
+    } else if (key == "amount") {
+      if (!SeedGrantValue(field, placement.amount, reason, where))
+        return false;
+      placement.hasAmount = true;
+    } else if (key == "capacity") {
+      if (!SeedGrantValue(field, placement.capacity, reason, where))
+        return false;
+      placement.hasCapacity = true;
+    }
+  }
+  if (!hasItem) {
+    reason = where + ": placement is missing required item";
+    return false;
+  }
+  out = placement;
+  return true;
+}
+
+bool ReadModel(const PortJson::Value& value, PickupModel& out, std::string& reason, const std::string& where) {
+  if (!value.IsObject()) {
+    reason = where + ": a model entry is an object";
+    return false;
+  }
+  PickupModel model;
+  for (const auto& [key, field] : value.AsObject()) {
+    if (key == "model" || key == "acs") {
+      if (!SeedHexAsset(field, key == "model" ? model.model : model.acs)) {
+        reason = where + ": " + key + " must be 1 to 8 hexadecimal digits";
+        return false;
       }
-    }
-    Fail("unterminated string");
-  }
-
-  // Bounded well inside int so the game's own sums (amount plus what the
-  // player already has) cannot overflow.
-  int ParseGrantValue() {
-    const int value = ParseInteger();
-    if (value < -9999 || value > 9999)
-      Fail("amount and capacity must be between -9999 and 9999");
-    return value;
-  }
-
-  int ParseInteger() {
-    SkipWhitespace();
-    const size_t start = mPos;
-    if (mPos < mText.size() && mText[mPos] == '-')
-      ++mPos;
-    if (mPos >= mText.size() || mText[mPos] < '0' || mText[mPos] > '9')
-      Fail("expected integer");
-    if (mText[mPos] == '0') {
-      ++mPos;
-      if (mPos < mText.size() && mText[mPos] >= '0' && mText[mPos] <= '9')
-        Fail("leading zero in integer");
-    } else {
-      while (mPos < mText.size() && mText[mPos] >= '0' && mText[mPos] <= '9')
-        ++mPos;
-    }
-    long long value = 0;
-    try {
-      value = std::stoll(mText.substr(start, mPos - start));
-    } catch (...) {
-      Fail("integer out of range");
-    }
-    if (value < std::numeric_limits<int>::min() || value > std::numeric_limits<int>::max())
-      Fail("integer out of range");
-    return static_cast<int>(value);
-  }
-
-  bool ConsumeLiteral(const char* literal) {
-    SkipWhitespace();
-    const size_t length = std::strlen(literal);
-    if (mText.compare(mPos, length, literal) != 0)
-      return false;
-    mPos += length;
-    return true;
-  }
-
-  void SkipValue(int objectDepth = 0) {
-    SkipWhitespace();
-    if (mPos >= mText.size())
-      Fail("expected value");
-    if (mText[mPos] == '"') {
-      (void)ParseString();
-    } else if (mText[mPos] == '{') {
-      SkipObject(objectDepth + 1);
-    } else if (mText[mPos] == '-' || (mText[mPos] >= '0' && mText[mPos] <= '9')) {
-      (void)ParseInteger();
-    } else if (!ConsumeLiteral("true") && !ConsumeLiteral("false")) {
-      Fail("unsupported value (expected string, integer, boolean, or object)");
-    }
-  }
-
-  void SkipObject(int depth) {
-    if (depth > 128)
-      Fail("object nesting limit exceeded");
-    Expect('{');
-    if (Consume('}'))
-      return;
-    for (;;) {
-      (void)ParseString();
-      Expect(':');
-      SkipValue(depth);
-      if (Consume('}'))
-        return;
-      Expect(',');
-    }
-  }
-
-  // Asset ids are written as 1-8 hexadecimal digits, optionally prefixed with
-  // "0x", so a seed reads like the location keys and the LOC dump lines.
-  uint32_t ParseHexAsset() {
-    const std::string text = ParseString();
-    size_t i = 0;
-    if (text.size() > 2 && text[0] == '0' && (text[1] == 'x' || text[1] == 'X'))
-      i = 2;
-    if (i >= text.size() || text.size() - i > 8)
-      Fail("expected 1 to 8 hexadecimal digits");
-    uint32_t value = 0;
-    for (; i < text.size(); ++i) {
-      const char c = text[i];
-      value <<= 4;
-      if (c >= '0' && c <= '9')
-        value |= static_cast< uint32_t >(c - '0');
-      else if (c >= 'a' && c <= 'f')
-        value |= static_cast< uint32_t >(c - 'a' + 10);
-      else if (c >= 'A' && c <= 'F')
-        value |= static_cast< uint32_t >(c - 'A' + 10);
-      else
-        Fail("expected 1 to 8 hexadecimal digits");
-    }
-    return value;
-  }
-
-  PickupModel ParseModel() {
-    PickupModel model;
-    Expect('{');
-    if (!Consume('}')) {
-      for (;;) {
-        const std::string key = ParseString();
-        Expect(':');
-        if (key == "model") {
-          model.model = ParseHexAsset();
-        } else if (key == "acs") {
-          model.acs = ParseHexAsset();
-        } else if (key == "character" || key == "animation") {
-          const int value = ParseInteger();
-          if (value < 0)
-            Fail("character and animation must be non-negative");
-          if (key == "character")
-            model.character = static_cast< uint32_t >(value);
-          else
-            model.animation = static_cast< uint32_t >(value);
-        } else {
-          SkipValue();
-        }
-        if (Consume('}'))
-          break;
-        Expect(',');
+    } else if (key == "character" || key == "animation") {
+      int number = 0;
+      if (!SeedInteger(field, number) || number < 0) {
+        reason = where + ": character and animation must be non-negative whole numbers";
+        return false;
       }
-    }
-    if (model.model == 0 && model.acs == 0)
-      Fail("model entry needs a model or acs asset");
-    return model;
-  }
-
-  void ParseModels(std::map<int, PickupModel>& models) {
-    Expect('{');
-    if (Consume('}'))
-      return;
-    for (;;) {
-      const std::string name = ParseString();
-      Expect(':');
-      const int item = PortRandomizer::ItemFromName(name.c_str());
-      if (item < 0)
-        Fail("unknown item name in models");
-      models[item] = ParseModel();
-      if (Consume('}'))
-        return;
-      Expect(',');
+      (key == "character" ? model.character : model.animation) = static_cast< uint32_t >(number);
     }
   }
-
-  Placement ParsePlacement() {
-    Placement placement;
-    bool hasItem = false;
-    Expect('{');
-    if (!Consume('}')) {
-      for (;;) {
-        const std::string key = ParseString();
-        Expect(':');
-        if (key == "item") {
-          const std::string name = ParseString();
-          placement.itemType = PortRandomizer::ItemFromName(name.c_str());
-          if (placement.itemType < 0)
-            Fail("unknown item name");
-          hasItem = true;
-        } else if (key == "amount") {
-          placement.amount = ParseGrantValue();
-          placement.hasAmount = true;
-        } else if (key == "capacity") {
-          placement.capacity = ParseGrantValue();
-          placement.hasCapacity = true;
-        } else {
-          SkipValue();
-        }
-        if (Consume('}'))
-          break;
-        Expect(',');
-      }
-    }
-    if (!hasItem)
-      Fail("placement is missing required item");
-    return placement;
+  if (model.model == 0 && model.acs == 0) {
+    reason = where + ": model entry needs a model or acs asset";
+    return false;
   }
-
-  void ParseLocations(std::map<std::string, Placement>& placements) {
-    Expect('{');
-    if (Consume('}'))
-      return;
-    for (;;) {
-      std::string key = ParseString();
-      // The game formats its keys in upper case (FormatLocationKey).
-      std::transform(key.begin(), key.end(), key.begin(),
-                     [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
-      Expect(':');
-      Placement placement = ParsePlacement();
-      placements[std::move(key)] = placement;
-      if (Consume('}'))
-        return;
-      Expect(',');
-    }
-  }
-
-public:
-  explicit Parser(const std::string& text) : mText(text) {}
-
-  void Parse(std::string& seedName, std::map<std::string, Placement>& placements,
-             std::map<int, PickupModel>& models) {
-    Expect('{');
-    if (!Consume('}')) {
-      for (;;) {
-        const std::string key = ParseString();
-        Expect(':');
-        if (key == "seed") {
-          seedName = ParseString();
-        } else if (key == "locations") {
-          ParseLocations(placements);
-        } else if (key == "models") {
-          ParseModels(models);
-        } else {
-          SkipValue();
-        }
-        if (Consume('}'))
-          break;
-        Expect(',');
-      }
-    }
-    SkipWhitespace();
-    if (mPos != mText.size())
-      Fail("trailing data");
-  }
-};
+  out = model;
+  return true;
+}
 
 bool LoadSeed(State& state) {
   const std::string path = SeedPath();
   std::ifstream input(path, std::ios::binary);
   if (!input)
     return false;
-  const std::string text((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+  const std::string text = port::ReadAllText(input);
   if (input.bad()) {
     PortLog::Write( "randomizer: seed read error at byte offset 0: could not read file\n");
     return false;
   }
 
-  std::string seedName;
-  std::map<std::string, Placement> placements;
-  std::map<int, PickupModel> models;
-  try {
-    Parser(text).Parse(seedName, placements, models);
-  } catch (const ParseError& error) {
-    PortLog::Write( "randomizer: seed parse error at byte offset %zu: %s\n", error.offset,
-                 error.reason);
+  SeedFile seed;
+  size_t offset = 0;
+  std::string reason;
+  if (!ParseSeedFile(text, seed, offset, reason)) {
+    if (offset == kSeedNoOffset)
+      PortLog::Write("randomizer: seed error: %s\n", reason.c_str());
+    else
+      PortLog::Write("randomizer: seed parse error at byte offset %zu: %s\n", offset, reason.c_str());
     return false;
   }
 
-  state.seedName = std::move(seedName);
-  state.placements = std::move(placements);
-  state.itemModels = std::move(models);
+  state.seedName = std::move(seed.name);
+  state.placements = std::move(seed.placements);
+  state.itemModels = std::move(seed.models);
   state.enabled = !state.placements.empty();
   return state.enabled;
 }
@@ -489,6 +253,66 @@ void AppendLog(const char* fileName, const char* line) noexcept {
 
 } // namespace
 
+bool ParseSeedFile(const std::string& text, SeedFile& out, size_t& errorOffset,
+                   std::string& errorReason) {
+  PortJson::Value root;
+  const char* syntax = nullptr;
+  if (!PortJson::Parse(text, root, errorOffset, &syntax)) {
+    errorReason = syntax != nullptr ? syntax : "invalid JSON";
+    return false;
+  }
+  // From here on the text is well-formed JSON; a problem is in what it says.
+  errorOffset = kSeedNoOffset;
+  if (!root.IsObject()) {
+    errorReason = "a seed file is a JSON object";
+    return false;
+  }
+  SeedFile seed;
+  for (const auto& [key, value] : root.AsObject()) {
+    if (key == "seed") {
+      if (!value.IsString()) {
+        errorReason = "\"seed\" must be a string";
+        return false;
+      }
+      seed.name = value.AsString();
+    } else if (key == "locations") {
+      if (!value.IsObject()) {
+        errorReason = "\"locations\" must be an object";
+        return false;
+      }
+      for (const auto& [rawKey, entry] : value.AsObject()) {
+        // The game formats its keys in upper case (FormatLocationKey).
+        std::string location = rawKey;
+        std::transform(location.begin(), location.end(), location.begin(),
+                       [](unsigned char c) { return static_cast< char >(std::toupper(c)); });
+        Placement placement;
+        if (!ReadPlacement(entry, placement, errorReason, "location \"" + rawKey + "\""))
+          return false;
+        seed.placements[std::move(location)] = placement;
+      }
+    } else if (key == "models") {
+      if (!value.IsObject()) {
+        errorReason = "\"models\" must be an object";
+        return false;
+      }
+      for (const auto& [name, entry] : value.AsObject()) {
+        const int item = PortRandomizer::ItemFromName(name.c_str());
+        if (item < 0) {
+          errorReason = "models: unknown item name \"" + name + "\"";
+          return false;
+        }
+        PickupModel model;
+        if (!ReadModel(entry, model, errorReason, "model for " + name))
+          return false;
+        seed.models[item] = model;
+      }
+    }
+    // Other keys are ignored, whatever they hold.
+  }
+  out = std::move(seed);
+  return true;
+}
+
 void EnsureLoaded() {
   try {
     static const bool loaded = []() noexcept {
@@ -496,13 +320,6 @@ void EnsureLoaded() {
         State& state = GetState();
         state.dump = port::EnvFlag("MP_RANDO_DUMP");
         (void)LoadSeed(state);
-      } catch (const ParseError& error) {
-        State& state = GetState();
-        state.enabled = false;
-        state.placements.clear();
-        state.seedName.clear();
-        PortLog::Write( "randomizer: seed parse error at byte offset %zu: %s\n", error.offset,
-                     error.reason);
       } catch (...) {
         try {
           State& state = GetState();
@@ -690,6 +507,19 @@ void RecordCheck(uint32_t worldAssetId, uint32_t areaAssetId, uint32_t entityId,
     char line[128];
     std::snprintf(line, sizeof(line), "CHECK %s %s\n", key, ItemName(itemType));
     AppendLog("randomizer_checks.log", line);
+  } catch (...) {
+  }
+}
+
+void LogPickupGrant(uint32_t worldAssetId, uint32_t areaAssetId, uint32_t entityId, int itemType,
+                    int capacity, int amount, int amountAfter, int capacityAfter) {
+  try {
+    if (!GetState().enabled)
+      return;
+    char key[32];
+    FormatLocationKey(worldAssetId, areaAssetId, entityId, key, sizeof(key));
+    PortLog::Write("randomizer: picked up %s: %s, capacity +%d, amount +%d; now %d/%d (amount/capacity)\n",
+                   key, ItemName(itemType), capacity, amount, amountAfter, capacityAfter);
   } catch (...) {
   }
 }

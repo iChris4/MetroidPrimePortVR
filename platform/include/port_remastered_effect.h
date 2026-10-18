@@ -29,13 +29,12 @@
 #include <string>
 #include <vector>
 
+#include "port_bytes.h"
+
 namespace PortRemastered {
 
 // FourCCs here are packed big-endian, as written: 'CNST' = 0x434E5354.
-constexpr uint32_t EffectFourCC(const char (&text)[5]) {
-  return uint32_t(uint8_t(text[0])) << 24 | uint32_t(uint8_t(text[1])) << 16 | uint32_t(uint8_t(text[2])) << 8 |
-         uint32_t(uint8_t(text[3]));
-}
+constexpr uint32_t EffectFourCC(const char (&text)[5]) { return port::FourCC(text); }
 
 using EffectGuid = std::array<uint8_t, 16>;
 
@@ -138,9 +137,6 @@ struct EffectMaterialTrack {
 // Breaks down a PMTR or SMTR property of an effect parsed from `data`.
 bool ParseMaterialTrack(const uint8_t* data, size_t size, const EffectProperty& property, EffectMaterialTrack& out);
 
-// The shader a MATI draws with: its MTRL guid's first four bytes as stored,
-// read big-endian (the id8 `re.sh shader` takes), or 0 for a short file.
-uint32_t EffectMaterialShader(const uint8_t* mati, size_t size);
 
 // Indented text dump of a parsed effect, one property per line, for diffing
 // against retail PART dumps.

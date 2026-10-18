@@ -1,4 +1,5 @@
 #include "port_pal_languages.h"
+#include "port_test.h"
 
 #include <zlib.h>
 
@@ -8,14 +9,6 @@
 #include <string>
 
 namespace {
-int sFailures = 0;
-
-void Check(bool condition, const char* what) {
-  if (!condition) {
-    std::fprintf(stderr, "FAIL: %s\n", what);
-    ++sFailures;
-  }
-}
 
 void Put32(std::vector<uint8_t>& out, uint32_t value) {
   out.push_back(uint8_t(value >> 24));
@@ -96,7 +89,7 @@ void TestReadPak() {
   const std::vector<uint8_t> packed = MakeStrg(3, 'x');
   std::vector<uint8_t> stored(4 + compressBound(uLong(packed.size())));
   uLongf length = uLongf(stored.size() - 4);
-  Check(compress(stored.data() + 4, &length, packed.data(), uLong(packed.size())) == Z_OK, "compress");
+  CHECK_MSG(compress(stored.data() + 4, &length, packed.data(), uLong(packed.size())) == Z_OK, "compress");
   stored.resize(4 + length);
   stored[0] = 0;
   stored[1] = 0;
@@ -111,39 +104,39 @@ void TestReadPak() {
   });
   std::map<uint32_t, std::vector<uint8_t>> tables;
   std::string error;
-  Check(PortPalLanguages::ReadPakStrgs(Reader(pak), tables, error), "read pak");
-  Check(tables.size() == 2, "two tables, no texture");
+  CHECK_MSG(PortPalLanguages::ReadPakStrgs(Reader(pak), tables, error), "read pak");
+  CHECK_MSG(tables.size() == 2, "two tables, no texture");
   // A stored entry is padded to 32 bytes; the padding stays, as on disc.
-  Check(tables[0x20].size() >= plain.size() && std::equal(plain.begin(), plain.end(), tables[0x20].begin()),
-        "plain table");
-  Check(tables[0x30] == packed, "compressed table inflated");
-  Check(PortPalLanguages::IsStringTable(tables[0x20]) && PortPalLanguages::IsStringTable(tables[0x30]), "valid tables");
+  CHECK_MSG(tables[0x20].size() >= plain.size() && std::equal(plain.begin(), plain.end(), tables[0x20].begin()),
+            "plain table");
+  CHECK_MSG(tables[0x30] == packed, "compressed table inflated");
+  CHECK_MSG(PortPalLanguages::IsStringTable(tables[0x20]) && PortPalLanguages::IsStringTable(tables[0x30]), "valid tables");
 
   std::vector<uint8_t> broken = stored;
   broken[3] = uint8_t(broken[3] + 1);  // claims one byte more than it inflates to
   const std::vector<uint8_t> badPak = MakePak({{kSTRG, 0x30, true, broken}});
   tables.clear();
-  Check(!PortPalLanguages::ReadPakStrgs(Reader(badPak), tables, error) && !error.empty(), "bad stream refused");
+  CHECK_MSG(!PortPalLanguages::ReadPakStrgs(Reader(badPak), tables, error) && !error.empty(), "bad stream refused");
 
   const std::vector<uint8_t> notPak(64, 0xFF);
-  Check(!PortPalLanguages::ReadPakStrgs(Reader(notPak), tables, error), "not a pak");
+  CHECK_MSG(!PortPalLanguages::ReadPakStrgs(Reader(notPak), tables, error), "not a pak");
 }
 
 void TestIsStringTable() {
   std::vector<uint8_t> table = MakeStrg(2, 'a');
-  Check(PortPalLanguages::IsStringTable(table), "valid");
+  CHECK_MSG(PortPalLanguages::IsStringTable(table), "valid");
   std::vector<uint8_t> cut(table.begin(), table.end() - 1);
-  Check(!PortPalLanguages::IsStringTable(cut), "cut short");
+  CHECK_MSG(!PortPalLanguages::IsStringTable(cut), "cut short");
   std::vector<uint8_t> magic = table;
   magic[0] = 0;
-  Check(!PortPalLanguages::IsStringTable(magic), "wrong magic");
+  CHECK_MSG(!PortPalLanguages::IsStringTable(magic), "wrong magic");
   std::vector<uint8_t> version = table;
   version[7] = 1;
-  Check(!PortPalLanguages::IsStringTable(version), "wrong version");
+  CHECK_MSG(!PortPalLanguages::IsStringTable(version), "wrong version");
   std::vector<uint8_t> languages = table;
   languages[11] = 9;
-  Check(!PortPalLanguages::IsStringTable(languages), "too many languages");
-  Check(!PortPalLanguages::IsStringTable({}), "empty");
+  CHECK_MSG(!PortPalLanguages::IsStringTable(languages), "too many languages");
+  CHECK_MSG(!PortPalLanguages::IsStringTable({}), "empty");
 }
 
 // A FONT of `version` naming TXTR 0xCAFEF00D.
@@ -171,15 +164,15 @@ std::vector<uint8_t> MakeFont(uint32_t version, const char* name) {
 void TestFontTexture() {
   for (uint32_t version : {0u, 1u, 2u, 4u}) {
     uint32_t texture = 0;
-    Check(PortPalLanguages::FontTexture(MakeFont(version, "Deface"), texture) && texture == 0xCAFEF00D,
-          "font texture by version");
+    CHECK_MSG(PortPalLanguages::FontTexture(MakeFont(version, "Deface"), texture) && texture == 0xCAFEF00D,
+              "font texture by version");
   }
   uint32_t texture = 0;
-  Check(!PortPalLanguages::FontTexture(MakeFont(5, "Deface"), texture), "unknown version");
+  CHECK_MSG(!PortPalLanguages::FontTexture(MakeFont(5, "Deface"), texture), "unknown version");
   std::vector<uint8_t> cut = MakeFont(2, "Deface");
   cut.resize(cut.size() - 2);
-  Check(!PortPalLanguages::FontTexture(cut, texture), "font cut short");
-  Check(!PortPalLanguages::FontTexture(MakeStrg(1, 1), texture), "not a font");
+  CHECK_MSG(!PortPalLanguages::FontTexture(cut, texture), "font cut short");
+  CHECK_MSG(!PortPalLanguages::FontTexture(MakeStrg(1, 1), texture), "not a font");
 }
 
 void TestImportedImageTextureIds() {
@@ -188,17 +181,17 @@ void TestImportedImageTextureIds() {
       L"&image=SI,0.6875,0.6875,FAB0528D; &image=SI,0.6875,0.6875,2CE9B190; "
       L"&image=SI,0.6875,0.6875,DE6901DE; &image=SI,0.6875,0.6875,7FF222B8; "
       L"&image=SI,0.6875,0.6875,E7B56235;";
-  Check(PortPalLanguages::RemapImportedImageTextureIds(legend), "map legend ids remapped");
-  Check(legend == L"&image=SI,0.6875,0.6875,8A78A5BF; &image=SI,0.6875,0.6875,8A78A5BF; "
-                  L"&image=SI,0.6875,0.6875,8A78A5BF; &image=SI,0.6875,0.6875,39C0091E; "
-                  L"&image=SI,0.6875,0.6875,39C0091E; &image=SI,0.6875,0.6875,C6FA23D1; "
-                  L"&image=SI,0.6875,0.6875,C6FA23D1;",
-        "all seven PAL variants map to the matching USA icon slots");
+  CHECK_MSG(PortPalLanguages::RemapImportedImageTextureIds(legend), "map legend ids remapped");
+  CHECK_MSG(legend == L"&image=SI,0.6875,0.6875,8A78A5BF; &image=SI,0.6875,0.6875,8A78A5BF; "
+                      L"&image=SI,0.6875,0.6875,8A78A5BF; &image=SI,0.6875,0.6875,39C0091E; "
+                      L"&image=SI,0.6875,0.6875,39C0091E; &image=SI,0.6875,0.6875,C6FA23D1; "
+                      L"&image=SI,0.6875,0.6875,C6FA23D1;",
+            "all seven PAL variants map to the matching USA icon slots");
 
   std::wstring lower = L"&image=SI,0.6875,0.6875,fab0528d;";
-  Check(PortPalLanguages::RemapImportedImageTextureIds(lower) &&
-            lower == L"&image=SI,0.6875,0.6875,8A78A5BF;",
-        "lowercase asset id");
+  CHECK_MSG(PortPalLanguages::RemapImportedImageTextureIds(lower) &&
+                lower == L"&image=SI,0.6875,0.6875,8A78A5BF;",
+            "lowercase asset id");
 
   std::wstring otherIds =
       L"&image=SI,0.6875,0.6875,FE2235F5; &image=SI,0.6875,0.6875,41031B9B; "
@@ -206,21 +199,21 @@ void TestImportedImageTextureIds() {
       L"&image=SI,0.6875,0.6875,95401DA9; &image=SI,0.6875,0.6875,81DFB050; "
       L"&image=SI,0.6875,0.6875,CB91BD62;";
   const std::wstring unchangedOtherIds = otherIds;
-  Check(!PortPalLanguages::RemapImportedImageTextureIds(otherIds) && otherIds == unchangedOtherIds,
-        "other seven map legend ids unchanged");
+  CHECK_MSG(!PortPalLanguages::RemapImportedImageTextureIds(otherIds) && otherIds == unchangedOtherIds,
+            "other seven map legend ids unchanged");
 
   std::wstring notImage =
       L"FAB0528D &font=FAB0528D; text DE6901DE; &image=SI,0.68,0.68,E7B56235";
   const std::wstring unchangedNotImage = notImage;
-  Check(!PortPalLanguages::RemapImportedImageTextureIds(notImage) && notImage == unchangedNotImage,
-        "prose, font tag, and unterminated image tag unchanged");
+  CHECK_MSG(!PortPalLanguages::RemapImportedImageTextureIds(notImage) && notImage == unchangedNotImage,
+            "prose, font tag, and unterminated image tag unchanged");
 
   std::wstring partialIds =
       L"&image=SI,0,0,0FAB0528D; &image=SI,0,0,FAB0528DA; &image=SI,0,0,xFAB0528D; "
       L"&image=SI,0,0,FAB0528D_;";
   const std::wstring unchangedPartialIds = partialIds;
-  Check(!PortPalLanguages::RemapImportedImageTextureIds(partialIds) && partialIds == unchangedPartialIds,
-        "partial or embedded ids unchanged");
+  CHECK_MSG(!PortPalLanguages::RemapImportedImageTextureIds(partialIds) && partialIds == unchangedPartialIds,
+            "partial or embedded ids unchanged");
 }
 
 }  // namespace
@@ -230,10 +223,8 @@ int main() {
   TestIsStringTable();
   TestFontTexture();
   TestImportedImageTextureIds();
-  if (sFailures != 0) {
-    std::fprintf(stderr, "%d failure(s)\n", sFailures);
-    return 1;
+  if (port_test::Failures() == 0) {
+    std::printf("port_pal_languages: ok\n");
   }
-  std::printf("port_pal_languages: ok\n");
-  return 0;
+  return PORT_TEST_RESULT();
 }

@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <thread>
 #include "port_debug.h"
+#include "port_log.h"
 
 #include <dolphin/ai.h>
 #include <dolphin/ar.h>
@@ -244,7 +245,7 @@ extern "C" void OSFatal(GXColor fg, GXColor bg, const char* msg) {
     (void)fg;
     (void)bg;
     if (msg != nullptr) {
-        std::fprintf(stderr, "OSFatal: %s\n", msg);
+        PortLog::Write("OSFatal: %s\n", msg);
     }
     // Declared noreturn: returning would run off into undefined behaviour.
     std::abort();

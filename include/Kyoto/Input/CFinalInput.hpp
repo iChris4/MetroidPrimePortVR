@@ -216,6 +216,10 @@ public:
     x1c_anaRightTrigger = held ? 1.f : 0.f;
     x28_anaRightTriggerP = pressed ? 1.f : 0.f;
   }
+  void PortSetX(bool held, bool pressed) {
+    x2c_b26_X = held;
+    x2d_b30_PX = pressed;
+  }
   void PortSetY(bool held, bool pressed) {
     x2c_b27_Y = held;
     x2d_b31_PY = pressed;

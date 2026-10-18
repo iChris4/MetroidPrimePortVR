@@ -1,4 +1,5 @@
 #include "MetroidPrime/CWorld.hpp"
+#include "port_env.h"
 
 #include "MetroidPrime/CScriptLayerManager.hpp"
 
@@ -376,7 +377,7 @@ void CWorld::TravelToArea(const TAreaId& aid, CStateManager& mgr, EAreaTravelTyp
 
 #ifdef TARGET_PC
   // MP_LOG_DOORS: ticks the next area could not stream while others deallocated.
-  static const bool logAreas = std::getenv("MP_LOG_DOORS") != nullptr;
+  static const bool logAreas = port::EnvFlag("MP_LOG_DOORS");
   static int blockedTicks = 0;
   if (logAreas && otherLoadArea != nullptr) {
     if (toStreamCount != 0 || x70_25_loadPaused) {
@@ -725,7 +726,7 @@ void CWorld::PortKeepWorldSky() {
     return;
   }
   // MP_LOG_DOORS: how long the world sky took to load after it was (re)requested.
-  static const bool logSky = std::getenv("MP_LOG_DOORS") != nullptr;
+  static const bool logSky = port::EnvFlag("MP_LOG_DOORS");
   static std::chrono::steady_clock::time_point skyRequested;
   static bool modelBuilt = false;
   if (logSky && !x94_skyboxWorld->IsLocked()) {

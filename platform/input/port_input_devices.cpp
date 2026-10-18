@@ -398,6 +398,9 @@ void BindPortControls(Profile& p) {
   Bind(p, Action::LoadState, Make(Device::Key, SDL_SCANCODE_F9));
   Bind(p, Action::Screenshot, Make(Device::Key, SDL_SCANCODE_F12));
   Bind(p, Action::PhotoMode, Make(Device::Key, SDL_SCANCODE_F8));
+  // Hold to aim / hold to pause for the gyro (F1 > Controller > Gyro aim).
+  Bind(p, Action::GyroAim, NativeInput(SDL_GAMEPAD_BUTTON_RIGHT_STICK));
+  Bind(p, Action::GyroAim, Make(Device::Key, SDL_SCANCODE_LCTRL));
 
   // The wheel cycles beams, as in PrimeHack (issue #61); retail has no wheel.
   // With pointer menus, Escape works as on PC: pauses, backs out of menus (B; the
@@ -648,7 +651,7 @@ void RouteDirectActions(const PortInput::Output& out) {
 // ticks, so they work while the game is paused or the F1 overlay is open.
 bool IsPortAction(Action a) {
   return a == Action::PortMenu || a == Action::SaveState || a == Action::LoadState || a == Action::Screenshot ||
-         a == Action::ToggleOriginal || a == Action::PhotoMode;
+         a == Action::ToggleOriginal || a == Action::PhotoMode || a == Action::GyroAim;
 }
 
 // Keys pressed since the last PollPortActions, added by an SDL event watch: a short
@@ -1188,7 +1191,11 @@ void PollPortActions() {
   const PortInput::Output& out = sRuntime.Poll(raw, contexts, static_cast< double >(SDL_GetTicksNS()) / 1e6,
                                                QuietContexts(sRuntime.ActiveContexts(), contexts));
   // The F1 Remap page is recording an input: a bound PortMenu would close it.
-  if (PortInputRemap::Capturing()) return;
+  if (PortInputRemap::Capturing()) {
+    PortDebug::SetGyroButton(false);
+    return;
+  }
+  PortDebug::SetGyroButton(out.Held(Action::GyroAim));
   if (out.Pressed(Action::PortMenu)) PortDebug::RequestToggle();
   if (out.Pressed(Action::SaveState)) PortDebug::RequestSaveStateHotkey(1);
   if (out.Pressed(Action::LoadState)) PortDebug::RequestSaveStateHotkey(2);

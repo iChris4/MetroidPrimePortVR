@@ -5,6 +5,9 @@
 #include "Kyoto/Basics/CBasics.hpp"
 
 #include "stddef.h"
+#ifdef TARGET_PC
+#include <string.h>
+#endif
 
 class COutputStream;
 
@@ -70,6 +73,13 @@ public:
   }
 
   uint GetWrittenBytes() const { return mNumWrites; }
+#ifdef TARGET_PC
+  // Port: bits written so far, counting the ones still in the shift register.
+  uint PortBitsWritten() const { return mNumWrites * 8 + (32 - mShiftRegisterOffset); }
+  // Port: the most bits this stream can hold (a memory stream truncates past
+  // its buffer), or no limit.
+  virtual uint PortCapacityBits() const { return 0xFFFFFFFFu; }
+#endif
 
 private:
   uint mUnwrittenLen;
@@ -89,7 +99,14 @@ inline void coutput_stream_helper(const T& t, COutputStream& out) {
 template <>
 inline void coutput_stream_helper(const float& t, COutputStream& out) {
   const float value = t;
+#ifdef TARGET_PC
+  // Copy the bits rather than type-pun: GCC -O2 may reorder a punned read (-Wstrict-aliasing).
+  uint bits;
+  memcpy(&bits, &value, sizeof(bits));
+  out.WriteLong(bits);
+#else
   out.WriteLong(*reinterpret_cast< const uint* >(&value));
+#endif
 }
 
 template <>

@@ -1,4 +1,5 @@
 #include "port_fx_debug.h"
+#include "port_vfx_opacity.h"
 #include "port_vfx_particles.h"
 #include "vr/vr_particle_billboard.h"
 
@@ -12,6 +13,7 @@
 #include "Kyoto/Math/CTransform4f.hpp"
 #include "Kyoto/Math/CVector3f.hpp"
 #include "Kyoto/Particles/CParticleGlobals.hpp"
+#include "Kyoto/Particles/PortParticleMath.hpp"
 #include "Kyoto/Particles/IElement.hpp"
 
 #include "aurora/vfx.hpp"
@@ -99,12 +101,7 @@ int EvalElem(const CPortVfxElem& e, int frame, float out[4]) {
     if (e.color == nullptr) {
       return 0;
     }
-    CColor c;
-    e.color->GetValue(frame, c);
-    out[0] = c.GetRed();
-    out[1] = c.GetGreen();
-    out[2] = c.GetBlue();
-    out[3] = c.GetAlpha();
+    e.color->GetValueHdr(frame, out);
     return 4;
   }
   }
@@ -169,10 +166,10 @@ void PortVfxSetLaunchDir(CElementGen::CParticle& particle) {
       m > kEps ? particle.x1c_vel * (1.f / std::sqrt(m)) : CVector3f::Zero();
 }
 
-uint PortVfxEvalVsmt(const CPortVfxData& vfx, int frame, float vsmt[19]) {
+uint PortVfxEvalVsmt(const CPortVfxData& vfx, int frame, float vsmt[kPortVfxVsmtCount]) {
   uint mask = 0;
   for (const CPortVfxElem& e : vfx.vsmt) {
-    if (e.a >= 19) {
+    if (e.a >= kPortVfxVsmtCount) {
       continue;
     }
     float v[4] = {};
@@ -241,6 +238,8 @@ bool PortVfxBuildDesc(const CPortVfxData& vfx, const float* vsmt, uint vsmtMask,
   desc.paletteSlot = static_cast< int8_t >(mat.paletteSlot);
   desc.modulate = mat.modulate;
   desc.depthSoften = mat.depthSoften;
+  desc.opacityGain = (vsmtMask & (1u << kPortVfxOpacityGainTarget)) ? vsmt[kPortVfxOpacityGainTarget] : mat.opacityGain;
+  desc.opacityBias = (vsmtMask & (1u << kPortVfxOpacityBiasTarget)) ? vsmt[kPortVfxOpacityBiasTarget] : mat.opacityBias;
   desc.rampRow[0] = static_cast< int8_t >(mat.rampRow[0]);
   desc.rampRow[1] = static_cast< int8_t >(mat.rampRow[1]);
   desc.addRow = static_cast< int8_t >(mat.addRow);
@@ -303,8 +302,10 @@ void CElementGen::PortRenderParticlesVfx() {
   const CTransform4f systemViewCopy(CGraphics::GetViewMatrix()); // the camera transform
   CTransform4f systemModelMatrix(systemViewCopy);
   systemModelMatrix.SetTranslation(CVector3f::Zero());
+  const bool followsEmitter = PortFollowsEmitter();
   const CTransform4f systemCameraCopy(systemModelMatrix.GetQuickInverse() *
                                       x22c_globalOrientation);
+  const CTransform4f cameraRotationInverse(systemModelMatrix.GetQuickInverse());
   systemModelMatrix = CTransform4f::Translate(xe8_globalTranslation) * x10c_globalScaleTransform *
                       systemModelMatrix * x178_localScaleTransform;
   CGraphics::SetModelMatrix(systemModelMatrix);
@@ -326,8 +327,10 @@ void CElementGen::PortRenderParticlesVfx() {
   order.reserve(particleCount);
   for (int i = 0; i < particleCount; ++i) {
     const CParticle& p = x30_particles[i];
-    const CVector3f pos = (p.x4_pos - p.x10_prevPos) * x80_timeDeltaScale + p.x10_prevPos;
-    order.emplace_back(static_cast< short >(i), systemCameraCopy * pos);
+    order.emplace_back(static_cast< short >(i),
+                       PortParticleMath::ParticlePositionForSort(
+                           cameraRotationInverse, systemCameraCopy, followsEmitter, p.x4_pos,
+                           p.x10_prevPos, x80_timeDeltaScale));
   }
   if (x28_loadedGenDesc->x30_28_SORT) {
     std::stable_sort(order.begin(), order.end(),
@@ -420,7 +423,7 @@ void CElementGen::PortRenderParticlesVfx() {
       if (dir.MagSquared() <= kEps) {
         dir = Normalised(p.x4_pos - p.x10_prevPos, CVector3f(0.f, 0.f, 1.f));
       }
-      const CVector3f a = systemCameraCopy.Rotate(dir);
+      const CVector3f a = PortParticleMath::ParticleDirectionInCamera(systemCameraCopy, dir);
       const CVector3f toCam = camFrame - vp;
       CVector3f b = Normalised(CVector3f::Cross(a, toCam), CVector3f::Zero());
       if (b.MagSquared() <= kEps) {
@@ -567,6 +570,10 @@ void CElementGen::PortRenderMeshesVfx(CPortVfxMeshBatch& batch) {
     batch.verts.clear();
     return;
   }
+  // This is a model draw, so a material whose mesh permutation was read against the shader takes its
+  // fade from the view-space normal (aurora's OpacityFresnel); every other material keeps the form
+  // its VMAT carries. port_vfx_opacity.h has the formula and why it is pinned to one recipe.
+  PortVfxSelectModelOpacity(x28_loadedGenDesc->xPortVfx->mat.features, desc);
   // The vertices are in world space already.
   CGraphics::SetModelMatrix(CTransform4f::Identity());
   CGraphics::SetCullMode(kCM_None);

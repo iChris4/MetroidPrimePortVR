@@ -15,6 +15,15 @@
 #include "rstl/auto_ptr.hpp"
 #include "rstl/vector.hpp"
 
+#ifdef TARGET_PC
+#include <cstdint>
+
+// The port's retained Remastered physics object state (platform seam): see
+// RetainedResult in port_remastered_ground_policy.h for the source contract.
+#include "port_remastered_ground_policy.h"
+#include "port_remastered_ground_rider.h"
+#endif
+
 class CPlayerGun;
 class CMorphBall;
 class CPlayerCameraBob;
@@ -296,6 +305,71 @@ public:
   int PortPlayerHintCount() const { return x838_playerHints.size(); }
   bool PortControlDirOverride() const { return x9c4_30_controlDirOverride; }
   const CVector3f& PortControlDirFlat() const { return x54c_controlDirFlat; }
+  // The retained Remastered persisted physics object state (state+0x13c). Port-only, never
+  // serialized: the source never restores it either (CPhysicsState's ctor writes 0 and no
+  // load path touches it, MOVER-SELECTION.md §3), so a rebuilt player starts at the default
+  // 0/valid below and nothing stale survives a save-state load.
+  const PortRemasteredGround::RetainedResult& PortRetainedObjectState() const {
+    return xa34_retainedObjectState;
+  }
+  void PortSetRetainedObjectState(const PortRemasteredGround::RetainedResult& state) {
+    xa34_retainedObjectState = state;
+  }
+  void PortInvalidateRetainedObjectState() {
+    xa34_retainedObjectState = PortRemasteredGround::RetainedInvalidate();
+  }
+  // Read-only mover-entry counter: how many ticks actually entered
+  // CGameCollision::MoveGroundedRemastered for THIS player (docs/REMASTERED_MOVEMENT.md). It is
+  // the only way to tell "ground replacement is wired" from "ground replacement is silently
+  // disabled": the dynamic-contact fallback, a morph-ball tick, a save-state load or the
+  // retained-state dispatch all stand the Remastered ground mover aside without any
+  // visible symptom. Monotonic, cumulative, per player, for the process lifetime (a
+  // save-state load rebuilds/teleports the player but does not reset it), never
+  // serialized and never read by the mover. NOT a source quantity and NOT a simulation
+  // tick: the source has no such counter, it does not advance on retail, airborne,
+  // morph-ball, dyn-fallback or paused ticks, and it must never be used as a clock.
+  uint32_t PortGroundMoverRuns() const { return xa38_groundMoverRuns; }
+  void PortNoteGroundMoverRun() { ++xa38_groundMoverRuns; }
+  // Remastered grounded mover on moving platforms (issue #117, slice 1). The rider
+  // controller the mover sets after its snap (SetRiderController 0xc1631c), decayed at the
+  // end of every movement tick (PortEndMovementTick). Port-only, never serialized: a
+  // save-state load clears it (PortResetRiderState).
+  PortRemasteredGroundRider::RiderController& PortRider() { return xa3c_rider; }
+  // Exactly one platform carry per tick (PortRemasteredGroundRider::PlanCarry): retail
+  // CScriptPlatform::MoveRiders runs in PreThink, before the player's mover is chosen, so it
+  // defers the player's carry when the previous movement tick ran a carry-owning Remastered
+  // mover (admitted grounded or airborne), and the tick's actual mover then applies or drops it.
+  bool PortDefersRiderCarry() const {
+    return PortRemasteredGroundRider::DeferRetailCarry(xa44_lastTickRemasteredCarry);
+  }
+  void PortSetLastTickRemasteredCarry(bool ran) { xa44_lastTickRemasteredCarry = ran; }
+  void PortDeferRiderCarry(const CVector3f& delta, const CQuaternion& rotDelta, bool rotate,
+                           uint tick);
+  void PortNoteRetailRiderCarry(uint tick) { xa48_retailCarryTick = tick; }
+  bool PortRetailRiderCarried(uint tick) const { return xa48_retailCarryTick == tick; }
+  void PortApplyDeferredRiderCarry(uint tick);
+  void PortDropDeferredRiderCarry() { xa4c_deferredCarryCount = 0; }
+  // A save-state load (PortSaveState::Place): no rider, no deferred carry, and the next tick
+  // is not a carry-owning Remastered one, so nothing from before the load carries across it.
+  void PortResetRiderState() {
+    xa3c_rider = PortRemasteredGroundRider::RiderController();
+    xa44_lastTickRemasteredCarry = false;
+    xa4c_deferredCarryCount = 0;
+    xad4_carriedYaw = 0.f;
+  }
+  // The yaw a Remastered mover's rider carry turned the player by this tick (a rotating
+  // platform, PredictMotion 0xc23e40), noted only when it reached the orientation.
+  // UpdateMouseAim takes it once, so free mouse look turns with the platform instead of
+  // setting the old heading back.
+  void PortNoteCarriedYaw(float yaw) { xad4_carriedYaw += yaw; }
+  float PortTakeCarriedYaw() {
+    const float yaw = xad4_carriedYaw;
+    xad4_carriedYaw = 0.f;
+    return yaw;
+  }
+  // After the player's move each running tick: a deferred carry no mover consumed (the
+  // player did not move this tick) is applied, as retail would have, then the rider decays.
+  void PortEndMovementTick(uint tick);
 #endif
   const CTransform4f& GetFirstPersonCameraTransform(CStateManager& mgr) const;
   void UpdateDebugCamera(CStateManager& mgr);
@@ -743,6 +817,27 @@ private:
   float xa28_attachedActorStruggle;
   int xa2c_damageLoopSfxDelayTicks;
   float xa30_samusExhaustedVoiceTimer;
+#ifdef TARGET_PC
+  // Port: the retained Remastered physics object state (see PortRetainedObjectState above).
+  // Default-initialised (0 / valid) by every constructor, as the source ctor does.
+  PortRemasteredGround::RetainedResult xa34_retainedObjectState;
+  // Port: the trial ground-mover run counter (see PortGroundMoverRuns above). Default 0;
+  // the source layout is not affected (every check below is inert off-MWERKS).
+  uint32_t xa38_groundMoverRuns = 0;
+  // Port: platform riders under the Remastered grounded mover (see PortRider above).
+  struct SPortDeferredCarry {
+    CVector3f delta;
+    CQuaternion rotDelta;
+    bool rotate;
+  };
+  PortRemasteredGroundRider::RiderController xa3c_rider;
+  bool xa44_lastTickRemasteredCarry = false;
+  uint xa48_retailCarryTick = ~0u;
+  int xa4c_deferredCarryCount = 0;
+  uint xa50_deferredCarryTick = ~0u;
+  SPortDeferredCarry xa54_deferredCarry[4];
+  float xad4_carriedYaw = 0.f;
+#endif
 };
 NESTED_CHECK_SIZEOF(CPlayer, CPlayerStuckTracker, 0x2e0);
 CHECK_SIZEOF(CPlayer, (VERSION >= VERSION_GM8P_00 ? 0xa48 : 0xa38))

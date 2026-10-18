@@ -17,6 +17,7 @@
 #include "dolphin/os.h"
 
 #ifdef TARGET_PC
+#include "port_beam_doors.h"
 #include "port_debug.h"
 
 #include <cstring>
@@ -333,6 +334,9 @@ CGameState::CGameState() : x0_(static_cast< uchar >(0))
   xpc_apProgress.reconciled = false;
   for (int i = 0; i < kPortSeenWords; ++i)
     xpc_seenPickups[i] = 0;
+  xpc_mapMarks = PortMapMarks::List();
+  for (int i = 0; i < PortBeamDoors::kWords; ++i)
+    xpc_beamDoors[i] = 0;
 #endif
   if (gpMemoryCard != nullptr)
     InitializeMemoryStates();
@@ -376,6 +380,9 @@ CGameState::CGameState(CInputStream& in, int saveIdx) : x0_(static_cast< uchar >
 #ifdef TARGET_PC
   for (int i = 0; i < kPortSeenWords; ++i)
     xpc_seenPickups[i] = 0;
+  xpc_mapMarks = PortMapMarks::List();
+  for (int i = 0; i < PortBeamDoors::kWords; ++i)
+    xpc_beamDoors[i] = 0;
   {
     // The first trailer had no checked locations, the second no shields.
     uint magic = in.ReadBits(32);
@@ -405,6 +412,10 @@ CGameState::CGameState(CInputStream& in, int saveIdx) : x0_(static_cast< uchar >
     if (magic == kPortSeenMagic) {
       for (int i = 0; i < kPortSeenWords; ++i)
         xpc_seenPickups[i] = in.ReadBits(32);
+      // The room marks follow it; an older save has zeros here.
+      if (in.ReadBits(32) == PortMapMarks::kMagic) {
+        xpc_mapMarks = PortMapMarks::Get([&in](unsigned bits) { return static_cast< uint >(in.ReadBits(bits)); });
+      }
     }
   }
   xpc_apProgress.reconciled = false;
@@ -504,6 +515,15 @@ void CGameState::PutTo(COutputStream& out) {
   out.WriteBits(kPortSeenMagic, 32);
   for (int i = 0; i < kPortSeenWords; ++i)
     out.WriteBits(xpc_seenPickups[i], 32);
+  {
+    // The room marks that still fit the stream, after the seen ones.
+    const size_t fit = PortMapMarks::Fit(xpc_mapMarks.count, out.PortCapacityBits(),
+                                         out.PortBitsWritten());
+    if (fit != 0) {
+      PortMapMarks::Put(xpc_mapMarks, fit,
+                        [&out](uint value, unsigned bits) { out.WriteBits(value, bits); });
+    }
+  }
 #endif
 }
 

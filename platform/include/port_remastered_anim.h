@@ -59,7 +59,7 @@ struct Anim {
 struct Character {
   // The SMDL the character skins, as the 16 bytes sit in the file. That is the
   // property order (Python's bytes_le), the same form a room property GUID has
-  // there, so pass it through the same swap as port_remastered_room.cpp's SwapUuid
+  // there, so pass it through the same swap as port_remastered_room_internal.h's SwapUuid
   // (first three fields byte-reversed) to get the pak id the model lookup takes.
   // All zero when the file has no reference where the reader looks for it (it is
   // located by position after the animation records, which is only confirmed on the

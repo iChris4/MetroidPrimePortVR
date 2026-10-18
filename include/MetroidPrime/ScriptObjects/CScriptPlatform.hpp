@@ -96,6 +96,25 @@ public:
                          const CTransform4f& newXf, const CVector3f& dragDelta,
                          CQuaternion rotDelta);
 
+#ifdef TARGET_PC
+  // Port: the pose at the start of this platform's PreThink, the pose at its end and
+  // the update they were taken in (CStateManager::PortSimTick), for the Remastered movers'
+  // rider carry (issue #117). Taken only by a PreThink that starts active: an inactive
+  // platform is not simulated, so its last active step stays the recorded one. Not
+  // x270_dragDelta: that stays stale while x260_moveDelay > 0.
+  const CTransform4f& PortPreThinkTransform() const { return xPortPreThinkXf; }
+  const CTransform4f& PortPreThinkEndTransform() const { return xPortPreThinkEnd; }
+  uint PortPoseTick() const { return xPortPoseTick; }
+  // CStateManager::MovePlatforms' physics move is part of the platform's own step, as in
+  // Remastered's physics step: the end pose follows it. Anything that moves the platform after
+  // that, before the player's move, is a teleport (PortRemasteredGroundRider::RiderCarryTerm).
+  void PortNoteStepEnd(uint tick) {
+    if (xPortPoseTick == tick) xPortPreThinkEnd = GetTransform();
+  }
+  // The orientation changed since the stamp (exact compare of the basis).
+  bool PortRotatedSinceStamp() const;
+#endif
+
 private:
   friend struct PortRoomState;
   typedef rstl::reserved_vector< ushort, 1024 > TMovedList;
@@ -133,6 +152,11 @@ private:
   bool x356_29_setXrayDrawFlags : 1;
   bool x356_30_disableXrayAlpha : 1;
   bool x356_31_xrayFog : 1;
+#ifdef TARGET_PC
+  CTransform4f xPortPreThinkXf = CTransform4f::Identity();
+  CTransform4f xPortPreThinkEnd = CTransform4f::Identity();
+  uint xPortPoseTick = ~0u;
+#endif
 };
 CHECK_SIZEOF(CScriptPlatform, (VERSION >= VERSION_GM8P_00 ? 0x368 : 0x358))
 

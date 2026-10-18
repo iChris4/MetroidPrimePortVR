@@ -14,7 +14,10 @@
 #include "dolphin/os.h"
 
 #ifdef TARGET_PC
+#include "MetroidPrime/CStateManager.hpp"
+#include "MetroidPrime/Player/CPlayerState.hpp"
 #include "MetroidPrime/PortSaveFormat.hpp"
+#include "port_debug.h"
 #include "port_apclient.h"
 #include "port_randomizer.h"
 #endif
@@ -252,6 +255,45 @@ void CGameOptions::SetSurroundMode(CAudioSys::ESurroundModes mode, bool apply) {
 const float CGameOptions::GetHudAlpha() const { return x60_hudAlpha * 0.003921569f; }
 
 const float CGameOptions::GetHelmetAlpha() const { return x64_helmetAlpha * 0.003921569f; }
+
+#ifdef TARGET_PC
+float CGameOptions::GetHudAlpha(EHudType type) const {
+  int percent;
+  switch (type) {
+  case kHT_XRay:
+    percent = PortDebug::HudOpacity(PortDebug::kHudOpacityXRay);
+    break;
+  case kHT_Thermal:
+    percent = PortDebug::HudOpacity(PortDebug::kHudOpacityThermal);
+    break;
+  case kHT_Scan:
+    percent = PortDebug::HudOpacity(PortDebug::kHudOpacityScan);
+    break;
+  default:
+    percent = PortDebug::kHudOpacityVisor;
+    break;
+  }
+  return percent == PortDebug::kHudOpacityVisor ? GetHudAlpha() : percent / 100.f;
+}
+
+float CGameOptions::GetActiveHudAlpha(const CStateManager& mgr) const {
+  switch (mgr.GetPlayerState()->GetActiveVisor(mgr)) {
+  case CPlayerState::kPV_XRay:
+    return GetHudAlpha(kHT_XRay);
+  case CPlayerState::kPV_Thermal:
+    return GetHudAlpha(kHT_Thermal);
+  case CPlayerState::kPV_Scan:
+    return GetHudAlpha(kHT_Scan);
+  default:
+    return GetHudAlpha(kHT_Combat);
+  }
+}
+
+float CGameOptions::GetEnergyHudAlpha(EHudType type) const {
+  const int percent = PortDebug::HudOpacity(PortDebug::kHudOpacityEnergy);
+  return percent == PortDebug::kHudOpacityVisor ? GetHudAlpha(type) : percent / 100.f;
+}
+#endif
 
 void CGameOptions::SetHelmetAlpha(const int alpha) { x64_helmetAlpha = alpha; }
 

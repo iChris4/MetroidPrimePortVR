@@ -520,6 +520,17 @@ private:
   void ClearGraveyard();
   static void RendererDrawCallback(const void*, const void*, int);
   static const bool MemoryAllocatorAllocationFailedCallback(const void*, unsigned int);
+#ifdef TARGET_PC
+public:
+  // Port: one count per PreThinkObjects pass (one per simulation update). Platforms stamp
+  // their PreThink pose with it and the player's mover compares against it, so a pose
+  // delta is only used in the update that produced it (issue #117 platform riders).
+  // x8d8_updateFrameIdx is not usable: it advances by 0.5 per update at 120 Hz.
+  uint PortSimTick() const { return xPortSimTick; }
+
+private:
+  uint xPortSimTick = 0;
+#endif
 };
 CHECK_SIZEOF(CStateManager, 0xf98)
 

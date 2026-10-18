@@ -65,7 +65,7 @@ struct Uniform {
   float fogColor[4];
   float fog[4];     // type, a, b, c
   float misc[4];    // modulate, reversed Z, ramp row 0, ramp row 1
-  float misc2[4];   // add row
+  float misc2[4];   // add row, opacity gain, opacity bias, unused (layout unchanged)
   float srcs[6][4]; // Src i = (code, value) at [i / 2][2 * (i % 2)]; code = -1 or row * 4 + comp
   float uvSets[4];  // per slot
   float layers[4];  // per slot
@@ -73,6 +73,7 @@ struct Uniform {
   float pad[32];
 };
 static_assert(sizeof(Uniform) == UniformSize);
+static_assert(offsetof(Uniform, misc2) == 208 && offsetof(Uniform, srcs) == 224);
 
 // ---- Array textures ----
 // A slot's texture as a texture_2d_array: a 1-layer view of the GX texture itself, or, for an atlas,
@@ -353,13 +354,13 @@ fn fs_main(in: VOut) -> @location(0) vec4f {
     let fx = src(in, 4);
     let fy = src(in, 5);
     let q = fy - fx;
-    x = x * smooth3(select(select(0.0, 1.0, d >= fx), sat((d - fx) / q), q != 0.0));
+    x = x * u.misc2.y * sat(smooth3(select(select(0.0, 1.0, d >= fx), sat((d - fx) / q), q != 0.0)) - u.misc2.z);
   }
   if ((FEAT & 2048u) != 0u) {
     let fx = src(in, 6);
     let fy = src(in, 7);
     let q = fy - fx;
-    x = x * smooth3(select(select(0.0, 1.0, fx <= 0.0), sat(-fx / q), q != 0.0));
+    x = x * u.misc2.y * sat(smooth3(select(select(0.0, 1.0, fx <= 0.0), sat(-fx / q), q != 0.0)) - u.misc2.z);
   }
   if ((FEAT & 4u) != 0u) {
     x = max(0.0, x - src(in, 0));
@@ -998,6 +999,8 @@ static void draw_prims(const DrawDesc& desc, const Vertex* verts, uint32_t verte
   u.misc[2] = float(desc.rampRow[0]);
   u.misc[3] = float(desc.rampRow[1]);
   u.misc2[0] = float(desc.addRow);
+  u.misc2[1] = desc.opacityGain;
+  u.misc2[2] = desc.opacityBias;
   const Src* srcs[SrcCount] = {&desc.erosion,   &desc.thrX,      &desc.thrY,        &desc.thrW,
                                &desc.fresnelX,  &desc.fresnelY,  &desc.fadeX,       &desc.fadeY,
                                &desc.indexScale, &desc.indexOffset, &desc.indexRow};

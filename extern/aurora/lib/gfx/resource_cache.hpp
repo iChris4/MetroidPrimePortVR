@@ -15,7 +15,11 @@ wgpu::Sampler sampler_ref(const wgpu::SamplerDescriptor& descriptor);
 
 namespace detail {
 void clear_bind_group_cache();
-void expire_cached_bind_groups();
+// After the render worker finished frame `finishedFrame` (its current_frame() when recorded).
+void expire_cached_bind_groups(uint32_t finishedFrame);
+// After an EFB resize that kept the cache: once the worker has finished the first two frames
+// at the new size, drop what they did not use.
+void expire_unused_bind_groups_soon();
 void shutdown_resource_cache();
 } // namespace detail
 

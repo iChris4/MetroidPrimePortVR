@@ -29,6 +29,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include "port_hash.h"
+
 namespace PortRemastered {
 
 // One asset directory entry (PACK::TOCC::ADIR). The three versions are the
@@ -62,11 +64,7 @@ using ReadFn = std::function<bool(uint64_t offset, void* out, size_t size)>;
 // only has to spread them).
 struct PakIdHash {
   size_t operator()(const std::array<uint8_t, 16>& id) const {
-    uint64_t hash = 14695981039346656037ull;
-    for (uint8_t byte : id) {
-      hash = (hash ^ byte) * 1099511628211ull;
-    }
-    return size_t(hash);
+    return size_t(port::Fnv1a64(id.data(), id.size()));
   }
 };
 

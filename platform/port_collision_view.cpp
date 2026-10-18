@@ -1,4 +1,5 @@
 #include "port_collision_view.h"
+#include "port_env.h"
 
 #include "Collision/CMaterialList.hpp"
 #include "Kyoto/Graphics/CGX.hpp"
@@ -23,7 +24,7 @@ const char* const kNames[] = {"off", "overlay", "only"};
 
 Mode InitialMode() {
   Mode mode = Mode::Off;
-  if (const char* env = std::getenv("MP_COLLISION_VIEW")) {
+  if (const char* env = port::EnvString("MP_COLLISION_VIEW")) {
     ParseMode(env, mode);
   }
   return mode;

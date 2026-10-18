@@ -234,6 +234,23 @@ void CScriptPlatform::MoveRiders(CStateManager& mgr, float dt, bool active,
 #endif
         continue;
       }
+#ifdef TARGET_PC
+      // Issue #117: the player's carry waits for its mover. When the player's previous
+      // movement tick ran a carry-owning Remastered mover (admitted grounded or airborne),
+      // the move is recorded instead of made; the player's tick then applies it or, on a
+      // carry-owning Remastered tick, drops it for the mover's own carry
+      // (PortRemasteredGroundRider::PlanCarry). The
+      // probe, the collided list and the back-off above are unchanged.
+      if (CPlayer* const rider = TCastToPtr< CPlayer >(act)) {
+        const bool rotate = rider->GetOrbitState() == CPlayer::kOS_NoOrbit;
+        if (rider->PortDefersRiderCarry()) {
+          rider->PortDeferRiderCarry(delta, rotDelta, rotate, mgr.PortSimTick());
+          ++it;
+          continue;
+        }
+        rider->PortNoteRetailRiderCarry(mgr.PortSimTick());
+      }
+#endif
       act->SetTranslation(newPos);
       const CPlayer* player = TCastToConstPtr< CPlayer >(*act);
       if (player == nullptr || player->GetOrbitState() == CPlayer::kOS_NoOrbit) {
@@ -245,6 +262,16 @@ void CScriptPlatform::MoveRiders(CStateManager& mgr, float dt, bool active,
 }
 
 void CScriptPlatform::PreThink(float dt, CStateManager& mgr) {
+#ifdef TARGET_PC
+  // Only an active platform takes the pose snapshot: an inactive physics actor is not
+  // simulated (its Previous is not refreshed), so its last active step stays the one a
+  // rider's stale carry reads (PortRemasteredGroundRider::RiderCarry).
+  const bool portStamp = GetActive();
+  if (portStamp) {
+    xPortPreThinkXf = GetTransform();
+    xPortPoseTick = mgr.PortSimTick();
+  }
+#endif
   DecayRiders(x318_riders, dt, mgr);
   x264_collisionRecoverDelay -= dt;
   x260_moveDelay -= dt;
@@ -293,6 +320,11 @@ void CScriptPlatform::PreThink(float dt, CStateManager& mgr) {
       }
     }
   }
+#ifdef TARGET_PC
+  if (portStamp) {
+    xPortPreThinkEnd = GetTransform();
+  }
+#endif
 }
 
 void CScriptPlatform::BuildSlaveList(CStateManager& mgr) {
@@ -488,6 +520,20 @@ void CScriptPlatform::AddSlave(TUniqueId id, CStateManager& mgr) {
     }
   }
 }
+
+#ifdef TARGET_PC
+bool CScriptPlatform::PortRotatedSinceStamp() const {
+  const CTransform4f& now = GetTransform();
+  for (int c = 0; c < 3; ++c) {
+    const CVector3f a = now.GetColumn(c);
+    const CVector3f b = xPortPreThinkXf.GetColumn(c);
+    if (a.GetX() != b.GetX() || a.GetY() != b.GetY() || a.GetZ() != b.GetZ()) {
+      return true;
+    }
+  }
+  return false;
+}
+#endif
 
 bool CScriptPlatform::IsRider(TUniqueId id) const {
   // Retain both vector erase instantiations in retail order.

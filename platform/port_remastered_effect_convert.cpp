@@ -1,5 +1,6 @@
 #include "port_remastered_effect_convert.h"
 #include "port_bytes.h"
+#include "Kyoto/Particles/CPortVfxConstants.hpp"
 
 #include <algorithm>
 #include <array>
@@ -31,8 +32,7 @@ using PropertyTable = std::unordered_map<uint32_t, PropertyType>;
 
 void AddProperties(PropertyTable& t, const char* names, Type type, uint32_t asset = 0) {
   for (const char* c = names; *c != 0;) {
-    const uint32_t fourcc = uint32_t(uint8_t(c[0])) << 24 | uint32_t(uint8_t(c[1])) << 16 |
-                            uint32_t(uint8_t(c[2])) << 8 | uint32_t(uint8_t(c[3]));
+    const uint32_t fourcc = port::FourCC(c);
     t[fourcc] = {type, asset};
     c += 4;
     while (*c == ' ') {
@@ -332,6 +332,11 @@ constexpr EffectGuid kPowerBallMati = {0x46, 0x2a, 0x75, 0x86, 0x33, 0xe7, 0x23,
 constexpr EffectGuid kPowerBallModel = {0x60, 0xae, 0xf6, 0x4b, 0xe5, 0x3b, 0x51, 0x4d,
                                         0x88, 0xbd, 0x50, 0xbb, 0xd1, 0xbd, 0xf6, 0x71};
 constexpr uint32_t kPowerBallShader = 0xe899b1df;
+// Power held-charge sphere: a different child/MATI, despite sharing the model and shader.
+constexpr EffectGuid kPowerChargeChild = {0xdf, 0x39, 0xe6, 0xa9, 0xfe, 0x9d, 0x41, 0x42,
+                                          0x84, 0x2e, 0x0b, 0x8f, 0x8a, 0x65, 0x48, 0xe2};
+constexpr EffectGuid kPowerChargeMati = {0x3c, 0x1c, 0x7d, 0x90, 0xc8, 0xcc, 0x9b, 0x4b,
+                                         0x87, 0x8f, 0xee, 0x8a, 0x41, 0xfc, 0x1e, 0x7f};
 
 enum class Role { Color, Opacity, Ramp, Ramp2, Threshold, Indirect, Palette };
 
@@ -375,7 +380,7 @@ struct Recipe {
   std::vector<TexSpec> textures;
   std::vector<SrcSpec> sources;
   int addRow = -1;         // PMTR row of the AddColor (rgb, scale); -1: none
-  bool unitCch0 = false;   // the shader also reads CCH0.z/.w (fade gain/bias): only the identity (1, 0) is expressible
+  bool unitCch0 = false;   // shaders without v3 gain/bias support require identity CCH0.z/.w
   bool frameBuffer = false; // a FrameBuffer_* shader (scene x vc.rgb, warped by CCH0.xy): drawn as a multiply
 };
 
@@ -556,7 +561,7 @@ const Recipe* RecipeOf(uint32_t shader) {
        {}},
       {0xe899b1df, kRamp | kIndirect | kDepthSoften | kOpacityFade,
        {{"TCH0", Role::Ramp, 0, 1}, {"TCH1", Role::Indirect, -1, -1}},
-       {{kSrcFadeX, 2, 0}, {kSrcFadeY, 2, 1}}, -1, true},
+       {{kSrcFadeX, 2, 0}, {kSrcFadeY, 2, 1}}, -1, false},
       {0x3a867837, kRamp | kIndirect,
        {{"TCH0", Role::Ramp, 0, 1}, {"TCH1", Role::Indirect, -1, -1}},
        {}},
@@ -706,7 +711,7 @@ bool ParseMati(const std::vector<uint8_t>& d, Mati& out) {
   if (d.size() < 0x6d) {
     return false;
   }
-  out.shader = uint32_t(d[0x48]) << 24 | uint32_t(d[0x49]) << 16 | uint32_t(d[0x4a]) << 8 | d[0x4b];
+  out.shader = port::GetBE32(d, 0x48);
   out.headerBlend = ReadLE32(d.data() + 0x61);
   const uint32_t count = ReadLE32(d.data() + 0x69);
   size_t at = 0x6d;
@@ -1065,12 +1070,31 @@ public:
                        [fourcc](const EffectValue& arg) { return UsesElement(arg, fourcc); });
   }
 
-  // PMRQ's direct REUL remains the existing PMRT CNST path. For the source's
-  // ordered RADD(REUL, REUL), PQAD carries two Euler vectors; CNST(r, r, r)
-  // preserves each real expression and the runtime composes the rotations as
-  // Rz * Ry * Rx in degrees. RTOV is not suitable here: it replicates one real
-  // into all three vector components.
+  // PMDL meshes are converted from Remastered coordinates with the model
+  // converter's default basis B = (90, 0, 180) in PMRT's Euler convention.
+  // Conjugate the source rotation by B so it remains in the converted model's
+  // frame. Element() preserves each real expression, including nested IRND;
+  // the PART's PIRN marker keeps those samples stable per particle. For a
+  // source RADD(REUL, REUL), preserve the ordered source product before
+  // conjugating it. RTOV cannot carry three independent angle expressions.
   bool ModelRotation(const std::vector<EffectValue>& value, std::vector<uint8_t>& out, std::string& why) const {
+    const auto appendBasis = [&]() {
+      AppendBE32(out, F("CNST"));
+      for (const float angle : {90.f, 0.f, 180.f}) {
+        AppendBE32(out, F("CNST"));
+        AppendBE32(out, FloatBits(angle));
+      }
+    };
+    const auto appendSourceEuler = [&](const EffectValue& reul) {
+      AppendBE32(out, F("CNST"));
+      for (size_t i = 0; i < 3; ++i) {
+        if (!Element(reul.args[i], Type::Real, out, why)) {
+          return false;
+        }
+      }
+      return true;
+    };
+
     const EffectValue* reul = value.size() == 1 ? &value[0] : nullptr;
     if (reul != nullptr && IsElement(*reul, F("REUL")) && reul->args.size() == 4) {
       const EffectValue& order = reul->args[3];
@@ -1078,18 +1102,14 @@ public:
         why = "a rotation order other than 0 (XYZ)";
         return false;
       }
-      AppendBE32(out, F("CNST"));
-      for (size_t i = 0; i < 3; ++i) {
-        // Keep the pre-existing direct-REUL behavior. IRND is supported only
-        // by the ordered composition carrier, where PIRN makes it stable per particle.
-        if (UsesElement(reul->args[i], F("IRND"))) {
-          why = "an angle with IRND";
-          return false;
-        }
-        if (!Element(reul->args[i], Type::Real, out, why)) {
-          return false;
-        }
+      // B is self-inverse: PQAD(B, PQAD(R, B)) evaluates to B * R * B^-1.
+      AppendBE32(out, F("PQAD"));
+      appendBasis();
+      AppendBE32(out, F("PQAD"));
+      if (!appendSourceEuler(*reul)) {
+        return false;
       }
+      appendBasis();
       return true;
     }
 
@@ -1110,17 +1130,17 @@ public:
       }
     }
 
+    // Preserve RADD's source order inside the conjugation: B * (R1 * R2) * B^-1.
+    AppendBE32(out, F("PQAD"));
+    appendBasis();
+    AppendBE32(out, F("PQAD"));
     AppendBE32(out, F("PQAD"));
     for (const EffectValue& operand : add->args) {
-      // CNST is the vector carrier: RTOV only replicates one scalar and cannot
-      // represent REUL's three independent angle expressions.
-      AppendBE32(out, F("CNST"));
-      for (size_t i = 0; i < 3; ++i) {
-        if (!Element(operand.args[i], Type::Real, out, why)) {
-          return false;
-        }
+      if (!appendSourceEuler(operand)) {
+        return false;
       }
     }
+    appendBasis();
     return true;
   }
 
@@ -1939,6 +1959,19 @@ public:
         constantIs(powerDvvn, 1, 4, false, true) && constantIs(powerPbdm, 1, 0, true, false) && !hasIexp) {
       features |= kAlreadyExposed;
     }
+    // Separately audited held-charge sphere: DVVN4 defaults inverse exposure on and PBDM2
+    // resolves additive usage. Its raw MATI also has header blend -1 (LE32 at 0x61).
+    // This fixes only HDR exposure cancellation; LDR appearance and full parity remain unproven.
+    // Do not change blend, recipe or the still-unrepresented SMTR alpha gain/bias here.
+    const bool exactChargeMatiProperty = powerMtin == &material && material.tag == 0 && material.value.size() == 2 &&
+                                         material.value[0].kind == EffectValue::Kind::Byte && material.value[0].word == 0 &&
+                                         material.value[1].kind == EffectValue::Kind::Guid &&
+                                         material.value[1].guid == kPowerChargeMati;
+    if (!swoosh && node.id == kPowerChargeChild && exactChargeMatiProperty && mati.shader == kPowerBallShader &&
+        mati.headerBlend == kNoHeaderBlend && guidIs(powerPmdl, kPowerBallModel) &&
+        constantIs(powerDvvn, 1, 4, false, true) && constantIs(powerPbdm, 1, 2, true, false) && !hasIexp) {
+      features |= kAlreadyExposed;
+    }
     if (recipe->frameBuffer) {
       if (cch0[0] != 0.0f || cch0[1] != 0.0f) {
         m_approximated.push_back(std::string("VMAT: shader ") + shaderText + "'s scene warp dropped (drawn as a multiply)");
@@ -1957,7 +1990,8 @@ public:
 
     // The blob.
     std::vector<uint8_t> blob;
-    AppendBE32(blob, 2);
+    const bool opacityGainBias = mati.shader == kPowerBallShader;
+    AppendBE32(blob, opacityGainBias ? 3 : 2);
     AppendBE32(blob, features);
     AppendBE32(blob, blend);
     AppendBE32(blob, uint32_t(slots.size()));
@@ -2007,6 +2041,10 @@ public:
     AppendBE32(blob, FloatBits(1.0f));  // modulate
     AppendBE32(blob, FloatBits(0.0f));  // depthSoften
     AppendBE32(blob, spriteCenter);
+    if (opacityGainBias) {
+      AppendBE32(blob, FloatBits(cch0[2]));
+      AppendBE32(blob, FloatBits(cch0[3]));
+    }
 
     AppendBE32(result.part, F("VMAT"));
     AppendBE32(result.part, F("CNST"));
@@ -2099,6 +2137,11 @@ public:
         }
         const int comp = int(item.args[1].word >> 8 & 0xff);
         std::vector<uint32_t> targets;
+        if (opacityGainBias && comp == 2) {
+          targets.push_back(kPortVfxOpacityGainTarget);
+        } else if (opacityGainBias && comp == 3) {
+          targets.push_back(kPortVfxOpacityBiasTarget);
+        }
         for (const SrcSpec& src : recipe->sources) {
           if (src.row < 0 && src.comp == comp) {
             targets.push_back(uint32_t(src.index));
@@ -2522,7 +2565,7 @@ public:
         texture = true;
       }
       if (fourcc == F("PMDL") && bytes.size() == 8) {
-        pmdl = uint32_t(bytes[4]) << 24 | uint32_t(bytes[5]) << 16 | uint32_t(bytes[6]) << 8 | bytes[7];
+        pmdl = port::GetBE32(bytes, 4);
       }
       written.insert(fourcc);
       AppendBE32(out, fourcc);
@@ -3026,7 +3069,7 @@ std::optional<uint32_t> EffectRetailId(const EffectGuid& id) {
   if (std::memcmp(id.data(), kPrefix, sizeof(kPrefix)) != 0) {
     return std::nullopt;
   }
-  return uint32_t(id[12]) << 24 | uint32_t(id[13]) << 16 | uint32_t(id[14]) << 8 | uint32_t(id[15]);
+  return port::ReadBE32(id.data() + 12);
 }
 
 std::vector<ConvertedPart> ConvertEffect(const EffectNode& effect, const uint8_t* data, const EffectConvertIO& io) {

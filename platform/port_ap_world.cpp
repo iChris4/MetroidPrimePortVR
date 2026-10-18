@@ -1,17 +1,18 @@
 #include "port_strings.h"
+#include "port_bytes.h"
 #include "port_ap_world.h"
 
 #include <cstdio>
 
 #include "port_custom_res.h"
 #include "port_json.h"
+#include "port_json_writer.h"
 
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
 #include <cstring>
 #include <initializer_list>
-#include <sstream>
 
 namespace PortApWorld {
 namespace {
@@ -275,64 +276,53 @@ void Parse(const PortJson::Value& data, Layout& layout) {
 }
 
 std::string Text(const Layout& layout) {
-  std::ostringstream text;
-  text << "{\"starting_room_name\":" << port::JsonQuote(layout.startRoom)
-       << ",\"final_bosses\":" << layout.finalBosses
-       << ",\"required_artifacts\":" << layout.requiredArtifacts << ",\"elevator_mapping\":{";
-  bool firstArea = true;
-  for (const auto& area : layout.elevators) {
-    text << (firstArea ? "" : ",") << port::JsonQuote(area.first) << ":{";
-    firstArea = false;
-    bool first = true;
-    for (const auto& entry : area.second) {
-      text << (first ? "" : ",") << port::JsonQuote(entry.first) << ':' << port::JsonQuote(entry.second);
-      first = false;
-    }
-    text << '}';
+  port::JsonWriter json;
+  const auto mapping = [&json](const std::map< std::string, std::string >& entries) {
+    json.BeginObject();
+    for (const auto& [from, to] : entries)
+      json.Key(from).String(to);
+    json.EndObject();
+  };
+  json.BeginObject();
+  json.Key("starting_room_name").String(layout.startRoom);
+  json.Key("final_bosses").Number(layout.finalBosses);
+  json.Key("required_artifacts").Number(layout.requiredArtifacts);
+  json.Key("elevator_mapping").BeginObject();
+  for (const auto& [area, elevators] : layout.elevators) {
+    json.Key(area);
+    mapping(elevators);
   }
-  text << "},\"door_color_randomization\":" << (layout.doorColorRandomization ? 1 : 0)
-       << ",\"remove_hive_mecha\":" << (layout.removeHiveMecha ? 1 : 0)
-       << ",\"backwards_lower_mines\":" << (layout.backwardsLowerMines ? 1 : 0)
-       << ",\"flaahgra_power_bombs\":" << (layout.flaahgraPowerBombs ? 1 : 0)
-       << ",\"etank_capacity\":" << layout.etankCapacity;
+  json.EndObject();
+  json.Key("door_color_randomization").Number(layout.doorColorRandomization ? 1 : 0);
+  json.Key("remove_hive_mecha").Number(layout.removeHiveMecha ? 1 : 0);
+  json.Key("backwards_lower_mines").Number(layout.backwardsLowerMines ? 1 : 0);
+  json.Key("flaahgra_power_bombs").Number(layout.flaahgraPowerBombs ? 1 : 0);
+  json.Key("etank_capacity").Number(layout.etankCapacity);
   if (layout.hasDoorColors) {
-    text << ",\"door_color_mapping\":{";
-    firstArea = true;
-    for (const auto& area : layout.doorColors) {
-      text << (firstArea ? "" : ",") << port::JsonQuote(area.first) << ":{\"type_mapping\":{";
-      firstArea = false;
-      bool first = true;
-      for (const auto& entry : area.second) {
-        text << (first ? "" : ",") << port::JsonQuote(entry.first) << ':' << port::JsonQuote(entry.second);
-        first = false;
-      }
-      text << "}}";
+    json.Key("door_color_mapping").BeginObject();
+    for (const auto& [area, colors] : layout.doorColors) {
+      json.Key(area).BeginObject().Key("type_mapping");
+      mapping(colors);
+      json.EndObject();
     }
-    text << '}';
+    json.EndObject();
   }
   if (layout.hasShields) {
-    text << ",\"blast_shield_mapping\":{";
-    firstArea = true;
-    for (const auto& area : layout.shields) {
-      text << (firstArea ? "" : ",") << port::JsonQuote(area.first) << ":{\"type_mapping\":{";
-      firstArea = false;
-      bool firstRoom = true;
-      for (const auto& room : area.second) {
-        text << (firstRoom ? "" : ",") << port::JsonQuote(room.first) << ":{";
-        firstRoom = false;
-        bool first = true;
-        for (const auto& entry : room.second) {
-          text << (first ? "" : ",") << '"' << entry.first << "\":" << port::JsonQuote(entry.second);
-          first = false;
-        }
-        text << '}';
+    json.Key("blast_shield_mapping").BeginObject();
+    for (const auto& [area, rooms] : layout.shields) {
+      json.Key(area).BeginObject().Key("type_mapping").BeginObject();
+      for (const auto& [room, docks] : rooms) {
+        json.Key(room).BeginObject();
+        for (const auto& [dock, shield] : docks)
+          json.Key(std::to_string(dock)).String(shield);
+        json.EndObject();
       }
-      text << "}}";
+      json.EndObject().EndObject();
     }
-    text << '}';
+    json.EndObject();
   }
-  text << '}';
-  return text.str();
+  json.EndObject();
+  return json.Take();
 }
 
 int DockTo(const std::string& area, const std::string& room, const std::string& dest) {
@@ -755,9 +745,103 @@ std::vector< uint8_t > RoomOps(const Layout& layout, uint32_t mrea,
   return ops;
 }
 
-std::vector< DoorChange > Doors(const Layout& layout, uint32_t mrea, const uint32_t* broken) {
+namespace {
+
+// A door the "unlock beam doors once opened" setting may turn blue: its lock.
+bool BeamLock(int lock) { return lock == 1 || lock == 2 || lock == 3 || lock == 5; }
+bool BeamLockName(const std::string& type) {
+  return type == "Wave Beam" || type == "Ice Beam" || type == "Plasma Beam" ||
+         type == "Power Beam Only";
+}
+
+// Per door, the bit of its doorway in the unlock set, -1 for a door that
+// isn't a beam door on the disc. The two sides of a doorway share a bit, and
+// bits count up in table order, so they're stable for a build.
+struct UnlockTable {
+  std::vector< int > bit;
+  int count = 0;
+};
+const UnlockTable& Unlocks() {
+  static const UnlockTable table = [] {
+    UnlockTable t;
+    t.bit.assign(kDoorCount, -1);
+    for (int i = 0; i < kDoorCount; ++i) {
+      if (!BeamLock(kDoors[i].defaultLock))
+        continue;
+      const int pair = PairedDoor(i);
+      t.bit[i] = pair >= 0 && pair < i && t.bit[pair] >= 0 ? t.bit[pair] : t.count++;
+    }
+    return t;
+  }();
+  return table;
+}
+
+bool UnlockSet(const uint32_t* unlocked, int bit) {
+  return unlocked != nullptr && bit >= 0 && bit < kBeamDoorBits &&
+         ((unlocked[bit / 32] >> (bit % 32)) & 1) != 0;
+}
+
+} // namespace
+
+int BeamDoorwayCount() { return Unlocks().count; }
+
+int BeamDoorwayBit(int door) {
+  return door >= 0 && door < kDoorCount ? Unlocks().bit[door] : -1;
+}
+
+int FindDoorByForce(uint32_t mrea, uint32_t forceId) {
+  if (forceId == 0)
+    return -1;
+  for (int i = 0; i < kDoorCount; ++i) {
+    const Door& d = kDoors[i];
+    if (kRooms[d.room].mrea == mrea && (d.forces[0] == forceId || d.forces[1] == forceId))
+      return i;
+  }
+  return -1;
+}
+
+bool BeamDoorUnlockable(const Layout& layout, uint32_t mrea, int door, const uint32_t* broken) {
+  if (BeamDoorwayBit(door) < 0)
+    return false;
+  for (const DoorChange& change : Doors(layout, mrea, broken)) {
+    if (change.index != door)
+      continue;
+    return (change.shield.empty() || change.shield == "None") &&
+           (change.type.empty() || BeamLockName(change.type));
+  }
+  // The seed leaves it as the disc has it.
+  return true;
+}
+
+std::vector< DoorChange > BeamDoorway(int bit) {
   std::vector< DoorChange > out;
-  if (!layout.hasDoorColors && !layout.hasShields)
+  for (int i = 0; i < kDoorCount; ++i) {
+    const Door& d = kDoors[i];
+    if (Unlocks().bit[i] != bit || bit < 0 || d.doorId == 0)
+      continue;
+    DoorChange change;
+    change.index = i;
+    change.pair = PairedDoor(i);
+    change.mrea = kRooms[d.room].mrea;
+    change.dock = d.dock;
+    change.vertical = (d.flags & kDoorVertical) != 0;
+    change.doorId = d.doorId;
+    for (int k = 0; k < 2; ++k) {
+      change.forces[k] = d.forces[k];
+      change.shieldActors[k] = d.shields[k];
+    }
+    out.push_back(change);
+  }
+  return out;
+}
+
+std::vector< DoorChange > Doors(const Layout& layout, uint32_t mrea, const uint32_t* broken,
+                                const uint32_t* unlocked) {
+  std::vector< DoorChange > out;
+  // Without a seed's colours or shields the disc's doors stay as they are,
+  // bar the ones the player unlocked.
+  const bool seeded = layout.hasDoorColors || layout.hasShields;
+  if (!seeded && unlocked == nullptr)
     return out;
   // DoorShieldFromBlastShieldType: the door a blast shield sits on, per kShields.
   static const char* const kUnderShield[] = {"Bomb",       "Blue", "Plasma Beam",     "Ice Beam",
@@ -765,7 +849,13 @@ std::vector< DoorChange > Doors(const Layout& layout, uint32_t mrea, const uint3
                                              "Disabled",   "Blue"};
   const int kDisabled = NameIndex(kShields, "Disabled");
   const int kNoShield = NameIndex(kShields, "None");
-  const Resolved resolved = Resolve(layout);
+  Resolved resolved;
+  if (seeded) {
+    resolved = Resolve(layout);
+  } else {
+    resolved.lock.assign(kDoorCount, -1);
+    resolved.shield.assign(kDoorCount, -1);
+  }
   auto shielded = [&](int door) {
     return resolved.shield[door] >= 0 && resolved.shield[door] != kDisabled &&
            resolved.shield[door] != kNoShield;
@@ -810,6 +900,12 @@ std::vector< DoorChange > Doors(const Layout& layout, uint32_t mrea, const uint3
         }
       }
     }
+    // An unlocked doorway is a plain blue one, unless a blast shield still
+    // sits on it or the seed gave it a lock that isn't a beam's.
+    if (UnlockSet(unlocked, Unlocks().bit[i]) &&
+        (change.shield.empty() || change.shield == "None") &&
+        BeamLockName(change.type.empty() ? kLocks[d.defaultLock] : change.type))
+      change.type = "Blue";
     if (change.type.empty() && change.shield.empty())
       continue;
     change.index = i;
@@ -940,17 +1036,26 @@ const DoorType* FindDoorType(const std::string& name) {
   return nullptr;
 }
 
-uint32_t Read32(const std::vector< uint8_t >& data, size_t at) {
-  return uint32_t(data[at]) << 24 | uint32_t(data[at + 1]) << 16 | uint32_t(data[at + 2]) << 8 |
-         data[at + 3];
+} // namespace
+
+bool BlueDoorStyle(DoorStyle& out) {
+  const DoorType* type = FindDoorType("Blue");
+  if (type == nullptr)
+    return false;
+  out.cmdl = type->cmdl;
+  out.cmdlVertical = type->cmdlVertical;
+  out.pattern0 = type->pattern0;
+  out.pattern1 = type->pattern1;
+  out.color = type->color;
+  return true;
 }
 
-float ReadFloat(const std::vector< uint8_t >& data, size_t at) {
-  const uint32_t bits = Read32(data, at);
-  float value;
-  std::memcpy(&value, &bits, sizeof(value));
-  return value;
-}
+std::vector< uint8_t > BlueDoorVulnerability() { return Vulnerability("Blue"); }
+
+namespace {
+
+using port::GetBE32;
+using port::GetBEFloat;
 
 // Where an object's properties start, after its name; 0 when it has none.
 size_t NameEnd(const std::vector< uint8_t >& props) {
@@ -1595,14 +1700,14 @@ std::vector< uint8_t > DoorOps(const std::vector< DoorChange >& doors,
         continue;
       bool shield = false;
       if (o.type == kActorType && o.props.size() >= start + kActorModel + 4)
-        shield = Read32(o.props, start + kActorModel) == kMissileShieldCmdl;
+        shield = GetBE32(o.props, start + kActorModel) == kMissileShieldCmdl;
       else if (o.type == kPointOfInterestType && o.props.size() >= start + 33)
-        shield = Read32(o.props, start + 29) == kDiscShieldScan;
+        shield = GetBE32(o.props, start + 29) == kDiscShieldScan;
       if (!shield)
         continue;
       bool close = true;
       for (int k = 0; k < 3; ++k) {
-        const float d = ReadFloat(o.props, start + 4 * k) - ReadFloat(doorObject.props, doorStart + 4 * k);
+        const float d = GetBEFloat(o.props, start + 4 * k) - GetBEFloat(doorObject.props, doorStart + 4 * k);
         close = close && d > -5.f && d < 5.f;
       }
       if (!close)
@@ -1631,7 +1736,7 @@ std::vector< uint8_t > DoorOps(const std::vector< DoorChange >& doors,
     if (shield == nullptr || object == nullptr || door.doorId == 0x002C0186 ||
         nextInstance + 8 > 0xFFFF)
       return;
-    if (Read32(object->props, NameEnd(object->props) + kDoorAnimSet) == kHatchAnimSet)
+    if (GetBE32(object->props, NameEnd(object->props) + kDoorAnimSet) == kHatchAnimSet)
       return;
     // Main Plaza's door to the Plaza Access ledge has its shield elsewhere.
     const uint32_t anchorId =
@@ -1642,8 +1747,8 @@ std::vector< uint8_t > DoorOps(const std::vector< DoorChange >& doors,
     float at[3], actorRotation[3];
     const size_t anchorStart = NameEnd(anchor->props);
     for (int k = 0; k < 3; ++k) {
-      at[k] = ReadFloat(anchor->props, anchorStart + 4 * k);
-      actorRotation[k] = ReadFloat(anchor->props, anchorStart + 12 + 4 * k);
+      at[k] = GetBEFloat(anchor->props, anchorStart + 4 * k);
+      actorRotation[k] = GetBEFloat(anchor->props, anchorStart + 12 + 4 * k);
     }
     ShieldPlace place;
     if (!PlaceShield(door, at, actorRotation, place))
@@ -1803,17 +1908,17 @@ std::vector< uint8_t > DoorOps(const std::vector< DoorChange >& doors,
       continue;
     const std::vector< uint8_t >& props = object->props;
     const size_t start = NameEnd(props);
-    const uint32_t count = Read32(props, 0);
-    if ((count != 13 && count != 14) || Read32(props, start + kDoorLightCount) != 14 ||
-        Read32(props, start + kDoorScanCount) != 1)
+    const uint32_t count = GetBE32(props, 0);
+    if ((count != 13 && count != 14) || GetBE32(props, start + kDoorLightCount) != 14 ||
+        GetBE32(props, start + kDoorScanCount) != 1)
       continue;
     const uint32_t id = scan(type->scan);
     if (id == 0)
       continue;
     std::vector< Run > runs{{kDoorScan, bytes({id})}};
     // Vertical and morph ball doors are looked at from the side they face.
-    const float pitch = ReadFloat(props, start + kDoorRotation);
-    const bool hatch = Read32(props, start + kDoorAnimSet) == kHatchAnimSet;
+    const float pitch = GetBEFloat(props, start + kDoorRotation);
+    const bool hatch = GetBE32(props, start + kDoorAnimSet) == kHatchAnimSet;
     float height = 0.f;
     if (hatch && pitch > -90.f && pitch < 90.f)
       height = -2.5f;
@@ -1856,12 +1961,13 @@ bool IsDoorDependency(uint32_t id) {
   return false;
 }
 
-std::vector< MapDoor > MapDoors(const Layout& layout, uint32_t mapa, const uint32_t* broken) {
+std::vector< MapDoor > MapDoors(const Layout& layout, uint32_t mapa, const uint32_t* broken,
+                                const uint32_t* unlocked) {
   std::vector< MapDoor > out;
   for (const Room& room : kRooms) {
     if (room.mapa != mapa)
       continue;
-    for (const DoorChange& door : Doors(layout, room.mrea, broken)) {
+    for (const DoorChange& door : Doors(layout, room.mrea, broken, unlocked)) {
       const DoorType* type = FindDoorType(door.type);
       if (type == nullptr)
         continue;

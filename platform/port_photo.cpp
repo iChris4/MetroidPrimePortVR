@@ -1,5 +1,6 @@
 // Photo mode (pause menu, F8, F1 > Game, console `photo`); see port_photo.h.
 #include "port_photo.h"
+#include "port_log.h"
 
 #include "port_debug.h"
 #include "port_freecam.h"
@@ -81,7 +82,7 @@ double Now() { return static_cast<double>(SDL_GetTicks()) * 0.001; }
 
 void Say(const std::string& text) {
   sMessage = text;
-  std::fprintf(stderr, "[photo] %s\n", text.c_str());
+  PortLog::Write("[photo] %s\n", text.c_str());
 }
 
 bool CanEnter(CStateManager& mgr, std::string& why) {

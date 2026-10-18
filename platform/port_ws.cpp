@@ -1,4 +1,6 @@
 #include "port_ws.h"
+#include "port_strings.h"
+#include "port_bytes.h"
 
 #include <algorithm>
 #include <array>
@@ -266,19 +268,10 @@ bool RandomSeed(uint32_t& seed) {
   }
 }
 
-std::string Lower(std::string value) {
-  for (char& c : value)
-    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-  return value;
-}
+using port::Lower;
 
-std::string_view Trim(std::string_view value) {
-  while (!value.empty() && (value.front() == ' ' || value.front() == '\t'))
-    value.remove_prefix(1);
-  while (!value.empty() && (value.back() == ' ' || value.back() == '\t'))
-    value.remove_suffix(1);
-  return value;
-}
+// HTTP's optional whitespace: spaces and tabs.
+std::string_view Trim(std::string_view value) { return port::TrimView(value, " \t"); }
 
 bool HasToken(std::string value, const std::string& wanted) {
   size_t start = 0;
@@ -713,7 +706,7 @@ size_t LoadCaDir(X509_STORE* store, const std::string& dir, std::string& note) {
       continue;
     ++files;
     std::ifstream file(entry.path(), std::ios::binary);
-    const std::string pem{std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
+    const std::string pem = port::ReadAllText(file);
     BIO* bio = BIO_new_mem_buf(pem.data(), static_cast<int>(pem.size()));
     if (bio == nullptr)
       continue;
@@ -1055,10 +1048,7 @@ void Sha1(const void* data, size_t size, uint8_t out[20]) {
     uint32_t words[80]{};
     for (size_t i = 0; i < 16; ++i) {
       const size_t index = offset + i * 4;
-      words[i] = (static_cast<uint32_t>(message[index]) << 24) |
-                 (static_cast<uint32_t>(message[index + 1]) << 16) |
-                 (static_cast<uint32_t>(message[index + 2]) << 8) |
-                 static_cast<uint32_t>(message[index + 3]);
+      words[i] = port::GetBE32(message, index);
     }
     for (size_t i = 16; i < 80; ++i) {
       const uint32_t value = words[i - 3] ^ words[i - 8] ^ words[i - 14] ^ words[i - 16];
@@ -1891,21 +1881,6 @@ bool Client::ReceiveText(std::string& message, int timeoutMs) {
     if (!bytes.empty())
       mReceiveBuffer = std::move(bytes);
   }
-}
-
-bool Client::WaitReadable(int timeoutMs) {
-  if (mSocket < 0) {
-    mError = "not connected";
-    return false;
-  }
-  const int ready = WaitIo(timeoutMs);
-  if (ready > 0)
-    return true;
-  if (ready == 0)
-    mError = "receive timed out";
-  else
-    mError = "receive wait failed: " + SystemError(SocketError());
-  return false;
 }
 
 bool Client::SendRaw(const std::string& data) {

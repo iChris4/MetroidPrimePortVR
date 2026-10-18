@@ -17,6 +17,10 @@ class CGuiModel;
 
 namespace PortDebug {
 
+// --settings-selftest: checks that every settings key reads back as written,
+// without starting the game. Returns the process exit code. Never saves.
+int SettingsSelfTest();
+
 // Live game state for the debug menu (set every simulation tick by
 // CStateManager::Update). Null before gameplay starts.
 void SetStateManager(CStateManager* mgr);
@@ -84,7 +88,6 @@ void SetSmoothFrames(bool enabled);
 // Per-frame look (docs/FRAME_INTERPOLATION.md, phase 1): with the frame limiter
 // off, frames between ticks show the look input the next tick will apply.
 bool FrameInterpolation();
-void SetFrameInterpolation(bool enabled);
 // Actor transform smoothing (phase 2): with the frame limiter off, actors draw
 // at a blend of their previous and current tick transforms.
 bool ActorInterpolation();
@@ -98,7 +101,6 @@ void SetPoseInterpolation(bool enabled);
 // Aurora sizes its buffers for it at
 // startup, so a change applies from the next start: RoomGeoResidentAtStartup reads the
 // settings file before the rest of them are loaded.
-bool RoomGeoResident();
 void SetRoomGeoResident(bool enabled);
 bool RoomGeoResidentAtStartup();
 // Particle smoothing (phase 4): with the frame limiter off, particle systems
@@ -217,11 +219,26 @@ const int kScanSpreadMin = 0;
 const int kScanSpreadMax = 100;
 int ScanSpread();
 void SetScanSpread(int percent);
+// HUD opacity per visor (issue #144), in percent, or kHudOpacityVisor for the game's Visor
+// Opacity. The X-Ray, Thermal and Scan HUDs default to Visor Opacity. The energy readout
+// defaults to 100, as in the game, where Visor Opacity never reaches it; set to
+// kHudOpacityVisor it follows the opacity of the HUD it is on. Stock under Original experience.
+enum HudOpacityPart { kHudOpacityXRay, kHudOpacityThermal, kHudOpacityScan, kHudOpacityEnergy, kHudOpacityPartCount };
+const int kHudOpacityVisor = -1;
+const int kHudOpacityMin = 0;
+const int kHudOpacityMax = 100;
+int HudOpacity(HudOpacityPart part);
+void SetHudOpacity(HudOpacityPart part, int percent);
 // The centre crosshair (free aim, mouse aim, twin stick): opacity in percent,
 // and an optional colour that replaces the game's (false = the game's own).
 const int kCrosshairOpacityMin = 0;
 const int kCrosshairOpacityMax = 100;
 int CrosshairOpacity();
+// The centre crosshair's look: the game's model, or a procedural take on Remastered's design
+// (crosshair_style=, MP_CROSSHAIR_STYLE). Classic under Original experience.
+enum ECrosshairStyle { kCrosshairStyle_Classic, kCrosshairStyle_Remastered };
+ECrosshairStyle CrosshairStyle();
+void SetCrosshairStyle(ECrosshairStyle style);
 bool CrosshairColor(float rgb[3]);
 // Auto-aim: without Lock-On the gun picks the target nearest the screen centre
 // (CPlayer::UpdateAimTarget). Off = aim only at a locked target. On under Original experience.
@@ -237,6 +254,7 @@ bool SecondaryCrosshairs();
 // Menus and the map read a remapped pad's standard buttons (F1 Controls > Remap).
 bool MenuStandardButtons();
 void SetMenuStandardButtons(bool enabled);
+void SetMapSwapFingers(bool swap); // the map_swap_fingers setting; read with PortPointer::MapSwapFingers()
 void SetPointerMenus(bool enabled); // the pointer_menus setting; read with PortPointer::Enabled()
 // Hide the helmet frame (the visor rim and its glow and lights).
 bool HideHelmet();
@@ -297,6 +315,12 @@ void SetMapPickupKinds(bool enabled);
 // On by default.
 bool MapStationPickups();
 void SetMapStationPickups(bool enabled);
+// The port's own lines on the world map screen: the legend entries for the
+// pickup shapes in use and the marked-room colour, and the "X Mark room" prompt
+// (with a pointer click on it marking the shown room). Off by default, so the
+// disc's own legend and prompts are what a first playthrough shows.
+bool MapExtraUi();
+void SetMapExtraUi(bool enabled);
 // The apworld's staggered_suit_damage, which the server doesn't send: 0 the
 // game's rule, 1 progressive (the apworld's default, and the port's), 2
 // additive. Only an Archipelago seed uses it.
@@ -308,6 +332,13 @@ void SetApSuitDamage(int mode);
 // (PortSkipCutscenes::Active).
 bool SkippableCutscenes();
 void SetSkippableCutscenes(bool enabled);
+// beam_doors_stay_unlocked (PortBeamDoors): a Wave, Ice, Plasma or Power Beam
+// door whose force field was broken is a plain blue door from then on, on both
+// sides, for the rest of the save. Off by default, and off in the Original
+// experience. Rooms load patched, so turning it on or off applies to rooms
+// loaded afterwards.
+bool BeamDoorsStayUnlocked();
+void SetBeamDoorsStayUnlocked(bool enabled);
 // The stored 1.00 sequence-break compatibility choice (raw, not the effective
 // policy). Randomizer and Archipelago games force it on at use.
 bool Revision100Compatibility();
@@ -366,6 +397,53 @@ void SetProjectedShadows(bool enabled);
 // creation, so it takes a restart; aurora falls back to Vulkan if it fails.
 bool OpenGles();
 void SetOpenGles(bool enabled);
+// Setting `graphics_backend` (Windows only): the graphics API to ask Aurora for
+// at the next start. Auto asks for nothing in particular, so Aurora takes its own
+// order (Direct3D 12, then Vulkan, then Direct3D 11); an explicit API is tried
+// first (issue #135). Either way a failed start falls back to that order for the
+// run and leaves the setting alone. Read at window creation, so it takes a
+// restart. Other platforms ignore it: Android's OpenGL ES choice is `opengles`.
+// These are the config file's values: don't reorder or renumber.
+enum EGraphicsBackend {
+  kGraphicsBackend_Auto = 0,
+  kGraphicsBackend_D3D12,
+  kGraphicsBackend_Vulkan,
+  kGraphicsBackend_D3D11,
+};
+// The number of choices, for the combo that lists them in EGraphicsBackend order.
+constexpr int kGraphicsBackendCount = 4;
+EGraphicsBackend GraphicsBackend();
+void SetGraphicsBackend(EGraphicsBackend backend);
+// The config file's name for a choice; these, and only these, are what
+// ParseGraphicsBackend and MP_GRAPHICS_BACKEND accept.
+inline const char* GraphicsBackendConfigName(EGraphicsBackend backend) {
+  switch (backend) {
+  case kGraphicsBackend_D3D12:
+    return "d3d12";
+  case kGraphicsBackend_Vulkan:
+    return "vulkan";
+  case kGraphicsBackend_D3D11:
+    return "d3d11";
+  default:
+    return "auto";
+  }
+}
+// Reads a stored name or an MP_GRAPHICS_BACKEND value. False for anything else,
+// with `out` left as it was, so an unknown value keeps the saved selection.
+inline bool ParseGraphicsBackend(const std::string& value, EGraphicsBackend& out) {
+  if (value == "auto") {
+    out = kGraphicsBackend_Auto;
+  } else if (value == "d3d12") {
+    out = kGraphicsBackend_D3D12;
+  } else if (value == "vulkan") {
+    out = kGraphicsBackend_Vulkan;
+  } else if (value == "d3d11") {
+    out = kGraphicsBackend_D3D11;
+  } else {
+    return false;
+  }
+  return true;
+}
 // Setting `gpu_driver`: the custom Vulkan driver (PortGpuDriver id) to load at the
 // next start, "" = the system's. Android only.
 const std::string& GpuDriver();
@@ -373,6 +451,14 @@ void SetGpuDriver(const std::string& id);
 // Setting `storage_clamp` (Auto/Off/On): sets MP_STORAGE_CLAMP for aurora's shader
 // generator unless it's already in the environment. Call before aurora_initialize.
 void ApplyStorageClamp();
+// Setting `driver_workarounds`: the Dawn toggles the ticked Video > Compatibility > Driver
+// workarounds turn on and off, comma-separated, for AuroraConfig. Call once, before
+// aurora_initialize. MP_DRIVER_WORKAROUNDS (names, or 0 for none) replaces the boxes for one
+// run; a start that never called DriverWorkaroundsStarted turns them off at the next one; and
+// `validation` (driver error checks) is unticked as it is applied, so it lasts one start.
+void BeginDriverWorkarounds(const std::string& userFolder, std::string& enable, std::string& disable);
+// The game got through its first second of frames: the workarounds didn't break the start.
+void DriverWorkaroundsStarted();
 // Extras normally earned by finishing the game (or, for the Fusion Suit, by a
 // GBA link to Metroid Fusion). They only change what the title screen offers;
 // nothing is written into the save's persistent flags.
@@ -432,7 +518,6 @@ void SetShiftBinding(int slot, int code);
 // The turbo fire's bindings (read by PortInputDevices), laid out as ShiftBinding's
 // (slot 2 reads -1 while touch is in use); all -1 (none) by default.
 int TurboBinding(int slot);
-void SetTurboBinding(int slot, int code);
 // A second controller button for a GameCube button (Aurora maps one each),
 // ORed in by CDolphinController: `bit` is the PAD_BUTTON_* / PAD_TRIGGER_* bit's
 // position, the code as ShiftBinding's slot 2; -1 for none.
@@ -527,9 +612,7 @@ void SetRemasteredMovement(bool enabled);
 // Spring Ball on a gyro flick (pad or phone tilted up sharply, like Trilogy's
 // nunchuk flick), on top of C-stick up. Rate is the pitch speed in rad/s a flick
 // must pass. The gyro source is the aim's.
-bool SpringBallFlick();
 void SetSpringBallFlick(bool enabled);
-float SpringBallFlickRate();
 void SetSpringBallFlickRate(float radiansPerSecond);
 // True for a short while after a flick, so one just before landing still counts.
 bool SpringBallFlickPending();
@@ -540,16 +623,24 @@ void SetGyroOverride(bool active, float pitch, float yaw);
 // sensitivity, so both share the same feel).
 float StickAimRate();
 void SetStickAimRate(float pixelsPerSecond);
-// Gyro aiming. Mode: 0 off, 1 aim while the hold input is down, 2 always aim.
-// Source: 0 auto (a pad's gyro if it has one, else the phone's), 1 controller
-// only, 2 the device's own gyro (Android phones). Rate is aim pixels per second
-// per radian per second of rotation, so it reads like the stick aim speed.
-int GyroMode();
+// Gyro aiming. Mode: 0 off, 1 aim while the Gyro aim button is held, 2 always
+// aim, 3 aim except while it is held, 4 press to toggle aim (initially off).
+// Source: 0 auto (a pad's gyro if it has
+// one, else the phone's), 1 controller only, 2 the device's own gyro (Android
+// phones). Sensitivity is camera angle per pad angle, apart from the mouse's.
 void SetGyroMode(int mode);
-int GyroSource();
 void SetGyroSource(int source);
-float GyroRate();
-void SetGyroRate(float pixelsPerSecondPerRad);
+void SetGyroSensitivity(float scale);
+// Gyro space: 0 local (the pad's own yaw axis), 1 player, 2 world (the turn
+// about gravity). Auto calibration learns the gyro's drift while the pad is
+// still; the confidence is 0..1, or negative when the source has no
+// accelerometer (no calibration or gravity then).
+void SetGyroSpace(int space);
+void SetGyroAutoCalibrate(bool on);
+void ResetGyroCalibration();
+float GyroCalibrationConfidence();
+// The input engine's "Gyro aim" action, set each frame before PollGyro.
+void SetGyroButton(bool held);
 // Reads the gyro, feeds the aim and spots Spring Ball flicks. Call once per
 // tick, before the frame.
 void PollGyro();
@@ -612,6 +703,9 @@ bool ShaderCompilationProgress(uint32_t& done, uint32_t& total);
 // Called during simulation, using the effective unbobbed camera direction.
 bool UpdateMouseAim(bool active, bool locked, float x, float y, float z);
 void SynchronizeMouseAim(float x, float y, float z);
+// Turns the mouse-look yaw by dyaw radians (the game turned the player: a rotating
+// platform's rider carry). No effect until the aim is initialized.
+void TurnMouseAim(float dyaw);
 void ResetMouseAim();
 float MouseSensitivity();
 void SetMouseSensitivity(float radiansPerPixel);
@@ -623,12 +717,10 @@ void BeginFrameMouse();
 // Thread-safe; drained by BeginFrameMouse.
 bool TouchAim();
 void SetTouchAim(bool on);
-float TouchAimSpeed();
 void SetTouchAimSpeed(float pixelsPerDp);
 void AddTouchAim(float dxDp, float dyDp);
 // A quick swipe up on the touch aim area (the overlay detects it): requests the
 // Spring Ball when "Spring Ball on swipe up" is on. Thread-safe.
-bool SpringBallSwipe();
 void SetSpringBallSwipe(bool enabled);
 void TouchSpringSwipe();
 // GameCube scheme (neither mouse aim nor twin stick): CPlayer turns by the touch
@@ -717,6 +809,7 @@ bool ConsumeResetRequest();
 bool Visible();
 // Writes the settings file now instead of waiting for the next overlay frame,
 // so a disc chosen during startup is remembered even if no frame is drawn yet.
+// It always writes, changed or not.
 void SaveSettingsNow();
 // Marks the settings file dirty from outside the overlay (the VR settings
 // store), so it is written on exit or by SaveSettingsNow like any other change.
@@ -749,6 +842,10 @@ bool TouchFloatingStickFlag();
 float TouchSideMarginDp();
 float TouchStickInsetDp();
 float TouchButtonInsetDp();
+// The overlay's opacity in percent (10-100). Same rules.
+float TouchOpacity();
+// False when F1 turned the on-screen controls off: only MENU and START stay. Same rules.
+bool TouchControlsEnabled();
 // Per-control offset and size, an opaque `<id>:<dx>,<dy>,<scale>;...` string the
 // Android touch view owns. Setting it saves the config on the next frame.
 std::string TouchLayout();

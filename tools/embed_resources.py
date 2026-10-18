@@ -4,12 +4,27 @@
 usage: embed_resources.py OUT.cpp (--dir DIR PREFIX | --file FILE NAME)...
 
 --dir adds every file under DIR as "PREFIX/<relative path>", --file adds one file as
-NAME. The table (PortEmbedded::kTable / kCount, see platform/include/port_embedded.h)
+NAME. In a git checkout, untracked files under DIR are left out (with a note), so a
+texture dump or pack dropped there is not baked into a build. The table (PortEmbedded::kTable / kCount, see platform/include/port_embedded.h)
 is sorted by path so lookups can binary-search it. Bytes are written as hex literals,
 which every compiler this port builds with (GCC, Clang, clang-cl) accepts.
 """
 import os
+import subprocess
 import sys
+
+
+def untracked(root):
+    """Untracked files under root (ignored ones included), or none outside git."""
+    try:
+        out = subprocess.run(["git", "-C", root, "ls-files", "-z", "--others", "--full-name", "."],
+                             capture_output=True, check=True).stdout
+        top = subprocess.run(["git", "-C", root, "rev-parse", "--show-toplevel"],
+                             capture_output=True, check=True, text=True).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return set()
+    return {os.path.normcase(os.path.realpath(os.path.join(top, p.decode())))
+            for p in out.split(b"\0") if p}
 
 
 def collect(args):
@@ -18,9 +33,13 @@ def collect(args):
     while i < len(args):
         if args[i] == "--dir":
             root, prefix = args[i + 1], args[i + 2].strip("/")
+            skip = untracked(root)
             for base, _, files in os.walk(root):
                 for name in files:
                     full = os.path.join(base, name)
+                    if os.path.normcase(os.path.realpath(full)) in skip:
+                        print("embed_resources.py: skipping untracked " + full, file=sys.stderr)
+                        continue
                     rel = os.path.relpath(full, root).replace(os.sep, "/")
                     entries[prefix + "/" + rel if prefix else rel] = full
             i += 3

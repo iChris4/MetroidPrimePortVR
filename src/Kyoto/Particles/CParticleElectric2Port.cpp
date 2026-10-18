@@ -1,4 +1,5 @@
 #include "Kyoto/Particles/CParticleElectric2Port.hpp"
+#include "port_env.h"
 
 #include <algorithm>
 #include <cmath>
@@ -38,7 +39,7 @@ CVector3f ToVec(const V3& v) { return CVector3f(v.x, v.y, v.z); }
 
 CParticleElectric2Port::CParticleElectric2Port(const CElectricDescription& desc) : mDesc(&desc) {
   mNodes = std::max(1, IntOr(desc.x10_SSEG, 0, 8));
-  if (std::getenv("MP_ELC2_LOG") != nullptr) {
+  if (port::EnvFlag("MP_ELC2_LOG")) {
     std::fprintf(stderr, "elc2: created (nodes %d, vfx %d)\n", mNodes, desc.xPortVfx != nullptr);
   }
   mSide = IntOr(desc.xPortSIDE, 0, 2);
@@ -253,7 +254,7 @@ void CParticleElectric2Port::Step(int frame, bool emitting, const Ctx& ctx) {
 }
 
 void CParticleElectric2Port::Render(int frame, const CTransform4f& view) {
-  static const bool logElc2 = std::getenv("MP_ELC2_LOG") != nullptr;
+  static const bool logElc2 = port::EnvFlag("MP_ELC2_LOG");
   if (logElc2 && frame % 30 == 0) {
     std::fprintf(stderr, "elc2: frame %d bolts %zu vfx %d\n", frame, mBolts.size(), mDesc->xPortVfx != nullptr);
   }
@@ -261,10 +262,10 @@ void CParticleElectric2Port::Render(int frame, const CTransform4f& view) {
     return;
   }
   const CPortVfxData& vfx = *mDesc->xPortVfx;
-  if (vfx.mat.version != 2) {
+  if (vfx.mat.version != 2 && vfx.mat.version != 3) {
     return;
   }
-  float vsmt[19] = {};
+  float vsmt[kPortVfxVsmtCount] = {};
   const uint vsmtMask = PortVfxEvalVsmt(vfx, frame, vsmt);
   aurora::gfx::vfx::DrawDesc desc;
   if (!PortVfxBuildDesc(vfx, vsmt, vsmtMask, desc)) {

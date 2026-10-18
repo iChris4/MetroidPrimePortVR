@@ -237,6 +237,13 @@ public:
   int GetScriptingSize() const {
     return xf0_24_postConstructed ? x12c_postConstructed->x10d0_sclySize : 0;
   }
+  // PC port: the room script (SCLY) actually in use, which a skippable-cutscene
+  // patch may have replaced with a patched copy kept by the post-construct data.
+  // Null until the area is post-constructed. The save state hashes this to tell
+  // whether a rebuilt area is the one the snapshot was taken from (issue #131).
+  const char* GetScriptingData() const {
+    return xf0_24_postConstructed ? x12c_postConstructed->x10c8_sclyBuf.get() : nullptr;
+  }
   const CTransform4f& GetTM() const { return xc_transform; }
   const CTransform4f& GetInverseTransform() const { return x3c_invTransform; }
   bool IsLoaded() const { return xf0_24_postConstructed; }

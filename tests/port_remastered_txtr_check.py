@@ -388,7 +388,8 @@ def main():
     if not os.access(args.tool, os.X_OK):
         sys.exit('build the tool first: g++ -std=c++20 -O2 -Wall -Wextra -Iplatform/include '
                  'tests/port_remastered_txtr_tool.cpp platform/port_remastered_txtr.cpp '
-                 '-o %s' % args.tool)
+                 'platform/port_remastered_tegra_swizzle.cpp platform/port_remastered_bcdec.cpp '
+                 'platform/port_remastered_astc_decode.cpp -o %s' % args.tool)
     if not os.access(RETROTOOL, os.X_OK):
         sys.exit('retrotool is missing at %s' % RETROTOOL)
 

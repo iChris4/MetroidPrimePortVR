@@ -73,7 +73,8 @@ public:
                                             const CMaterialFilter&, const TEntityList&, CVector3f,
                                             TUniqueId&, CCollisionInfo&, double&);
   static CRayCastResult RayStaticIntersection(const CStateManager&, const CVector3f&,
-                                              const CVector3f&, float, const CMaterialFilter&);
+                                              const CVector3f&, float, const CMaterialFilter&,
+                                              bool frontOnly = false);
   static bool RayStaticIntersectionBool(const CStateManager&, const CVector3f&, const CVector3f&,
                                         float, const CMaterialFilter&);
   static bool RayStaticIntersectionArea(const CGameArea&, const CVector3f&, const CVector3f&, float,
@@ -108,6 +109,13 @@ public:
 #ifdef TARGET_PC
   static void MoveAirborneStepped(CStateManager& mgr, CPlayer& player, float dt,
                                   const TEntityList*);
+  // Remastered's grounded mover: CPhysicsGroundMoverColliderMP1::MoveObject
+  // 0xf923d8 with MoveAlongGround 0xf92ccc, CanMoveUpAndDownFromPosition 0xf928c0,
+  // IsOnWallAtPosition 0xf93c9c and SnapToGround 0xf934ec.
+  static void MoveGroundedRemastered(CStateManager& mgr, CPlayer& player, float dt,
+                                     const TEntityList*);
+  // Scales the whole velocity down when its rise exceeds the player's maximum (0xf94480).
+  static void PortCapRise(CStateManager& mgr, CPlayer& player);
 #endif
 
   static void MakeCollisionCallbacks(CStateManager&, CPhysicsActor&, const TUniqueId&,

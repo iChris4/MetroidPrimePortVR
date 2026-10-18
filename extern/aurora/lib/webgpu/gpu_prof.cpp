@@ -38,6 +38,10 @@ constexpr size_t RingDepth = 4;
 constexpr uint8_t ContextId = 0;
 constexpr uint64_t SaneFrameGapNs = UINT64_C(5'000'000'000);
 constexpr uint32_t WindowFrames = 60;
+// A window also closes once its frames' spans add up to this much GPU time, so a slow GPU
+// (dynamic resolution reads these once a second) does not wait many seconds for 60 frames,
+// while a fast one still averages its full 60.
+constexpr uint64_t WindowNs = UINT64_C(500'000'000);
 
 enum class EventKind : uint8_t {
   ZoneBegin,
@@ -298,7 +302,8 @@ void emit_frame(Slot& slot, const uint64_t* ts) {
 
 #endif // TRACY_ENABLE
 
-// Adds one frame's pass durations to the window; every WindowFrames frames publishes averages.
+// Adds one frame's pass durations to the window; every WindowFrames frames, or WindowNs of GPU
+// time, publishes averages.
 void aggregate_frame(const Slot& slot, const uint64_t* ts) {
   if (g_resetWindow.exchange(false, std::memory_order_relaxed)) {
     g_accum.clear();
@@ -336,7 +341,7 @@ void aggregate_frame(const Slot& slot, const uint64_t* ts) {
     return;
   }
   g_accumSpanNs += double(spanEnd - spanBegin);
-  if (++g_accumFrames < WindowFrames) {
+  if (++g_accumFrames < WindowFrames && g_accumSpanNs < double(WindowNs)) {
     return;
   }
   const double inv = 1.0 / double(g_accumFrames);

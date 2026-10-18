@@ -1,4 +1,5 @@
 #include "port_revision_scripts.h"
+#include "port_bytes.h"
 
 #include "port_skip_cutscenes.h"
 
@@ -225,10 +226,6 @@ std::vector< Guard > GuardsFor(Version version, uint32_t mreaId) {
   return {};
 }
 
-uint32_t BigEndian32(const uint8_t* p) {
-  return uint32_t(p[0]) << 24 | uint32_t(p[1]) << 16 | uint32_t(p[2]) << 8 | p[3];
-}
-
 // Number of guards the room's objects don't satisfy (-1: not parseable).
 int GuardMisses(const std::vector< Guard >& guards, const uint8_t* scly, size_t size) {
   std::vector< PortSkipCutscenes::ScriptObject > objects;
@@ -251,7 +248,7 @@ int GuardMisses(const std::vector< Guard >& guards, const uint8_t* scly, size_t 
       const size_t tailSize = size_t(o.props.data() + o.props.size() - tail);
       ok = (g.tail == 0 || tailSize == g.tail) &&
            (g.model == 0 || (tailSize >= kActorModel + 4U &&
-                             BigEndian32(tail + kActorModel) == g.model)) &&
+                             port::ReadBE32(tail + kActorModel) == g.model)) &&
            (g.activeOff < 0 || (tailSize > size_t(g.activeOff) && tail[g.activeOff] == 1));
       break;
     }

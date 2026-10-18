@@ -1,6 +1,7 @@
 // The part of the movie import that runs ffmpeg (see port_remastered_movie.h).
 
 #include "port_remastered_movie.h"
+#include "port_env.h"
 
 #include <cstdlib>
 #include <filesystem>
@@ -47,7 +48,7 @@ bool Runs(const std::string& program) {
 } // namespace
 
 std::string FindFfmpeg() {
-  if (const char* env = std::getenv("MP_FFMPEG"); env != nullptr && env[0] != '\0') {
+  if (const char* env = port::EnvString("MP_FFMPEG"); env != nullptr && env[0] != '\0') {
     return Runs(env) ? std::string(env) : std::string();
   }
 #ifdef _WIN32

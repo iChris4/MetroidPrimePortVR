@@ -455,6 +455,19 @@ bool begin_frame(uint64_t contentTag) noexcept {
 
 void end_frame(uint64_t contentTag) noexcept {
   ZoneScoped;
+  // The frames just after an EFB resize, timed for its log line (webgpu::resize_swapchain).
+  struct ResizeFrameTimer {
+    std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+    bool timed = webgpu::g_resizeFramesToTime > 0;
+    ~ResizeFrameTimer() {
+      if (timed) {
+        const int index = 3 - webgpu::g_resizeFramesToTime--;
+        const double ms =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+        Log.info("EFB resize: frame {} after it took {:.1f} ms to record, submit and present", index, ms);
+      }
+    }
+  } resizeFrameTimer;
 #ifdef AURORA_ENABLE_GX
   phase::set(phase::Main, "end_frame (recording and queueing the frame)");
   gx::fifo::drain();
@@ -808,6 +821,14 @@ void aurora_set_resampler(AuroraSampler sampler) {
   aurora::webgpu::set_resampler(sampler);
 #else
   (void)sampler;
+#endif
+}
+
+void aurora_set_present_sharpness(float sharpness) {
+#ifdef AURORA_ENABLE_GX
+  aurora::webgpu::set_present_sharpness(sharpness);
+#else
+  (void)sharpness;
 #endif
 }
 void aurora_set_graphics_quality(uint32_t msaa, uint16_t maxTextureAnisotropy) {

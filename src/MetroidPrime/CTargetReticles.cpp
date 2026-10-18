@@ -5,6 +5,8 @@
 #include "MetroidPrime/Cameras/CCameraManager.hpp"
 #include "MetroidPrime/Cameras/CGameCamera.hpp"
 #include "MetroidPrime/Player/CPlayer.hpp"
+#include "MetroidPrime/Enemies/CPatterned.hpp"
+#include "MetroidPrime/CCollisionActor.hpp"
 #include "MetroidPrime/Player/CPlayerGun.hpp"
 #include "MetroidPrime/ScriptObjects/CScriptGrapplePoint.hpp"
 #include "MetroidPrime/TCastTo.hpp"
@@ -38,6 +40,9 @@
 #include "vr/vr_view.h"
 #include "vr/vr_look_scan.h"
 #include "vr/vr_settings.h"
+#include <algorithm>
+#include <cmath>
+#include <vector>
 #include "port_mouse.h"
 #endif
 
@@ -207,6 +212,11 @@ void CCompoundTargetReticle::Update(float dt, const CStateManager& mgr) {
   UpdateCurrLockOnGroup(dt, mgr);
   UpdateNextLockOnGroup(dt, mgr);
   UpdateOrbitZoneGroup(dt, mgr);
+#ifdef TARGET_PC
+  if (PortDebug::CrosshairStyle() == PortDebug::kCrosshairStyle_Remastered) {
+    PortUpdateRemasteredCrosshair(dt, mgr);
+  }
+#endif
 
   // 4. Reticle state transitions
   EReticleState desiredState = GetDesiredReticleState(mgr);
@@ -1211,6 +1221,168 @@ void CCompoundTargetReticle::DrawNextLockOnGroup(const CMatrix3f& rot,
   }
 }
 
+#ifdef TARGET_PC
+namespace {
+struct PortXhairVertex {
+  CVector3f pos;
+  CColor color;
+};
+
+// Remastered's combat aiming cursor (CReticleCombatAiming), drawn procedurally: a soft hexagonal
+// centre dot and three tapered spikes turned 0/120/240 degrees about it, the tip of each
+// toward the centre. Units are Remastered's model units on its cursor plane, 1.25 m in front of
+// the camera; `k` scales them to the world at the depth the cursor is drawn at. The outlines
+// were read off Remastered's arm and centre textures (core half-width and glow per station).
+struct PortXhairStation {
+  float y, core, glow;
+};
+const PortXhairStation kPortXhairArm[] = {
+    {0.018f, 0.f, 0.f},         {0.014f, 0.004f, 0.040f},  {0.001f, 0.012f, 0.047f},
+    {-0.010f, 0.016f, 0.047f},  {-0.022f, 0.016f, 0.048f}, {-0.045f, 0.013f, 0.047f},
+    {-0.068f, 0.009f, 0.044f},  {-0.080f, 0.004f, 0.041f}, {-0.100f, 0.003f, 0.032f},
+    {-0.125f, 0.0015f, 0.023f}, {-0.135f, 0.f, 0.f},
+};
+const float kPortXhairGlowAlpha = 0.3f;
+const float kPortXhairCentreCore = 0.019f;  // hexagon circumradius, opaque
+const float kPortXhairCentreOuter = 0.030f; // where the glow reaches zero
+const float kPortXhairCentreAlpha = 0.92f;
+const float kPortXhairArmOffset = 0.1f;
+const float kPortXhairGlobalScale = 0.45f;
+
+void PortXhairAddQuad(std::vector< PortXhairVertex >& v, const PortXhairVertex& a,
+                      const PortXhairVertex& b, const PortXhairVertex& c, const PortXhairVertex& d) {
+  v.insert(v.end(), {a, b, c, a, c, d});
+}
+
+void PortDrawRemasteredCrosshair(const CMatrix3f& rot, const CVector3f& pos, float k,
+                                 float armScale, float centreScale, const CColor& color) {
+  std::vector< PortXhairVertex > v;
+  const float pi = 3.14159265f;
+  auto col = [&](float a) { return CColor(color.GetRed(), color.GetGreen(), color.GetBlue(), color.GetAlpha() * a); };
+  auto vert = [&](float x, float y, float a) {
+    return PortXhairVertex{CVector3f(x * k, 0.f, y * k), col(a)};
+  };
+
+  // Centre: solid hexagon (point up) and a falloff ring out to the glow radius.
+  {
+    const float su = centreScale * kPortXhairGlobalScale;
+    for (int i = 0; i < 6; ++i) {
+      const float a0 = (90.f + 60.f * static_cast< float >(i)) * pi / 180.f;
+      const float a1 = (90.f + 60.f * static_cast< float >(i + 1)) * pi / 180.f;
+      const float ri = kPortXhairCentreCore * su, ro = kPortXhairCentreOuter * su;
+      v.push_back(vert(0.f, 0.f, kPortXhairCentreAlpha));
+      v.push_back(vert(ri * cosf(a0), ri * sinf(a0), kPortXhairCentreAlpha));
+      v.push_back(vert(ri * cosf(a1), ri * sinf(a1), kPortXhairCentreAlpha));
+      PortXhairAddQuad(v, vert(ri * cosf(a0), ri * sinf(a0), kPortXhairCentreAlpha),
+                       vert(ro * cosf(a0), ro * sinf(a0), 0.f), vert(ro * cosf(a1), ro * sinf(a1), 0.f),
+                       vert(ri * cosf(a1), ri * sinf(a1), kPortXhairCentreAlpha));
+    }
+  }
+
+  // Arms: glow strip (faint along the axis, zero at the edges), then the solid core.
+  const float sa = armScale * kPortXhairGlobalScale;
+  const int stations = static_cast< int >(sizeof(kPortXhairArm) / sizeof(kPortXhairArm[0]));
+  for (int arm = 0; arm < 3; ++arm) {
+    const float ang = static_cast< float >(arm) * 120.f * pi / 180.f;
+    const float ca = cosf(ang), sn = sinf(ang);
+    auto place = [&](float x, float y, float a) {
+      const float px = x * sa, py = y * sa + kPortXhairArmOffset;
+      return vert(px * ca - py * sn, px * sn + py * ca, a);
+    };
+    for (int i = 0; i + 1 < stations; ++i) {
+      const PortXhairStation& p = kPortXhairArm[i];
+      const PortXhairStation& q = kPortXhairArm[i + 1];
+      PortXhairAddQuad(v, place(-p.glow, p.y, 0.f), place(0.f, p.y, kPortXhairGlowAlpha),
+                       place(0.f, q.y, kPortXhairGlowAlpha), place(-q.glow, q.y, 0.f));
+      PortXhairAddQuad(v, place(0.f, p.y, kPortXhairGlowAlpha), place(p.glow, p.y, 0.f),
+                       place(q.glow, q.y, 0.f), place(0.f, q.y, kPortXhairGlowAlpha));
+      PortXhairAddQuad(v, place(-p.core, p.y, 1.f), place(p.core, p.y, 1.f), place(q.core, q.y, 1.f),
+                       place(-q.core, q.y, 1.f));
+    }
+  }
+
+  gpRender->SetModelMatrix(CTransform4f(rot, pos));
+  gpRender->SetBlendMode_AlphaBlended();
+  CGraphics::SetCullMode(kCM_None);
+  gpRender->BeginTriangles(static_cast< int >(v.size()));
+  for (const PortXhairVertex& pv : v) {
+    gpRender->PrimColor(pv.color);
+    gpRender->PrimVertex(pv.pos);
+  }
+  gpRender->EndPrimitive();
+}
+
+CColor PortRemasteredCrosshairColor(EReticleState state, float targetT) {
+  float idle[3] = {0.f, 0.7f, 1.f};
+  if (state == kRS_XRay) {
+    idle[0] = 1.f, idle[1] = 0.54f, idle[2] = 0.19f;
+  } else if (state == kRS_Thermal) {
+    idle[0] = 0.58f, idle[1] = 0.91f, idle[2] = 1.f;
+  }
+  float rgb[3];
+  if (PortDebug::CrosshairColor(rgb)) {
+    std::copy_n(rgb, 3, idle);
+  }
+  const float target[3] = {1.f, 0.f, 0.f};
+  return CColor(idle[0] + (target[0] - idle[0]) * targetT, idle[1] + (target[1] - idle[1]) * targetT,
+                idle[2] + (target[2] - idle[2]) * targetT, 1.f);
+}
+} // namespace
+
+// Remastered's cursor tracks what the aim ray meets: its arms and dot shrink with the distance
+// (1 m or less: full, 50 m or more: 0.45 and 0.33, at most 0.2 per tick), and the colour fades
+// to red over a hostile. "Hostile" here is a living, active, targetable CPatterned, or the
+// owner of a collision actor the ray hits. Run once per simulation tick.
+void CCompoundTargetReticle::PortUpdateRemasteredCrosshair(float dt, const CStateManager& mgr) {
+  const CCameraManager* camMgr = mgr.GetCameraManager();
+  const CGameCamera& cam = camMgr->GetCurrentCamera(mgr);
+  CVector3f eye = camMgr->GetSimulationCameraTransform(mgr).GetTranslation();
+  CVector3f dir = xf4_targetPos - eye;
+  float pointerX = 0.f;
+  float pointerY = 0.f;
+  if (PortDebug::PresentedPointerAimPosition(CCameraManager::GetPresentationInterpolation(), pointerX,
+                                             pointerY)) {
+    float yaw = 0.f;
+    float pitch = 0.f;
+    PortMouse::PointerAim::RayAngles(pointerX, pointerY, cam.GetRenderFov(), cam.GetAspectRatio(), yaw,
+                                     pitch);
+    const CTransform4f viewXf = cam.GetTransform();
+    dir = viewXf.Rotate(CVector3f(sinf(yaw) * cosf(pitch), cosf(yaw) * cosf(pitch), sinf(pitch)));
+    eye = viewXf.GetTranslation();
+  }
+  const float kRange = 100.f;
+  float distance = kRange;
+  bool overTarget = false;
+  if (dir.CanBeNormalized()) {
+    dir.Normalize();
+    static const CMaterialFilter filter = CMaterialFilter::MakeIncludeExclude(
+        CMaterialList(kMT_Solid), CMaterialList(kMT_Player, kMT_ProjectilePassthrough));
+    TEntityList nearList;
+    mgr.BuildNearList(nearList, eye, dir, kRange, filter, mgr.GetPlayer());
+    TUniqueId hitId = kInvalidUniqueId;
+    const CRayCastResult hit = mgr.RayWorldIntersection(hitId, eye, dir, kRange, filter, nearList);
+    if (hit.IsValid()) {
+      distance = (hit.GetPoint() - mgr.GetPlayer()->GetTranslation()).Magnitude();
+      const CEntity* ent = mgr.GetObjectById(hitId);
+      if (const CCollisionActor* col = TCastToConstPtr< CCollisionActor >(ent)) {
+        ent = mgr.GetObjectById(col->GetOwnerId());
+      }
+      if (const CPatterned* pat = TCastToConstPtr< CPatterned >(ent)) {
+          overTarget = pat->IsAlive() && pat->GetActive() && pat->GetTargetable();
+      }
+    }
+  }
+  const float f = rstl::min_val(rstl::max_val((distance - 1.f) / 49.f, 0.f), 1.f);
+  auto step = [](float cur, float want, float lo) {
+    return rstl::min_val(rstl::max_val(cur + rstl::min_val(rstl::max_val(want - cur, -0.2f), 0.2f), lo), 1.f);
+  };
+  xPortXhairArmScale = step(xPortXhairArmScale, 1.f + (0.45f - 1.f) * f, 0.45f);
+  xPortXhairCentreScale = step(xPortXhairCentreScale, 1.f + (0.33f - 1.f) * f, 0.33f);
+  xPortXhairTargetT = overTarget ? rstl::min_val(xPortXhairTargetT + dt / 0.25f, 1.f)
+                                 : rstl::max_val(xPortXhairTargetT - dt / 0.25f, 0.f);
+}
+#endif
+
 void CCompoundTargetReticle::DrawOrbitZoneGroup(const CMatrix3f& rot,
                                                 const CStateManager& mgr) const {
   if (x28_noDrawTicks <= 0 && x1e8_crosshairsScale > 0.f) {
@@ -1232,6 +1404,7 @@ void CCompoundTargetReticle::DrawOrbitZoneGroup(const CMatrix3f& rot,
     CMatrix3f crosshairRotation = rot;
 #ifdef TARGET_PC
     const CCameraManager* camMgr = mgr.GetCameraManager();
+    const CGameCamera& cam = camMgr->GetCurrentCamera(mgr);
     if (PortVr::VrCannonTargetPoint(mgr, targetPos)) {
       // PortVr cannon targeting: the crosshair sits where the cannon's ray
       // hits, found this frame against the presented camera, and faces the head.
@@ -1252,7 +1425,6 @@ void CCompoundTargetReticle::DrawOrbitZoneGroup(const CMatrix3f& rot,
     float pointerY = 0.f;
     if (PortDebug::PresentedPointerAimPosition(CCameraManager::GetPresentationInterpolation(),
                                                     pointerX, pointerY)) {
-      const CGameCamera& cam = camMgr->GetCurrentCamera(mgr);
       float yaw = 0.f;
       float pitch = 0.f;
       PortMouse::PointerAim::RayAngles(pointerX, pointerY, cam.GetRenderFov(),
@@ -1284,6 +1456,28 @@ void CCompoundTargetReticle::DrawOrbitZoneGroup(const CMatrix3f& rot,
     color = PortDebug::OriginalExperience() || PortVr::VrImmersive()
                 ? color.WithAlphaModulatedBy(opacity)
                 : CColor(color.GetRed(), color.GetGreen(), color.GetBlue(), opacity);
+#endif
+#ifdef TARGET_PC
+    if (PortDebug::CrosshairStyle() == PortDebug::kCrosshairStyle_Remastered) {
+      // Where the classic model's centre is drawn, with Remastered's cursor at its own size
+      // (100% = Remastered's; the size slider scales it) facing the camera.
+      const CTransform4f camXf = camMgr->GetCurrentCameraTransform(mgr);
+      const CVector3f cursor = targetPos + crosshairRotation * (model->GetBoundingBox().GetCenterPoint() * scale);
+      const float depth = (camXf.GetInverse() * cursor).GetY();
+      if (depth > 0.f) {
+        const float kRemasteredFov = 55.f; // the vertical FOV Remastered's cursor size is tuned for
+        const float units = depth * tanf(0.5f * cam.GetRenderFov() * 3.14159265f / 180.f) /
+                            (1.25f * tanf(0.5f * kRemasteredFov * 3.14159265f / 180.f));
+        const float size = PortDebug::DirectAim() ? static_cast< float >(PortDebug::CrosshairSize()) / 100.f : 1.f;
+        CColor rc = PortRemasteredCrosshairColor(x20_prevState, xPortXhairTargetT);
+        rc = CColor(rc.GetRed(), rc.GetGreen(), rc.GetBlue(),
+                    x1e8_crosshairsScale * static_cast< float >(PortDebug::CrosshairOpacity()) / 100.f);
+        CGraphics::SetDepthWriteMode(false, kE_Always, false);
+        PortDrawRemasteredCrosshair(crosshairRotation, cursor, units * size, xPortXhairArmScale, xPortXhairCentreScale, rc);
+        gpRender->SetBlendMode_AlphaBlended();
+      }
+      return;
+    }
 #endif
     model->Draw(CModelFlags::Additive(color.WithAlphaModulatedBy(x1e8_crosshairsScale))
                     .DepthCompareUpdate(false, false));

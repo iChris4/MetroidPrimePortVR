@@ -43,6 +43,12 @@ enum : uint32_t {
   // Blast shields, eight ids per kind (ShieldKind): the missile shield's
   // glow border, glow trim, body and moving glow recoloured, and at + 7 its
   // model wearing them.
+  // Map legend swatches (16x16 RGBA8 drawn at run time): a filled dot, a ring,
+  // a grey cross and a cyan square.
+  kLegendDotTxtr = 0xDEAF0200,
+  kLegendRingTxtr = 0xDEAF0201,
+  kLegendCrossTxtr = 0xDEAF0202,
+  kLegendMarkTxtr = 0xDEAF0203,
   kShieldBase = 0xDEAF0120,
   kShieldEnd = kShieldBase + 8 * 7,
 };

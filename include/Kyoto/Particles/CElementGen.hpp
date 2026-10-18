@@ -19,6 +19,7 @@ class CModVectorElement;
 
 #pragma cpp_extensions on
 #ifdef TARGET_PC
+#include "Kyoto/Particles/CPortVfxConstants.hpp"
 #include <vector>
 struct CPortVfxMeshBatch;
 #endif
@@ -373,7 +374,7 @@ public:
 private:
   // VMAT material: VSMT results for this frame (port_vfx_particles.cpp). Bit n of the
   // mask = slot n was written; slots 0..10 are the Src values, 11+2*tex+k the warp scales.
-  float xPortVsmt[19];
+  float xPortVsmt[kPortVfxVsmtCount];
   uint xPortVsmtMask;
   float xPortNestedHdrColor[4];
   float xPortNestedHdrInnerRadius, xPortNestedHdrOuterRadius;

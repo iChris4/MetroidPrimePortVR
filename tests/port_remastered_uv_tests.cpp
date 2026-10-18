@@ -9,6 +9,7 @@
 #include "port_remastered_anuv_gun.h"
 #include "port_pbr_record.h"
 #include "port_remastered_uv.h"
+#include "port_test.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -21,15 +22,6 @@
 using namespace PortRemastered;
 
 namespace {
-
-int sFailures = 0;
-
-void Check(bool condition, const char* what) {
-  if (!condition) {
-    std::fprintf(stderr, "FAIL: %s\n", what);
-    ++sFailures;
-  }
-}
 
 constexpr uint32_t FourCC(char a, char b, char c, char d) {
   return (uint32_t(uint8_t(a)) << 24) | (uint32_t(uint8_t(b)) << 16) | (uint32_t(uint8_t(c)) << 8) | uint8_t(d);
@@ -442,9 +434,9 @@ void TestRule() {
     Fixture f(0x40, 0, 2);
     uint32_t coords[7] = {0, 1, 2, 3, 4, 5, 6};
     ApplyAuvi(f.material, coords, 7);
-    Check(coords[0] == 0 && coords[1] == 1 && coords[2] == 2 && coords[3] == 3 && coords[4] == 4 && coords[5] == 5 &&
-              coords[6] == 6,
-          "a flagged material with no AUVI keeps every texcoord");
+    CHECK_MSG(coords[0] == 0 && coords[1] == 1 && coords[2] == 2 && coords[3] == 3 && coords[4] == 4 && coords[5] == 5 &&
+                  coords[6] == 6,
+              "a flagged material with no AUVI keeps every texcoord");
   }
   {  // The flag is what admits the parameter.
     Fixture f(0x40, 0, 0);
@@ -452,18 +444,18 @@ void TestRule() {
     f.material.unk1 &= ~kAuviFlag;
     uint32_t coords[7] = {0, 1, 2, 3, 4, 5, 6};
     ApplyAuvi(f.material, coords, 7);
-    Check(coords[0] == 0 && coords[1] == 1 && coords[2] == 2 && coords[3] == 3 && coords[4] == 4 && coords[5] == 5 &&
-              coords[6] == 6,
-          "an AUVI without the flag is not read");
+    CHECK_MSG(coords[0] == 0 && coords[1] == 1 && coords[2] == 2 && coords[3] == 3 && coords[4] == 4 && coords[5] == 5 &&
+                  coords[6] == 6,
+              "an AUVI without the flag is not read");
   }
   {  // Only the first three values are read; a coord past them has no channel.
     Fixture f(kAuviFlag, 0, 0);
     f.material.data.push_back(f.Auvi(2, 1, 0, 3));
     uint32_t coords[7] = {0, 1, 2, 3, 4, 5, 6};
     ApplyAuvi(f.material, coords, 7);
-    Check(coords[0] == 2 && coords[1] == 1 && coords[2] == 0, "the three output channels are remapped");
-    Check(coords[3] == 3 && coords[4] == 4 && coords[5] == 5 && coords[6] == 6,
-          "a coord past the third output channel is left alone");
+    CHECK_MSG(coords[0] == 2 && coords[1] == 1 && coords[2] == 0, "the three output channels are remapped");
+    CHECK_MSG(coords[3] == 3 && coords[4] == 4 && coords[5] == 5 && coords[6] == 6,
+              "a coord past the third output channel is left alone");
   }
   {  // Every coord is remapped, the second layer's three included: they are the
      // same array the converter gathers the primary four into.
@@ -471,9 +463,9 @@ void TestRule() {
     f.material.data.push_back(f.Auvi(1, 0, 0, 0));
     uint32_t coords[7] = {0, 2, 1, 2, 0, 2, 1};
     ApplyAuvi(f.material, coords, 7);
-    Check(coords[0] == 1 && coords[1] == 0 && coords[2] == 0 && coords[3] == 0 && coords[4] == 1 && coords[5] == 0 &&
-              coords[6] == 0,
-          "the three output channels of all seven coords are remapped, the second layer's three included");
+    CHECK_MSG(coords[0] == 1 && coords[1] == 0 && coords[2] == 0 && coords[3] == 0 && coords[4] == 1 && coords[5] == 0 &&
+                  coords[6] == 0,
+              "the three output channels of all seven coords are remapped, the second layer's three included");
   }
   {  // Two AUVIs are a later saying again, not a chain to walk the coords through:
      // (1,0,0) then (0,2,0) leaves texcoord 0 on 0, while chaining walks it 0 -> 1 -> 2.
@@ -482,8 +474,8 @@ void TestRule() {
     f.material.data.push_back(f.Auvi(0, 2, 0, 0));
     uint32_t coords[7] = {0, 1, 2, 3, 4, 5, 6};
     ApplyAuvi(f.material, coords, 7);
-    Check(coords[0] == 0 && coords[1] == 2 && coords[2] == 0,
-          "only the last Int4 AUVI is applied, once (chaining would give coord 0 = 2)");
+    CHECK_MSG(coords[0] == 0 && coords[1] == 2 && coords[2] == 0,
+              "only the last Int4 AUVI is applied, once (chaining would give coord 0 = 2)");
   }
   {  // An AUVI of another shape is not the parameter.
     Fixture f(kAuviFlag, 0, 0);
@@ -491,12 +483,12 @@ void TestRule() {
     f.material.data.push_back(f.Auvi(3, 3, 3, 3, ModelMaterialData::Kind::Scalar));
     uint32_t coords[7] = {0, 0, 0, 0, 0, 0, 0};
     ApplyAuvi(f.material, coords, 7);
-    Check(coords[0] == 1, "a later AUVI that is not an Int4 is ignored");
+    CHECK_MSG(coords[0] == 1, "a later AUVI that is not an Int4 is ignored");
     Fixture g(kAuviFlag, 0, 0);
     g.material.data.push_back(g.Auvi(3, 3, 3, 3, ModelMaterialData::Kind::Int1));
     uint32_t again[7] = {0, 0, 0, 0, 0, 0, 0};
     ApplyAuvi(g.material, again, 7);
-    Check(again[0] == 0, "an Int1 AUVI is not read either");
+    CHECK_MSG(again[0] == 0, "an Int1 AUVI is not read either");
   }
   {  // A negative selector is not one the port recognises, so the map keeps the
      // texcoord it had.
@@ -504,12 +496,12 @@ void TestRule() {
     f.material.data.push_back(f.Auvi(1, -1, -7, 0));
     uint32_t coords[7] = {0, 1, 2, 3, 4, 5, 6};
     ApplyAuvi(f.material, coords, 7);
-    Check(coords[0] == 1 && coords[1] == 1 && coords[2] == 2 && coords[3] == 3 && coords[4] == 4 && coords[5] == 5 &&
-              coords[6] == 6,
-          "a negative mapped value preserves the texcoord");
+    CHECK_MSG(coords[0] == 1 && coords[1] == 1 && coords[2] == 2 && coords[3] == 3 && coords[4] == 4 && coords[5] == 5 &&
+                  coords[6] == 6,
+              "a negative mapped value preserves the texcoord");
   }
-  Check(Auvi(Fixture(kAuviFlag, 0, 0).material) == nullptr, "Auvi is null without a parameter");
-  Check(Auvi(Fixture(0, 0, 0).material) == nullptr, "Auvi is null without the flag");
+  CHECK_MSG(Auvi(Fixture(kAuviFlag, 0, 0).material) == nullptr, "Auvi is null without a parameter");
+  CHECK_MSG(Auvi(Fixture(0, 0, 0).material) == nullptr, "Auvi is null without the flag");
 }
 
 // One conversion of the fixture's material, and the base and MR texcoords the
@@ -524,13 +516,13 @@ bool Converted(uint32_t flags, uint32_t baseCoord, uint32_t mrCoord, const std::
   std::string error;
   if (!Convert(BuildModel(f.material, uvSets), cmdl, error)) {
     std::fprintf(stderr, "FAIL: the conversion failed: %s\n", error.c_str());
-    ++sFailures;
+    port_test::CountFailure();
     return false;
   }
   std::vector<uint32_t> coords;
   if (!ReadMapCoords(cmdl, coords) || coords.size() < 2) {
     std::fprintf(stderr, "FAIL: no PBR material in the converted CMDL\n");
-    ++sFailures;
+    port_test::CountFailure();
     return false;
   }
   baseOut = coords[0];
@@ -548,41 +540,41 @@ void TestConverter() {
   {  // AUVI (1,0,0): the base's channel 0 is fed from texcoord set 1 and the MR
      // map's channel 2 from set 0.
     const std::vector<ModelMaterialData> params{probe.Auvi(1, 0, 0, 0)};
-    Check(Converted(kAuviFlag, 0, 2, params, base, mr), "converted with an AUVI");
-    Check(base == 1 && mr == 0, "AUVI (1,0,0) sends base channel 0 to UV1 and MR channel 2 to UV0");
+    CHECK_MSG(Converted(kAuviFlag, 0, 2, params, base, mr), "converted with an AUVI");
+    CHECK_MSG(base == 1 && mr == 0, "AUVI (1,0,0) sends base channel 0 to UV1 and MR channel 2 to UV0");
   }
   {  // The flag is what admits the parameter.
     const std::vector<ModelMaterialData> params{probe.Auvi(1, 0, 0, 0)};
-    Check(Converted(0, 0, 2, params, base, mr), "converted without the flag");
-    Check(base == 0 && mr == 2, "without the flag every map keeps its own texcoord");
+    CHECK_MSG(Converted(0, 0, 2, params, base, mr), "converted without the flag");
+    CHECK_MSG(base == 0 && mr == 2, "without the flag every map keeps its own texcoord");
   }
   {  // And with no parameter to read, the port's own fallback stands.
-    Check(Converted(kAuviFlag, 0, 2, {}, base, mr), "converted with no AUVI");
-    Check(base == 0 && mr == 2, "with no AUVI every map keeps its own texcoord");
+    CHECK_MSG(Converted(kAuviFlag, 0, 2, {}, base, mr), "converted with no AUVI");
+    CHECK_MSG(base == 0 && mr == 2, "with no AUVI every map keeps its own texcoord");
   }
   {  // A coord past the vertex shader's third output channel has no channel to go
      // through, so it is left where it was (the model's texcoord set 4).
     const std::vector<ModelMaterialData> params{probe.Auvi(1, 0, 0, 0)};
-    Check(Converted(kAuviFlag, 4, 2, params, base, mr), "converted with a coord past the third");
-    Check(base == 4 && mr == 0, "a coord past the third output channel is unchanged");
+    CHECK_MSG(Converted(kAuviFlag, 4, 2, params, base, mr), "converted with a coord past the third");
+    CHECK_MSG(base == 4 && mr == 0, "a coord past the third output channel is unchanged");
   }
   {  // Two AUVIs: the last one counts, applied once. Chaining them would walk the
      // base map's texcoord 0 through 1 and out to 2.
     const std::vector<ModelMaterialData> params{probe.Auvi(1, 0, 0, 0), probe.Auvi(0, 2, 0, 0)};
-    Check(Converted(kAuviFlag, 0, 2, params, base, mr), "converted with two AUVIs");
-    Check(base == 0 && mr == 0, "the last Int4 AUVI is applied once (chaining would give base = 2)");
+    CHECK_MSG(Converted(kAuviFlag, 0, 2, params, base, mr), "converted with two AUVIs");
+    CHECK_MSG(base == 0 && mr == 0, "the last Int4 AUVI is applied once (chaining would give base = 2)");
   }
   {  // A negative selector is not one the port recognises: the map keeps its own.
     const std::vector<ModelMaterialData> params{probe.Auvi(-1, -1, -1, 0)};
-    Check(Converted(kAuviFlag, 0, 2, params, base, mr), "converted with a negative AUVI");
-    Check(base == 0 && mr == 2, "a negative mapped value preserves the texcoord");
+    CHECK_MSG(Converted(kAuviFlag, 0, 2, params, base, mr), "converted with a negative AUVI");
+    CHECK_MSG(base == 0 && mr == 2, "a negative mapped value preserves the texcoord");
   }
   {  // An AUVI after the Int4 one that is not an Int4 is not read, so the Int4
      // still counts.
     const std::vector<ModelMaterialData> params{probe.Auvi(1, 0, 0, 0),
                                                 probe.Auvi(3, 3, 3, 3, ModelMaterialData::Kind::Scalar)};
-    Check(Converted(kAuviFlag, 0, 2, params, base, mr), "converted with a non-Int4 AUVI");
-    Check(base == 1 && mr == 0, "a later AUVI of another shape is ignored");
+    CHECK_MSG(Converted(kAuviFlag, 0, 2, params, base, mr), "converted with a non-Int4 AUVI");
+    CHECK_MSG(base == 1 && mr == 0, "a later AUVI of another shape is ignored");
   }
 }
 
@@ -612,10 +604,10 @@ void TestLightmapUv() {
     cmdl.clear();
     outputs.clear();
     error.clear();
-    Check(Convert(model, cmdl, error, true), converted.c_str());
-    Check(ReadLightmapOutputs(cmdl, 3, outputs), read.c_str());
+    CHECK_MSG(Convert(model, cmdl, error, true), converted.c_str());
+    CHECK_MSG(ReadLightmapOutputs(cmdl, 3, outputs), read.c_str());
     if (!outputs.empty()) {
-      Check(AllLightmapCoords(outputs[0], 31.f, 32.f), selected.c_str());
+      CHECK_MSG(AllLightmapCoords(outputs[0], 31.f, 32.f), selected.c_str());
     }
   }
 
@@ -625,10 +617,10 @@ void TestLightmapUv() {
                                       {LightmapBuffer(0.f, true)}, {{0, 0}});
     cmdl.clear();
     outputs.clear();
-    Check(Convert(model, cmdl, error, true), "converted the a978d507 shader twin");
-    Check(ReadLightmapOutputs(cmdl, 3, outputs), "read the a978d507 twin's LMUV attribute");
+    CHECK_MSG(Convert(model, cmdl, error, true), "converted the a978d507 shader twin");
+    CHECK_MSG(ReadLightmapOutputs(cmdl, 3, outputs), "read the a978d507 twin's LMUV attribute");
     if (!outputs.empty()) {
-      Check(AllLightmapCoords(outputs[0], 31.f, 32.f), "the resolved a978d507 twin selects TEXCOORD_1.zw");
+      CHECK_MSG(AllLightmapCoords(outputs[0], 31.f, 32.f), "the resolved a978d507 twin selects TEXCOORD_1.zw");
     }
   }
 
@@ -637,10 +629,10 @@ void TestLightmapUv() {
                                       {LightmapBuffer(0.f, true)}, {{0, 0}});
     cmdl.clear();
     outputs.clear();
-    Check(Convert(model, cmdl, error, true), "converted ordinary PBR with both lightmap channels");
-    Check(ReadLightmapOutputs(cmdl, 3, outputs), "read ordinary PBR's LMUV attribute");
+    CHECK_MSG(Convert(model, cmdl, error, true), "converted ordinary PBR with both lightmap channels");
+    CHECK_MSG(ReadLightmapOutputs(cmdl, 3, outputs), "read ordinary PBR's LMUV attribute");
     if (!outputs.empty()) {
-      Check(AllLightmapCoords(outputs[0], 11.f, 12.f), "ordinary PBR retains TEXCOORD_0.zw");
+      CHECK_MSG(AllLightmapCoords(outputs[0], 11.f, 12.f), "ordinary PBR retains TEXCOORD_0.zw");
     }
   }
 
@@ -649,11 +641,11 @@ void TestLightmapUv() {
                                       {LightmapBuffer(0.f, false)}, {{0, 0}});
     cmdl.clear();
     outputs.clear();
-    Check(Convert(model, cmdl, error, true), "converted a coord-3 family without coord 3");
-    Check(ReadLightmapOutputs(cmdl, 3, outputs), "read coord-3 family without coord 3");
+    CHECK_MSG(Convert(model, cmdl, error, true), "converted a coord-3 family without coord 3");
+    CHECK_MSG(ReadLightmapOutputs(cmdl, 3, outputs), "read coord-3 family without coord 3");
     if (!outputs.empty()) {
-      Check(outputs[0].slot == -1 && outputs[0].coords.empty(),
-            "missing required coord 3 omits LMUV instead of substituting coord 1");
+      CHECK_MSG(outputs[0].slot == -1 && outputs[0].coords.empty(),
+                "missing required coord 3 omits LMUV instead of substituting coord 1");
     }
   }
 
@@ -662,11 +654,11 @@ void TestLightmapUv() {
                                       {LightmapBuffer(0.f, true), LightmapBuffer(10.f, false)}, {{0, 0}, {0, 1}});
     cmdl.clear();
     outputs.clear();
-    Check(Convert(model, cmdl, error, true), "converted mixed-buffer coord-3 family");
-    Check(ReadLightmapOutputs(cmdl, 6, outputs), "read mixed-buffer coord-3 material");
+    CHECK_MSG(Convert(model, cmdl, error, true), "converted mixed-buffer coord-3 family");
+    CHECK_MSG(ReadLightmapOutputs(cmdl, 6, outputs), "read mixed-buffer coord-3 material");
     if (!outputs.empty()) {
-      Check(outputs[0].slot == -1 && outputs[0].coords.empty(),
-            "mixed buffers omit LMUV when any primitive lacks the required coord 3");
+      CHECK_MSG(outputs[0].slot == -1 && outputs[0].coords.empty(),
+                "mixed buffers omit LMUV when any primitive lacks the required coord 3");
     }
   }
 
@@ -676,11 +668,11 @@ void TestLightmapUv() {
                                       {LightmapBuffer(0.f, true), LightmapBuffer(10.f, false)}, {{0, 0}, {1, 1}});
     cmdl.clear();
     outputs.clear();
-    Check(Convert(model, cmdl, error, true), "converted mixed-family lightmap model");
-    Check(ReadLightmapOutputs(cmdl, 6, outputs), "read mixed-family LMUV attributes");
+    CHECK_MSG(Convert(model, cmdl, error, true), "converted mixed-family lightmap model");
+    CHECK_MSG(ReadLightmapOutputs(cmdl, 6, outputs), "read mixed-family LMUV attributes");
     if (outputs.size() >= 2) {
-      Check(AllLightmapCoords(outputs[0], 31.f, 32.f), "coord-3 family emits TEXCOORD_1.zw");
-      Check(AllLightmapCoords(outputs[1], 11.f, 12.f), "default family emits TEXCOORD_0.zw");
+      CHECK_MSG(AllLightmapCoords(outputs[0], 31.f, 32.f), "coord-3 family emits TEXCOORD_1.zw");
+      CHECK_MSG(AllLightmapCoords(outputs[1], 11.f, 12.f), "default family emits TEXCOORD_0.zw");
     }
   }
 
@@ -694,11 +686,11 @@ void TestLightmapUv() {
     model.anuv.assign(kAnuvGun, kAnuvGun + sizeof(kAnuvGun));
     cmdl.clear();
     outputs.clear();
-    Check(Convert(model, cmdl, error, true), "converted lightmap with seven available attribute slots");
-    Check(ReadLightmapOutputs(cmdl, 3, outputs), "read lightmap in the last attribute slot");
+    CHECK_MSG(Convert(model, cmdl, error, true), "converted lightmap with seven available attribute slots");
+    CHECK_MSG(ReadLightmapOutputs(cmdl, 3, outputs), "read lightmap in the last attribute slot");
     if (!outputs.empty()) {
-      Check(outputs[0].slot == 7, "LMUV uses slot 7 when ANUV has occupied slots 0 through 6");
-      Check(AllLightmapCoords(outputs[0], 31.f, 32.f), "slot-7 LMUV still addresses TEXCOORD_1.zw");
+      CHECK_MSG(outputs[0].slot == 7, "LMUV uses slot 7 when ANUV has occupied slots 0 through 6");
+      CHECK_MSG(AllLightmapCoords(outputs[0], 31.f, 32.f), "slot-7 LMUV still addresses TEXCOORD_1.zw");
     }
   }
 
@@ -707,10 +699,10 @@ void TestLightmapUv() {
                                       {LightmapBuffer(0.f, true, 4)}, {{0, 0}});
     cmdl.clear();
     outputs.clear();
-    Check(Convert(model, cmdl, error, true), "converted lightmap with all eight attribute slots occupied");
-    Check(ReadLightmapOutputs(cmdl, 3, outputs), "read fully occupied lightmap descriptor");
+    CHECK_MSG(Convert(model, cmdl, error, true), "converted lightmap with all eight attribute slots occupied");
+    CHECK_MSG(ReadLightmapOutputs(cmdl, 3, outputs), "read fully occupied lightmap descriptor");
     if (!outputs.empty()) {
-      Check(outputs[0].slot == -1 && outputs[0].coords.empty(), "full descriptor capacity omits LMUV");
+      CHECK_MSG(outputs[0].slot == -1 && outputs[0].coords.empty(), "full descriptor capacity omits LMUV");
     }
   }
 }
@@ -726,25 +718,25 @@ void TestSlotSplit() {
   model.anuv.assign(kAnuvGun, kAnuvGun + sizeof(kAnuvGun));
   std::vector<uint8_t> cmdl;
   std::string error;
-  Check(Convert(model, cmdl, error), "converted with an ANUV");
+  CHECK_MSG(Convert(model, cmdl, error), "converted with an ANUV");
   std::vector<uint32_t> coords;
-  Check(ReadMapCoords(cmdl, coords) && coords.size() >= 2, "a PBR material with an ANUV");
+  CHECK_MSG(ReadMapCoords(cmdl, coords) && coords.size() >= 2, "a PBR material with an ANUV");
   if (coords.size() >= 2) {
-    Check(coords[0] != coords[1], "the moving map gets its own texcoord");
+    CHECK_MSG(coords[0] != coords[1], "the moving map gets its own texcoord");
   }
   // With all eight texcoords already declared there is no slot to give, and the
   // maps share (the first transform then drives both).
   model.vertexBuffers[0].uvs.resize(8, model.vertexBuffers[0].uvs[0]);
   cmdl.clear();
   coords.clear();
-  Check(Convert(model, cmdl, error) && ReadMapCoords(cmdl, coords) && coords.size() >= 2 && coords[0] == coords[1],
-        "with no texcoord left the maps share");
+  CHECK_MSG(Convert(model, cmdl, error) && ReadMapCoords(cmdl, coords) && coords.size() >= 2 && coords[0] == coords[1],
+            "with no texcoord left the maps share");
   // Without the ANUV the same material shares set 0.
   model.anuv.clear();
   cmdl.clear();
   coords.clear();
-  Check(Convert(model, cmdl, error) && ReadMapCoords(cmdl, coords) && coords.size() >= 2 && coords[0] == coords[1],
-        "without an ANUV the maps share their set");
+  CHECK_MSG(Convert(model, cmdl, error) && ReadMapCoords(cmdl, coords) && coords.size() >= 2 && coords[0] == coords[1],
+            "without an ANUV the maps share their set");
 }
 
 } // namespace
@@ -754,8 +746,8 @@ int main() {
   TestConverter();
   TestLightmapUv();
   TestSlotSplit();
-  if (sFailures == 0) {
+  if (port_test::Failures() == 0) {
     std::printf("port_remastered_uv_tests: ok\n");
   }
-  return sFailures == 0 ? 0 : 1;
+  return PORT_TEST_RESULT();
 }

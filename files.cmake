@@ -193,6 +193,7 @@ set(MP_GAME_SOURCES
     src/Kyoto/Particles/CModVectorElement.cpp
     src/Kyoto/Particles/CParticleData.cpp
     src/Kyoto/Particles/CParticleDataFactory.cpp
+    src/Kyoto/Particles/CPortVfxMat.cpp
     src/Kyoto/Particles/CParticleElectric.cpp
     src/Kyoto/Particles/CParticleElectricDataFactory.cpp
     src/Kyoto/Particles/CParticleGen.cpp

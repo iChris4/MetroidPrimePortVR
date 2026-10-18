@@ -441,9 +441,11 @@ void CSaveGameScreen::ProcessUserInput(const CFinalInput& input) {
     // Port: hover and click the choices (port_pointer_menu.h); a click
     // anywhere else confirms the selected one, as A (issue #120). A double
     // click's second half is dropped, so it can't also confirm the next prompt.
+    // Only while there are choices: the file select feeds this screen every
+    // frame with no prompt up, and its rows need the click.
     float gx, gy;
     int count = 0;
-    if (PortPointerMenu::Begin()) {
+    if (PortPointerMenu::Begin() && x58_tablegroup_choices->GetIsActive()) {
       PortPointerMenu::Table(x58_tablegroup_choices);
       if (PortPointerMenu::TakeClickPoint(gx, gy, count) && count == 1) {
         CFinalInput pointerInput = input;

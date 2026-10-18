@@ -4,8 +4,14 @@
 // Every reply ends with a line `=> ok` or `=> err: <why>`. tools/mpcon.py is
 // the client. Commands that touch the game run inside the state manager's
 // tick, where every object pointer is live; the rest run once per frame.
+#include "port_ap_world.h"
 #include "port_apclient.h"
+#include "port_beam_doors.h"
+#include "port_log.h"
+#include "port_env.h"
+#include "port_strings.h"
 #include "port_collision_view.h"
+#include "port_console_physics.h"
 #include "port_debug.h"
 #include "port_discord.h"
 #include "port_freecam.h"
@@ -55,6 +61,8 @@
 #include "MetroidPrime/Enemies/CPatterned.hpp"
 #include "MetroidPrime/HUD/CSamusHud.hpp"
 #include "MetroidPrime/Player/CGameState.hpp"
+#include "MetroidPrime/CScriptMailbox.hpp"
+#include "port_map_marks.h"
 #include "port_map_pickups.h"
 #include "MetroidPrime/Player/CPlayer.hpp"
 #include "MetroidPrime/Player/CPlayerGun.hpp"
@@ -82,6 +90,7 @@
 #include <filesystem>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <typeinfo>
 #include "port_fx_debug.h"
@@ -172,7 +181,7 @@ void SendRaw(unsigned generation, const std::string& text) {
       continue;
     }
     if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-      std::fprintf(stderr, "[console] client is not reading; disconnecting it\n");
+      PortLog::Write("[console] client is not reading; disconnecting it\n");
       shutdown(sClient, SHUT_RDWR);
     }
     return;
@@ -184,6 +193,21 @@ void SendRaw(unsigned generation, const std::string& text) {
 }
 
 #ifndef _WIN32
+// "GET / HTTP/1.1" and the like: an upper-case method, a target, a version.
+bool LooksLikeHttp(const std::string& line) {
+  const size_t method = line.find(' ');
+  if (method == std::string::npos || method == 0) {
+    return false;
+  }
+  for (size_t i = 0; i < method; ++i) {
+    if (line[i] < 'A' || line[i] > 'Z') {
+      return false;
+    }
+  }
+  const size_t version = line.rfind(" HTTP/");
+  return version != std::string::npos && version > method;
+}
+
 void ListenThread(int listener) {
   std::string buffer;
   for (;;) {
@@ -210,8 +234,10 @@ void ListenThread(int listener) {
       sClient = client;
       generation = ++sGeneration;
     }
-    std::fprintf(stderr, "[console] client connected\n");
+    PortLog::Write("[console] client connected\n");
     buffer.clear();
+    bool firstLine = true;
+    bool refused = false;
     char chunk[512];
     for (;;) {
       const ssize_t n = recv(client, chunk, sizeof(chunk), 0);
@@ -226,6 +252,14 @@ void ListenThread(int listener) {
         if (!line.empty() && line.back() == '\r') {
           line.pop_back();
         }
+        // A web page can POST to a loopback port; the request line and headers
+        // would otherwise run as commands. No console client speaks HTTP.
+        if (firstLine && LooksLikeHttp(line)) {
+          PortLog::Write("[console] HTTP request refused; disconnecting the client\n");
+          refused = true;
+          break;
+        }
+        firstLine = false;
         bool queued = false;
         {
           std::lock_guard< std::mutex > lock(sQueueMutex);
@@ -238,8 +272,11 @@ void ListenThread(int listener) {
           SendRaw(generation, "=> err: too many commands waiting\n");
         }
       }
+      if (refused) {
+        break;
+      }
       if (buffer.size() > kMaxLine) {
-        std::fprintf(stderr, "[console] line too long; disconnecting the client\n");
+        PortLog::Write("[console] line too long; disconnecting the client\n");
         break;
       }
     }
@@ -248,40 +285,49 @@ void ListenThread(int listener) {
       close(sClient);
       sClient = -1;
     }
-    std::fprintf(stderr, "[console] client disconnected\n");
+    PortLog::Write("[console] client disconnected\n");
   }
 }
 #endif
 
 void Start() {
   sStarted = true;
-  const char* value = std::getenv("MP_CONSOLE");
+  const char* value = port::EnvString("MP_CONSOLE");
   if (value == nullptr || value[0] == '\0' || std::strcmp(value, "0") == 0) {
     return;
   }
 #ifdef _WIN32
-  std::fputs("[console] MP_CONSOLE is not supported on Windows\n", stderr);
+  PortLog::Write("[console] MP_CONSOLE is not supported on Windows\n");
 #else
-  int port = std::atoi(value);
-  if (port <= 1) {
-    port = 4777;
+  // MP_CONSOLE=1 (or any non-number) is the default port; a number names one.
+  char* end = nullptr;
+  const long requested = std::strtol(value, &end, 10);
+  int port = 4777;
+  if (end != value && *end == '\0' && requested > 1) {
+    if (requested > 65535) {
+      PortLog::Write("[console] MP_CONSOLE=%s is not a port (2-65535)\n", value);
+      return;
+    }
+    port = static_cast< int >(requested);
   }
   const int listener = socket(AF_INET, SOCK_STREAM, 0);
-  const int yes = 1;
-  setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+  if (listener >= 0) {
+    const int yes = 1;
+    setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+  }
   sockaddr_in addr{};
   addr.sin_family = AF_INET;
   addr.sin_port = htons(static_cast< uint16_t >(port));
   addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
   if (listener < 0 || bind(listener, reinterpret_cast< sockaddr* >(&addr), sizeof(addr)) != 0 ||
       listen(listener, 1) != 0) {
-    std::fprintf(stderr, "[console] cannot listen on 127.0.0.1:%d: %s\n", port, std::strerror(errno));
+    PortLog::Write("[console] cannot listen on 127.0.0.1:%d: %s\n", port, std::strerror(errno));
     if (listener >= 0) {
       close(listener);
     }
     return;
   }
-  std::fprintf(stderr, "[console] listening on 127.0.0.1:%d\n", port);
+  PortLog::Write("[console] listening on 127.0.0.1:%d\n", port);
   sEnabled = true;
   std::thread(ListenThread, listener).detach();
 #endif
@@ -339,12 +385,7 @@ void Finish(const char* error = nullptr) {
   sHasCommand = false;
 }
 
-std::string Lower(std::string s) {
-  for (char& c : s) {
-    c = static_cast< char >(std::tolower(static_cast< unsigned char >(c)));
-  }
-  return s;
-}
+using port::Lower;
 
 bool ParseHex(const std::string& s, uint32_t& value) {
   if (s.empty()) {
@@ -495,143 +536,98 @@ std::string Describe(CStateManager& mgr, CEntity& ent) {
 // ---------------------------------------------------------------------------
 // Commands
 
-void CmdHelp() {
-  Out("status [--json]            world, area, player position, health, visor, beam; --json: one line, with fade state");
-  Out("worlds                     world ids and names");
-  Out("areas                      areas of the current world (index, MREA)");
-  Out("warp <world> [mrea]        load a world (hex MLVL id or name prefix), optionally an area");
-  Out("enter <area>               make a loaded area current, as crossing its dock does");
-  Out("room <area>                teleport to a loaded area's spawn point (the F1 room list)");
-  Out("tp <x> <y> <z>             move the player");
-  Out("fx <PART id>|off [dist] [scale] [loop]  play one particle effect in front of the camera; prints its #id");
-  Out("fx list [filter]           live root generators: kind, asset, position, particles, flags, native VFX props");
-  Out("fx tree <#id>              one generator and its children, recursively");
-  Out("fx stats                   live generators, vfx quads/triangles and CPU ms (update, render) last frame");
-  Out("fx mute <asset>|clear|list  hide a PART/SWHC/ELSC asset (it still updates); fx solo <asset|#id> hides the rest");
-  Out("fx timescale <s>           particle time scale (0 freezes particles only; 1 = off)");
-  Out("face <yaw deg> | look <id> turn the player (yaw 0 = +y, 90 = -x)");
-  Out("objs [filter]              objects whose class or name contains filter");
-  Out("obj <id>                   one object: state, health, animation, connections");
-  Out("send <id> <msg>            deliver a script message (name or number; relays fire on SetToZero)");
-  Out("give <item> [n]            add an item (name or number, see `items`)");
-  Out("take <item> [n]            remove item capacity (drops a suit)");
-  Out("items                      the player's inventory");
-  Out("visor <combat|xray|scan|thermal|0-3>, beam <power|ice|wave|plasma|0-3>  switch like the touch wheels");
-  Out("heal                       refill health");
-  Out("kill <id>                  kill an actor as with a last Power Beam shot (bosses too)");
-  Out("hurt [n] | die             hit the player for n (default 10) with the HUD flash | empty the health");
-  Out("god [on|off]               the player takes no damage (no argument: show)");
-  Out("memo <text>                show text as a HUD message");
-  Out("strg <id> [index]          a string table as the game loads it (mods included)");
-  Out("language [en|EUFR|...]     the text language, changed while the game runs");
-  Out("press <a+b+...> [frames]   hold pad buttons (a b x y z l r start up down left right;");
-  Out("                           sx:<n> sy:<n> cx:<n> cy:<n> also hold a stick axis;");
-  Out("                           frames 0 = keep holding until the next press/stick)");
-  Out("stick <x> <y> [frames]     hold the main stick (-127..127); cstick for the C stick");
-  Out("gyro <pitch> [yaw] [frames] fake gyro rates in rad/s (pitch > 0 tilts up; a flick is ~6)");
-  Out("shot                       take a screenshot and print its path");
-  Out("wait <frames>              let frames pass");
-  Out("probe [off|on|mirror|window]   the PBR reflection probe, or what PBR surfaces show of it");
-  Out("roomgeo [on|off|overlay]  the room geometry mods supply, in place of the area's own or on top of it");
-  Out("roomgeo at <x> <y> <z> [margin] | hide <cmdl> | show [cmdl]   its instances at a point; stop drawing one");
-  Out("colldump <x0> <y0> <z0> <x1> <y1> <z1> <file.obj>   the area's collision triangles in a box");
-  Out("collision [off|overlay|only]    draw collision (only: hide the world's surfaces)");
-  Out("roomliquid [on|off]       the water, poison and lava surfaces mods supply, in place of the game's");
-  Out("roomgeo lights on|off     light it with the area's lights even where the room has baked light");
-  Out("roomgeo minpx <n>         leave out instances under n pixels (game resolution) on screen; 0 draws all");
-  Out("roomgeo lod <scale>       scale the distances where models switch to coarser levels; 0 never switches");
-  Out("roomgeo sort on|off       draw opaque room models nearest first (default on)");
-  Out("roomgeo prepass on|off    depth-only pass first for cut-out room models (default off)");
-  Out("roomgeo casters on|off    out-of-view room models cast the sun's shadow (default on)");
-  Out("shadow [casters on|off]   the sun's shadow map last frame: direction, colour, box, casters, and the room's suns");
-  Out("roomgeo costtest <n>      PBR shading cost test: 0 off, 1 flat, 2 no lights, 3 no volume, 4 no cube, 5 no normal maps, 6 no ORM/emissive, 7 maps only, 8 no aniso, 9 no aniso or mip blend, 10 no post-processing, 11 no screen copies");
-  Out("gpuselftest               render known patterns offscreen, compare the readback, log PASS/FAIL per case");
-  Out("gputimes on|off|show      per-pass GPU times (timestamp queries; 60-frame averages; needs a GPU that has them)");
-  Out("roomgeo script            Remastered's camera zones, counters and groups in each loaded area, and the camera");
-  Out("roomgeo group <n> show|hide   set a group until its script next changes it");
-  Out("roomgeo pick              the instances the middle of the view looks through, nearest first, and the");
-  Out("                           first one's materials");
-  Out("roomgeo mats <cmdl>       a loaded model's materials: flags, PBR or TEV, the PBR record (any CMDL once it");
-  Out("                           has drawn under `drawlog on` or `view drawid`, not just room geometry)");
-  Out("roomgeo mat <cmdl> <material> <field> <value...> | mat clear");
-  Out("                           draw a material with a record value replaced: emissive, backlight, height,");
-  Out("                           mode, kind, strength, p0..p3, or the value's index (0 to 18)");
-  Out("roomenv info [<x> <y> <z>] exposure, tone curve, probe and baked ambient at the view or a point");
-  Out("view [off|albedo|normal|rough|metal|ao|ambient|reflection|glow|exposure|kind|sun|drawid]");
-  Out("                           what PBR surfaces show in place of their shaded result; drawid: every draw's");
-  Out("                           serial as a flat colour (R low byte, G, B), no post-processing");
-  Out("drawlog [on|off|dump <file>]  number and record every model surface drawn; dump the last frame as TSV");
-  Out("pick <x> <y>               the draw at a window pixel (top-left origin): owner, CMDL, material, record,");
-  Out("                           shader hash, and the material's line (switches to `view drawid` for a moment)");
-  Out("shader dump <dir>          write every WGSL module made, as <hash>.wgsl, with index.tsv (also MP_WGSL_DUMP)");
-  Out("shader override <dir>|off  compile <hash>.wgsl files from a dir in place of the generated ones, then reload");
-  Out("shader reload              drop the shader and pipeline caches so edited overrides compile (MP_WGSL_OVERRIDE)");
-  Out("stats                      the last frame's draws and buffers, the heap, room geometry and environments");
-  Out("roomenv [on|off|exposure on|off]  the room environments mods supply; exposure: by room, not by cube");
-  Out("roomenv grades | state <id> <state>  the colour grades; as if script object <id> (hex) sent <state>");
-  Out("roomenv volume on|off | ambient <scale> | show off|coords|light");
-  Out("                           the baked light per pixel; the baked ambient's weight (0: the game's);");
-  Out("                           draw the volume's coordinates or its light alone on room geometry");
-  Out("hdfont [on|off]            the distance-field font mods supply, in place of the disc's glyphs");
-  Out("touchpad [attach|detach|stick <x> <y>]  a virtual gamepad like Android's touch overlay");
-  Out("minimap  the HUD minimap's screen rect (x0 y0 x1 y1, 0..1), or invalid");
-  Out("maptap   a touch-overlay minimap tap: one Z press, opens the map");
-  Out("touchaim <dx> <dy> [hold s]   touch aim travel in dp (right/down +), the finger counts as down for hold seconds");
-  Out("maprotate <degrees>   twist the open map screen's yaw, as two fingers do; positive turns it as the stick's right does");
-  Out("mapzoom <ratio>   pinch the open map screen: 2 zooms in to twice the size, 0.5 out");
-  Out("mappan <dx> <dy> [hold s]   drag the open map screen by dx,dy dp (view height 400 dp); finger down for hold s (0.25)");
-  Out("freecam [on|off|freeze on|off|player on|off|speed <n>|pos <x> <y> <z>|look <yaw> <pitch>]");
-  Out("                           fly the view away from the player (HUD hidden; freeze holds the game still)");
-  Out("photo [on|off|capture [1|2|4]|fov <n>|roll <n>|samus on|off|panel on|off|super 1|2|4|speed <n>]");
-  Out("                           photo mode: frozen free camera with a roll and fov, saves a PNG");
-  Out("aspect <4:3|16:9|window>   switch the rendering aspect, as the Options row does");
-  Out("original [on|off]   Original experience (retail settings over the saved ones)");
-  Out("keypreset classic|mouse   apply a keyboard preset (Controls > Remap), as its button");
-  Out("padpreset gamecube|remastered|modern|southpaw   apply a controller preset to pad 1");
-  Out("fov <45..90>               first-person vertical FOV, as the Options row does");
-  Out("gunoffset <r> <f> <u>      arm cannon offset in metres (+-1), as the Video row does");
-  Out("pointeraim [on|off|<x> <y>] pointer aim mode, or place its pointer (-1..1); prints it");
-  Out("window [<w> <h>]           resize the window (leaves fullscreen); prints the size");
-  Out("msaa <1|4>, aniso <1..16>  anti-aliasing and anisotropic filtering, applied next frame");
-  Out("pixellight [0|1]         per-pixel lighting (1) or the original per-vertex (0); no argument prints it");
-  Out("sunshadow [0|1]          the port's sun shadow in outdoor rooms (1) or off, as Remastered; no argument prints it");
-  Out("projshadow [0|1]         Remastered projected actor shadows (1) or the retail blob (0); no argument prints it");
-  Out("hudscale <50..100>         HUD scale in percent, as the Options row does");
-  Out("scanspread <0..100>        how far the widescreen HUD moves the scan panels out");
-  Out("crosshair <25..100>        mouse/twin-stick crosshair size in percent");
-  Out("helmet <0|1>, visorfx <0|1> show (1) or hide (0) the helmet and visor effects");
-  Out("interp [actor|pose|particle|all <0|1>]   frame interpolation settings (F1 Video > Frame rate)");
-  Out("present <0..1|cycle|tick|off> force the presentation factor (also MP_PRESENT_T);");
-  Out("                           tick draws the plain tick state");
-  Out("hold <0|1>, step [ticks]   stop the simulation; step runs ticks one per frame");
-  Out("reveal <0|1>               reveal every world's map, as the Options row does");
-  Out("pickups <0|1>              white dots on the map for uncollected pickups");
-  Out("tracker                    items, scans and rooms visited (the F1 Tracker page)");
-  Out("viewmodel <cmdl> [dist] [yaw] [pitch] | off | status | light <0|1>   draw a model in front of the camera");
-  Out("state list | last | save [n] | load [n] | undo | slot <n>   save states (F1 Save states page)");
-  Out("timer <0|1>                on-screen in-game time; igt <seconds> sets the play time");
-  Out("livesplit <0|1> | addr <host:port> | send <command> | status   LiveSplit Server client");
-  Out("discord <0|1> | status   Discord Rich Presence");
-  Out("gci list | share on|off | emulator <folder|auto> | import <path> | export <dir or .raw> | dolphin import|export   memory card transfer");
-  Out("ap [connect <server> <slot> [password] | disconnect | recent | resume <n> | say <text> | chat]   Archipelago, as the F1 Archipelago page does");
-  Out("quit                       exit the game");
-  Out("title                      quit the game to the title screen");
-  Out("ids: hex editor id (002900A1), u<index> unique id, or an exact debug name");
-}
-
 void CmdWorlds() {
+  if (gpMemoryCard == nullptr || gpMemoryCard->GetMemoryWorlds().empty()) {
+    return Finish("world list not loaded yet");
+  }
   const auto& worlds = gpMemoryCard->GetMemoryWorlds();
   const uint32_t current = gpGameState != nullptr ? gpGameState->CurrentWorldAssetId() : 0;
   for (int i = 0; i < worlds.size(); ++i) {
     const uint32_t id = static_cast< uint32_t >(worlds[i].first);
     Out("%08X %s%s", id, WorldName(i).c_str(), id == current ? "  <- current" : "");
   }
+  Finish();
 }
 
 const char* ProbeModeName() {
   static const char* const names[] = {"off", "on", "mirror", "window"};
   const int mode = CCubeMaterial::sPortPBRProbeMode;
   return mode >= 0 && mode < 4 ? names[mode] : "unset";
+}
+
+// The `physics` object of `status --json`: state sampled inside the current simulation tick,
+// reported for the movement-parity work (issue #117). These are observations, not assertions
+// about what the mover will do next: `ground_collider` is the kMT_GroundCollider material flag
+// on the player (Remastered drops it in the air), which is NOT the same as being grounded, and
+// the fields say nothing about which mover (retail or Remastered) a later tick will select.
+// `tick` is the tick generation this command is running in (CActor::PortTickGeneration), and
+// `status` runs early in the tick, so most fields are the previous tick's result.
+// Returns the object's members without its braces, for the one-line JSON. Built as a
+// std::string (port_console_physics.h): nothing here can be cut off at a fixed size.
+std::string PhysicsJson(CStateManager& mgr, const CPlayer& player, const CVector3f& pos) {
+  static const char* const movement[] = {"on_ground", "jump", "apply_jump", "falling",
+                                         "falling_morphed"};
+  static const char* const orbit[] = {"no_orbit", "orbit_object", "orbit_point", "orbit_carcass",
+                                      "forced_orbit_object", "grapple"};
+  const int ms = static_cast< int >(player.GetPlayerMovementState());
+  const int os = static_cast< int >(player.GetOrbitState());
+  const CVector3f vel = player.GetVelocityWR();
+  const TUniqueId targetId = player.GetOrbitTargetId();
+  const CEntity* target = mgr.GetObjectById(targetId);
+  const unsigned editorId =
+      target != nullptr ? static_cast< unsigned >(target->GetEditorId().Value()) : 0u;
+  char editor[16];
+  std::snprintf(editor, sizeof(editor), "%08X", editorId); // 8 hex digits and a terminator
+  const auto flag = [](bool value) { return value ? "true" : "false"; };
+  std::string out = "\"tick\":" + std::to_string(CActor::PortTickGeneration());
+  out += ",\"pos\":";
+  out += PortConsolePhysics::JsonVector(pos.GetX(), pos.GetY(), pos.GetZ());
+  out += ",\"vel\":";
+  out += PortConsolePhysics::JsonVector(vel.GetX(), vel.GetY(), vel.GetZ());
+  out += ",\"movement_state\":\"";
+  out += ms >= 0 && ms < 5 ? movement[ms] : "?";
+  out += "\",\"ground_collider\":";
+  out += flag(player.GetMaterialList().HasMaterial(kMT_GroundCollider));
+#ifdef TARGET_PC
+  // Port-only diagnostics for the Remastered ground mover (docs/REMASTERED_MOVEMENT.md).
+  // Both are read-only observations with no source counterpart:
+  // `ground_mover_runs` is the player's cumulative count of ticks that actually entered
+  // CGameCollision::MoveGroundedRemastered (0 on retail movement, on an airborne or
+  // morph-ball tick, on the dynamic-contact fallback, and while the retained state is
+  // invalid), and `retained_ground_state` is the retained Remastered object state
+  // (0 no floor, 1 grounded) or null when the port has no source-retained value for this
+  // tick. Neither is read by any decision the mover makes, and neither is a simulation
+  // tick: `tick` above is the only generation counter. The getter is TARGET_PC-only, like
+  // the mover it counts.
+  out += ",\"ground_mover_runs\":";
+  out += std::to_string(player.PortGroundMoverRuns());
+  out += ",\"retained_ground_state\":";
+  {
+    const PortRemasteredGround::RetainedResult& retained = player.PortRetainedObjectState();
+    if (retained.valid) {
+      out += std::to_string(static_cast< unsigned >(retained.state));
+    } else {
+      out += "null";
+    }
+  }
+#endif
+  out += ",\"dashing\":";
+  out += flag(player.IsSidewaysDashing());
+  out += ",\"dash_done\":";
+  out += flag(player.GetDoneSidewaysDashing());
+  out += ",\"orbit_state\":\"";
+  out += os >= 0 && os < 6 ? orbit[os] : "?";
+  out += "\",\"target\":";
+  out += std::to_string(static_cast< uint32_t >(targetId.Value()));
+  out += ",\"target_editor\":\"";
+  out += editor;
+  out += "\",\"remastered_movement\":";
+  out += flag(PortDebug::RemasteredMovement());
+  out += ",\"sim_rate\":";
+  out += std::to_string(PortDebug::SimRate());
+  out += ",\"sim_adaptive\":";
+  out += flag(PortDebug::SimAdaptive());
+  return out;
 }
 
 // `status --json`: one line for scripts (tools/mprig.py). `fade` is true while the in-game fade
@@ -665,13 +661,15 @@ void CmdStatusJson(CStateManager& mgr) {
   Out("{\"frame\":%u,\"game_state\":%d,\"world\":\"%08X\",\"area\":%d,\"mrea\":\"%08X\","
       "\"pos\":[%.3f,%.3f,%.3f],\"yaw\":%.2f,\"hp\":%.1f,\"hp_max\":%.1f,\"morph\":\"%s\","
       "\"visor\":\"%s\",\"beam\":\"%s\",\"first_person\":%s,\"cinematic\":%s,\"fade\":%s,"
-      "\"freecam\":{\"on\":%s,\"pos\":[%.3f,%.3f,%.3f],\"yaw\":%.2f,\"pitch\":%.2f}}",
+      "\"freecam\":{\"on\":%s,\"pos\":[%.3f,%.3f,%.3f],\"yaw\":%.2f,\"pitch\":%.2f},"
+      "\"physics\":{%s}}",
       sFrame, static_cast< int >(mgr.GetGameState()), mlvl, areaIdx, mrea, pos.GetX(), pos.GetY(),
       pos.GetZ(), yaw, ps.GetHealthInfo().GetHP(), ps.CalculateHealth(),
       m >= 0 && m < 4 ? morph[m] : "?", v >= 0 && v < 4 ? visors[v] : "?",
       b >= 0 && b < 5 ? beams[b] : "?", mgr.GetCameraManager()->IsInFPCamera() ? "true" : "false",
       mgr.GetCameraManager()->IsInCinematicCamera() ? "true" : "false", fade ? "true" : "false",
-      PortFreeCam::Active() ? "true" : "false", pose.x, pose.y, pose.z, pose.yaw, pose.pitch);
+      PortFreeCam::Active() ? "true" : "false", pose.x, pose.y, pose.z, pose.yaw, pose.pitch,
+      PhysicsJson(mgr, player, pos).c_str());
 }
 
 void CmdStatus(CStateManager& mgr) {
@@ -1870,87 +1868,6 @@ void CmdPhoto(CStateManager& mgr) {
   Finish();
 }
 
-bool IsTickCommand(const std::string& name) {
-  if (name == "fx" && sCmd.args.size() > 1) {
-    static const char* const queries[] = {"list", "tree", "stats", "mute", "solo", "timescale"};
-    for (const char* q : queries) {
-      if (Lower(sCmd.args[1]) == q) {
-        return false;
-      }
-    }
-  }
-  static const char* const names[] = {"status", "areas", "objs", "obj", "send", "give",
-                                      "take", "items", "heal", "kill", "hurt", "die", "god", "memo", "strg", "language", "tp", "lift", "room", "fx", "face", "look", "warp",
-                                      "tracker", "enter", "visor", "beam", "photo"};
-  for (const char* n : names) {
-    if (name == n) {
-      return true;
-    }
-  }
-  return false;
-}
-
-void RunTick(CStateManager& mgr) {
-  const std::string& name = sCmd.args[0];
-  if (name == "status") {
-    CmdStatus(mgr);
-    Finish();
-  } else if (name == "photo") {
-    CmdPhoto(mgr);
-  } else if (name == "areas") {
-    CmdAreas(mgr);
-  } else if (name == "enter") {
-    CmdEnter(mgr);
-  } else if (name == "objs") {
-    CmdObjs(mgr);
-  } else if (name == "obj") {
-    CmdObj(mgr);
-  } else if (name == "send") {
-    CmdSend(mgr);
-  } else if (name == "give" || name == "take") {
-    CmdGive(mgr, name == "take");
-  } else if (name == "items") {
-    CmdItems(mgr);
-  } else if (name == "heal") {
-    CmdHeal(mgr);
-  } else if (name == "kill") {
-    CmdKill(mgr);
-  } else if (name == "hurt") {
-    CmdHurt(sCmd.args.size() > 1 ? sCmd.args[1] : std::string());
-  } else if (name == "die") {
-    CmdDie(mgr);
-  } else if (name == "god") {
-    CmdGod();
-  } else if (name == "visor") {
-    CmdVisor(mgr);
-  } else if (name == "beam") {
-    CmdBeam(mgr);
-  } else if (name == "memo") {
-    CmdMemo();
-  } else if (name == "strg") {
-    CmdStrg();
-  } else if (name == "language") {
-    CmdLanguage();
-  } else if (name == "tp") {
-    CmdTp(mgr);
-  } else if (name == "lift") {
-    CmdLift(mgr);
-  } else if (name == "room") {
-    CmdRoom();
-  } else if (name == "fx") {
-    CmdFx(mgr);
-  } else if (name == "face") {
-    CmdFace(mgr);
-  } else if (name == "look") {
-    CmdLook(mgr);
-  } else if (name == "warp") {
-    CmdWarp(mgr);
-  } else if (name == "tracker") {
-    sCmd.out += PortTracker::Text(PortTracker::Collect(mgr)) + "\n" + PortAp::LogicText();
-    Finish();
-  }
-}
-
 bool ParseButtons(const std::string& spec, PADStatus& pad) {
   u16& buttons = pad.button;
   size_t start = 0;
@@ -1990,1245 +1907,1802 @@ bool ParseButtons(const std::string& spec, PADStatus& pad) {
   return true;
 }
 
-// Frame-level commands, and unknown ones.
-void RunFrame() {
+// ---------------------------------------------------------------------------
+// Frame commands
+
+void CmdQuit() {
+  // As closing the window: the quick resume is written first.
+  PortSaveState::ResumeSave();
+  PortSaveState::ResumeQuitCleanly();
+  Finish();
+  sQuit = true;
+}
+
+void CmdPhazonGun() {
+  CStateManager* const mgr = const_cast< CStateManager* >(PortDebug::StateManager());
+  if (mgr == nullptr || mgr->GetPlayer() == nullptr) {
+    return Finish("not in a game");
+  }
+  const std::string mode = sCmd.args.size() > 1 ? Lower(sCmd.args[1]) : "on";
+  const_cast< CPlayerGun* >(mgr->GetPlayer()->GetPlayerGun())->PortForcePhazonBeam(mode != "off");
+  Finish();
+}
+
+void CmdTitle() {
+  CStateManager* const mgr = const_cast< CStateManager* >(PortDebug::StateManager());
+  if (mgr == nullptr) {
+    return Finish("not in a game");
+  }
+  mgr->QuitGame(); // restart mode kRM_Default: back through the pre-front end
+  Finish();
+}
+
+void CmdAspect() {
+  const std::string mode = sCmd.args.size() > 1 ? Lower(sCmd.args[1]) : "";
+  if (mode == "4:3") {
+    PortDebug::SetAspectMode(PortDebug::kAspect_4_3);
+  } else if (mode == "16:9") {
+    PortDebug::SetAspectMode(PortDebug::kAspect_16_9);
+  } else if (mode == "window") {
+    PortDebug::SetAspectMode(PortDebug::kAspect_Window);
+  } else {
+    return Finish("usage: aspect <4:3|16:9|window>");
+  }
+  Finish();
+}
+
+void CmdOriginal() {
+  const std::string mode = sCmd.args.size() > 1 ? Lower(sCmd.args[1]) : "";
+  if (mode == "on" || mode == "off") {
+    PortDebug::SetOriginalExperience(mode == "on");
+  } else if (!mode.empty()) {
+    return Finish("usage: original [on|off]");
+  }
+  Out(PortDebug::OriginalExperience() ? "original experience on" : "original experience off");
+  Finish();
+}
+
+void CmdKeyPreset() {
+  const std::string preset = sCmd.args.size() > 1 ? Lower(sCmd.args[1]) : "";
+  if (!PortControls::ApplyKeyPresetNamed(preset)) {
+    return Finish("usage: keypreset classic|mouse");
+  }
+  Finish();
+}
+
+void CmdPadPreset() {
+  const std::string preset = sCmd.args.size() > 1 ? Lower(sCmd.args[1]) : "";
+  if (!PortControls::ApplyPadPresetNamed(preset)) {
+    return Finish("usage: padpreset gamecube|remastered|modern|southpaw");
+  }
+  Finish();
+}
+
+void CmdFov() {
+  const float fov =
+      sCmd.args.size() > 1 ? static_cast< float >(std::atof(sCmd.args[1].c_str())) : 0.f;
+  if (!(fov >= PortDebug::kFovMin && fov <= PortDebug::kFovMax)) {
+    return Finish("usage: fov <45..90>   first-person vertical FOV (retail 55)");
+  }
+  PortDebug::SetFirstPersonFov(fov);
+  Finish();
+}
+
+void CmdGunOffset() {
+  if (sCmd.args.size() != 4) {
+    return Finish("usage: gunoffset <right> <forward> <up>   arm cannon offset in metres (+-1)");
+  }
+  const float offset[3] = {static_cast< float >(std::atof(sCmd.args[1].c_str())),
+                           static_cast< float >(std::atof(sCmd.args[2].c_str())),
+                           static_cast< float >(std::atof(sCmd.args[3].c_str()))};
+  PortDebug::SetGunOffset(offset);
+  Finish();
+}
+
+void CmdPointerAim() {
+  if (sCmd.args.size() == 2 && (Lower(sCmd.args[1]) == "on" || Lower(sCmd.args[1]) == "off")) {
+    PortDebug::SetPointerAim(Lower(sCmd.args[1]) == "on");
+  } else if (sCmd.args.size() == 3) {
+    PortDebug::SetPointerAimPosition(static_cast< float >(std::atof(sCmd.args[1].c_str())),
+                                     static_cast< float >(std::atof(sCmd.args[2].c_str())));
+  } else if (sCmd.args.size() != 1) {
+    return Finish("usage: pointeraim [on|off|<x> <y>]   x, y in -1..1 of the half view");
+  }
+  float x = 0.f, y = 0.f;
+  const bool free = PortDebug::PointerAimPosition(x, y);
+  char line[128];
+  std::snprintf(line, sizeof(line), "pointeraim %s %s x=%.3f y=%.3f",
+                PortDebug::PointerAim() ? "on" : "off", free ? "free" : "centred", x, y);
+  Out(line);
+  Finish();
+}
+
+void CmdPointer() {
+  // Coordinates are GUI (EFB) pixels, not window pixels; `pointer hits` lists the rects.
+  static const char* const kUsage =
+      "usage: pointer <x> <y> move|click|dclick|tap|dtap|down|up [l|r|touch]|drag <x1> <y1> [l|r|touch]|wheel <n>|pinch <ratio>"
+      " | pointer back | pointer where | pointer hits";
+  const std::string verb = sCmd.args.size() > 1 ? Lower(sCmd.args[1]) : std::string();
+  if (verb == "back") {
+    PortPointer::ScriptBack();
+    return Finish();
+  }
+  if (verb == "hits") {
+    OutLines(PortGuiHit::Describe(-1.f, -1.f));
+    return Finish();
+  }
+  if (verb == "where") {
+    float gx = 0.f, gy = 0.f;
+    const bool has = PortPointer::Position(gx, gy);
+    Out("pointer %s %.1f %.1f last=%s screen=%d enabled=%d", has ? "at" : "none", gx, gy,
+        PortPointer::MouseIsLast() ? "mouse" : PortPointer::TouchIsLast() ? "touch" : "other",
+        PortPointer::ScreenActive() ? 1 : 0, PortPointer::Enabled() ? 1 : 0);
+    OutLines(PortGuiHit::Describe(gx, gy));
+    return Finish();
+  }
+  if (sCmd.args.size() < 4) {
+    return Finish(kUsage);
+  }
+  const float x = static_cast< float >(std::atof(sCmd.args[1].c_str()));
+  const float y = static_cast< float >(std::atof(sCmd.args[2].c_str()));
+  const std::string action = Lower(sCmd.args[3]);
+  if (action == "move") {
+    PortPointer::ScriptMove(x, y);
+  } else if (action == "click" || action == "dclick") {
+    PortPointer::ScriptClick(x, y, action == "dclick", false);
+  } else if (action == "tap" || action == "dtap") {
+    PortPointer::ScriptClick(x, y, action == "dtap", true);
+  } else if (action == "down" || action == "up") {
+    const std::string how = sCmd.args.size() > 4 ? Lower(sCmd.args[4]) : std::string("l");
+    PortPointer::ScriptPress(x, y, action == "down",
+                             how == "r" ? PortPointer::kButtonRight : PortPointer::kButtonLeft, how == "touch");
+  } else if (action == "drag" && sCmd.args.size() >= 6) {
+    const std::string how = sCmd.args.size() > 6 ? Lower(sCmd.args[6]) : std::string("l");
+    PortPointer::ScriptDrag(x, y, static_cast< float >(std::atof(sCmd.args[4].c_str())),
+                            static_cast< float >(std::atof(sCmd.args[5].c_str())),
+                            how == "r" ? PortPointer::kButtonRight : PortPointer::kButtonLeft, how == "touch");
+  } else if (action == "wheel" && sCmd.args.size() >= 5) {
+    PortPointer::ScriptMove(x, y);
+    PortPointer::ScriptWheel(static_cast< float >(std::atof(sCmd.args[4].c_str())));
+  } else if (action == "pinch" && sCmd.args.size() >= 5) {
+    PortPointer::ScriptPinch(x, y, static_cast< float >(std::atof(sCmd.args[4].c_str())));
+  } else {
+    return Finish(kUsage);
+  }
+  Finish();
+}
+
+void CmdWindow() {
+  int count = 0;
+  SDL_Window** windows = SDL_GetWindows(&count);
+  SDL_Window* window = windows != nullptr && count > 0 ? windows[0] : nullptr;
+  SDL_free(windows);
+  if (window == nullptr) {
+    return Finish("no window");
+  }
+  if (sCmd.args.size() > 2) {
+    const int w = std::atoi(sCmd.args[1].c_str());
+    const int h = std::atoi(sCmd.args[2].c_str());
+    if (w < 64 || h < 64) {
+      return Finish("usage: window [<width> <height>]");
+    }
+    SDL_SetWindowFullscreen(window, false);
+    SDL_SetWindowSize(window, w, h);
+    SDL_SyncWindow(window);
+  }
+  int w = 0;
+  int h = 0;
+  SDL_GetWindowSizeInPixels(window, &w, &h);
+  char line[48];
+  std::snprintf(line, sizeof(line), "window %dx%d", w, h);
+  Out(line);
+  Finish();
+}
+
+void CmdMsaaAniso() {
   const std::string& name = sCmd.args[0];
-  if (name == "help") {
-    CmdHelp();
-    Finish();
-  } else if (name == "worlds") {
-    if (gpMemoryCard == nullptr || gpMemoryCard->GetMemoryWorlds().empty()) {
-      return Finish("world list not loaded yet");
+  const int value = sCmd.args.size() > 1 ? std::atoi(sCmd.args[1].c_str()) : 0;
+  if (value < 1 || value > 16) {
+    return Finish("usage: msaa <1|4> | aniso <1..16>");
+  }
+  if (name == "msaa") {
+    PortDebug::SetMsaa(value);
+  } else {
+    PortDebug::SetAnisotropy(value);
+  }
+  Finish();
+}
+
+void CmdPixelLight() {
+  if (sCmd.args.size() > 1) {
+    const std::string& v = sCmd.args[1];
+    if (v != "0" && v != "1") {
+      return Finish("usage: pixellight [0|1]");
     }
-    CmdWorlds();
-    Finish();
-  } else if (name == "fx") {
-    CmdFxQuery();
-  } else if (name == "quit") {
-    // As closing the window: the quick resume is written first.
-    PortSaveState::ResumeSave();
-    PortSaveState::ResumeQuitCleanly();
-    Finish();
-    sQuit = true;
-  } else if (name == "phazongun") {
-    CStateManager* const mgr = const_cast< CStateManager* >(PortDebug::StateManager());
-    if (mgr == nullptr || mgr->GetPlayer() == nullptr) {
-      return Finish("not in a game");
+    PortDebug::SetPerPixelLighting(v == "1");
+  }
+  Out(PortDebug::PerPixelLighting() ? "pixellight 1" : "pixellight 0");
+  Finish();
+}
+
+void CmdMapUi() {
+  if (sCmd.args.size() > 1) {
+    const std::string& v = sCmd.args[1];
+    if (v != "0" && v != "1") {
+      return Finish("usage: mapui [0|1]");
     }
-    const std::string mode = sCmd.args.size() > 1 ? Lower(sCmd.args[1]) : "on";
-    const_cast< CPlayerGun* >(mgr->GetPlayer()->GetPlayerGun())->PortForcePhazonBeam(mode != "off");
-    Finish();
-  } else if (name == "title") {
-    CStateManager* const mgr = const_cast< CStateManager* >(PortDebug::StateManager());
-    if (mgr == nullptr) {
-      return Finish("not in a game");
+    PortDebug::SetMapExtraUi(v == "1");
+  }
+  Out(PortDebug::MapExtraUi() ? "mapui 1" : "mapui 0");
+  Finish();
+}
+
+void CmdSunShadow() {
+  if (sCmd.args.size() > 1) {
+    const std::string& v = sCmd.args[1];
+    if (v != "0" && v != "1") {
+      return Finish("usage: sunshadow [0|1]");
     }
-    mgr->QuitGame(); // restart mode kRM_Default: back through the pre-front end
-    Finish();
-  } else if (name == "aspect") {
-    const std::string mode = sCmd.args.size() > 1 ? Lower(sCmd.args[1]) : "";
-    if (mode == "4:3") {
-      PortDebug::SetAspectMode(PortDebug::kAspect_4_3);
-    } else if (mode == "16:9") {
-      PortDebug::SetAspectMode(PortDebug::kAspect_16_9);
-    } else if (mode == "window") {
-      PortDebug::SetAspectMode(PortDebug::kAspect_Window);
-    } else {
-      return Finish("usage: aspect <4:3|16:9|window>");
+    PortDebug::SetSunShadows(v == "1");
+  }
+  Out(PortDebug::SunShadows() ? "sunshadow 1" : "sunshadow 0");
+  Finish();
+}
+
+void CmdProjShadow() {
+  if (sCmd.args.size() > 1) {
+    const std::string& v = sCmd.args[1];
+    if (v != "0" && v != "1") {
+      return Finish("usage: projshadow [0|1]");
     }
-    Finish();
-  } else if (name == "original") {
-    const std::string mode = sCmd.args.size() > 1 ? Lower(sCmd.args[1]) : "";
-    if (mode == "on" || mode == "off") {
-      PortDebug::SetOriginalExperience(mode == "on");
-    } else if (!mode.empty()) {
-      return Finish("usage: original [on|off]");
+    PortDebug::SetProjectedShadows(v == "1");
+  }
+  Out(PortDebug::ProjectedShadows() ? "projshadow 1" : "projshadow 0");
+  Finish();
+}
+
+void CmdHudScale() {
+  const int value = sCmd.args.size() > 1 ? std::atoi(sCmd.args[1].c_str()) : 0;
+  if (value < PortDebug::kHudScaleMin || value > PortDebug::kHudScaleMax) {
+    return Finish("usage: hudscale <50..100>");
+  }
+  PortDebug::SetHudScale(value);
+  Finish();
+}
+
+void CmdScanSpread() {
+  const int value = sCmd.args.size() > 1 ? std::atoi(sCmd.args[1].c_str()) : -1;
+  if (value < PortDebug::kScanSpreadMin || value > PortDebug::kScanSpreadMax) {
+    return Finish("usage: scanspread <0..100>");
+  }
+  PortDebug::SetScanSpread(value);
+  Finish();
+}
+
+void CmdHudOpacity() {
+  static const char* const kParts[PortDebug::kHudOpacityPartCount] = {"xray", "thermal", "scan", "energy"};
+  int part = -1;
+  for (int i = 0; i < PortDebug::kHudOpacityPartCount; ++i) {
+    if (sCmd.args.size() > 1 && sCmd.args[1] == kParts[i]) {
+      part = i;
     }
-    Out(PortDebug::OriginalExperience() ? "original experience on" : "original experience off");
-    Finish();
-  } else if (name == "keypreset") {
-    const std::string preset = sCmd.args.size() > 1 ? Lower(sCmd.args[1]) : "";
-    if (!PortControls::ApplyKeyPresetNamed(preset)) {
-      return Finish("usage: keypreset classic|mouse");
+  }
+  const std::string value = sCmd.args.size() > 2 ? sCmd.args[2] : "";
+  const bool numeric = !value.empty() && value.find_first_not_of("0123456789") == std::string::npos;
+  const int percent = value == "visor" ? PortDebug::kHudOpacityVisor : std::atoi(value.c_str());
+  if (part < 0 || (value != "visor" && !numeric) ||
+      (percent != PortDebug::kHudOpacityVisor &&
+       (percent < PortDebug::kHudOpacityMin || percent > PortDebug::kHudOpacityMax))) {
+    return Finish("usage: hudopacity <xray|thermal|scan|energy> <visor|0..100>");
+  }
+  PortDebug::SetHudOpacity(static_cast< PortDebug::HudOpacityPart >(part), percent);
+  Finish();
+}
+
+void CmdCrosshair() {
+  if (sCmd.args.size() > 1 && sCmd.args[1] == "style") {
+    const std::string style = sCmd.args.size() > 2 ? sCmd.args[2] : "";
+    if (style != "classic" && style != "remastered") {
+      return Finish("usage: crosshair style classic|remastered");
     }
-    Finish();
-  } else if (name == "padpreset") {
-    const std::string preset = sCmd.args.size() > 1 ? Lower(sCmd.args[1]) : "";
-    if (!PortControls::ApplyPadPresetNamed(preset)) {
-      return Finish("usage: padpreset gamecube|remastered|modern|southpaw");
-    }
-    Finish();
-  } else if (name == "fov") {
-    const float fov =
-        sCmd.args.size() > 1 ? static_cast< float >(std::atof(sCmd.args[1].c_str())) : 0.f;
-    if (!(fov >= PortDebug::kFovMin && fov <= PortDebug::kFovMax)) {
-      return Finish("usage: fov <45..90>   first-person vertical FOV (retail 55)");
-    }
-    PortDebug::SetFirstPersonFov(fov);
-    Finish();
-  } else if (name == "gunoffset") {
-    if (sCmd.args.size() != 4) {
-      return Finish("usage: gunoffset <right> <forward> <up>   arm cannon offset in metres (+-1)");
-    }
-    const float offset[3] = {static_cast< float >(std::atof(sCmd.args[1].c_str())),
-                             static_cast< float >(std::atof(sCmd.args[2].c_str())),
-                             static_cast< float >(std::atof(sCmd.args[3].c_str()))};
-    PortDebug::SetGunOffset(offset);
-    Finish();
-  } else if (name == "pointeraim") {
-    if (sCmd.args.size() == 2 && (Lower(sCmd.args[1]) == "on" || Lower(sCmd.args[1]) == "off")) {
-      PortDebug::SetPointerAim(Lower(sCmd.args[1]) == "on");
-    } else if (sCmd.args.size() == 3) {
-      PortDebug::SetPointerAimPosition(static_cast< float >(std::atof(sCmd.args[1].c_str())),
-                                       static_cast< float >(std::atof(sCmd.args[2].c_str())));
-    } else if (sCmd.args.size() != 1) {
-      return Finish("usage: pointeraim [on|off|<x> <y>]   x, y in -1..1 of the half view");
-    }
-    float x = 0.f, y = 0.f;
-    const bool free = PortDebug::PointerAimPosition(x, y);
-    char line[128];
-    std::snprintf(line, sizeof(line), "pointeraim %s %s x=%.3f y=%.3f",
-                  PortDebug::PointerAim() ? "on" : "off", free ? "free" : "centred", x, y);
-    Out(line);
-    Finish();
-  } else if (name == "pointer") {
-    // Coordinates are GUI (EFB) pixels, not window pixels; `pointer hits` lists the rects.
-    static const char* const kUsage =
-        "usage: pointer <x> <y> move|click|dclick|tap|dtap|down|up [l|r|touch]|drag <x1> <y1> [l|r|touch]|wheel <n>|pinch <ratio>"
-        " | pointer back | pointer where | pointer hits";
-    const std::string verb = sCmd.args.size() > 1 ? Lower(sCmd.args[1]) : std::string();
-    if (verb == "back") {
-      PortPointer::ScriptBack();
-      return Finish();
-    }
-    if (verb == "hits") {
-      OutLines(PortGuiHit::Describe(-1.f, -1.f));
-      return Finish();
-    }
-    if (verb == "where") {
-      float gx = 0.f, gy = 0.f;
-      const bool has = PortPointer::Position(gx, gy);
-      Out("pointer %s %.1f %.1f last=%s screen=%d enabled=%d", has ? "at" : "none", gx, gy,
-          PortPointer::MouseIsLast() ? "mouse" : PortPointer::TouchIsLast() ? "touch" : "other",
-          PortPointer::ScreenActive() ? 1 : 0, PortPointer::Enabled() ? 1 : 0);
-      OutLines(PortGuiHit::Describe(gx, gy));
-      return Finish();
-    }
-    if (sCmd.args.size() < 4) {
-      return Finish(kUsage);
-    }
-    const float x = static_cast< float >(std::atof(sCmd.args[1].c_str()));
-    const float y = static_cast< float >(std::atof(sCmd.args[2].c_str()));
-    const std::string action = Lower(sCmd.args[3]);
-    if (action == "move") {
-      PortPointer::ScriptMove(x, y);
-    } else if (action == "click" || action == "dclick") {
-      PortPointer::ScriptClick(x, y, action == "dclick", false);
-    } else if (action == "tap" || action == "dtap") {
-      PortPointer::ScriptClick(x, y, action == "dtap", true);
-    } else if (action == "down" || action == "up") {
-      const std::string how = sCmd.args.size() > 4 ? Lower(sCmd.args[4]) : std::string("l");
-      PortPointer::ScriptPress(x, y, action == "down",
-                               how == "r" ? PortPointer::kButtonRight : PortPointer::kButtonLeft, how == "touch");
-    } else if (action == "drag" && sCmd.args.size() >= 6) {
-      const std::string how = sCmd.args.size() > 6 ? Lower(sCmd.args[6]) : std::string("l");
-      PortPointer::ScriptDrag(x, y, static_cast< float >(std::atof(sCmd.args[4].c_str())),
-                              static_cast< float >(std::atof(sCmd.args[5].c_str())),
-                              how == "r" ? PortPointer::kButtonRight : PortPointer::kButtonLeft, how == "touch");
-    } else if (action == "wheel" && sCmd.args.size() >= 5) {
-      PortPointer::ScriptMove(x, y);
-      PortPointer::ScriptWheel(static_cast< float >(std::atof(sCmd.args[4].c_str())));
-    } else if (action == "pinch" && sCmd.args.size() >= 5) {
-      PortPointer::ScriptPinch(x, y, static_cast< float >(std::atof(sCmd.args[4].c_str())));
-    } else {
-      return Finish(kUsage);
-    }
-    Finish();
-  } else if (name == "window") {
-    int count = 0;
-    SDL_Window** windows = SDL_GetWindows(&count);
-    SDL_Window* window = windows != nullptr && count > 0 ? windows[0] : nullptr;
-    SDL_free(windows);
-    if (window == nullptr) {
-      return Finish("no window");
-    }
-    if (sCmd.args.size() > 2) {
-      const int w = std::atoi(sCmd.args[1].c_str());
-      const int h = std::atoi(sCmd.args[2].c_str());
-      if (w < 64 || h < 64) {
-        return Finish("usage: window [<width> <height>]");
-      }
-      SDL_SetWindowFullscreen(window, false);
-      SDL_SetWindowSize(window, w, h);
-      SDL_SyncWindow(window);
-    }
-    int w = 0;
-    int h = 0;
-    SDL_GetWindowSizeInPixels(window, &w, &h);
-    char line[48];
-    std::snprintf(line, sizeof(line), "window %dx%d", w, h);
-    Out(line);
-    Finish();
-  } else if (name == "msaa" || name == "aniso") {
-    const int value = sCmd.args.size() > 1 ? std::atoi(sCmd.args[1].c_str()) : 0;
-    if (value < 1 || value > 16) {
-      return Finish("usage: msaa <1|4> | aniso <1..16>");
-    }
-    if (name == "msaa") {
-      PortDebug::SetMsaa(value);
-    } else {
-      PortDebug::SetAnisotropy(value);
-    }
-    Finish();
-  } else if (name == "pixellight") {
-    if (sCmd.args.size() > 1) {
-      const std::string& v = sCmd.args[1];
-      if (v != "0" && v != "1") {
-        return Finish("usage: pixellight [0|1]");
-      }
-      PortDebug::SetPerPixelLighting(v == "1");
-    }
-    Out(PortDebug::PerPixelLighting() ? "pixellight 1" : "pixellight 0");
-    Finish();
-  } else if (name == "sunshadow") {
-    if (sCmd.args.size() > 1) {
-      const std::string& v = sCmd.args[1];
-      if (v != "0" && v != "1") {
-        return Finish("usage: sunshadow [0|1]");
-      }
-      PortDebug::SetSunShadows(v == "1");
-    }
-    Out(PortDebug::SunShadows() ? "sunshadow 1" : "sunshadow 0");
-    Finish();
-  } else if (name == "projshadow") {
-    if (sCmd.args.size() > 1) {
-      const std::string& v = sCmd.args[1];
-      if (v != "0" && v != "1") {
-        return Finish("usage: projshadow [0|1]");
-      }
-      PortDebug::SetProjectedShadows(v == "1");
-    }
-    Out(PortDebug::ProjectedShadows() ? "projshadow 1" : "projshadow 0");
-    Finish();
-  } else if (name == "hudscale") {
-    const int value = sCmd.args.size() > 1 ? std::atoi(sCmd.args[1].c_str()) : 0;
-    if (value < PortDebug::kHudScaleMin || value > PortDebug::kHudScaleMax) {
-      return Finish("usage: hudscale <50..100>");
-    }
-    PortDebug::SetHudScale(value);
-    Finish();
-  } else if (name == "scanspread") {
-    const int value = sCmd.args.size() > 1 ? std::atoi(sCmd.args[1].c_str()) : -1;
-    if (value < PortDebug::kScanSpreadMin || value > PortDebug::kScanSpreadMax) {
-      return Finish("usage: scanspread <0..100>");
-    }
-    PortDebug::SetScanSpread(value);
-    Finish();
-  } else if (name == "crosshair") {
-    const int value = sCmd.args.size() > 1 ? std::atoi(sCmd.args[1].c_str()) : 0;
-    if (value < PortDebug::kCrosshairSizeMin || value > PortDebug::kCrosshairSizeMax) {
-      return Finish("usage: crosshair <25..100>");
-    }
-    PortDebug::SetCrosshairSize(value);
-    Finish();
-  } else if (name == "helmet" || name == "visorfx") {
-    const std::string value = sCmd.args.size() > 1 ? sCmd.args[1] : "";
-    if (value != "0" && value != "1") {
-      return Finish("usage: helmet <0|1> | visorfx <0|1>");
-    }
-    if (name == "helmet") {
-      PortDebug::SetHideHelmet(value == "0");
-    } else {
-      PortDebug::SetHideVisorEffects(value == "0");
-    }
-    Finish();
-  } else if (name == "reveal") {
-    const std::string value = sCmd.args.size() > 1 ? sCmd.args[1] : "";
-    if (value != "0" && value != "1") {
-      return Finish("usage: reveal <0|1>   reveal every world's map");
-    }
-    PortDebug::SetRevealMap(value == "1");
-    Finish();
-  } else if (name == "pickups") {
-    const std::string value = sCmd.args.size() > 1 ? Lower(sCmd.args[1]) : "";
-    if (value == "seen") {
-      const std::string sub = sCmd.args.size() > 2 ? Lower(sCmd.args[2]) : "";
-      if (sub == "clear") {
-        PortMapPickups::ClearSeen();
-      } else if (sub == "all") {
-        PortMapPickups::MarkAllSeen();
-      } else if (!sub.empty()) {
-        return Finish("usage: pickups seen [clear|all]");
-      } else {
-        PortDebug::SetMapPickups(PortDebug::kMapPickups_Seen);
-      }
-      size_t dots = 0;
-      const PortMapPickups::Dot* list = PortMapPickups::Dots(dots);
-      const uint32_t world = gpGameState != nullptr ? gpGameState->CurrentWorldAssetId() : 0;
-      std::string indices;
-      for (size_t i = 0; i < dots; ++i) {
-        if (PortMapPickups::Seen(i) && list[i].world == world) {
-          indices += (indices.empty() ? "" : " ") + std::to_string(i);
-        }
-      }
-      Out("seen %zu of %zu; this world: %s", PortMapPickups::SeenCount(), dots,
-          indices.empty() ? "none" : indices.c_str());
-      return Finish();
-    }
-    if (value == "kinds" || value == "station") {
-      const std::string sub = sCmd.args.size() > 2 ? Lower(sCmd.args[2]) : "";
-      if (sub == "on" || sub == "off") {
-        if (value == "kinds") {
-          PortDebug::SetMapPickupKinds(sub == "on");
-        } else {
-          PortDebug::SetMapStationPickups(sub == "on");
-        }
-        return Finish();
-      }
-      if (!sub.empty() || value == "station") {
-        return Finish("usage: pickups kinds|station <on|off>");
-      }
-      // This world's dots and what they hold: M major, m minor, ? unknown.
-      size_t dots = 0;
-      const PortMapPickups::Dot* list = PortMapPickups::Dots(dots);
-      const unsigned char* kinds = PortMapPickups::Kinds();
-      const uint32_t world = gpGameState != nullptr ? gpGameState->CurrentWorldAssetId() : 0;
-      std::string text;
-      for (size_t i = 0; i < dots; ++i) {
-        if (list[i].world == world) {
-          text += (text.empty() ? "" : " ") + std::to_string(i) +
-                  (kinds[i] == PortMapPickups::kK_Major   ? "M"
-                   : kinds[i] == PortMapPickups::kK_Minor ? "m"
-                                                          : "?");
-        }
-      }
-      Out("kinds %s; this world: %s", PortDebug::MapPickupKinds() ? "on" : "off",
-          text.empty() ? "none" : text.c_str());
-      return Finish();
-    }
-    if (value == "0" || value == "off") {
-      PortDebug::SetMapPickups(PortDebug::kMapPickups_Off);
-    } else if (value == "1" || value == "all") {
-      PortDebug::SetMapPickups(PortDebug::kMapPickups_All);
-    } else if (value == "rooms") {
-      PortDebug::SetMapPickups(PortDebug::kMapPickups_Rooms);
-    } else {
-      return Finish("usage: pickups <off|seen|rooms|all>   pickups on the map (0 and 1 are off and all)\n"
-                    "       pickups seen [clear|all]   the pickups seen so far in this save\n"
-                    "       pickups kinds [on|off]     major/minor shapes; no argument lists them\n"
-                    "       pickups station <on|off>   map stations show pickups in Seen");
-    }
-    Finish();
-  } else if (name == "mods") {
-    // mods [reload]: what is loaded; reload reads the folder again.
-    if (sCmd.args.size() > 1 && Lower(sCmd.args[1]) == "reload") {
-      PortSaveState::RequestModReload();
-      Out("reload queued");
-      return Finish();
-    }
-    const PortMods::Status& status = PortMods::CurrentStatus();
-    Out("%d mod(s), %d disc file(s), %zu native texture(s), %zu bound", int(status.mods.size()), status.overlays,
-        PortMods::NativeTextureCount(), PortMods::NativeTexturesBound());
-    for (const PortMods::ModInfo& mod : status.mods) {
-      Out("%s %s files=%d resources=%d textures=%d", mod.enabled ? "+" : "-", mod.name.c_str(), mod.files,
-          mod.resources, mod.textures);
-    }
-    Out("%s", PortSaveState::LastMessage().c_str());
-    Finish();
-  } else if (name == "remastered") {
-    // remastered [start <image.nsp|xci> [key file] | cancel]: the import of
-    // port_remastered_import.h, and how far it is.
-    const std::string verb = sCmd.args.size() > 1 ? Lower(sCmd.args[1]) : "";
-    if (verb == "start" && sCmd.args.size() > 2) {
-      const std::string keys = sCmd.args.size() > 3 ? sCmd.args[3] : PortRemastered::DefaultKeysPath();
-      if (!PortDebug::StartRemasteredImport(sCmd.args[2], keys)) {
-        return Finish("an import is already running, or there is no mods folder");
-      }
-    } else if (verb == "cancel") {
-      PortRemastered::CancelImport();
-    } else if (!verb.empty()) {
-      return Finish("usage: remastered [start <image.nsp|xci> [key file] | cancel]");
-    }
-    const PortRemastered::ImportState state = PortRemastered::ImportStatus();
-    Out("%s %d/%d failed %d: %s",
-        state.running ? "running" : !state.finished ? "idle" : state.ok ? "done" : state.cancelled ? "cancelled" : "failed",
-        state.done, state.total, state.failed, state.message.c_str());
-    Finish();
-  } else if (name == "probe") {
-    static const char* const names[] = {"off", "on", "mirror", "window"};
-    if (sCmd.args.size() > 1) {
-      const std::string arg = Lower(sCmd.args[1]);
-      int mode = -1;
-      for (int i = 0; i < 4; ++i) {
-        if (arg == names[i]) {
-          mode = i;
-        }
-      }
-      if (mode < 0) {
-        return Finish("usage: probe [off|on|mirror|window]");
-      }
-      CCubeMaterial::sPortPBRProbeMode = mode;
-    }
-    Out("probe %s weight %.0f", ProbeModeName(), CCubeMaterial::sPortPBRProbeWeight);
-    Finish();
-  } else if (name == "freecam") {
-    CmdFreeCam();
-  } else if (name == "colldump") {
-    CmdCollDump();
-  } else if (name == "collision") {
-    CmdCollision();
-  } else if (name == "shadow") {
-    if (sCmd.args.size() > 2 && Lower(sCmd.args[1]) == "casters" &&
-        (Lower(sCmd.args[2]) == "on" || Lower(sCmd.args[2]) == "off")) {
-      PortRoomGeo::SetOffscreenCasters(Lower(sCmd.args[2]) == "on");
-    }
-    f32 dir[3], color[3], center[3], distance = 0.f;
-    u32 casters = 0;
-    GXPortGetShadowInfo(dir, color, &distance, center, &casters);
-    if (distance <= 0.f) {
-      Out("shadow map off (no sun, MP_SHADOWS=0, or a scene without shadows)");
-    } else {
-      Out("light travels %.3f %.3f %.3f colour %.3f %.3f %.3f", dir[0], dir[1], dir[2], color[0], color[1], color[2]);
-      Out("4 cascades to %.1f, last centred %.2f %.2f %.2f, %u caster draw(s), %u of them out-of-view room models "
-          "(casters %s)",
-          distance, center[0], center[1], center[2], casters, PortRoomGeo::OffscreenCasterCount(),
-          PortRoomGeo::OffscreenCasters() ? "on" : "off");
-    }
-    OutLines(PortRoomEnv::SunInfo());
-    OutLines(PortRoomEnv::RoomLightInfo());
-    Finish();
-  } else if (name == "view") {
-    CmdView();
-  } else if (name == "stats") {
-    CmdStats();
-  } else if (name == "touchpad") {
-    CmdTouchPad();
-  } else if (name == "minimap") {
-    float rect[4] = {};
-    bool drawn = false;
-    if (PortDebug::MinimapRect(rect, &drawn)) {
-      Out("minimap valid %.4f %.4f %.4f %.4f %s", rect[0], rect[1], rect[2], rect[3],
-          drawn ? "drawn" : "button");
-    } else {
-      Out("minimap invalid");
-    }
-    Finish();
-  } else if (name == "maptap") {
-    PortDebug::RequestMapTap();
-    Out("maptap queued");
-    Finish();
-  } else if (name == "maprotate") {
-    float deg = 0.f;
-    if (sCmd.args.size() < 2 || !ParseFloat(sCmd.args[1], deg)) {
-      return Finish("usage: maprotate <degrees>");
-    }
-    if (!PortDebug::MapScreenOpen()) {
-      Out("maprotate ignored: the map screen is not open");
-    } else {
-      PortDebug::AddMapRotate(deg * (3.14159265f / 180.f));
-      Out("maprotate queued");
-    }
-    Finish();
-  } else if (name == "mapzoom") {
-    float ratio = 1.f;
-    if (sCmd.args.size() < 2 || !ParseFloat(sCmd.args[1], ratio) || !(ratio > 0.f)) {
-      return Finish("usage: mapzoom <ratio>");
-    }
-    if (!PortDebug::MapScreenOpen()) {
-      Out("mapzoom ignored: the map screen is not open");
-    } else {
-      PortDebug::AddMapZoom(ratio);
-      Out("mapzoom queued");
-    }
-    Finish();
-  } else if (name == "touchaim") {
-    float dx = 0.f;
-    float dy = 0.f;
-    float holdS = 0.f;
-    if (sCmd.args.size() < 3 || !ParseFloat(sCmd.args[1], dx) || !ParseFloat(sCmd.args[2], dy) ||
-        (sCmd.args.size() > 3 && !ParseFloat(sCmd.args[3], holdS))) {
-      return Finish("usage: touchaim <dx> <dy> [hold seconds]");
-    }
-    // Finger travel in dp (right/down positive); the hold keeps the finger "down",
-    // which holds the GameCube scheme's free-look pitch.
-    if (holdS > 0.f) PortDebug::HoldTouchAim(holdS);
-    PortDebug::AddTouchAim(dx, dy);
-    Out("touchaim queued");
-    Finish();
-  } else if (name == "mappan") {
-    float dx = 0.f;
-    float dy = 0.f;
-    float holdS = 0.25f;
-    if (sCmd.args.size() < 3 || !ParseFloat(sCmd.args[1], dx) || !ParseFloat(sCmd.args[2], dy) ||
-        (sCmd.args.size() > 3 && !ParseFloat(sCmd.args[3], holdS))) {
-      return Finish("usage: mappan <dx> <dy> [hold seconds]");
-    }
-    if (!PortDebug::MapScreenOpen()) {
-      Out("mappan ignored: the map screen is not open");
-    } else {
-      PortDebug::AddMapPan(dx, dy, 400.f, static_cast< int >(holdS * 1000.f));
-      Out("mappan queued");
-    }
-    Finish();
-  } else if (name == "hdfont") {
-    if (sCmd.args.size() > 1) {
-      const std::string arg = Lower(sCmd.args[1]);
-      if (arg != "on" && arg != "off") {
-        return Finish("usage: hdfont [on|off]");
-      }
-      PortHdFont::SetEnabled(arg == "on");
-    }
-    Out("hdfont %s", PortHdFont::Enabled() ? "on" : "off");
-    Finish();
-  } else if (name == "roomenv") {
-    float number = 0.f;
-    if (sCmd.args.size() > 1) {
-      const std::string arg = Lower(sCmd.args[1]);
-      if (arg == "info") {
-        // At a point, or where the view is.
-        float at[3];
-        float forward[3];
-        if (sCmd.args.size() > 4) {
-          if (!ParseFloat(sCmd.args[2], at[0]) || !ParseFloat(sCmd.args[3], at[1]) ||
-              !ParseFloat(sCmd.args[4], at[2])) {
-            return Finish("usage: roomenv info [<x> <y> <z>]");
-          }
-        } else if (!PortDebug::ViewRay(at, forward)) {
-          return Finish("not in a world");
-        }
-        const std::string info = PortRoomEnv::Info(at);
-        Out("at %.2f %.2f %.2f", at[0], at[1], at[2]);
-        OutLines(info.empty() ? std::string("no room environment loaded") : info);
-        return Finish();
-      } else if (arg == "exposure" && sCmd.args.size() > 2 &&
-                 (Lower(sCmd.args[2]) == "on" || Lower(sCmd.args[2]) == "off")) {
-        PortRoomEnv::SetRoomExposed(Lower(sCmd.args[2]) == "on");
-      } else if (arg == "auto" && sCmd.args.size() > 2 &&
-                 (Lower(sCmd.args[2]) == "on" || Lower(sCmd.args[2]) == "off")) {
-        PortRoomEnv::SetAutoExposure(Lower(sCmd.args[2]) == "on");
-      } else if (arg == "static" && sCmd.args.size() > 2 &&
-                 (Lower(sCmd.args[2]) == "on" || Lower(sCmd.args[2]) == "off")) {
-        PortRoomEnv::SetStaticExposure(Lower(sCmd.args[2]) == "on");
-      } else if (arg == "arealights" && sCmd.args.size() > 2 &&
-                 (Lower(sCmd.args[2]) == "on" || Lower(sCmd.args[2]) == "off")) {
-        PortRoomEnv::SetAreaLights(Lower(sCmd.args[2]) == "on");
-      } else if (arg == "balllight" && sCmd.args.size() > 2 &&
-                 (Lower(sCmd.args[2]) == "on" || Lower(sCmd.args[2]) == "off")) {
-        PortRemasteredBallLight::SetEnabled(Lower(sCmd.args[2]) == "on");
-      } else if (arg == "balllight" && sCmd.args.size() > 2 && ParseFloat(sCmd.args[2], number)) {
-        PortRemasteredBallLight::SetScale(number);
-      } else if (arg == "blend" && sCmd.args.size() > 2 &&
-                 (Lower(sCmd.args[2]) == "on" || Lower(sCmd.args[2]) == "off")) {
-        PortRoomEnv::SetProbeBlend(Lower(sCmd.args[2]) == "on");
-      } else if (arg == "bloom" && sCmd.args.size() > 2 &&
-                 (Lower(sCmd.args[2]) == "on" || Lower(sCmd.args[2]) == "off")) {
-        PortRoomEnv::SetBloomEnabled(Lower(sCmd.args[2]) == "on");
-      } else if (arg == "grades" && sCmd.args.size() > 2 &&
-                 (Lower(sCmd.args[2]) == "on" || Lower(sCmd.args[2]) == "off")) {
-        PortRoomEnv::SetViewGradesOn(Lower(sCmd.args[2]) == "on");
-      } else if (arg == "grades") {
-        OutLines(PortRoomEnv::GradeInfo());
-        return Finish();
-      } else if (arg == "fog") {
-        OutLines(PortRoomEnv::FogInfo());
-        return Finish();
-      } else if (arg == "volfog" && sCmd.args.size() > 2 &&
-                 (Lower(sCmd.args[2]) == "on" || Lower(sCmd.args[2]) == "off")) {
-        PortRoomEnv::SetVolFogEnabled(Lower(sCmd.args[2]) == "on");
-      } else if (arg == "fogregions" && sCmd.args.size() > 2 &&
-                 (Lower(sCmd.args[2]) == "on" || Lower(sCmd.args[2]) == "off")) {
-        PortRoomEnv::SetFogRegionsEnabled(Lower(sCmd.args[2]) == "on");
-      } else if (arg == "state" && sCmd.args.size() > 3) {
-        PortRoomEnv::SendScriptState(uint32_t(std::strtoul(sCmd.args[2].c_str(), nullptr, 16)) & 0x3ffffff,
-                                     std::atoi(sCmd.args[3].c_str()));
-        OutLines(PortRoomEnv::GradeInfo());
-        return Finish();
-      } else if (arg == "grade" && sCmd.args.size() > 2 &&
-                 (Lower(sCmd.args[2]) == "on" || Lower(sCmd.args[2]) == "off")) {
-        PortRoomEnv::SetColorGradeEnabled(Lower(sCmd.args[2]) == "on");
-      } else if (arg == "on" || arg == "off") {
-        PortRoomEnv::SetEnabled(arg == "on");
-      } else if (arg == "volume" && sCmd.args.size() > 2 &&
-                 (Lower(sCmd.args[2]) == "on" || Lower(sCmd.args[2]) == "off")) {
-        PortRoomEnv::SetVolumesEnabled(Lower(sCmd.args[2]) == "on");
-      } else if (arg == "ambient" && sCmd.args.size() > 2 && ParseFloat(sCmd.args[2], number)) {
-        PortRoomEnv::SetAmbientScale(number);
-      } else if (arg == "show" && sCmd.args.size() > 2 &&
-                 (Lower(sCmd.args[2]) == "off" || Lower(sCmd.args[2]) == "coords" ||
-                  Lower(sCmd.args[2]) == "light")) {
-        PortRoomEnv::SetVolumeView(Lower(sCmd.args[2]) == "off" ? 0 : Lower(sCmd.args[2]) == "coords" ? 1 : 2);
-      } else {
-        return Finish("usage: roomenv [on|off|info [<x> <y> <z>]|exposure on|off|auto on|off|static on|off|"
-                      "arealights on|off|balllight on|off|<scale>|blend on|off|bloom on|off|"
-                      "grade on|off|grades|fog|volfog on|off|fogregions on|off|"
-                      "volume on|off|ambient <scale>|"
-                      "show off|coords|light]");
-      }
-    }
-    int areas = 0;
-    int probes = 0;
-    int cubes = 0;
-    int grids = 0;
-    PortRoomEnv::Stats(areas, probes, cubes, grids);
-    float backlightTop = 0.f;
-    float backlightBack = 0.f;
-    PortRoomEnv::Backlight(backlightTop, backlightBack);
-    static const char* const kViews[] = {"off", "coords", "light"};
-    Out("roomenv %s: %d area(s), %d probe(s), %d cube(s) loaded, %d ambient grid(s), exposure by %s, "
-        "auto %s, static %s (glow x%g), area lights %s, probe blend %s, bloom %s, grade %s, volume %s, "
-        "ambient %g, show %s, backlight top %g back %g",
-        PortRoomEnv::Enabled() ? "on" : "off", areas, probes, cubes, grids,
-        PortRoomEnv::RoomExposed() ? "room" : "cube", PortRoomEnv::AutoExposure() ? "on" : "off",
-        PortRoomEnv::StaticExposure() ? "on" : "off", PortRoomEnv::GlowScale(),
-        PortRoomEnv::AreaLights() ? "on" : "off", PortRoomEnv::ProbeBlend() ? "on" : "off",
-        PortRoomEnv::BloomEnabled() ? "on" : "off",
-        PortRoomEnv::ColorGradeEnabled() ? "on" : "off", PortRoomEnv::VolumesEnabled() ? "on" : "off",
-        PortRoomEnv::AmbientScale(), kViews[std::clamp(PortRoomEnv::VolumeView(), 0, 2)],
-        backlightTop, backlightBack);
-    Finish();
-  } else if (name == "gputimes") {
-    const std::string arg = sCmd.args.size() > 1 ? Lower(sCmd.args[1]) : "show";
-    if (arg == "on" || arg == "off") {
-      GXPortSetGpuTimes(arg == "on" ? GX_TRUE : GX_FALSE);
-      Out("gputimes %s", arg.c_str());
-    } else if (arg == "show") {
-      if (!GXPortGpuTimesSupported()) {
-        Out("timestamps unsupported");
-      } else {
-        GXPortGpuTime times[32];
-        float total = 0.f;
-        float span = 0.f;
-        const u32 count = GXPortGetGpuTimes(times, 32, &total, &span);
-        if (count == 0) {
-          Out("no data yet (gputimes on, then wait 60+ frames)");
-        }
-        for (u32 i = 0; i < count; ++i) {
-          Out("%-24s %7.3f ms  x%.2f", times[i].name, times[i].msPerFrame, times[i].passesPerFrame);
-        }
-        if (count != 0) {
-          Out("total %.3f ms, span %.3f ms (per frame)", total, span);
-        }
-      }
-    } else {
-      Out("gputimes on|off|show");
-    }
-    Finish();
-  } else if (name == "gpuselftest") {
-    char summary[160];
-    aurora_gpu_selftest_summary(summary, sizeof(summary));
-    PortDebug::RequestGpuSelfTest();
-    Out("gpu self-test queued for the next frame; results in the log as `gpu selftest: <case>: PASS|FAIL` (previous run: %s)",
-        summary[0] != '\0' ? summary : "none");
-    Finish();
-  } else if (name == "roomgeo") {
-    if (sCmd.args.size() > 1) {
-      const std::string arg = Lower(sCmd.args[1]);
-      if (arg == "on" || arg == "off" || arg == "overlay") {
-        PortRoomGeo::SetMode(arg == "on" ? PortRoomGeo::Mode::Replace
-                             : arg == "off" ? PortRoomGeo::Mode::Off
-                                            : PortRoomGeo::Mode::Overlay);
-      } else if (arg == "lights" && sCmd.args.size() > 2 &&
-                 (Lower(sCmd.args[2]) == "on" || Lower(sCmd.args[2]) == "off")) {
-        PortRoomGeo::SetAreaLights(Lower(sCmd.args[2]) == "on");
-      } else if (arg == "minpx" && sCmd.args.size() > 2) {
-        PortRoomGeo::SetMinPixels(std::strtof(sCmd.args[2].c_str(), nullptr));
-      } else if (arg == "lod" && sCmd.args.size() > 2) {
-        PortRoomGeo::SetLodDistance(std::strtof(sCmd.args[2].c_str(), nullptr));
-      } else if (arg == "sort" && sCmd.args.size() > 2 &&
-                 (Lower(sCmd.args[2]) == "on" || Lower(sCmd.args[2]) == "off")) {
-        PortRoomGeo::SetFrontToBack(Lower(sCmd.args[2]) == "on");
-      } else if (arg == "casters" && sCmd.args.size() > 2 &&
-                 (Lower(sCmd.args[2]) == "on" || Lower(sCmd.args[2]) == "off")) {
-        PortRoomGeo::SetOffscreenCasters(Lower(sCmd.args[2]) == "on");
-      } else if (arg == "prepass" && sCmd.args.size() > 2 &&
-                 (Lower(sCmd.args[2]) == "on" || Lower(sCmd.args[2]) == "off")) {
-        PortRoomGeo::SetDepthPrepass(Lower(sCmd.args[2]) == "on");
-      } else if (arg == "costtest" && sCmd.args.size() > 2) {
-        GXSetPBRCostTest(u32(std::atoi(sCmd.args[2].c_str())));
-      } else if (arg == "script") {
-        const std::string info = PortRoomGeo::ScriptInfo();
-        OutLines(info.empty() ? std::string("no area has a script") : info);
-        return Finish();
-      } else if (arg == "group" && sCmd.args.size() > 3 &&
-                 (Lower(sCmd.args[3]) == "show" || Lower(sCmd.args[3]) == "hide")) {
-        Out("%d instance(s)", PortRoomGeo::SetGroupShown(uint32_t(std::atoi(sCmd.args[2].c_str())),
-                                                         Lower(sCmd.args[3]) == "show"));
-        return Finish();
-      } else if (arg == "at" && sCmd.args.size() > 4) {
-        const CVector3f point(float(std::atof(sCmd.args[2].c_str())), float(std::atof(sCmd.args[3].c_str())),
-                              float(std::atof(sCmd.args[4].c_str())));
-        const float margin = sCmd.args.size() > 5 ? float(std::atof(sCmd.args[5].c_str())) : 0.f;
-        const std::string list = PortRoomGeo::At(point, margin);
-        OutLines(list.empty() ? std::string("no instance there") : list);
-        return Finish();
-      } else if (arg == "pick") {
-        float origin[3];
-        float forward[3];
-        if (!PortDebug::ViewRay(origin, forward)) {
-          return Finish("not in a world");
-        }
-        std::string list;
-        const uint32_t first = PortRoomGeo::Pick(CVector3f(origin[0], origin[1], origin[2]),
-                                                 CVector3f(forward[0], forward[1], forward[2]), list);
-        OutLines(list.empty() ? std::string("no instance ahead") : list);
-        if (first != 0) {
-          Out("materials of %08X:", first);
-          OutLines(PortRoomGeo::Materials(first));
-        }
-        return Finish();
-      } else if (arg == "mats" && sCmd.args.size() > 2) {
-        uint32_t id = 0;
-        if (!ParseModel(sCmd.args[2], id)) {
-          return Finish("roomgeo: not a model id");
-        }
-        const std::string list = PortRoomGeo::Materials(id);
-        OutLines(list.empty() ? std::string("no loaded model has that id") : list);
-        return Finish();
-      } else if (arg == "mat" && sCmd.args.size() == 3 && Lower(sCmd.args[2]) == "clear") {
-        Out("%d value(s) cleared", PortRoomGeo::ClearMaterialValues());
-        return Finish();
-      } else if (arg == "mat" && sCmd.args.size() > 5) {
-        uint32_t id = 0;
-        unsigned material = 0;
-        int field = 0;
-        int count = 0;
-        if (!ParseModel(sCmd.args[2], id) || !ParseUnsigned(sCmd.args[3], material) ||
-            !ParseMaterialField(Lower(sCmd.args[4]), field, count)) {
-          return Finish("usage: roomgeo mat <cmdl> <material> <field> <value...> | mat clear; fields: emissive "
-                        "backlight height mode kind strength p0 p1 p2 p3, or 0 to 18");
-        }
-        // One value for all of a colour, or one each.
-        float values[3] = {};
-        const int given = int(sCmd.args.size()) - 5;
-        if (given != 1 && given != count) {
-          return Finish("roomgeo: that field takes one value, or one per component");
-        }
-        for (int i = 0; i < given; ++i) {
-          if (!ParseFloat(sCmd.args[5 + i], values[i])) {
-            return Finish("roomgeo: not a number");
-          }
-        }
-        for (int i = 0; i < count; ++i) {
-          if (!PortRoomGeo::SetMaterialValue(id, int(material), field + i, values[given == 1 ? 0 : i])) {
-            return Finish("roomgeo: no loaded model has that material");
-          }
-        }
-        OutLines(PortRoomGeo::Materials(id));
-        Out("(drawn until `roomgeo mat clear` or the next start)");
-        return Finish();
-      } else if ((arg == "hide" || arg == "show") && (sCmd.args.size() > 2 || arg == "show")) {
-        uint32_t id = 0;
-        // 0 means every model, so a mistyped id must not parse as one.
-        if (sCmd.args.size() > 2 && !ParseModel(sCmd.args[2], id)) {
-          return Finish("roomgeo: not a model id");
-        }
-        Out("%d model(s)", PortRoomGeo::SetHidden(id, arg == "hide"));
-      } else {
-        return Finish("usage: roomgeo [on|off|overlay | lights on|off | minpx <n> | lod <scale> | "
-                      "at <x> <y> <z> [margin] | pick | "
-                      "hide <cmdl> | show [cmdl] | mats <cmdl> | mat <cmdl> <material> <field> <value...> | "
-                      "mat clear]");
-      }
-    }
-    int areas = 0;
-    int instances = 0;
-    int models = 0;
-    int loaded = 0;
-    int drawn = 0;
-    PortRoomGeo::Stats(areas, instances, models, loaded, drawn);
-    const PortRoomGeo::Mode mode = PortRoomGeo::GetMode();
-    Out("roomgeo %s: %d area(s), %d instance(s), %d of %d model(s) loaded, %d drawn",
-        mode == PortRoomGeo::Mode::Off ? "off" : mode == PortRoomGeo::Mode::Replace ? "on" : "overlay", areas,
-        instances, loaded, models, drawn);
-    int levels = 0;
-    int levelsLoaded = 0;
-    int coarse = 0;
-    PortRoomGeo::LodStats(levels, levelsLoaded, coarse);
-    Out("detail: distance x%.2f, %d of %d coarser level(s) loaded, %d drawn coarser", PortRoomGeo::LodDistance(),
-        levelsLoaded, levels, coarse);
-    if (const AuroraStats* stats = aurora_get_stats()) {
-      Out("frame: %u draws, %.1f MiB vertices, %.1f MiB indices, %.1f MiB arrays, %.1f MiB uniforms, %.0f fps",
-          stats->drawCallCount, stats->lastVertSize / 1048576.f, stats->lastIndexSize / 1048576.f,
-          stats->lastStorageSize / 1048576.f, stats->lastUniformSize / 1048576.f, aurora_get_fps());
-    }
-    Finish();
-  } else if (name == "roomliquid") {
-    if (sCmd.args.size() > 1) {
-      const std::string arg = Lower(sCmd.args[1]);
-      if (arg != "on" && arg != "off") {
-        return Finish("usage: roomliquid [on|off]");
-      }
-      PortRoomLiquid::SetEnabled(arg == "on");
-    }
-    int areas = 0;
-    int surfaces = 0;
-    int drawn = 0;
-    PortRoomLiquid::Stats(areas, surfaces, drawn);
-    Out("roomliquid %s: %d area(s), %d surface(s), %d drawn", PortRoomLiquid::Enabled() ? "on" : "off", areas,
-        surfaces, drawn);
-    // The water the camera is in: retail's underwater fog colour against Remastered's filter.
-    const CStateManager* const mgr = PortDebug::StateManager();
-    const CCameraManager* const cameras = mgr != nullptr ? mgr->GetCameraManager() : nullptr;
-    if (cameras != nullptr && cameras->GetFluidCounter() != 0) {
-      if (const CScriptWater* water = TCastToConstPtr< CScriptWater >(mgr->GetObjectById(cameras->GetFluidId()))) {
-        const CColor& retail = water->GetUnderwaterFogColor();
-        float filter[4];
-        const bool remastered =
-            water->GetCurrentAreaId() != kInvalidAreaId &&
-            PortRoomLiquid::CameraFilter(mgr->GetWorld()->GetAreaAlways(water->GetCurrentAreaId()),
-                                         water->GetUniqueId().value, water->GetTranslation(), filter);
-        Out("camera in water u%u: retail fog/filter %.3f %.3f %.3f %.3f, Remastered filter %s", water->GetUniqueId().value,
-            retail.GetRed(), retail.GetGreen(), retail.GetBlue(), retail.GetAlpha(),
-            remastered ? "found" : "none");
-        if (remastered) {
-          Out("  Remastered filter %.3f %.3f %.3f %.3f", filter[0], filter[1], filter[2], filter[3]);
-        }
-      }
-    }
-    Finish();
-  } else if (name == "viewmodel") {
-    const std::string arg = sCmd.args.size() > 1 ? Lower(sCmd.args[1]) : "status";
-    if (arg == "off") {
-      PortViewModel::Hide();
-    } else if (arg == "light") {
-      PortViewModel::SetLight(sCmd.args.size() > 2 && sCmd.args[2] == "1");
-    } else if (arg != "status") {
-      const auto num = [](size_t i) {
-        return sCmd.args.size() > i ? static_cast< float >(std::atof(sCmd.args[i].c_str())) : 0.f;
-      };
-      std::string err;
-      if (!PortViewModel::Show(static_cast< uint32_t >(std::strtoul(arg.c_str(), nullptr, 16)),
-                               num(2), num(3), num(4), err)) {
-        return Finish(err.c_str());
-      }
-    }
-    Out("%s", PortViewModel::Status().c_str());
-    Finish();
-  } else if (name == "state") {
-    const std::string action = sCmd.args.size() > 1 ? Lower(sCmd.args[1]) : "list";
-    const int slot = sCmd.args.size() > 2 ? std::atoi(sCmd.args[2].c_str())
-                                          : PortSaveState::SelectedSlot();
-    if (action == "save" || action == "load" || action == "undo") {
-      const bool queued = action == "save" ? PortSaveState::RequestSave(slot)
-                          : action == "load"
-                              ? PortSaveState::RequestLoad(slot)
-                              : PortSaveState::RequestLoad(PortSaveState::kUndoSlot);
-      if (!queued) {
-        return Finish(PortSaveState::LastMessage().c_str());
-      }
-      Out("queued; see 'state last'");
-      return Finish();
-    } else if (action == "slot") {
-      PortSaveState::SetSelectedSlot(slot);
-      Out("selected slot %d", PortSaveState::SelectedSlot());
-      return Finish();
-    } else if (action == "last") {
-      Out("%s", PortSaveState::LastMessage().c_str());
-      return Finish();
-    } else if (action == "list") {
-      for (int i = PortSaveState::kUndoSlot; i <= PortSaveState::kSlotCount; ++i) {
-        const PortSaveState::Info info = PortSaveState::SlotInfo(i);
-        if (info.exists) {
-          Out("%s%d %s - %s igt=%.1f%s", i == PortSaveState::SelectedSlot() ? "*" : " ", i,
-              info.world.c_str(), info.room.c_str(), info.playTime, info.morphed ? " ball" : "");
-        }
-      }
-      Out("folder %s", PortSaveState::Folder().c_str());
-      return Finish();
-    }
-    return Finish("usage: state list|last|save [n]|load [n]|undo|slot <n>");
-  } else if (name == "resume") {
-    const std::string action = sCmd.args.size() > 1 ? sCmd.args[1] : "status";
-    if (action == "status") {
-      Out("%s", PortSaveState::ResumeStatus().c_str());
-      return Finish();
-    } else if (action == "save") {
-      // Whatever the quick_resume setting says; away from a safe point it
-      // writes the last snapshot.
-      const bool saved = PortSaveState::ResumeSave(true);
-      Out("%s", PortSaveState::LastMessage().c_str());
-      return Finish(saved ? nullptr : "not written");
-    } else if (action == "load") {
-      if (!PortSaveState::RequestResumeLoad()) {
-        return Finish(PortSaveState::LastMessage().c_str());
-      }
-      Out("queued; see 'state last'");
-      return Finish();
-    } else if (action == "clear") {
-      PortSaveState::ResumeClear();
-      return Finish();
-    }
-    return Finish("usage: resume [status|save|load|clear]");
-  } else if (name == "timer") {
-    const std::string value = sCmd.args.size() > 1 ? sCmd.args[1] : "";
-    if (value != "0" && value != "1") {
-      return Finish("usage: timer <0|1>");
-    }
-    PortDebug::SetSpeedrunTimer(value == "1");
-    Finish();
-  } else if (name == "igt") {
-    const double value = sCmd.args.size() > 1 ? std::atof(sCmd.args[1].c_str()) : -1.0;
-    if (!(value >= 0.0) || gpGameState == nullptr) {
-      return Finish("usage: igt <seconds>");
-    }
-    gpGameState->SetTotalPlayTime(value);
-    Finish();
-  } else if (name == "livesplit") {
-    const std::string action = sCmd.args.size() > 1 ? Lower(sCmd.args[1]) : "status";
-    if (action == "0" || action == "1") {
-      PortDebug::SetLiveSplit(action == "1");
-    } else if (action == "addr" && sCmd.args.size() == 3) {
-      PortDebug::SetLiveSplitAddress(sCmd.args[2]);
-    } else if (action == "send" && sCmd.args.size() > 2) {
-      std::string line = sCmd.args[2];
-      for (size_t i = 3; i < sCmd.args.size(); ++i) {
-        line += " " + sCmd.args[i];
-      }
-      PortLiveSplit::SendRaw(line);
-    } else if (action != "status") {
-      return Finish("usage: livesplit <0|1> | addr <host:port> | send <command> | status");
-    }
-    static const char* const kStatusNames[] = {"off", "connecting", "connected", "failed"};
-    Out("livesplit %s %s %s", PortDebug::LiveSplit() ? "on" : "off",
-        PortDebug::LiveSplitAddress().c_str(), kStatusNames[PortLiveSplit::Status()]);
-    const std::string error = PortLiveSplit::LastError();
-    if (!error.empty()) {
-      Out("last error: %s", error.c_str());
-    }
-    Finish();
-  } else if (name == "discord") {
-    const std::string action = sCmd.args.size() > 1 ? Lower(sCmd.args[1]) : "status";
-    if (action == "0" || action == "1") {
-      PortDebug::SetDiscordPresence(action == "1");
-    } else if (action != "status") {
-      return Finish("usage: discord <0|1> | status");
-    }
-    static const char* const kStatusNames[] = {"off", "connecting", "connected", "failed"};
-    Out("discord %s %s", PortDebug::DiscordPresence() ? "on" : "off", kStatusNames[PortDiscord::Status()]);
-    Out("showing: %s", PortDiscord::CurrentText().c_str());
-    const std::string error = PortDiscord::LastError();
-    if (!error.empty()) {
-      Out("last error: %s", error.c_str());
-    }
-    Finish();
-  } else if (name == "gci") {
-    const std::string action = sCmd.args.size() > 1 ? Lower(sCmd.args[1]) : "list";
-    // The rest of the line is one path, spaces and all.
-    std::string path;
-    for (size_t i = 2; i < sCmd.args.size(); ++i) {
-      path += (i > 2 ? " " : "") + sCmd.args[i];
-    }
+    PortDebug::SetCrosshairStyle(style == "remastered" ? PortDebug::kCrosshairStyle_Remastered
+                                                       : PortDebug::kCrosshairStyle_Classic);
+    return Finish();
+  }
+  const int value = sCmd.args.size() > 1 ? std::atoi(sCmd.args[1].c_str()) : 0;
+  if (value < PortDebug::kCrosshairSizeMin || value > PortDebug::kCrosshairSizeMax) {
+    return Finish("usage: crosshair <25..100> | crosshair style classic|remastered");
+  }
+  PortDebug::SetCrosshairSize(value);
+  Finish();
+}
+
+void CmdHelmetVisorFx() {
+  const std::string& name = sCmd.args[0];
+  const std::string value = sCmd.args.size() > 1 ? sCmd.args[1] : "";
+  if (value != "0" && value != "1") {
+    return Finish("usage: helmet <0|1> | visorfx <0|1>");
+  }
+  if (name == "helmet") {
+    PortDebug::SetHideHelmet(value == "0");
+  } else {
+    PortDebug::SetHideVisorEffects(value == "0");
+  }
+  Finish();
+}
+
+void CmdReveal() {
+  const std::string value = sCmd.args.size() > 1 ? sCmd.args[1] : "";
+  if (value != "0" && value != "1") {
+    return Finish("usage: reveal <0|1>   reveal every world's map");
+  }
+  PortDebug::SetRevealMap(value == "1");
+  Finish();
+}
+
+void CmdPickups() {
+  const std::string value = sCmd.args.size() > 1 ? Lower(sCmd.args[1]) : "";
+  if (value == "seen") {
     const std::string sub = sCmd.args.size() > 2 ? Lower(sCmd.args[2]) : "";
-    const auto isFormat = [](const std::string& word) {
-      return word == "usa" || word == "pal" || word == "trilogy";
-    };
-    std::string text;
-    if (action == "list") {
-      text = PortDebug::CardList();
-    } else if (action == "import" && !path.empty()) {
-      text = PortDebug::CardImport(path);
-    } else if (action == "export" && isFormat(sub) && sCmd.args.size() > 3) {
-      text = PortDebug::CardExport(path.substr(sub.size() + 1), sub);
-    } else if (action == "export" && !path.empty()) {
-      text = PortDebug::CardExport(path);
-    } else if (action == "dolphin" && sub == "import" && sCmd.args.size() == 3) {
-      text = PortDebug::CardImportDolphin();
-    } else if (action == "dolphin" && sub == "export" && sCmd.args.size() <= 4 &&
-               (sCmd.args.size() == 3 || isFormat(Lower(sCmd.args[3])))) {
-      text = PortDebug::CardExportDolphin(sCmd.args.size() == 4 ? Lower(sCmd.args[3]) : "");
-    } else if (action == "share" && (sub == "on" || sub == "off") && sCmd.args.size() == 3) {
-      PortGci::SetShareEmulatorCard(sub == "on");
-      PortDebug::SaveSettingsNow();
-      std::string why;
-      if (sub == "on" && PortGci::SharedCardBase(&why).empty()) {
-        why = " (" + why + ")";
-      } else {
-        why.clear();
-      }
-      text = "sharing the emulator card: " + sub + why + "; it takes effect at the title screen";
-    } else if (action == "emulator" && !path.empty()) {
-      PortGci::SetEmulatorFolder(Lower(path) == "auto" ? "" : path);
-      PortDebug::SaveSettingsNow();
-      text = "emulator folder: " + (PortGci::EmulatorFolder().empty() ? "auto" : PortGci::EmulatorFolder());
+    if (sub == "clear") {
+      PortMapPickups::ClearSeen();
+    } else if (sub == "all") {
+      PortMapPickups::MarkAllSeen();
+    } else if (!sub.empty()) {
+      return Finish("usage: pickups seen [clear|all]");
     } else {
-      return Finish("usage: gci list | share on|off | emulator <folder|auto> | import <path> | export [usa|pal] <dir or .raw> | export trilogy "
-                    "<save.bin> | dolphin import | dolphin export [usa|pal|trilogy]");
+      PortDebug::SetMapPickups(PortDebug::kMapPickups_Seen);
     }
-    size_t start = 0;
-    while (start <= text.size()) {
-      const size_t end = std::min(text.find('\n', start), text.size());
-      Out("%s", text.substr(start, end - start).c_str());
-      start = end + 1;
+    size_t dots = 0;
+    const PortMapPickups::Dot* list = PortMapPickups::Dots(dots);
+    const uint32_t world = gpGameState != nullptr ? gpGameState->CurrentWorldAssetId() : 0;
+    std::string indices;
+    for (size_t i = 0; i < dots; ++i) {
+      if (PortMapPickups::Seen(i) && list[i].world == world) {
+        indices += (indices.empty() ? "" : " ") + std::to_string(i);
+      }
     }
-    Finish();
-  } else if (name == "ap") {
-    const std::string action = sCmd.args.size() > 1 ? Lower(sCmd.args[1]) : "";
-    std::string error;
-    if (action == "connect" && (sCmd.args.size() == 4 || sCmd.args.size() == 5)) {
-      PortAp::ConnectionDetails details;
-      details.server = sCmd.args[2];
-      details.slot = sCmd.args[3];
-      details.password = sCmd.args.size() == 5 ? sCmd.args[4] : "";
-      if (!PortAp::Connect(details, error))
-        return Finish(error.c_str());
-    } else if (action == "disconnect") {
-      if (!PortAp::Disconnect(error))
-        return Finish(error.c_str());
-    } else if (action == "recent" && sCmd.args.size() == 2) {
-      const std::vector<PortAp::ConnectionDetails> games = PortAp::RecentGames();
-      for (size_t i = 0; i < games.size(); ++i)
-        Out("%zu: %s @ %s, seed %s, played %lld", i, games[i].slot.c_str(), games[i].server.c_str(),
-            games[i].seed.c_str(), static_cast<long long>(games[i].lastPlayed));
-    } else if (action == "resume" && sCmd.args.size() == 3) {
-      unsigned index = 0;
-      const std::vector<PortAp::ConnectionDetails> games = PortAp::RecentGames();
-      if (!ParseUnsigned(sCmd.args[2], index) || index >= games.size())
-        return Finish("no such recent game (see ap recent)");
-      if (!PortAp::Connect(games[index], error))
-        return Finish(error.c_str());
-    } else if (action == "say" && sCmd.args.size() >= 3) {
-      std::string text = sCmd.args[2];
-      for (size_t i = 3; i < sCmd.args.size(); ++i)
-        text += " " + sCmd.args[i];
-      if (!PortAp::SendChat(text, error))
-        return Finish(error.c_str());
-    } else if (action == "chat" && sCmd.args.size() == 2) {
-      for (const PortAp::ChatLine& line : PortAp::ChatLog())
-        Out("[%s] %s", line.type.c_str(), line.text.c_str());
-    } else if (!action.empty()) {
-      return Finish("usage: ap [connect <server> <slot> [password] | disconnect | recent | resume <n> | "
-                    "say <text> | chat]");
+    Out("seen %zu of %zu; this world: %s", PortMapPickups::SeenCount(), dots,
+        indices.empty() ? "none" : indices.c_str());
+    return Finish();
+  }
+  if (value == "collect") {
+    // pickups collect <dot>: posts the dot's memory relay to its world's
+    // mailbox, as picking it up does, so the map shows it collected.
+    size_t dots = 0;
+    const PortMapPickups::Dot* list = PortMapPickups::Dots(dots);
+    const long index = sCmd.args.size() > 2 ? std::strtol(sCmd.args[2].c_str(), nullptr, 10) : -1;
+    if (gpGameState == nullptr || index < 0 || static_cast< size_t >(index) >= dots) {
+      return Finish("usage: pickups collect <dot index>   (needs a game; see pickups kinds)");
     }
-    Out("%s (%s)", PortAp::StatusText(), PortAp::ConfigFilePath().c_str());
-    Finish();
-  } else if (name == "rando") {
-    const std::string action = sCmd.args.size() > 1 ? Lower(sCmd.args[1]) : "";
-    std::string error;
-    if (action == "gen" && sCmd.args.size() <= 3) {
-      PortRandoGen::Seed seed;
-      if (!PortRandoGen::Generate(PortDebug::RandoSettings(), sCmd.args.size() == 3 ? sCmd.args[2] : "", seed,
-                                  error) ||
-          !PortRandoGen::Save(seed, error))
-        return Finish(error.c_str());
-      if (PortDebug::StateManager() != nullptr) {
-        Out("saved seed %s; quit to the title screen to play it", seed.name.c_str());
+    gpGameState->StateForWorld(list[index].world)
+        .Mailbox()
+        .GetPtr()
+        ->AddMsg(TEditorId(list[index].relay));
+    Out("dot %ld collected", index);
+    return Finish();
+  }
+  if (value == "kinds" || value == "station") {
+    const std::string sub = sCmd.args.size() > 2 ? Lower(sCmd.args[2]) : "";
+    if (sub == "on" || sub == "off") {
+      if (value == "kinds") {
+        PortDebug::SetMapPickupKinds(sub == "on");
       } else {
-        if (!PortAp::PlaySolo(seed.name, error))
-          return Finish(error.c_str());
-        Out("playing seed %s", seed.name.c_str());
+        PortDebug::SetMapStationPickups(sub == "on");
       }
-    } else if (action == "play" && sCmd.args.size() == 3) {
-      if (!PortAp::PlaySolo(sCmd.args[2], error))
-        return Finish(error.c_str());
-      Out("playing seed %s", sCmd.args[2].c_str());
-    } else if (action == "delete" && sCmd.args.size() == 3) {
-      if (!PortAp::DeleteSolo(sCmd.args[2], error))
-        return Finish(error.c_str());
-      Out("deleted seed %s", sCmd.args[2].c_str());
-    } else if (action == "list" && sCmd.args.size() == 2) {
-      std::error_code ec;
-      for (const auto& entry : std::filesystem::directory_iterator(PortRandoGen::SeedDirectory(), ec)) {
-        const std::string file = entry.path().filename().string();
-        if (file.size() > 5 && file.compare(file.size() - 5, 5, ".json") == 0 &&
-            !(file.size() > 11 && file.compare(file.size() - 11, 11, ".state.json") == 0))
-          Out("%s", file.substr(0, file.size() - 5).c_str());
-      }
-    } else {
-      return Finish("usage: rando [gen [seedtext] | play <name> | delete <name> | list]");
-    }
-    Finish();
-  } else if (name == "wait") {
-    unsigned frames = 0;
-    if (sCmd.phase == 0) {
-      if (sCmd.args.size() < 2 || !ParseUnsigned(sCmd.args[1], frames)) {
-        return Finish("usage: wait <frames>");
-      }
-      sCmd.phase = 1;
-      sCmd.untilFrame = sFrame + frames;
-    }
-    if (sFrame >= sCmd.untilFrame) {
-      Finish();
-    }
-  } else if (name == "press" || name == "stick" || name == "cstick") {
-    if (sCmd.phase == 0) {
-      unsigned frames = 6;
-      PADStatus& pad = sCmd.pad;
-      pad = PADStatus{};
-      pad.err = PAD_ERR_NONE;
-      size_t framesArg;
-      if (name == "press") {
-        if (sCmd.args.size() < 2 || !ParseButtons(sCmd.args[1], pad)) {
-          return Finish("usage: press <a+b+...> [frames]");
-        }
-        framesArg = 2;
-      } else {
-        float x, y;
-        if (sCmd.args.size() < 3 || !ParseFloat(sCmd.args[1], x) || !ParseFloat(sCmd.args[2], y)) {
-          return Finish("usage: stick <x> <y> [frames]");
-        }
-        const s8 sx = static_cast< s8 >(std::clamp(x, -127.f, 127.f));
-        const s8 sy = static_cast< s8 >(std::clamp(y, -127.f, 127.f));
-        (name == "stick" ? pad.stickX : pad.substickX) = sx;
-        (name == "stick" ? pad.stickY : pad.substickY) = sy;
-        framesArg = 3;
-      }
-      if (sCmd.args.size() > framesArg && !ParseUnsigned(sCmd.args[framesArg], frames)) {
-        return Finish("bad frame count");
-      }
-      if (frames == 0) {
-        // Stays held until the next press/stick (used with hold/step).
-        PADSetVirtualStatus(0, &sCmd.pad);
-        return Finish();
-      }
-      sCmd.phase = 1;
-      sCmd.untilFrame = sFrame + std::max(frames, 1u);
-    }
-    if (sFrame < sCmd.untilFrame) {
-      PADSetVirtualStatus(0, &sCmd.pad);
-    } else {
-      // The virtual status is sticky; release so the next press is an edge.
-      PADStatus released{};
-      released.err = PAD_ERR_NONE;
-      PADSetVirtualStatus(0, &released);
-      Finish();
-    }
-  } else if (name == "gyro") {
-    if (sCmd.phase == 0) {
-      float pitch = 0.f;
-      float yaw = 0.f;
-      unsigned frames = 6;
-      if (sCmd.args.size() < 2 || !ParseFloat(sCmd.args[1], pitch) ||
-          (sCmd.args.size() > 2 && !ParseFloat(sCmd.args[2], yaw)) ||
-          (sCmd.args.size() > 3 && !ParseUnsigned(sCmd.args[3], frames))) {
-        return Finish("usage: gyro <pitch> [yaw] [frames]");
-      }
-      PortDebug::SetGyroOverride(true, pitch, yaw);
-      sCmd.phase = 1;
-      sCmd.untilFrame = sFrame + std::max(frames, 1u);
-    }
-    if (sFrame >= sCmd.untilFrame) {
-      PortDebug::SetGyroOverride(false, 0.f, 0.f);
-      Finish();
-    }
-  } else if (name == "present") {
-    const std::string arg = sCmd.args.size() > 1 ? Lower(sCmd.args[1]) : "";
-    float t = 0.f;
-    if (arg == "off") {
-      PortDebug::SetPresentOverride(-1.f);
-    } else if (arg == "cycle") {
-      PortDebug::SetPresentOverride(PortDebug::kPresentCycle);
-    } else if (arg == "tick") {
-      PortDebug::SetPresentOverride(PortDebug::kPresentTick);
-    } else if (!arg.empty() && ParseFloat(arg, t) && t >= 0.f && t <= 1.f) {
-      PortDebug::SetPresentOverride(t);
-    } else if (arg.empty()) {
-      const float value = PortDebug::PresentOverrideValue();
-      if (value < 0.f) {
-        Out("present off");
-      } else if (value == PortDebug::kPresentTick) {
-        Out("present tick");
-      } else if (value > 1.f) {
-        Out("present cycle");
-      } else {
-        Out("present %.3f", value);
-      }
-    } else {
-      return Finish("usage: present <0..1|cycle|tick|off>");
-    }
-    Finish();
-  } else if (name == "hold") {
-    const std::string arg = sCmd.args.size() > 1 ? sCmd.args[1] : "";
-    if (arg != "0" && arg != "1") {
-      return Finish("usage: hold <0|1>");
-    }
-    PortDebug::SetTickHold(arg == "1");
-    Finish();
-  } else if (name == "step") {
-    if (sCmd.phase == 0) {
-      unsigned count = 1;
-      if (!PortDebug::TickHold()) {
-        return Finish("not held (hold 1 first)");
-      }
-      if (sCmd.args.size() > 1 && !ParseUnsigned(sCmd.args[1], count)) {
-        return Finish("usage: step [ticks]");
-      }
-      PortDebug::StepTicks(count);
-      sCmd.phase = 1;
-      sCmd.untilFrame = sFrame + count + 120;
-      return;
-    }
-    if (PortDebug::PendingHeldTicks() == 0) {
-      Finish();
-    } else if (sFrame >= sCmd.untilFrame) {
-      Finish("ticks still pending");
-    }
-  } else if (name == "interp") {
-    const std::string which = sCmd.args.size() > 1 ? Lower(sCmd.args[1]) : "";
-    const std::string arg = sCmd.args.size() > 2 ? sCmd.args[2] : "";
-    if (which.empty()) {
-      Out("actor %d pose %d particle %d frame_limit %d", PortDebug::ActorInterpolation(),
-          PortDebug::PoseInterpolation(), PortDebug::ParticleInterpolation(),
-          PortDebug::FrameLimitEnabled());
       return Finish();
     }
-    if ((arg != "0" && arg != "1") ||
-        (which != "actor" && which != "pose" && which != "particle" && which != "all")) {
-      return Finish("usage: interp [actor|pose|particle|all <0|1>]");
+    if (!sub.empty() || value == "station") {
+      return Finish("usage: pickups kinds|station <on|off>");
     }
-    const bool on = arg == "1";
-    if (which == "actor" || which == "all") {
-      PortDebug::SetActorInterpolation(on);
-    }
-    if (which == "pose" || which == "all") {
-      PortDebug::SetPoseInterpolation(on);
-    }
-    if (which == "particle" || which == "all") {
-      PortDebug::SetParticleInterpolation(on);
-    }
-    Finish();
-  } else if (name == "drawlog") {
-    CmdDrawLog();
-  } else if (name == "pick") {
-    CmdPick();
-  } else if (name == "shader") {
-    CmdShader();
-  } else if (name == "shot") {
-    namespace fs = std::filesystem;
-    std::error_code ec;
-    const fs::path dir = fs::current_path(ec) / "screenshots";
-    const auto count = [&dir] {
-      std::error_code e;
-      size_t n = 0;
-      for (fs::directory_iterator it(dir, e), end; !e && it != end; it.increment(e)) {
-        ++n;
+    // This world's dots and what they hold: M major, m minor, ? unknown.
+    size_t dots = 0;
+    const PortMapPickups::Dot* list = PortMapPickups::Dots(dots);
+    const unsigned char* kinds = PortMapPickups::Kinds();
+    const uint32_t world = gpGameState != nullptr ? gpGameState->CurrentWorldAssetId() : 0;
+    std::string text;
+    for (size_t i = 0; i < dots; ++i) {
+      if (list[i].world == world) {
+        text += (text.empty() ? "" : " ") + std::to_string(i) +
+                (kinds[i] == PortMapPickups::kK_Major   ? "M"
+                 : kinds[i] == PortMapPickups::kK_Minor ? "m"
+                                                        : "?");
       }
-      return n;
-    };
-    if (sCmd.phase == 0) {
-      sCmd.shotCount = count();
-      aurora::request_screenshot();
-      sCmd.phase = 1;
-      sCmd.untilFrame = sFrame + 120;
-      return;
     }
-    if (count() > sCmd.shotCount) {
-      fs::path newest;
-      fs::file_time_type newestTime{};
-      for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
-        const fs::file_time_type t = it->last_write_time(ec);
-        if (newest.empty() || t > newestTime) {
-          newest = it->path();
-          newestTime = t;
+    Out("kinds %s; this world: %s", PortDebug::MapPickupKinds() ? "on" : "off",
+        text.empty() ? "none" : text.c_str());
+    return Finish();
+  }
+  if (value == "0" || value == "off") {
+    PortDebug::SetMapPickups(PortDebug::kMapPickups_Off);
+  } else if (value == "1" || value == "all") {
+    PortDebug::SetMapPickups(PortDebug::kMapPickups_All);
+  } else if (value == "rooms") {
+    PortDebug::SetMapPickups(PortDebug::kMapPickups_Rooms);
+  } else {
+    return Finish("usage: pickups <off|seen|rooms|all>   pickups on the map (0 and 1 are off and all)\n"
+                  "       pickups seen [clear|all]   the pickups seen so far in this save\n"
+                  "       pickups kinds [on|off]     major/minor shapes; no argument lists them\n"
+                  "       pickups collect <dot>      mark a dot's pickup collected (test aid)\n"
+                  "       pickups station <on|off>   map stations show pickups in Seen");
+  }
+  Finish();
+}
+
+void CmdBeamDoors(CStateManager& mgr) {
+  // beamdoors [status|list [here]|unlock <door index|all>|reset]: the beam
+  // doorways the player has opened (PortBeamDoors). Door indices are the ones
+  // `list` prints (PortApWorld's door table).
+  const std::string sub = sCmd.args.size() > 1 ? Lower(sCmd.args[1]) : "status";
+  if (gpGameState == nullptr) {
+    return Finish("not in a game");
+  }
+  const uint* bits = gpGameState->PortBeamDoorBits();
+  const int count = PortApWorld::BeamDoorwayCount();
+  if (sub == "reset") {
+    PortBeamDoors::Reset();
+  } else if (sub == "unlock") {
+    if (sCmd.args.size() < 3) {
+      return Finish("usage: beamdoors unlock <door index|all>");
+    }
+    if (Lower(sCmd.args[2]) == "all") {
+      int changed = 0;
+      for (int bit = 0; bit < count; ++bit)
+        changed += PortBeamDoors::Unlock(mgr, bit) ? 1 : 0;
+      Out("unlocked %d doorways", changed);
+    } else {
+      char* end = nullptr;
+      const long door = std::strtol(sCmd.args[2].c_str(), &end, 10);
+      const int bit = end != sCmd.args[2].c_str() && *end == 0
+                          ? PortApWorld::BeamDoorwayBit(static_cast< int >(door))
+                          : -1;
+      if (bit < 0) {
+        return Finish("not a beam door (see beamdoors list)");
+      }
+      Out(PortBeamDoors::Unlock(mgr, bit) ? "doorway %d unlocked" : "doorway %d already unlocked",
+          bit);
+    }
+  } else if (sub == "list") {
+    const bool here = sCmd.args.size() > 2 && Lower(sCmd.args[2]) == "here";
+    uint32_t mrea = 0;
+    if (here) {
+      const CWorld* world = mgr.GetWorld();
+      mrea = static_cast< uint32_t >(world->GetAreaAlways(world->GetCurrentAreaId()).GetAreaAssetId());
+    }
+    for (int bit = 0; bit < count; ++bit) {
+      std::string doors;
+      bool inArea = !here;
+      for (const PortApWorld::DoorChange& door : PortApWorld::BeamDoorway(bit)) {
+        inArea = inArea || door.mrea == mrea;
+        doors += (doors.empty() ? "" : ", ") + std::to_string(door.index) + " (area " +
+                 [&] { char text[16]; std::snprintf(text, sizeof(text), "%08X", door.mrea); return std::string(text); }() +
+                 ", dock " + std::to_string(door.dock) + ")";
+      }
+      if (inArea) {
+        Out("%3d %s door %s", bit, PortBeamDoors::Test(bits, bit) ? "open  " : "locked",
+            doors.empty() ? "(no door object)" : doors.c_str());
+      }
+    }
+  } else if (sub != "status") {
+    return Finish("usage: beamdoors [status|list [here]|unlock <door index|all>|reset]");
+  }
+  int open = 0;
+  for (int bit = 0; bit < count; ++bit)
+    open += PortBeamDoors::Test(bits, bit) ? 1 : 0;
+  Out("beamdoors %s; %d of %d doorways unlocked", PortBeamDoors::Enabled() ? "on" : "off", open,
+      count);
+  Finish();
+}
+
+void CmdMark() {
+  // mark [list|clear|toggle [area]]: the map's room marks of the current world.
+  const std::string sub = sCmd.args.size() > 1 ? Lower(sCmd.args[1]) : "list";
+  const PortMapMarks::List* list = PortMapMarks::Current();
+  if (list == nullptr || gpGameState == nullptr) {
+    return Finish("not in a game");
+  }
+  if (sub == "clear") {
+    PortMapMarks::Clear();
+  } else if (sub == "toggle") {
+    const long area =
+        sCmd.args.size() > 2 ? std::strtol(sCmd.args[2].c_str(), nullptr, 10) : -1;
+    if (area < 0) {
+      return Finish("usage: mark toggle <area index>");
+    }
+    const int result = PortMapMarks::Toggle(gpGameState->CurrentWorldAssetId(), int(area));
+    if (result == 0) {
+      return Finish("not possible (list full or unknown area)");
+    }
+    Out("area %ld %s", area, result > 0 ? "marked" : "unmarked");
+  } else if (sub != "list") {
+    return Finish("usage: mark [list|clear|toggle <area>]");
+  }
+  std::string text;
+  for (uint32_t i = 0; i < list->count; ++i) {
+    text += (text.empty() ? "" : " ") + std::to_string(PortMapMarks::WorldOf(list->packed[i])) +
+            ":" + std::to_string(PortMapMarks::AreaOf(list->packed[i]));
+  }
+  Out("%u marks (max %zu; world:area): %s", list->count, PortMapMarks::kMaxMarks,
+      text.empty() ? "none" : text.c_str());
+  Finish();
+}
+
+void CmdMods() {
+  // mods [reload]: what is loaded; reload reads the folder again.
+  if (sCmd.args.size() > 1 && Lower(sCmd.args[1]) == "reload") {
+    PortSaveState::RequestModReload();
+    Out("reload queued");
+    return Finish();
+  }
+  const PortMods::Status& status = PortMods::CurrentStatus();
+  Out("%d mod(s), %d disc file(s), %zu native texture(s), %zu bound", int(status.mods.size()), status.overlays,
+      PortMods::NativeTextureCount(), PortMods::NativeTexturesBound());
+  for (const PortMods::ModInfo& mod : status.mods) {
+    Out("%s %s files=%d resources=%d textures=%d", mod.enabled ? "+" : "-", mod.name.c_str(), mod.files,
+        mod.resources, mod.textures);
+  }
+  Out("%s", PortSaveState::LastMessage().c_str());
+  Finish();
+}
+
+void CmdRemastered() {
+  // remastered [start <image.nsp|xci> [key file] | cancel]: the import of
+  // port_remastered_import.h, and how far it is.
+  const std::string verb = sCmd.args.size() > 1 ? Lower(sCmd.args[1]) : "";
+  if (verb == "start" && sCmd.args.size() > 2) {
+    const std::string keys = sCmd.args.size() > 3 ? sCmd.args[3] : PortRemastered::DefaultKeysPath();
+    if (!PortDebug::StartRemasteredImport(sCmd.args[2], keys)) {
+      return Finish("an import is already running, or there is no mods folder");
+    }
+  } else if (verb == "cancel") {
+    PortRemastered::CancelImport();
+  } else if (!verb.empty()) {
+    return Finish("usage: remastered [start <image.nsp|xci> [key file] | cancel]");
+  }
+  const PortRemastered::ImportState state = PortRemastered::ImportStatus();
+  Out("%s %d/%d failed %d: %s",
+      state.running ? "running" : !state.finished ? "idle" : state.ok ? "done" : state.cancelled ? "cancelled" : "failed",
+      state.done, state.total, state.failed, state.message.c_str());
+  Finish();
+}
+
+void CmdProbe() {
+  static const char* const names[] = {"off", "on", "mirror", "window"};
+  if (sCmd.args.size() > 1) {
+    const std::string arg = Lower(sCmd.args[1]);
+    int mode = -1;
+    for (int i = 0; i < 4; ++i) {
+      if (arg == names[i]) {
+        mode = i;
+      }
+    }
+    if (mode < 0) {
+      return Finish("usage: probe [off|on|mirror|window]");
+    }
+    CCubeMaterial::sPortPBRProbeMode = mode;
+  }
+  Out("probe %s weight %.0f", ProbeModeName(), CCubeMaterial::sPortPBRProbeWeight);
+  Finish();
+}
+
+void CmdShadow() {
+  if (sCmd.args.size() > 2 && Lower(sCmd.args[1]) == "casters" &&
+      (Lower(sCmd.args[2]) == "on" || Lower(sCmd.args[2]) == "off")) {
+    PortRoomGeo::SetOffscreenCasters(Lower(sCmd.args[2]) == "on");
+  }
+  f32 dir[3], color[3], center[3], distance = 0.f;
+  u32 casters = 0;
+  GXPortGetShadowInfo(dir, color, &distance, center, &casters);
+  if (distance <= 0.f) {
+    Out("shadow map off (no sun, MP_SHADOWS=0, or a scene without shadows)");
+  } else {
+    Out("light travels %.3f %.3f %.3f colour %.3f %.3f %.3f", dir[0], dir[1], dir[2], color[0], color[1], color[2]);
+    Out("4 cascades to %.1f, last centred %.2f %.2f %.2f, %u caster draw(s), %u of them out-of-view room models "
+        "(casters %s)",
+        distance, center[0], center[1], center[2], casters, PortRoomGeo::OffscreenCasterCount(),
+        PortRoomGeo::OffscreenCasters() ? "on" : "off");
+  }
+  OutLines(PortRoomEnv::SunInfo());
+  OutLines(PortRoomEnv::RoomLightInfo());
+  Finish();
+}
+
+void CmdMinimap() {
+  float rect[4] = {};
+  bool drawn = false;
+  if (PortDebug::MinimapRect(rect, &drawn)) {
+    Out("minimap valid %.4f %.4f %.4f %.4f %s", rect[0], rect[1], rect[2], rect[3],
+        drawn ? "drawn" : "button");
+  } else {
+    Out("minimap invalid");
+  }
+  Finish();
+}
+
+void CmdMapTap() {
+  PortDebug::RequestMapTap();
+  Out("maptap queued");
+  Finish();
+}
+
+void CmdMapRotate() {
+  float deg = 0.f;
+  if (sCmd.args.size() < 2 || !ParseFloat(sCmd.args[1], deg)) {
+    return Finish("usage: maprotate <degrees>");
+  }
+  if (!PortDebug::MapScreenOpen()) {
+    Out("maprotate ignored: the map screen is not open");
+  } else {
+    PortDebug::AddMapRotate(deg * (3.14159265f / 180.f));
+    Out("maprotate queued");
+  }
+  Finish();
+}
+
+void CmdMapZoom() {
+  float ratio = 1.f;
+  if (sCmd.args.size() < 2 || !ParseFloat(sCmd.args[1], ratio) || !(ratio > 0.f)) {
+    return Finish("usage: mapzoom <ratio>");
+  }
+  if (!PortDebug::MapScreenOpen()) {
+    Out("mapzoom ignored: the map screen is not open");
+  } else {
+    PortDebug::AddMapZoom(ratio);
+    Out("mapzoom queued");
+  }
+  Finish();
+}
+
+void CmdTouchAim() {
+  float dx = 0.f;
+  float dy = 0.f;
+  float holdS = 0.f;
+  if (sCmd.args.size() < 3 || !ParseFloat(sCmd.args[1], dx) || !ParseFloat(sCmd.args[2], dy) ||
+      (sCmd.args.size() > 3 && !ParseFloat(sCmd.args[3], holdS))) {
+    return Finish("usage: touchaim <dx> <dy> [hold seconds]");
+  }
+  // Finger travel in dp (right/down positive); the hold keeps the finger "down",
+  // which holds the GameCube scheme's free-look pitch.
+  if (holdS > 0.f) PortDebug::HoldTouchAim(holdS);
+  PortDebug::AddTouchAim(dx, dy);
+  Out("touchaim queued");
+  Finish();
+}
+
+void CmdMapPan() {
+  float dx = 0.f;
+  float dy = 0.f;
+  float holdS = 0.25f;
+  if (sCmd.args.size() < 3 || !ParseFloat(sCmd.args[1], dx) || !ParseFloat(sCmd.args[2], dy) ||
+      (sCmd.args.size() > 3 && !ParseFloat(sCmd.args[3], holdS))) {
+    return Finish("usage: mappan <dx> <dy> [hold seconds]");
+  }
+  if (!PortDebug::MapScreenOpen()) {
+    Out("mappan ignored: the map screen is not open");
+  } else {
+    PortDebug::AddMapPan(dx, dy, 400.f, static_cast< int >(holdS * 1000.f));
+    Out("mappan queued");
+  }
+  Finish();
+}
+
+void CmdHdFont() {
+  if (sCmd.args.size() > 1) {
+    const std::string arg = Lower(sCmd.args[1]);
+    if (arg != "on" && arg != "off") {
+      return Finish("usage: hdfont [on|off]");
+    }
+    PortHdFont::SetEnabled(arg == "on");
+  }
+  Out("hdfont %s", PortHdFont::Enabled() ? "on" : "off");
+  Finish();
+}
+
+void CmdRoomEnv() {
+  float number = 0.f;
+  if (sCmd.args.size() > 1) {
+    const std::string arg = Lower(sCmd.args[1]);
+    if (arg == "info") {
+      // At a point, or where the view is.
+      float at[3];
+      float forward[3];
+      if (sCmd.args.size() > 4) {
+        if (!ParseFloat(sCmd.args[2], at[0]) || !ParseFloat(sCmd.args[3], at[1]) ||
+            !ParseFloat(sCmd.args[4], at[2])) {
+          return Finish("usage: roomenv info [<x> <y> <z>]");
         }
+      } else if (!PortDebug::ViewRay(at, forward)) {
+        return Finish("not in a world");
       }
-      Out("%s", newest.string().c_str());
-      Finish();
-    } else if (sFrame >= sCmd.untilFrame) {
-      Finish("no screenshot appeared");
+      const std::string info = PortRoomEnv::Info(at);
+      Out("at %.2f %.2f %.2f", at[0], at[1], at[2]);
+      OutLines(info.empty() ? std::string("no room environment loaded") : info);
+      return Finish();
+    } else if (arg == "exposure" && sCmd.args.size() > 2 &&
+               (Lower(sCmd.args[2]) == "on" || Lower(sCmd.args[2]) == "off")) {
+      PortRoomEnv::SetRoomExposed(Lower(sCmd.args[2]) == "on");
+    } else if (arg == "auto" && sCmd.args.size() > 2 &&
+               (Lower(sCmd.args[2]) == "on" || Lower(sCmd.args[2]) == "off")) {
+      PortRoomEnv::SetAutoExposure(Lower(sCmd.args[2]) == "on");
+    } else if (arg == "static" && sCmd.args.size() > 2 &&
+               (Lower(sCmd.args[2]) == "on" || Lower(sCmd.args[2]) == "off")) {
+      PortRoomEnv::SetStaticExposure(Lower(sCmd.args[2]) == "on");
+    } else if (arg == "arealights" && sCmd.args.size() > 2 &&
+               (Lower(sCmd.args[2]) == "on" || Lower(sCmd.args[2]) == "off")) {
+      PortRoomEnv::SetAreaLights(Lower(sCmd.args[2]) == "on");
+    } else if (arg == "balllight" && sCmd.args.size() > 2 &&
+               (Lower(sCmd.args[2]) == "on" || Lower(sCmd.args[2]) == "off")) {
+      PortRemasteredBallLight::SetEnabled(Lower(sCmd.args[2]) == "on");
+    } else if (arg == "balllight" && sCmd.args.size() > 2 && ParseFloat(sCmd.args[2], number)) {
+      PortRemasteredBallLight::SetScale(number);
+    } else if (arg == "blend" && sCmd.args.size() > 2 &&
+               (Lower(sCmd.args[2]) == "on" || Lower(sCmd.args[2]) == "off")) {
+      PortRoomEnv::SetProbeBlend(Lower(sCmd.args[2]) == "on");
+    } else if (arg == "bloom" && sCmd.args.size() > 2 &&
+               (Lower(sCmd.args[2]) == "on" || Lower(sCmd.args[2]) == "off")) {
+      PortRoomEnv::SetBloomEnabled(Lower(sCmd.args[2]) == "on");
+    } else if (arg == "grades" && sCmd.args.size() > 2 &&
+               (Lower(sCmd.args[2]) == "on" || Lower(sCmd.args[2]) == "off")) {
+      PortRoomEnv::SetViewGradesOn(Lower(sCmd.args[2]) == "on");
+    } else if (arg == "grades") {
+      OutLines(PortRoomEnv::GradeInfo());
+      return Finish();
+    } else if (arg == "fog") {
+      OutLines(PortRoomEnv::FogInfo());
+      return Finish();
+    } else if (arg == "volfog" && sCmd.args.size() > 2 &&
+               (Lower(sCmd.args[2]) == "on" || Lower(sCmd.args[2]) == "off")) {
+      PortRoomEnv::SetVolFogEnabled(Lower(sCmd.args[2]) == "on");
+    } else if (arg == "fogregions" && sCmd.args.size() > 2 &&
+               (Lower(sCmd.args[2]) == "on" || Lower(sCmd.args[2]) == "off")) {
+      PortRoomEnv::SetFogRegionsEnabled(Lower(sCmd.args[2]) == "on");
+    } else if (arg == "state" && sCmd.args.size() > 3) {
+      PortRoomEnv::SendScriptState(uint32_t(std::strtoul(sCmd.args[2].c_str(), nullptr, 16)) & 0x3ffffff,
+                                   std::atoi(sCmd.args[3].c_str()));
+      OutLines(PortRoomEnv::GradeInfo());
+      return Finish();
+    } else if (arg == "grade" && sCmd.args.size() > 2 &&
+               (Lower(sCmd.args[2]) == "on" || Lower(sCmd.args[2]) == "off")) {
+      PortRoomEnv::SetColorGradeEnabled(Lower(sCmd.args[2]) == "on");
+    } else if (arg == "on" || arg == "off") {
+      PortRoomEnv::SetEnabled(arg == "on");
+    } else if (arg == "volume" && sCmd.args.size() > 2 &&
+               (Lower(sCmd.args[2]) == "on" || Lower(sCmd.args[2]) == "off")) {
+      PortRoomEnv::SetVolumesEnabled(Lower(sCmd.args[2]) == "on");
+    } else if (arg == "ambient" && sCmd.args.size() > 2 && ParseFloat(sCmd.args[2], number)) {
+      PortRoomEnv::SetAmbientScale(number);
+    } else if (arg == "show" && sCmd.args.size() > 2 &&
+               (Lower(sCmd.args[2]) == "off" || Lower(sCmd.args[2]) == "coords" ||
+                Lower(sCmd.args[2]) == "light")) {
+      PortRoomEnv::SetVolumeView(Lower(sCmd.args[2]) == "off" ? 0 : Lower(sCmd.args[2]) == "coords" ? 1 : 2);
+    } else {
+      return Finish("usage: roomenv [on|off|info [<x> <y> <z>]|exposure on|off|auto on|off|static on|off|"
+                    "arealights on|off|balllight on|off|<scale>|blend on|off|bloom on|off|"
+                    "grade on|off|grades|fog|volfog on|off|fogregions on|off|"
+                    "volume on|off|ambient <scale>|"
+                    "show off|coords|light]");
+    }
+  }
+  int areas = 0;
+  int probes = 0;
+  int cubes = 0;
+  int grids = 0;
+  PortRoomEnv::Stats(areas, probes, cubes, grids);
+  float backlightTop = 0.f;
+  float backlightBack = 0.f;
+  PortRoomEnv::Backlight(backlightTop, backlightBack);
+  static const char* const kViews[] = {"off", "coords", "light"};
+  Out("roomenv %s: %d area(s), %d probe(s), %d cube(s) loaded, %d ambient grid(s), exposure by %s, "
+      "auto %s, static %s (glow x%g), area lights %s, probe blend %s, bloom %s, grade %s, volume %s, "
+      "ambient %g, show %s, backlight top %g back %g",
+      PortRoomEnv::Enabled() ? "on" : "off", areas, probes, cubes, grids,
+      PortRoomEnv::RoomExposed() ? "room" : "cube", PortRoomEnv::AutoExposure() ? "on" : "off",
+      PortRoomEnv::StaticExposure() ? "on" : "off", PortRoomEnv::GlowScale(),
+      PortRoomEnv::AreaLights() ? "on" : "off", PortRoomEnv::ProbeBlend() ? "on" : "off",
+      PortRoomEnv::BloomEnabled() ? "on" : "off",
+      PortRoomEnv::ColorGradeEnabled() ? "on" : "off", PortRoomEnv::VolumesEnabled() ? "on" : "off",
+      PortRoomEnv::AmbientScale(), kViews[std::clamp(PortRoomEnv::VolumeView(), 0, 2)],
+      backlightTop, backlightBack);
+  Finish();
+}
+
+void CmdGpuTimes() {
+  const std::string arg = sCmd.args.size() > 1 ? Lower(sCmd.args[1]) : "show";
+  if (arg == "on" || arg == "off") {
+    GXPortSetGpuTimes(arg == "on" ? GX_TRUE : GX_FALSE);
+    Out("gputimes %s", arg.c_str());
+  } else if (arg == "show") {
+    if (!GXPortGpuTimesSupported()) {
+      Out("timestamps unsupported");
+    } else {
+      GXPortGpuTime times[32];
+      float total = 0.f;
+      float span = 0.f;
+      const u32 count = GXPortGetGpuTimes(times, 32, &total, &span);
+      if (count == 0) {
+        Out("no data yet (gputimes on, then wait 60+ frames)");
+      }
+      for (u32 i = 0; i < count; ++i) {
+        Out("%-24s %7.3f ms  x%.2f", times[i].name, times[i].msPerFrame, times[i].passesPerFrame);
+      }
+      if (count != 0) {
+        Out("total %.3f ms, span %.3f ms (per frame)", total, span);
+      }
     }
   } else {
-    Finish("unknown command (try help)");
+    Out("gputimes on|off|show");
   }
+  Finish();
+}
+
+void CmdGpuSelfTest() {
+  char summary[160];
+  aurora_gpu_selftest_summary(summary, sizeof(summary));
+  PortDebug::RequestGpuSelfTest();
+  Out("gpu self-test queued for the next frame; results in the log as `gpu selftest: <case>: PASS|FAIL` (previous run: %s)",
+      summary[0] != '\0' ? summary : "none");
+  Finish();
+}
+
+void CmdRoomGeo() {
+  if (sCmd.args.size() > 1) {
+    const std::string arg = Lower(sCmd.args[1]);
+    if (arg == "on" || arg == "off" || arg == "overlay") {
+      PortRoomGeo::SetMode(arg == "on" ? PortRoomGeo::Mode::Replace
+                           : arg == "off" ? PortRoomGeo::Mode::Off
+                                          : PortRoomGeo::Mode::Overlay);
+    } else if (arg == "lights" && sCmd.args.size() > 2 &&
+               (Lower(sCmd.args[2]) == "on" || Lower(sCmd.args[2]) == "off")) {
+      PortRoomGeo::SetAreaLights(Lower(sCmd.args[2]) == "on");
+    } else if (arg == "minpx" && sCmd.args.size() > 2) {
+      PortRoomGeo::SetMinPixels(std::strtof(sCmd.args[2].c_str(), nullptr));
+    } else if (arg == "lod" && sCmd.args.size() > 2) {
+      PortRoomGeo::SetLodDistance(std::strtof(sCmd.args[2].c_str(), nullptr));
+    } else if (arg == "sort" && sCmd.args.size() > 2 &&
+               (Lower(sCmd.args[2]) == "on" || Lower(sCmd.args[2]) == "off")) {
+      PortRoomGeo::SetFrontToBack(Lower(sCmd.args[2]) == "on");
+    } else if (arg == "casters" && sCmd.args.size() > 2 &&
+               (Lower(sCmd.args[2]) == "on" || Lower(sCmd.args[2]) == "off")) {
+      PortRoomGeo::SetOffscreenCasters(Lower(sCmd.args[2]) == "on");
+    } else if (arg == "prepass" && sCmd.args.size() > 2 &&
+               (Lower(sCmd.args[2]) == "on" || Lower(sCmd.args[2]) == "off")) {
+      PortRoomGeo::SetDepthPrepass(Lower(sCmd.args[2]) == "on");
+    } else if (arg == "costtest" && sCmd.args.size() > 2) {
+      GXSetPBRCostTest(u32(std::atoi(sCmd.args[2].c_str())));
+    } else if (arg == "script") {
+      const std::string info = PortRoomGeo::ScriptInfo();
+      OutLines(info.empty() ? std::string("no area has a script") : info);
+      return Finish();
+    } else if (arg == "group" && sCmd.args.size() > 3 &&
+               (Lower(sCmd.args[3]) == "show" || Lower(sCmd.args[3]) == "hide")) {
+      Out("%d instance(s)", PortRoomGeo::SetGroupShown(uint32_t(std::atoi(sCmd.args[2].c_str())),
+                                                       Lower(sCmd.args[3]) == "show"));
+      return Finish();
+    } else if (arg == "at" && sCmd.args.size() > 4) {
+      const CVector3f point(float(std::atof(sCmd.args[2].c_str())), float(std::atof(sCmd.args[3].c_str())),
+                            float(std::atof(sCmd.args[4].c_str())));
+      const float margin = sCmd.args.size() > 5 ? float(std::atof(sCmd.args[5].c_str())) : 0.f;
+      const std::string list = PortRoomGeo::At(point, margin);
+      OutLines(list.empty() ? std::string("no instance there") : list);
+      return Finish();
+    } else if (arg == "pick") {
+      float origin[3];
+      float forward[3];
+      if (!PortDebug::ViewRay(origin, forward)) {
+        return Finish("not in a world");
+      }
+      std::string list;
+      const uint32_t first = PortRoomGeo::Pick(CVector3f(origin[0], origin[1], origin[2]),
+                                               CVector3f(forward[0], forward[1], forward[2]), list);
+      OutLines(list.empty() ? std::string("no instance ahead") : list);
+      if (first != 0) {
+        Out("materials of %08X:", first);
+        OutLines(PortRoomGeo::Materials(first));
+      }
+      return Finish();
+    } else if (arg == "mats" && sCmd.args.size() > 2) {
+      uint32_t id = 0;
+      if (!ParseModel(sCmd.args[2], id)) {
+        return Finish("roomgeo: not a model id");
+      }
+      const std::string list = PortRoomGeo::Materials(id);
+      OutLines(list.empty() ? std::string("no loaded model has that id") : list);
+      return Finish();
+    } else if (arg == "mat" && sCmd.args.size() == 3 && Lower(sCmd.args[2]) == "clear") {
+      Out("%d value(s) cleared", PortRoomGeo::ClearMaterialValues());
+      return Finish();
+    } else if (arg == "mat" && sCmd.args.size() > 5) {
+      uint32_t id = 0;
+      unsigned material = 0;
+      int field = 0;
+      int count = 0;
+      if (!ParseModel(sCmd.args[2], id) || !ParseUnsigned(sCmd.args[3], material) ||
+          !ParseMaterialField(Lower(sCmd.args[4]), field, count)) {
+        return Finish("usage: roomgeo mat <cmdl> <material> <field> <value...> | mat clear; fields: emissive "
+                      "backlight height mode kind strength p0 p1 p2 p3, or 0 to 18");
+      }
+      // One value for all of a colour, or one each.
+      float values[3] = {};
+      const int given = int(sCmd.args.size()) - 5;
+      if (given != 1 && given != count) {
+        return Finish("roomgeo: that field takes one value, or one per component");
+      }
+      for (int i = 0; i < given; ++i) {
+        if (!ParseFloat(sCmd.args[5 + i], values[i])) {
+          return Finish("roomgeo: not a number");
+        }
+      }
+      for (int i = 0; i < count; ++i) {
+        if (!PortRoomGeo::SetMaterialValue(id, int(material), field + i, values[given == 1 ? 0 : i])) {
+          return Finish("roomgeo: no loaded model has that material");
+        }
+      }
+      OutLines(PortRoomGeo::Materials(id));
+      Out("(drawn until `roomgeo mat clear` or the next start)");
+      return Finish();
+    } else if ((arg == "hide" || arg == "show") && (sCmd.args.size() > 2 || arg == "show")) {
+      uint32_t id = 0;
+      // 0 means every model, so a mistyped id must not parse as one.
+      if (sCmd.args.size() > 2 && !ParseModel(sCmd.args[2], id)) {
+        return Finish("roomgeo: not a model id");
+      }
+      Out("%d model(s)", PortRoomGeo::SetHidden(id, arg == "hide"));
+    } else {
+      return Finish("usage: roomgeo [on|off|overlay | lights on|off | minpx <n> | lod <scale> | "
+                    "at <x> <y> <z> [margin] | pick | "
+                    "hide <cmdl> | show [cmdl] | mats <cmdl> | mat <cmdl> <material> <field> <value...> | "
+                    "mat clear]");
+    }
+  }
+  int areas = 0;
+  int instances = 0;
+  int models = 0;
+  int loaded = 0;
+  int drawn = 0;
+  PortRoomGeo::Stats(areas, instances, models, loaded, drawn);
+  const PortRoomGeo::Mode mode = PortRoomGeo::GetMode();
+  Out("roomgeo %s: %d area(s), %d instance(s), %d of %d model(s) loaded, %d drawn",
+      mode == PortRoomGeo::Mode::Off ? "off" : mode == PortRoomGeo::Mode::Replace ? "on" : "overlay", areas,
+      instances, loaded, models, drawn);
+  int levels = 0;
+  int levelsLoaded = 0;
+  int coarse = 0;
+  PortRoomGeo::LodStats(levels, levelsLoaded, coarse);
+  Out("detail: distance x%.2f, %d of %d coarser level(s) loaded, %d drawn coarser", PortRoomGeo::LodDistance(),
+      levelsLoaded, levels, coarse);
+  if (const AuroraStats* stats = aurora_get_stats()) {
+    Out("frame: %u draws, %.1f MiB vertices, %.1f MiB indices, %.1f MiB arrays, %.1f MiB uniforms, %.0f fps",
+        stats->drawCallCount, stats->lastVertSize / 1048576.f, stats->lastIndexSize / 1048576.f,
+        stats->lastStorageSize / 1048576.f, stats->lastUniformSize / 1048576.f, aurora_get_fps());
+  }
+  Finish();
+}
+
+void CmdRoomLiquid() {
+  if (sCmd.args.size() > 1) {
+    const std::string arg = Lower(sCmd.args[1]);
+    if (arg != "on" && arg != "off") {
+      return Finish("usage: roomliquid [on|off]");
+    }
+    PortRoomLiquid::SetEnabled(arg == "on");
+  }
+  int areas = 0;
+  int surfaces = 0;
+  int drawn = 0;
+  PortRoomLiquid::Stats(areas, surfaces, drawn);
+  Out("roomliquid %s: %d area(s), %d surface(s), %d drawn", PortRoomLiquid::Enabled() ? "on" : "off", areas,
+      surfaces, drawn);
+  // The water the camera is in: retail's underwater fog colour against Remastered's filter.
+  const CStateManager* const mgr = PortDebug::StateManager();
+  const CCameraManager* const cameras = mgr != nullptr ? mgr->GetCameraManager() : nullptr;
+  if (cameras != nullptr && cameras->GetFluidCounter() != 0) {
+    if (const CScriptWater* water = TCastToConstPtr< CScriptWater >(mgr->GetObjectById(cameras->GetFluidId()))) {
+      const CColor& retail = water->GetUnderwaterFogColor();
+      float filter[4];
+      const bool remastered =
+          water->GetCurrentAreaId() != kInvalidAreaId &&
+          PortRoomLiquid::CameraFilter(mgr->GetWorld()->GetAreaAlways(water->GetCurrentAreaId()),
+                                       water->GetUniqueId().value, water->GetTranslation(), filter);
+      Out("camera in water u%u: retail fog/filter %.3f %.3f %.3f %.3f, Remastered filter %s", water->GetUniqueId().value,
+          retail.GetRed(), retail.GetGreen(), retail.GetBlue(), retail.GetAlpha(),
+          remastered ? "found" : "none");
+      if (remastered) {
+        Out("  Remastered filter %.3f %.3f %.3f %.3f", filter[0], filter[1], filter[2], filter[3]);
+      }
+    }
+  }
+  Finish();
+}
+
+void CmdViewModel() {
+  const std::string arg = sCmd.args.size() > 1 ? Lower(sCmd.args[1]) : "status";
+  if (arg == "off") {
+    PortViewModel::Hide();
+  } else if (arg == "light") {
+    PortViewModel::SetLight(sCmd.args.size() > 2 && sCmd.args[2] == "1");
+  } else if (arg != "status") {
+    const auto num = [](size_t i) {
+      return sCmd.args.size() > i ? static_cast< float >(std::atof(sCmd.args[i].c_str())) : 0.f;
+    };
+    std::string err;
+    if (!PortViewModel::Show(static_cast< uint32_t >(std::strtoul(arg.c_str(), nullptr, 16)),
+                             num(2), num(3), num(4), err)) {
+      return Finish(err.c_str());
+    }
+  }
+  Out("%s", PortViewModel::Status().c_str());
+  Finish();
+}
+
+void CmdState() {
+  const std::string action = sCmd.args.size() > 1 ? Lower(sCmd.args[1]) : "list";
+  const int slot = sCmd.args.size() > 2 ? std::atoi(sCmd.args[2].c_str())
+                                        : PortSaveState::SelectedSlot();
+  if (action == "save" || action == "load" || action == "undo") {
+    const bool queued = action == "save" ? PortSaveState::RequestSave(slot)
+                        : action == "load"
+                            ? PortSaveState::RequestLoad(slot)
+                            : PortSaveState::RequestLoad(PortSaveState::kUndoSlot);
+    if (!queued) {
+      return Finish(PortSaveState::LastMessage().c_str());
+    }
+    Out("queued; see 'state last'");
+    return Finish();
+  } else if (action == "slot") {
+    PortSaveState::SetSelectedSlot(slot);
+    Out("selected slot %d", PortSaveState::SelectedSlot());
+    return Finish();
+  } else if (action == "last") {
+    Out("%s", PortSaveState::LastMessage().c_str());
+    return Finish();
+  } else if (action == "list") {
+    for (int i = PortSaveState::kUndoSlot; i <= PortSaveState::kSlotCount; ++i) {
+      const PortSaveState::Info info = PortSaveState::SlotInfo(i);
+      if (info.exists) {
+        Out("%s%d %s - %s igt=%.1f%s", i == PortSaveState::SelectedSlot() ? "*" : " ", i,
+            info.world.c_str(), info.room.c_str(), info.playTime, info.morphed ? " ball" : "");
+      }
+    }
+    Out("folder %s", PortSaveState::Folder().c_str());
+    return Finish();
+  }
+  return Finish("usage: state list|last|save [n]|load [n]|undo|slot <n>");
+}
+
+void CmdResume() {
+  const std::string action = sCmd.args.size() > 1 ? sCmd.args[1] : "status";
+  if (action == "status") {
+    Out("%s", PortSaveState::ResumeStatus().c_str());
+    return Finish();
+  } else if (action == "save") {
+    // Whatever the quick_resume setting says; away from a safe point it
+    // writes the last snapshot.
+    const bool saved = PortSaveState::ResumeSave(true);
+    Out("%s", PortSaveState::LastMessage().c_str());
+    return Finish(saved ? nullptr : "not written");
+  } else if (action == "load") {
+    if (!PortSaveState::RequestResumeLoad()) {
+      return Finish(PortSaveState::LastMessage().c_str());
+    }
+    Out("queued; see 'state last'");
+    return Finish();
+  } else if (action == "clear") {
+    PortSaveState::ResumeClear();
+    return Finish();
+  }
+  return Finish("usage: resume [status|save|load|clear]");
+}
+
+void CmdTimer() {
+  const std::string value = sCmd.args.size() > 1 ? sCmd.args[1] : "";
+  if (value != "0" && value != "1") {
+    return Finish("usage: timer <0|1>");
+  }
+  PortDebug::SetSpeedrunTimer(value == "1");
+  Finish();
+}
+
+void CmdIgt() {
+  const double value = sCmd.args.size() > 1 ? std::atof(sCmd.args[1].c_str()) : -1.0;
+  if (!(value >= 0.0) || gpGameState == nullptr) {
+    return Finish("usage: igt <seconds>");
+  }
+  gpGameState->SetTotalPlayTime(value);
+  Finish();
+}
+
+void CmdLiveSplit() {
+  const std::string action = sCmd.args.size() > 1 ? Lower(sCmd.args[1]) : "status";
+  if (action == "0" || action == "1") {
+    PortDebug::SetLiveSplit(action == "1");
+  } else if (action == "addr" && sCmd.args.size() == 3) {
+    PortDebug::SetLiveSplitAddress(sCmd.args[2]);
+  } else if (action == "send" && sCmd.args.size() > 2) {
+    std::string line = sCmd.args[2];
+    for (size_t i = 3; i < sCmd.args.size(); ++i) {
+      line += " " + sCmd.args[i];
+    }
+    PortLiveSplit::SendRaw(line);
+  } else if (action != "status") {
+    return Finish("usage: livesplit <0|1> | addr <host:port> | send <command> | status");
+  }
+  static const char* const kStatusNames[] = {"off", "connecting", "connected", "failed"};
+  Out("livesplit %s %s %s", PortDebug::LiveSplit() ? "on" : "off",
+      PortDebug::LiveSplitAddress().c_str(), kStatusNames[PortLiveSplit::Status()]);
+  const std::string error = PortLiveSplit::LastError();
+  if (!error.empty()) {
+    Out("last error: %s", error.c_str());
+  }
+  Finish();
+}
+
+void CmdDiscord() {
+  const std::string action = sCmd.args.size() > 1 ? Lower(sCmd.args[1]) : "status";
+  if (action == "0" || action == "1") {
+    PortDebug::SetDiscordPresence(action == "1");
+  } else if (action != "status") {
+    return Finish("usage: discord <0|1> | status");
+  }
+  static const char* const kStatusNames[] = {"off", "connecting", "connected", "failed"};
+  Out("discord %s %s", PortDebug::DiscordPresence() ? "on" : "off", kStatusNames[PortDiscord::Status()]);
+  Out("showing: %s", PortDiscord::CurrentText().c_str());
+  const std::string error = PortDiscord::LastError();
+  if (!error.empty()) {
+    Out("last error: %s", error.c_str());
+  }
+  Finish();
+}
+
+void CmdGci() {
+  const std::string action = sCmd.args.size() > 1 ? Lower(sCmd.args[1]) : "list";
+  // The rest of the line is one path, spaces and all.
+  std::string path;
+  for (size_t i = 2; i < sCmd.args.size(); ++i) {
+    path += (i > 2 ? " " : "") + sCmd.args[i];
+  }
+  const std::string sub = sCmd.args.size() > 2 ? Lower(sCmd.args[2]) : "";
+  const auto isFormat = [](const std::string& word) {
+    return word == "usa" || word == "pal" || word == "trilogy";
+  };
+  std::string text;
+  if (action == "list") {
+    text = PortDebug::CardList();
+  } else if (action == "import" && !path.empty()) {
+    text = PortDebug::CardImport(path);
+  } else if (action == "export" && isFormat(sub) && sCmd.args.size() > 3) {
+    text = PortDebug::CardExport(path.substr(sub.size() + 1), sub);
+  } else if (action == "export" && !path.empty()) {
+    text = PortDebug::CardExport(path);
+  } else if (action == "dolphin" && sub == "import" && sCmd.args.size() == 3) {
+    text = PortDebug::CardImportDolphin();
+  } else if (action == "dolphin" && sub == "export" && sCmd.args.size() <= 4 &&
+             (sCmd.args.size() == 3 || isFormat(Lower(sCmd.args[3])))) {
+    text = PortDebug::CardExportDolphin(sCmd.args.size() == 4 ? Lower(sCmd.args[3]) : "");
+  } else if (action == "share" && (sub == "on" || sub == "off") && sCmd.args.size() == 3) {
+    PortGci::SetShareEmulatorCard(sub == "on");
+    PortDebug::SaveSettingsNow();
+    std::string why;
+    if (sub == "on" && PortGci::SharedCardBase(&why).empty()) {
+      why = " (" + why + ")";
+    } else {
+      why.clear();
+    }
+    text = "sharing the emulator card: " + sub + why + "; it takes effect at the title screen";
+  } else if (action == "emulator" && !path.empty()) {
+    PortGci::SetEmulatorFolder(Lower(path) == "auto" ? "" : path);
+    PortDebug::SaveSettingsNow();
+    text = "emulator folder: " + (PortGci::EmulatorFolder().empty() ? "auto" : PortGci::EmulatorFolder());
+  } else {
+    return Finish("usage: gci list | share on|off | emulator <folder|auto> | import <path> | export [usa|pal] <dir or .raw> | export trilogy "
+                  "<save.bin> | dolphin import | dolphin export [usa|pal|trilogy]");
+  }
+  size_t start = 0;
+  while (start <= text.size()) {
+    const size_t end = std::min(text.find('\n', start), text.size());
+    Out("%s", text.substr(start, end - start).c_str());
+    start = end + 1;
+  }
+  Finish();
+}
+
+void CmdAp() {
+  const std::string action = sCmd.args.size() > 1 ? Lower(sCmd.args[1]) : "";
+  std::string error;
+  if (action == "connect" && (sCmd.args.size() == 4 || sCmd.args.size() == 5)) {
+    PortAp::ConnectionDetails details;
+    details.server = sCmd.args[2];
+    details.slot = sCmd.args[3];
+    details.password = sCmd.args.size() == 5 ? sCmd.args[4] : "";
+    if (!PortAp::Connect(details, error))
+      return Finish(error.c_str());
+  } else if (action == "disconnect") {
+    if (!PortAp::Disconnect(error))
+      return Finish(error.c_str());
+  } else if (action == "recent" && sCmd.args.size() == 2) {
+    const std::vector<PortAp::ConnectionDetails> games = PortAp::RecentGames();
+    for (size_t i = 0; i < games.size(); ++i)
+      Out("%zu: %s @ %s, seed %s, played %lld", i, games[i].slot.c_str(), games[i].server.c_str(),
+          games[i].seed.c_str(), static_cast<long long>(games[i].lastPlayed));
+  } else if (action == "resume" && sCmd.args.size() == 3) {
+    unsigned index = 0;
+    const std::vector<PortAp::ConnectionDetails> games = PortAp::RecentGames();
+    if (!ParseUnsigned(sCmd.args[2], index) || index >= games.size())
+      return Finish("no such recent game (see ap recent)");
+    if (!PortAp::Connect(games[index], error))
+      return Finish(error.c_str());
+  } else if (action == "say" && sCmd.args.size() >= 3) {
+    std::string text = sCmd.args[2];
+    for (size_t i = 3; i < sCmd.args.size(); ++i)
+      text += " " + sCmd.args[i];
+    if (!PortAp::SendChat(text, error))
+      return Finish(error.c_str());
+  } else if (action == "chat" && sCmd.args.size() == 2) {
+    for (const PortAp::ChatLine& line : PortAp::ChatLog())
+      Out("[%s] %s", line.type.c_str(), line.text.c_str());
+  } else if (!action.empty()) {
+    return Finish("usage: ap [connect <server> <slot> [password] | disconnect | recent | resume <n> | "
+                  "say <text> | chat]");
+  }
+  Out("%s (%s)", PortAp::StatusText(), PortAp::ConfigFilePath().c_str());
+  Finish();
+}
+
+void CmdRando() {
+  const std::string action = sCmd.args.size() > 1 ? Lower(sCmd.args[1]) : "";
+  std::string error;
+  if (action == "gen" && sCmd.args.size() <= 3) {
+    PortRandoGen::Seed seed;
+    if (!PortRandoGen::Generate(PortDebug::RandoSettings(), sCmd.args.size() == 3 ? sCmd.args[2] : "", seed,
+                                error) ||
+        !PortRandoGen::Save(seed, error))
+      return Finish(error.c_str());
+    if (PortDebug::StateManager() != nullptr) {
+      Out("saved seed %s; quit to the title screen to play it", seed.name.c_str());
+    } else {
+      if (!PortAp::PlaySolo(seed.name, error))
+        return Finish(error.c_str());
+      Out("playing seed %s", seed.name.c_str());
+    }
+  } else if (action == "play" && sCmd.args.size() == 3) {
+    if (!PortAp::PlaySolo(sCmd.args[2], error))
+      return Finish(error.c_str());
+    Out("playing seed %s", sCmd.args[2].c_str());
+  } else if (action == "delete" && sCmd.args.size() == 3) {
+    if (!PortAp::DeleteSolo(sCmd.args[2], error))
+      return Finish(error.c_str());
+    Out("deleted seed %s", sCmd.args[2].c_str());
+  } else if (action == "list" && sCmd.args.size() == 2) {
+    std::error_code ec;
+    for (const auto& entry : std::filesystem::directory_iterator(PortRandoGen::SeedDirectory(), ec)) {
+      const std::string file = entry.path().filename().string();
+      if (file.size() > 5 && file.compare(file.size() - 5, 5, ".json") == 0 &&
+          !(file.size() > 11 && file.compare(file.size() - 11, 11, ".state.json") == 0))
+        Out("%s", file.substr(0, file.size() - 5).c_str());
+    }
+  } else {
+    return Finish("usage: rando [gen [seedtext] | play <name> | delete <name> | list]");
+  }
+  Finish();
+}
+
+void CmdWait() {
+  unsigned frames = 0;
+  if (sCmd.phase == 0) {
+    if (sCmd.args.size() < 2 || !ParseUnsigned(sCmd.args[1], frames)) {
+      return Finish("usage: wait <frames>");
+    }
+    sCmd.phase = 1;
+    sCmd.untilFrame = sFrame + frames;
+  }
+  if (sFrame >= sCmd.untilFrame) {
+    Finish();
+  }
+}
+
+void CmdPress() {
+  const std::string& name = sCmd.args[0];
+  if (sCmd.phase == 0) {
+    unsigned frames = 6;
+    PADStatus& pad = sCmd.pad;
+    pad = PADStatus{};
+    pad.err = PAD_ERR_NONE;
+    size_t framesArg;
+    if (name == "press") {
+      if (sCmd.args.size() < 2 || !ParseButtons(sCmd.args[1], pad)) {
+        return Finish("usage: press <a+b+...> [frames]");
+      }
+      framesArg = 2;
+    } else {
+      float x, y;
+      if (sCmd.args.size() < 3 || !ParseFloat(sCmd.args[1], x) || !ParseFloat(sCmd.args[2], y)) {
+        return Finish("usage: stick <x> <y> [frames]");
+      }
+      const s8 sx = static_cast< s8 >(std::clamp(x, -127.f, 127.f));
+      const s8 sy = static_cast< s8 >(std::clamp(y, -127.f, 127.f));
+      (name == "stick" ? pad.stickX : pad.substickX) = sx;
+      (name == "stick" ? pad.stickY : pad.substickY) = sy;
+      framesArg = 3;
+    }
+    if (sCmd.args.size() > framesArg && !ParseUnsigned(sCmd.args[framesArg], frames)) {
+      return Finish("bad frame count");
+    }
+    if (frames == 0) {
+      // Stays held until the next press/stick (used with hold/step).
+      PADSetVirtualStatus(0, &sCmd.pad);
+      return Finish();
+    }
+    sCmd.phase = 1;
+    sCmd.untilFrame = sFrame + std::max(frames, 1u);
+  }
+  if (sFrame < sCmd.untilFrame) {
+    PADSetVirtualStatus(0, &sCmd.pad);
+  } else {
+    // The virtual status is sticky; release so the next press is an edge.
+    PADStatus released{};
+    released.err = PAD_ERR_NONE;
+    PADSetVirtualStatus(0, &released);
+    Finish();
+  }
+}
+
+void CmdGyro() {
+  if (sCmd.phase == 0) {
+    float pitch = 0.f;
+    float yaw = 0.f;
+    unsigned frames = 6;
+    if (sCmd.args.size() < 2 || !ParseFloat(sCmd.args[1], pitch) ||
+        (sCmd.args.size() > 2 && !ParseFloat(sCmd.args[2], yaw)) ||
+        (sCmd.args.size() > 3 && !ParseUnsigned(sCmd.args[3], frames))) {
+      return Finish("usage: gyro <pitch> [yaw] [frames]");
+    }
+    PortDebug::SetGyroOverride(true, pitch, yaw);
+    sCmd.phase = 1;
+    sCmd.untilFrame = sFrame + std::max(frames, 1u);
+  }
+  if (sFrame >= sCmd.untilFrame) {
+    PortDebug::SetGyroOverride(false, 0.f, 0.f);
+    Finish();
+  }
+}
+
+void CmdPresent() {
+  const std::string arg = sCmd.args.size() > 1 ? Lower(sCmd.args[1]) : "";
+  float t = 0.f;
+  if (arg == "off") {
+    PortDebug::SetPresentOverride(-1.f);
+  } else if (arg == "cycle") {
+    PortDebug::SetPresentOverride(PortDebug::kPresentCycle);
+  } else if (arg == "tick") {
+    PortDebug::SetPresentOverride(PortDebug::kPresentTick);
+  } else if (!arg.empty() && ParseFloat(arg, t) && t >= 0.f && t <= 1.f) {
+    PortDebug::SetPresentOverride(t);
+  } else if (arg.empty()) {
+    const float value = PortDebug::PresentOverrideValue();
+    if (value < 0.f) {
+      Out("present off");
+    } else if (value == PortDebug::kPresentTick) {
+      Out("present tick");
+    } else if (value > 1.f) {
+      Out("present cycle");
+    } else {
+      Out("present %.3f", value);
+    }
+  } else {
+    return Finish("usage: present <0..1|cycle|tick|off>");
+  }
+  Finish();
+}
+
+void CmdHold() {
+  const std::string arg = sCmd.args.size() > 1 ? sCmd.args[1] : "";
+  if (arg != "0" && arg != "1") {
+    return Finish("usage: hold <0|1>");
+  }
+  PortDebug::SetTickHold(arg == "1");
+  Finish();
+}
+
+void CmdStep() {
+  if (sCmd.phase == 0) {
+    unsigned count = 1;
+    if (!PortDebug::TickHold()) {
+      return Finish("not held (hold 1 first)");
+    }
+    if (sCmd.args.size() > 1 && !ParseUnsigned(sCmd.args[1], count)) {
+      return Finish("usage: step [ticks]");
+    }
+    PortDebug::StepTicks(count);
+    sCmd.phase = 1;
+    sCmd.untilFrame = sFrame + count + 120;
+    return;
+  }
+  if (PortDebug::PendingHeldTicks() == 0) {
+    Finish();
+  } else if (sFrame >= sCmd.untilFrame) {
+    Finish("ticks still pending");
+  }
+}
+
+void CmdInterp() {
+  const std::string which = sCmd.args.size() > 1 ? Lower(sCmd.args[1]) : "";
+  const std::string arg = sCmd.args.size() > 2 ? sCmd.args[2] : "";
+  if (which.empty()) {
+    Out("actor %d pose %d particle %d frame_limit %d", PortDebug::ActorInterpolation(),
+        PortDebug::PoseInterpolation(), PortDebug::ParticleInterpolation(),
+        PortDebug::FrameLimitEnabled());
+    return Finish();
+  }
+  if ((arg != "0" && arg != "1") ||
+      (which != "actor" && which != "pose" && which != "particle" && which != "all")) {
+    return Finish("usage: interp [actor|pose|particle|all <0|1>]");
+  }
+  const bool on = arg == "1";
+  if (which == "actor" || which == "all") {
+    PortDebug::SetActorInterpolation(on);
+  }
+  if (which == "pose" || which == "all") {
+    PortDebug::SetPoseInterpolation(on);
+  }
+  if (which == "particle" || which == "all") {
+    PortDebug::SetParticleInterpolation(on);
+  }
+  Finish();
+}
+
+void CmdShot() {
+  namespace fs = std::filesystem;
+  std::error_code ec;
+  const fs::path dir = fs::current_path(ec) / "screenshots";
+  const auto count = [&dir] {
+    std::error_code e;
+    size_t n = 0;
+    for (fs::directory_iterator it(dir, e), end; !e && it != end; it.increment(e)) {
+      ++n;
+    }
+    return n;
+  };
+  if (sCmd.phase == 0) {
+    sCmd.shotCount = count();
+    aurora::request_screenshot();
+    sCmd.phase = 1;
+    sCmd.untilFrame = sFrame + 120;
+    return;
+  }
+  if (count() > sCmd.shotCount) {
+    fs::path newest;
+    fs::file_time_type newestTime{};
+    for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
+      const fs::file_time_type t = it->last_write_time(ec);
+      if (newest.empty() || t > newestTime) {
+        newest = it->path();
+        newestTime = t;
+      }
+    }
+    Out("%s", newest.string().c_str());
+    Finish();
+  } else if (sFrame >= sCmd.untilFrame) {
+    Finish("no screenshot appeared");
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The command table
+
+void CmdHelp();
+
+void CmdStatusTick(CStateManager& mgr) {
+  CmdStatus(mgr);
+  Finish();
+}
+
+void CmdTracker(CStateManager& mgr) {
+  sCmd.out += PortTracker::Text(PortTracker::Collect(mgr)) + "\n" + PortAp::LogicText();
+  Finish();
+}
+
+// One row of the command table. A command runs either once per frame, from
+// PortConsoleFrame, or inside the state manager's tick, where every object
+// pointer is live; which one is set says where. A frame command that spans
+// frames (wait, press, shot, ...) is called again each frame until it calls
+// Finish, keeping its progress in sCmd. A command with both runs in the
+// frame when frameWhen says so (fx: its queries run without a game).
+//
+// `help` holds the command's lines of the `help` reply, newline separated;
+// the reply prints them in table order. A command may own several rows: the
+// first runs it, and the later ones (no handler) only place more of its help
+// further down the list. A row with empty help is a command whose line
+// belongs to the row before it (face covers look, hurt covers die, ...).
+struct CommandSpec {
+  std::string_view name;
+  void (*frame)();
+  void (*tick)(CStateManager& mgr);
+  std::string_view help;
+  bool (*frameWhen)() = nullptr;
+};
+
+// fx's queries, which read the particle debug state rather than the world.
+bool FxIsQuery() {
+  if (sCmd.args.size() > 1) {
+    static const char* const queries[] = {"list", "tree", "stats", "mute", "solo", "timescale"};
+    for (const char* q : queries) {
+      if (Lower(sCmd.args[1]) == q) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+const CommandSpec kCommands[] = {
+    {"status", nullptr, CmdStatusTick,
+     "status [--json]            world, area, player position, health, visor, beam; --json: one line, with fade and physics state"},
+    {"worlds", CmdWorlds, nullptr, "worlds                     world ids and names"},
+    {"areas", nullptr, CmdAreas, "areas                      areas of the current world (index, MREA)"},
+    {"warp", nullptr, CmdWarp,
+     "warp <world> [mrea]        load a world (hex MLVL id or name prefix), optionally an area"},
+    {"enter", nullptr, CmdEnter,
+     "enter <area>               make a loaded area current, as crossing its dock does"},
+    {"room", nullptr, [](CStateManager&) { CmdRoom(); },
+     "room <area>                teleport to a loaded area's spawn point (the F1 room list)"},
+    {"tp", nullptr, CmdTp, "tp <x> <y> <z>             move the player"},
+    {"lift", nullptr, CmdLift, "lift <id> <dz>             move an actor up (dz > 0) or down"},
+    {"fx", CmdFxQuery, CmdFx,
+     "fx <PART id>|off [dist] [scale] [loop]  play one particle effect in front of the camera; prints its #id\n"
+     "fx list [filter]           live root generators: kind, asset, position, particles, flags, native VFX props\n"
+     "fx tree <#id>              one generator and its children, recursively\n"
+     "fx stats                   live generators, vfx quads/triangles and CPU ms (update, render) last frame\n"
+     "fx mute <asset>|clear|list  hide a PART/SWHC/ELSC asset (it still updates); fx solo <asset|#id> hides the rest\n"
+     "fx timescale <s>           particle time scale (0 freezes particles only; 1 = off)",
+     FxIsQuery},
+    {"face", nullptr, CmdFace, "face <yaw deg> | look <id> turn the player (yaw 0 = +y, 90 = -x)"},
+    {"look", nullptr, CmdLook, ""},
+    {"objs", nullptr, CmdObjs, "objs [filter]              objects whose class or name contains filter"},
+    {"obj", nullptr, CmdObj, "obj <id>                   one object: state, health, animation, connections"},
+    {"send", nullptr, CmdSend,
+     "send <id> <msg>            deliver a script message (name or number; relays fire on SetToZero)"},
+    {"give", nullptr, [](CStateManager& mgr) { CmdGive(mgr, false); },
+     "give <item> [n]            add an item (name or number, see `items`)"},
+    {"take", nullptr, [](CStateManager& mgr) { CmdGive(mgr, true); },
+     "take <item> [n]            remove item capacity (drops a suit)"},
+    {"items", nullptr, CmdItems, "items                      the player's inventory"},
+    {"visor", nullptr, CmdVisor,
+     "visor <combat|xray|scan|thermal|0-3>, beam <power|ice|wave|plasma|0-3>  switch like the touch wheels"},
+    {"beam", nullptr, CmdBeam, ""},
+    {"heal", nullptr, CmdHeal, "heal                       refill health"},
+    {"kill", nullptr, CmdKill,
+     "kill <id> [damage]         kill an actor as with a last Power Beam shot (bosses too)"},
+    {"phazongun", CmdPhazonGun, nullptr,
+     "phazongun [off]            let the arm cannon fire the Phazon Beam (off: stop)"},
+    {"hurt", nullptr, [](CStateManager&) { CmdHurt(sCmd.args.size() > 1 ? sCmd.args[1] : std::string()); },
+     "hurt [n] | die             hit the player for n (default 10) with the HUD flash | empty the health"},
+    {"die", nullptr, CmdDie, ""},
+    {"god", nullptr, [](CStateManager&) { CmdGod(); },
+     "god [on|off]               the player takes no damage (no argument: show)"},
+    {"memo", nullptr, [](CStateManager&) { CmdMemo(); },
+     "memo <text>                show text as a HUD message"},
+    {"strg", nullptr, [](CStateManager&) { CmdStrg(); },
+     "strg <id> [index]          a string table as the game loads it (mods included)"},
+    {"language", nullptr, [](CStateManager&) { CmdLanguage(); },
+     "language [en|EUFR|...]     the text language, changed while the game runs"},
+    {"press", CmdPress, nullptr,
+     "press <a+b+...> [frames]   hold pad buttons (a b x y z l r start up down left right;\n"
+     "                           sx:<n> sy:<n> cx:<n> cy:<n> also hold a stick axis;\n"
+     "                           frames 0 = keep holding until the next press/stick)"},
+    {"stick", CmdPress, nullptr,
+     "stick <x> <y> [frames]     hold the main stick (-127..127); cstick for the C stick"},
+    {"cstick", CmdPress, nullptr, ""},
+    {"gyro", CmdGyro, nullptr,
+     "gyro <pitch> [yaw] [frames] fake gyro rates in rad/s (pitch > 0 tilts up; a flick is ~6)"},
+    {"shot", CmdShot, nullptr, "shot                       take a screenshot and print its path"},
+    {"wait", CmdWait, nullptr, "wait <frames>              let frames pass"},
+    {"probe", CmdProbe, nullptr,
+     "probe [off|on|mirror|window]   the PBR reflection probe, or what PBR surfaces show of it"},
+    {"roomgeo", CmdRoomGeo, nullptr,
+     "roomgeo [on|off|overlay]  the room geometry mods supply, in place of the area's own or on top of it\n"
+     "roomgeo at <x> <y> <z> [margin] | hide <cmdl> | show [cmdl]   its instances at a point; stop drawing one"},
+    {"colldump", CmdCollDump, nullptr,
+     "colldump <x0> <y0> <z0> <x1> <y1> <z1> <file.obj>   the area's collision triangles in a box"},
+    {"collision", CmdCollision, nullptr,
+     "collision [off|overlay|only]    draw collision (only: hide the world's surfaces)"},
+    {"roomliquid", CmdRoomLiquid, nullptr,
+     "roomliquid [on|off]       the water, poison and lava surfaces mods supply, in place of the game's"},
+    {"roomgeo", nullptr, nullptr,
+     "roomgeo lights on|off     light it with the area's lights even where the room has baked light\n"
+     "roomgeo minpx <n>         leave out instances under n pixels (game resolution) on screen; 0 draws all\n"
+     "roomgeo lod <scale>       scale the distances where models switch to coarser levels; 0 never switches\n"
+     "roomgeo sort on|off       draw opaque room models nearest first (default on)\n"
+     "roomgeo prepass on|off    depth-only pass first for cut-out room models (default off)\n"
+     "roomgeo casters on|off    out-of-view room models cast the sun's shadow (default on)"},
+    {"shadow", CmdShadow, nullptr,
+     "shadow [casters on|off]   the sun's shadow map last frame: direction, colour, box, casters, and the room's suns"},
+    {"roomgeo", nullptr, nullptr,
+     "roomgeo costtest <n>      PBR shading cost test: 0 off, 1 flat, 2 no lights, 3 no volume, 4 no cube, 5 no normal maps, 6 no ORM/emissive, 7 maps only, 8 no aniso, 9 no aniso or mip blend, 10 no post-processing, 11 no screen copies"},
+    {"gpuselftest", CmdGpuSelfTest, nullptr,
+     "gpuselftest               render known patterns offscreen, compare the readback, log PASS/FAIL per case"},
+    {"gputimes", CmdGpuTimes, nullptr,
+     "gputimes on|off|show      per-pass GPU times (timestamp queries; 60-frame averages; needs a GPU that has them)"},
+    {"roomgeo", nullptr, nullptr,
+     "roomgeo script            Remastered's camera zones, counters and groups in each loaded area, and the camera\n"
+     "roomgeo group <n> show|hide   set a group until its script next changes it\n"
+     "roomgeo pick              the instances the middle of the view looks through, nearest first, and the\n"
+     "                           first one's materials\n"
+     "roomgeo mats <cmdl>       a loaded model's materials: flags, PBR or TEV, the PBR record (any CMDL once it\n"
+     "                           has drawn under `drawlog on` or `view drawid`, not just room geometry)\n"
+     "roomgeo mat <cmdl> <material> <field> <value...> | mat clear\n"
+     "                           draw a material with a record value replaced: emissive, backlight, height,\n"
+     "                           mode, kind, strength, p0..p3, or the value's index (0 to 18)"},
+    {"roomenv", CmdRoomEnv, nullptr,
+     "roomenv info [<x> <y> <z>] exposure, tone curve, probe and baked ambient at the view or a point"},
+    {"view", CmdView, nullptr,
+     "view [off|albedo|normal|rough|metal|ao|ambient|reflection|glow|exposure|kind|sun|drawid]\n"
+     "                           what PBR surfaces show in place of their shaded result; drawid: every draw's\n"
+     "                           serial as a flat colour (R low byte, G, B), no post-processing"},
+    {"drawlog", CmdDrawLog, nullptr,
+     "drawlog [on|off|dump <file>]  number and record every model surface drawn; dump the last frame as TSV"},
+    {"pick", CmdPick, nullptr,
+     "pick <x> <y>               the draw at a window pixel (top-left origin): owner, CMDL, material, record,\n"
+     "                           shader hash, and the material's line (switches to `view drawid` for a moment)"},
+    {"shader", CmdShader, nullptr,
+     "shader dump <dir>          write every WGSL module made, as <hash>.wgsl, with index.tsv (also MP_WGSL_DUMP)\n"
+     "shader override <dir>|off  compile <hash>.wgsl files from a dir in place of the generated ones, then reload\n"
+     "shader reload              drop the shader and pipeline caches so edited overrides compile (MP_WGSL_OVERRIDE)"},
+    {"stats", CmdStats, nullptr,
+     "stats                      the last frame's draws and buffers, the heap, room geometry and environments"},
+    {"roomenv", nullptr, nullptr,
+     "roomenv [on|off|exposure on|off]  the room environments mods supply; exposure: by room, not by cube\n"
+     "roomenv grades | state <id> <state>  the colour grades; as if script object <id> (hex) sent <state>\n"
+     "roomenv volume on|off | ambient <scale> | show off|coords|light\n"
+     "                           the baked light per pixel; the baked ambient's weight (0: the game's);\n"
+     "                           draw the volume's coordinates or its light alone on room geometry"},
+    {"hdfont", CmdHdFont, nullptr,
+     "hdfont [on|off]            the distance-field font mods supply, in place of the disc's glyphs"},
+    {"mods", CmdMods, nullptr,
+     "mods [reload]              loaded mods, disc files and native textures; reload reads the folder again"},
+    {"remastered", CmdRemastered, nullptr,
+     "remastered [start <image.nsp|xci> [key file] | cancel]  the Remastered import and its progress"},
+    {"touchpad", CmdTouchPad, nullptr,
+     "touchpad [attach|detach|stick <x> <y>]  a virtual gamepad like Android's touch overlay"},
+    {"minimap", CmdMinimap, nullptr,
+     "minimap  the HUD minimap's screen rect (x0 y0 x1 y1, 0..1), or invalid"},
+    {"maptap", CmdMapTap, nullptr, "maptap   a touch-overlay minimap tap: one Z press, opens the map"},
+    {"touchaim", CmdTouchAim, nullptr,
+     "touchaim <dx> <dy> [hold s]   touch aim travel in dp (right/down +), the finger counts as down for hold seconds"},
+    {"maprotate", CmdMapRotate, nullptr,
+     "maprotate <degrees>   twist the open map screen's yaw, as two fingers do; positive turns it as the stick's right does"},
+    {"mapzoom", CmdMapZoom, nullptr,
+     "mapzoom <ratio>   pinch the open map screen: 2 zooms in to twice the size, 0.5 out"},
+    {"mappan", CmdMapPan, nullptr,
+     "mappan <dx> <dy> [hold s]   drag the open map screen by dx,dy dp (view height 400 dp); finger down for hold s (0.25)"},
+    {"freecam", CmdFreeCam, nullptr,
+     "freecam [on|off|freeze on|off|player on|off|speed <n>|pos <x> <y> <z>|look <yaw> <pitch>]\n"
+     "                           fly the view away from the player (HUD hidden; freeze holds the game still)"},
+    {"photo", nullptr, CmdPhoto,
+     "photo [on|off|capture [1|2|4]|fov <n>|roll <n>|samus on|off|panel on|off|super 1|2|4|speed <n>]\n"
+     "                           photo mode: frozen free camera with a roll and fov, saves a PNG"},
+    {"aspect", CmdAspect, nullptr,
+     "aspect <4:3|16:9|window>   switch the rendering aspect, as the Options row does"},
+    {"original", CmdOriginal, nullptr,
+     "original [on|off]   Original experience (retail settings over the saved ones)"},
+    {"keypreset", CmdKeyPreset, nullptr,
+     "keypreset classic|mouse   apply a keyboard preset (Controls > Remap), as its button"},
+    {"padpreset", CmdPadPreset, nullptr,
+     "padpreset gamecube|remastered|modern|southpaw   apply a controller preset to pad 1"},
+    {"fov", CmdFov, nullptr, "fov <45..90>               first-person vertical FOV, as the Options row does"},
+    {"gunoffset", CmdGunOffset, nullptr,
+     "gunoffset <r> <f> <u>      arm cannon offset in metres (+-1), as the Video row does"},
+    {"pointeraim", CmdPointerAim, nullptr,
+     "pointeraim [on|off|<x> <y>] pointer aim mode, or place its pointer (-1..1); prints it"},
+    {"pointer", CmdPointer, nullptr,
+     "pointer <x> <y> move|click|dclick|tap|dtap|down|up [l|r|touch]|drag <x1> <y1> [l|r|touch]|wheel <n>|pinch <ratio>\n"
+     "                           scripted mouse or touch input in GUI pixels; pointer back|where|hits"},
+    {"window", CmdWindow, nullptr,
+     "window [<w> <h>]           resize the window (leaves fullscreen); prints the size"},
+    {"msaa", CmdMsaaAniso, nullptr,
+     "msaa <1|4>, aniso <1..16>  anti-aliasing and anisotropic filtering, applied next frame"},
+    {"aniso", CmdMsaaAniso, nullptr, ""},
+    {"pixellight", CmdPixelLight, nullptr,
+     "pixellight [0|1]         per-pixel lighting (1) or the original per-vertex (0); no argument prints it"},
+    {"sunshadow", CmdSunShadow, nullptr,
+     "sunshadow [0|1]          the port's sun shadow in outdoor rooms (1) or off, as Remastered; no argument prints it"},
+    {"projshadow", CmdProjShadow, nullptr,
+     "projshadow [0|1]         Remastered projected actor shadows (1) or the retail blob (0); no argument prints it"},
+    {"hudscale", CmdHudScale, nullptr,
+     "hudscale <50..100>         HUD scale in percent, as the Options row does"},
+    {"scanspread", CmdScanSpread, nullptr,
+     "scanspread <0..100>        how far the widescreen HUD moves the scan panels out"},
+    {"crosshair", CmdCrosshair, nullptr,
+     "crosshair <25..100> | style classic|remastered   mouse/twin-stick crosshair size in percent, or its style"},
+    {"hudopacity", CmdHudOpacity, nullptr,
+     "hudopacity <xray|thermal|scan|energy> <visor|0..100>  that HUD's opacity, or Visor Opacity's"},
+    {"helmet", CmdHelmetVisorFx, nullptr,
+     "helmet <0|1>, visorfx <0|1> show (1) or hide (0) the helmet and visor effects"},
+    {"visorfx", CmdHelmetVisorFx, nullptr, ""},
+    {"interp", CmdInterp, nullptr,
+     "interp [actor|pose|particle|all <0|1>]   frame interpolation settings (F1 Video > Frame rate)"},
+    {"present", CmdPresent, nullptr,
+     "present <0..1|cycle|tick|off> force the presentation factor (also MP_PRESENT_T);\n"
+     "                           tick draws the plain tick state"},
+    {"hold", CmdHold, nullptr,
+     "hold <0|1>, step [ticks]   stop the simulation; step runs ticks one per frame"},
+    {"step", CmdStep, nullptr, ""},
+    {"reveal", CmdReveal, nullptr,
+     "reveal <0|1>               reveal every world's map, as the Options row does"},
+    {"mapui", CmdMapUi, nullptr,
+     "mapui [0|1]                 the map's extra legend entries and the Mark room prompt"},
+    {"beamdoors", nullptr, CmdBeamDoors,
+     "beamdoors [status|list [here]|unlock <door index|all>|reset]  the beam doors opened for good\n"
+     "                           (beam_doors_stay_unlocked; unlock restyles the loaded doors)"},
+    {"mark", CmdMark, nullptr,
+     "mark [list|clear|toggle <area>]  the map's room marks of the current world (world:area)"},
+    {"pickups", CmdPickups, nullptr,
+     "pickups <0|1>              white dots on the map for uncollected pickups\n"
+     "                           (also off|seen|rooms|all, seen [clear|all], kinds|station [on|off], collect <dot>)"},
+    {"tracker", nullptr, CmdTracker,
+     "tracker                    items, scans and rooms visited (the F1 Tracker page)"},
+    {"viewmodel", CmdViewModel, nullptr,
+     "viewmodel <cmdl> [dist] [yaw] [pitch] | off | status | light <0|1>   draw a model in front of the camera"},
+    {"state", CmdState, nullptr,
+     "state list | last | save [n] | load [n] | undo | slot <n>   save states (F1 Save states page)"},
+    {"resume", CmdResume, nullptr,
+     "resume [status|save|load|clear]  quick resume (savestates/resume.mpss): show, write, load, delete"},
+    {"timer", CmdTimer, nullptr,
+     "timer <0|1>                on-screen in-game time; igt <seconds> sets the play time"},
+    {"igt", CmdIgt, nullptr, ""},
+    {"livesplit", CmdLiveSplit, nullptr,
+     "livesplit <0|1> | addr <host:port> | send <command> | status   LiveSplit Server client"},
+    {"discord", CmdDiscord, nullptr, "discord <0|1> | status   Discord Rich Presence"},
+    {"gci", CmdGci, nullptr,
+     "gci list | share on|off | emulator <folder|auto> | import <path> | export <dir or .raw> | dolphin import|export   memory card transfer"},
+    {"ap", CmdAp, nullptr,
+     "ap [connect <server> <slot> [password] | disconnect | recent | resume <n> | say <text> | chat]   Archipelago, as the F1 Archipelago page does"},
+    {"rando", CmdRando, nullptr,
+     "rando [gen [seedtext] | play <name> | delete <name> | list]  the built-in randomizer's seeds"},
+    {"help", CmdHelp, nullptr, "help                       this list"},
+    {"quit", CmdQuit, nullptr, "quit                       exit the game"},
+    {"title", CmdTitle, nullptr, "title                      quit the game to the title screen"},
+};
+
+const char kHelpFooter[] = "ids: hex editor id (002900A1), u<index> unique id, or an exact debug name";
+
+// The row that runs a command: its first one.
+const CommandSpec* FindCommand(std::string_view name) {
+  for (const CommandSpec& cmd : kCommands) {
+    if (cmd.name == name) {
+      return cmd.frame != nullptr || cmd.tick != nullptr ? &cmd : nullptr;
+    }
+  }
+  return nullptr;
+}
+
+void CmdHelp() {
+  for (const CommandSpec& cmd : kCommands) {
+    std::string_view help = cmd.help;
+    while (!help.empty()) {
+      const size_t end = std::min(help.find('\n'), help.size());
+      Out("%.*s", int(end), help.data());
+      help.remove_prefix(std::min(end + 1, help.size()));
+    }
+  }
+  Out("%s", kHelpFooter);
+  Finish();
+}
+
+bool IsTickCommand(const std::string& name) {
+  const CommandSpec* cmd = FindCommand(name);
+  return cmd != nullptr && cmd->tick != nullptr && !(cmd->frameWhen != nullptr && cmd->frameWhen());
+}
+
+void RunTick(CStateManager& mgr) {
+  FindCommand(sCmd.args[0])->tick(mgr);
+}
+
+// Frame-level commands, and unknown ones.
+void RunFrame() {
+  const CommandSpec* cmd = FindCommand(sCmd.args[0]);
+  if (cmd == nullptr || cmd->frame == nullptr) {
+    return Finish("unknown command (try help)");
+  }
+  cmd->frame();
 }
 
 void Tokenize(const std::string& line, std::vector< std::string >& args) {

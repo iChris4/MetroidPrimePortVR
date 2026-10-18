@@ -1,6 +1,8 @@
 // Room geometry at run time: which areas have a file, their models, and the draw. See
 // port_room_geo.h.
 #include "port_env.h"
+#include "port_strings.h"
+#include "port_bytes.h"
 #include "port_room_geo.h"
 #include "port_maya_spline.h"
 #include "port_room_sky.h"
@@ -39,11 +41,13 @@
 #include <dolphin/gx/GXExtra.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <future>
 #include <iterator>
 #include <memory>
 #include <string>
@@ -330,26 +334,10 @@ const size_t kMergeCopies = 4;
 const size_t kMergeVertices = 4096;
 const float kMergeCell = 64.f;
 
-uint32_t ReadBig(const uint8_t* p) {
-  return uint32_t(p[0]) << 24 | uint32_t(p[1]) << 16 | uint32_t(p[2]) << 8 | uint32_t(p[3]);
-}
-void WriteBig(uint8_t* p, uint32_t v) {
-  p[0] = uint8_t(v >> 24);
-  p[1] = uint8_t(v >> 16);
-  p[2] = uint8_t(v >> 8);
-  p[3] = uint8_t(v);
-}
-float ReadBigFloat(const uint8_t* p) {
-  const uint32_t v = ReadBig(p);
-  float f;
-  std::memcpy(&f, &v, 4);
-  return f;
-}
-void WriteBigFloat(uint8_t* p, float f) {
-  uint32_t v;
-  std::memcpy(&v, &f, 4);
-  WriteBig(p, v);
-}
+using port::ReadBEFloat;
+using port::ReadBE32;
+using port::WriteBE32;
+using port::WriteBEFloat;
 
 // A CMDL's sections, as CModel::CModel reads them.
 struct CmdlSections {
@@ -363,20 +351,20 @@ struct CmdlSections {
 };
 
 bool ReadCmdl(const std::vector< uint8_t >& data, CmdlSections& out) {
-  if (data.size() < 0x2c || ReadBig(data.data()) != 0xdeadbabe) {
+  if (data.size() < 0x2c || ReadBE32(data.data()) != 0xdeadbabe) {
     return false;
   }
-  out.version = ReadBig(&data[4]);
-  out.flags = ReadBig(&data[8]);
-  const size_t count = ReadBig(&data[0x24]);
+  out.version = ReadBE32(&data[4]);
+  out.flags = ReadBE32(&data[8]);
+  const size_t count = ReadBE32(&data[0x24]);
   const size_t sizesAt = out.version == 1 ? 0x28 : 0x2c;
-  out.matSets = out.version >= 2 ? ReadBig(&data[0x28]) : 1;
+  out.matSets = out.version >= 2 ? ReadBE32(&data[0x28]) : 1;
   if (sizesAt + count * 4 > data.size()) {
     return false;
   }
   size_t at = (sizesAt + count * 4 + 31) & ~size_t(31);
   for (size_t i = 0; i < count; ++i) {
-    const size_t size = ReadBig(&data[sizesAt + i * 4]);
+    const size_t size = ReadBE32(&data[sizesAt + i * 4]);
     if (at + size > data.size()) {
       return false;
     }
@@ -389,7 +377,7 @@ bool ReadCmdl(const std::vector< uint8_t >& data, CmdlSections& out) {
     return false;
   }
   out.surfaces = info + 1;
-  out.surfaceCount = ReadBig(&data[out.sections[info].first]);
+  out.surfaceCount = ReadBE32(&data[out.sections[info].first]);
   return out.surfaces + out.surfaceCount <= count;
 }
 
@@ -424,16 +412,16 @@ std::vector< uint8_t > MergeCmdl(const std::vector< uint8_t >& source, const CCu
       return {};
     }
     const uint8_t* const header = &source[at];
-    const uint32_t extra = ReadBig(header + 0x1c);
+    const uint32_t extra = ReadBE32(header + 0x1c);
     if (extra > size) {
       return {};
     }
     const size_t headerSize = (0x4b + size_t(extra)) & ~size_t(31);
-    const size_t listSize = ReadBig(header + 0x10) & 0x7fffffff;
+    const size_t listSize = ReadBE32(header + 0x10) & 0x7fffffff;
     if (headerSize + listSize > size) {
       return {};
     }
-    const CCubeMaterial material = cube.GetMaterialByIndex(int(ReadBig(header + 0xc)));
+    const CCubeMaterial material = cube.GetMaterialByIndex(int(ReadBE32(header + 0xc)));
     if (material.PortNeedsModelMatrix()) {
       return {};
     }
@@ -453,9 +441,9 @@ std::vector< uint8_t > MergeCmdl(const std::vector< uint8_t >& source, const CCu
     if ((desc & 3) != GX_INDEX16) {
       return {};
     }
-    if (extra >= 0x40 && ReadBig(header + 0x44) == 0x50424958) { // 'PBIX'
-      surface.bases[0] = ReadBig(header + 0x48);
-      surface.bases[1] = ReadBig(header + 0x4c);
+    if (extra >= 0x40 && ReadBE32(header + 0x44) == 0x50424958) { // 'PBIX'
+      surface.bases[0] = ReadBE32(header + 0x48);
+      surface.bases[1] = ReadBE32(header + 0x4c);
     }
     const uint8_t* const list = header + headerSize;
     for (size_t i = 0; i < listSize;) {
@@ -499,8 +487,8 @@ std::vector< uint8_t > MergeCmdl(const std::vector< uint8_t >& source, const CCu
   std::vector< std::vector< uint8_t > > lists(in.surfaceCount);
   for (size_t s = 0; s < in.surfaceCount; ++s) {
     const uint8_t* const header = &source[in.sections[in.surfaces + s].first];
-    const size_t headerSize = (0x4b + ReadBig(header + 0x1c)) & ~31u;
-    const size_t listSize = ReadBig(header + 0x10) & 0x7fffffff;
+    const size_t headerSize = (0x4b + ReadBE32(header + 0x1c)) & ~31u;
+    const size_t listSize = ReadBE32(header + 0x10) & 0x7fffffff;
     const uint8_t* const list = header + headerSize;
     const Surface& surface = surfaces[s];
     std::vector< uint8_t >& out = lists[s];
@@ -544,11 +532,11 @@ std::vector< uint8_t > MergeCmdl(const std::vector< uint8_t >& source, const CCu
   const CVector3f hi = bounds.GetMaxPoint();
   const float box[6] = {lo.GetX(), lo.GetY(), lo.GetZ(), hi.GetX(), hi.GetY(), hi.GetZ()};
   for (int i = 0; i < 6; ++i) {
-    WriteBigFloat(&out[0xc + i * 4], box[i]);
+    WriteBEFloat(&out[0xc + i * 4], box[i]);
   }
   size_t at = aligned(sizesAt + sizes.size() * 4);
   for (size_t i = 0; i < sizes.size(); ++i) {
-    WriteBig(&out[sizesAt + i * 4], uint32_t(sizes[i]));
+    WriteBE32(&out[sizesAt + i * 4], uint32_t(sizes[i]));
     uint8_t* const dst = &out[at];
     const uint8_t* const src = &source[in.sections[i].first];
     if (i == in.positions) {
@@ -556,11 +544,11 @@ std::vector< uint8_t > MergeCmdl(const std::vector< uint8_t >& source, const CCu
         const CTransform4f& xf = *places[copy];
         for (size_t v = 0; v < positionCount; ++v) {
           const uint8_t* const p = src + v * 12;
-          const CVector3f world = xf * CVector3f(ReadBigFloat(p), ReadBigFloat(p + 4), ReadBigFloat(p + 8));
+          const CVector3f world = xf * CVector3f(ReadBEFloat(p), ReadBEFloat(p + 4), ReadBEFloat(p + 8));
           uint8_t* const q = dst + (copy * positionCount + v) * 12;
-          WriteBigFloat(q, world.GetX());
-          WriteBigFloat(q + 4, world.GetY());
-          WriteBigFloat(q + 8, world.GetZ());
+          WriteBEFloat(q, world.GetX());
+          WriteBEFloat(q + 4, world.GetY());
+          WriteBEFloat(q + 8, world.GetZ());
         }
       }
     } else if (i == in.positions + 1) {
@@ -583,7 +571,7 @@ std::vector< uint8_t > MergeCmdl(const std::vector< uint8_t >& source, const CCu
           uint8_t* const q = dst + (copy * normalCount + v) * normalSize;
           float n[3], wn[3];
           for (int k = 0; k < 3; ++k) {
-            n[k] = ReadBigFloat(p + k * 4);
+            n[k] = ReadBEFloat(p + k * 4);
           }
           for (int r = 0; r < 3; ++r) {
             wn[r] = c[r * 3] * n[0] + c[r * 3 + 1] * n[1] + c[r * 3 + 2] * n[2];
@@ -591,14 +579,14 @@ std::vector< uint8_t > MergeCmdl(const std::vector< uint8_t >& source, const CCu
           const float nLength = std::sqrt(wn[0] * wn[0] + wn[1] * wn[1] + wn[2] * wn[2]);
           for (int k = 0; k < 3; ++k) {
             wn[k] = nLength > 0.f ? sign * wn[k] / nLength : 0.f;
-            WriteBigFloat(q + k * 4, wn[k]);
+            WriteBEFloat(q + k * 4, wn[k]);
           }
           for (size_t f = 0; f < frames; ++f) {
             const size_t bAt = 12 + 24 * f, tAt = 24 + 24 * f;
             float b[3], t[3];
             for (int k = 0; k < 3; ++k) {
-              b[k] = ReadBigFloat(p + bAt + k * 4);
-              t[k] = ReadBigFloat(p + tAt + k * 4);
+              b[k] = ReadBEFloat(p + bAt + k * 4);
+              t[k] = ReadBEFloat(p + tAt + k * 4);
             }
             const float handed = (n[1] * t[2] - n[2] * t[1]) * b[0] + (n[2] * t[0] - n[0] * t[2]) * b[1] +
                                          (n[0] * t[1] - n[1] * t[0]) * b[2] < 0.f ? -sign : sign;
@@ -615,8 +603,8 @@ std::vector< uint8_t > MergeCmdl(const std::vector< uint8_t >& source, const CCu
             const float wb[3] = {(wn[1] * wt[2] - wn[2] * wt[1]) * handed, (wn[2] * wt[0] - wn[0] * wt[2]) * handed,
                                  (wn[0] * wt[1] - wn[1] * wt[0]) * handed};
             for (int k = 0; k < 3; ++k) {
-              WriteBigFloat(q + bAt + k * 4, wb[k]);
-              WriteBigFloat(q + tAt + k * 4, wt[k]);
+              WriteBEFloat(q + bAt + k * 4, wb[k]);
+              WriteBEFloat(q + tAt + k * 4, wt[k]);
             }
           }
         }
@@ -624,7 +612,7 @@ std::vector< uint8_t > MergeCmdl(const std::vector< uint8_t >& source, const CCu
           const uint8_t* const p = src + v * normalSize;
           float n[3];
           for (int k = 0; k < 3; ++k) {
-            n[k] = format > 0 ? float(int16_t(p[k * 2] << 8 | p[k * 2 + 1])) / 16384.f : ReadBigFloat(p + k * 4);
+            n[k] = format > 0 ? float(int16_t(p[k * 2] << 8 | p[k * 2 + 1])) / 16384.f : ReadBEFloat(p + k * 4);
           }
           // Row r of the world matrix's cofactors dotted with the normal.
           float w[3];
@@ -640,29 +628,29 @@ std::vector< uint8_t > MergeCmdl(const std::vector< uint8_t >& source, const CCu
               q[k * 2] = uint8_t(uint16_t(s) >> 8);
               q[k * 2 + 1] = uint8_t(s);
             } else {
-              WriteBigFloat(q + k * 4, value);
+              WriteBEFloat(q + k * 4, value);
             }
           }
         }
       }
     } else if (i >= in.surfaces && i < in.surfaces + in.surfaceCount) {
       const size_t s = i - in.surfaces;
-      const uint32_t extra = ReadBig(src + 0x1c);
+      const uint32_t extra = ReadBE32(src + 0x1c);
       const size_t headerSize = (0x4b + size_t(extra)) & ~size_t(31);
       std::memcpy(dst, src, headerSize);
       const CVector3f centre = bounds.GetCenterPoint();
-      WriteBigFloat(dst, centre.GetX());
-      WriteBigFloat(dst + 4, centre.GetY());
-      WriteBigFloat(dst + 8, centre.GetZ());
-      WriteBig(dst + 0x10, (ReadBig(src + 0x10) & 0x80000000) | uint32_t(lists[s].size()));
+      WriteBEFloat(dst, centre.GetX());
+      WriteBEFloat(dst + 4, centre.GetY());
+      WriteBEFloat(dst + 8, centre.GetZ());
+      WriteBE32(dst + 0x10, (ReadBE32(src + 0x10) & 0x80000000) | uint32_t(lists[s].size()));
       if (extra != 0) {
         for (int k = 0; k < 6; ++k) {
-          WriteBigFloat(dst + 0x2c + k * 4, box[k]);
+          WriteBEFloat(dst + 0x2c + k * 4, box[k]);
         }
       }
       if (surfaces[s].bases[0] != 0 || surfaces[s].bases[1] != 0) {
-        WriteBig(dst + 0x48, 0); // folded into the indices
-        WriteBig(dst + 0x4c, 0);
+        WriteBE32(dst + 0x48, 0); // folded into the indices
+        WriteBE32(dst + 0x4c, 0);
       }
       std::memcpy(dst + headerSize, lists[s].data(), lists[s].size());
     } else {
@@ -871,25 +859,7 @@ void BindMaterialValues() {
 
 // The whole file, in one read when its size is known. The stream is left as a read
 // through istreambuf_iterator leaves it: failed only when the file did not open.
-std::vector< uint8_t > ReadAll(std::ifstream& in) {
-  std::vector< uint8_t > data;
-  if (!in) {
-    return data;
-  }
-  in.seekg(0, std::ios::end);
-  const std::streamoff size = in.tellg();
-  in.seekg(0, std::ios::beg);
-  if (in && size > 0) {
-    data.resize(size_t(size));
-    in.read(reinterpret_cast< char* >(data.data()), std::streamsize(size));
-    data.resize(size_t(in.gcount()));
-  } else {
-    in.clear();
-    data.assign(std::istreambuf_iterator< char >(in), std::istreambuf_iterator< char >());
-  }
-  in.clear();
-  return data;
-}
+using port::ReadAll;
 
 // The seconds a clip takes to play once, first frame to last.
 float ClipLength(const Instance::AnimClip& clip) {
@@ -970,6 +940,31 @@ void ReadLods() {
   }
 }
 
+// An area's file, read and parsed: all of the load that needs nothing of the game's, so
+// it can run on a worker while the game streams the area in (Prefetch).
+struct Parsed {
+  bool ok = false;
+  std::string error;
+  std::vector< Instance > instances;
+  Script script;
+};
+
+Parsed ReadAndParse(const std::string& path) {
+  Parsed parsed;
+  std::ifstream in(PortGci::PathFromString(path), std::ios::binary);
+  const std::vector< uint8_t > data = ReadAll(in);
+  parsed.ok = in && Parse(data, parsed.instances, parsed.error, &parsed.script);
+  return parsed;
+}
+
+// Prefetches by MREA, with the path each was read from: the main thread only.
+struct Prefetched {
+  std::string path;
+  std::future< Parsed > parsed;
+};
+std::unordered_map< uint32_t, Prefetched > sPrefetched;
+constexpr size_t kMaxPrefetched = 16;
+
 void Load(uint32_t mrea, Area& area) {
   const std::string path = PortMods::RoomGeoPath(mrea);
   if (path.empty() || gpResourceFactory == nullptr) {
@@ -978,15 +973,24 @@ void Load(uint32_t mrea, Area& area) {
   if (!sLodsRead) {
     ReadLods();
   }
-  std::ifstream in(PortGci::PathFromString(path), std::ios::binary);
-  const std::vector< uint8_t > data = ReadAll(in);
-  std::string error;
-  if (!in || !Parse(data, area.instances, error, &area.script)) {
-    PortLog::Write("room geo: %s: %s\n", path.c_str(), error.empty() ? "cannot read" : error.c_str());
+  Parsed parsed;
+  const auto prefetched = sPrefetched.find(mrea);
+  if (prefetched != sPrefetched.end() && prefetched->second.path == path && prefetched->second.parsed.valid()) {
+    parsed = prefetched->second.parsed.get(); // waits only if the worker is not done yet
+  } else {
+    parsed = ReadAndParse(path);
+  }
+  if (prefetched != sPrefetched.end()) {
+    sPrefetched.erase(prefetched);
+  }
+  if (!parsed.ok) {
+    PortLog::Write("room geo: %s: %s\n", path.c_str(), parsed.error.empty() ? "cannot read" : parsed.error.c_str());
     area.instances.clear();
     area.script = Script();
     return;
   }
+  area.instances = std::move(parsed.instances);
+  area.script = std::move(parsed.script);
   // A model the import could not convert leaves its instances behind.
   std::unordered_map< uint32_t, size_t > index;
   size_t missing = 0;
@@ -1232,6 +1236,33 @@ void Apply(Area& area, const ScriptEdge& edge, int depth) {
 }
 
 } // namespace
+
+void Prefetch(uint32_t mrea) {
+  if (GetMode() == Mode::Off || Areas().count(mrea) != 0 || sPrefetched.count(mrea) != 0) {
+    return;
+  }
+  std::string path = PortMods::RoomGeoPath(mrea);
+  if (path.empty()) {
+    return;
+  }
+  // Areas streamed in and dropped again before they loaded: the finished ones go first.
+  for (auto it = sPrefetched.begin(); sPrefetched.size() >= kMaxPrefetched && it != sPrefetched.end();) {
+    if (it->second.parsed.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+      it = sPrefetched.erase(it);
+    } else {
+      ++it;
+    }
+  }
+  if (sPrefetched.size() >= kMaxPrefetched) {
+    return;
+  }
+  try {
+    std::future< Parsed > parsed = std::async(std::launch::async, ReadAndParse, path);
+    sPrefetched.emplace(mrea, Prefetched{std::move(path), std::move(parsed)});
+  } catch (...) {
+    // No thread to spare: Load reads the file itself.
+  }
+}
 
 void SetLoadedAreas(const uint32_t* mreas, size_t count) {
   auto& areas = Areas();
@@ -2337,6 +2368,7 @@ int ClearMaterialValues() {
 
 void Reset() {
   CCubeModel::PortClearPBROverrides();
+  sPrefetched.clear(); // waits for any still reading: the files are about to change
   Areas().clear();
   sLods.clear();
   sLodsRead = false;
@@ -2413,7 +2445,7 @@ Mode GetMode() {
     return Mode::Off;
   }
   if (sMode < 0) {
-    const char* const env = std::getenv("MP_ROOM_GEO");
+    const char* const env = port::EnvString("MP_ROOM_GEO");
     sMode = int(env == nullptr || env[0] == '\0' ? Mode::Replace
                 : env[0] == '0'                  ? Mode::Off
                 : env[0] == 'o'                  ? Mode::Overlay

@@ -184,12 +184,16 @@ elseif (_aurora_dawn_provider STREQUAL "package")
     endif ()
     set(AURORA_DAWN_PACKAGE_URL
       "https://github.com/encounter/dawn/releases/download/${AURORA_DAWN_VERSION}/dawn-${_dawn_system}-${_dawn_arch}.tar.gz")
+    aurora_url_hash(_dawn_url_hash dawn "${AURORA_DAWN_VERSION}_${_dawn_system}-${_dawn_arch}" "${AURORA_DAWN_PACKAGE_SHA256}")
+  else ()
+    aurora_url_hash(_dawn_url_hash dawn "custom" "${AURORA_DAWN_PACKAGE_SHA256}")
   endif ()
   message(STATUS "aurora: Fetching prebuilt Dawn package from ${AURORA_DAWN_PACKAGE_URL}")
 
   include(FetchContent)
   FetchContent_Declare(dawn_prebuilt
     URL "${AURORA_DAWN_PACKAGE_URL}"
+    ${_dawn_url_hash}
     DOWNLOAD_EXTRACT_TIMESTAMP FALSE
   )
   FetchContent_MakeAvailable(dawn_prebuilt)

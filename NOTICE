@@ -17,6 +17,14 @@ root's own code rather than sweeping those directories in. Anyone who obtained
 this repository obtained a working copy; that is a separate question from what
 may be redistributed, and it is one only the copyright holder can answer.
 
+**The console SDK and runtime are not covered either.** `extern/sdk/` holds the
+decompiled Dolphin (GameCube) SDK (`extern/sdk/dolphin/`, which still carries
+Nintendo's build strings), the Metrowerks C library headers (`extern/sdk/libc/`)
+and the CodeWarrior runtime (`extern/sdk/runtime/`). Like `src/` and
+`include/`, they come from the retail executable and its toolchain, belong to
+their owners, and are outside the MIT grant. The same goes for the per-revision
+symbol and split data under `config/`, which describes that executable.
+
 **No game assets may be packaged with a build.** Not the disc image, not
 extracted PAK/STRG data, not textures from the retail game. The build takes the
 disc image as a runtime argument and nothing else, and `tools/make_appimage.sh`
@@ -34,23 +42,43 @@ travels with any build that contains it.
 | Aurora — windowing, WebGPU/Dawn plumbing | MIT | `extern/aurora/LICENSE` |
 | MusyX — audio mixer | MIT | `extern/musyx/LICENSE` |
 | SDL3 | zlib | fetched at configure time, `build/*/_deps/sdl-src/` |
+| Dawn — WebGPU implementation, with its bundled third-party code | BSD-3-Clause and others, © The Dawn & Tint Authors | `packaging/licenses/dawn.txt` (the prebuilt archive has none) |
+| nod — disc image reader | MIT or Apache-2.0, © Luke Street | `packaging/licenses/nod-MIT.txt`, `nod-Apache-2.0.txt` |
+| Abseil | Apache-2.0 | fetched, `abseil-cpp-src/` |
+| libpng | libpng | fetched, `png-src/` |
+| FreeType | FreeType Licence | fetched, `freetype-src/docs/FTL.TXT` |
+| xxHash | BSD-2-Clause | fetched, `xxhash-src/` |
 | ARM astc-encoder 5.7.0 — ASTC texture encoder for the Remastered importer | Apache-2.0, © Arm Limited | `extern/astcenc/LICENSE.txt` |
+| tegra_swizzle 0.3.2 and bcdec_rs 0.1.2 — Tegra block linear untiling and BC1–BC7 decoders, ported to C++ in `platform/port_remastered_tegra_swizzle.cpp` and `platform/port_remastered_bcdec.cpp` | MIT, © 2017-2018 IOrange, © 2016-2017 Smith Lin, © 2021 Nathan Kelso, © 2020-2021 hds | header of each file |
+| astc-decode 0.3.1 — ASTC block decoder, ported to C++ in `platform/port_remastered_astc_decode.cpp` | Apache-2.0, © 2021 Weiyi Wang (derived from an Apache-2.0 decoder at UNC Chapel Hill) | header of the file |
 | libadrenotools — loads custom Vulkan drivers (Turnip) on Android | BSD-2-Clause, © Billy Laws | `extern/adrenotools/LICENSE` |
 | liblinkernsbypass — used by libadrenotools | BSD-2-Clause, © Billy Laws | `extern/adrenotools/lib/linkernsbypass/LICENSE` |
+| GamepadMotionHelpers — gyro calibration and player/world space | MIT, © Julian "Jibb" Smart | `extern/GamepadMotionHelpers/LICENSE` |
 | Dear ImGui | MIT | fetched, `imgui-src/` |
 | fmt | MIT | fetched, `fmt-src/` |
 | zstd | BSD | fetched, `zstd-src/` |
+| Dawn — WebGPU implementation (prebuilt) | BSD-3-Clause, © The Dawn & Tint Authors | `packaging/licenses/dawn.txt` |
+| nod — disc image reader (prebuilt) | MIT or Apache-2.0 | `packaging/licenses/nod-MIT.txt`, `nod-Apache-2.0.txt` |
+| Abseil | Apache-2.0 | fetched, `abseil-cpp-src/` |
+| FreeType | FreeType Licence (FTL) | fetched, `freetype-src/` |
+| libpng | libpng licence | fetched, `png-src/` |
+| zlib-ng | zlib | fetched, `zlib-src/` |
+| xxHash | BSD-2-Clause | fetched, `xxhash-src/` |
+| RmlUi | MIT | fetched, `rmlui-src/` |
+| SQLite | public domain | fetched, `sqlite3-src/` (no licence file) |
+| OpenSSL (Windows, macOS and Android, linked in) | Apache-2.0 | `openssl.txt` / `openssl-license.txt` in each package |
 | Button prompt icons | Kenney CC0 | `tools/prompt_icons/README.md` |
-| Skippable cutscene room patches (`platform/port_skip_cutscenes_data.inc`), generated from randomprime's output | MIT, © randomprime contributors | https://github.com/randovania/randomprime/blob/master/LICENSE |
-| Archipelago pickup room patches (`platform/port_ap_pickups_data.inc`), generated from randomprime's `pickup_meta.rs.in` | MIT, © randomprime contributors | https://github.com/randovania/randomprime/blob/master/LICENSE |
-| Archipelago room and elevator table (`platform/port_ap_world_data.inc`), generated from randomprime's `pickup_meta.rs.in` and `elevators.rs` | MIT, © randomprime contributors | https://github.com/randovania/randomprime/blob/master/LICENSE |
-| Archipelago door table (in `platform/port_ap_world_data.inc`), generated from the Metroid Prime apworld's room data | MIT, © 2024 Electro1512 | https://github.com/UltiNaruto/MetroidAPrime/blob/main/LICENSE.md |
-| Archipelago logic rules (`platform/port_ap_logic_data.inc`), generated from the Metroid Prime AP PopTracker pack (v1.2.0, `838d820`) | MIT, © 2024 lil David | https://github.com/lilDavid/MetroidPrimeAP-PoptrackerPack/blob/main/LICENSE |
-| Custom pickup and door shield textures and models (Nothing, Phazon Suit, Zoomer, Cog; Power Beam and Bomb doors; `platform/port_custom_assets_data.inc`), embedded from randomprime's `extra_assets` | MIT, © randomprime contributors | https://github.com/randovania/randomprime/blob/master/LICENSE |
+| Skippable cutscene room patches (`platform/port_skip_cutscenes_data.inc`), generated from randomprime's output | MIT, © 2018 April Wade | `packaging/licenses/randomprime.txt` |
+| Archipelago pickup room patches (`platform/port_ap_pickups_data.inc`), generated from randomprime's `pickup_meta.rs.in` | MIT, © 2018 April Wade | `packaging/licenses/randomprime.txt` |
+| Archipelago room and elevator table (`platform/port_ap_world_data.inc`), generated from randomprime's `pickup_meta.rs.in` and `elevators.rs` | MIT, © 2018 April Wade | `packaging/licenses/randomprime.txt` |
+| Archipelago door table (in `platform/port_ap_world_data.inc`), generated from the Metroid Prime apworld's room data | MIT, © 2024 Electro1512 | `packaging/licenses/metroid-aprime-apworld.txt` |
+| Archipelago logic rules (`platform/port_ap_logic_data.inc`), generated from the Metroid Prime AP PopTracker pack (v1.2.0, `838d820`) | MIT, © 2024 lil David | `packaging/licenses/metroidprimeap-poptracker.txt` |
+| Custom pickup and door shield textures and models (Nothing, Phazon Suit, Zoomer, Cog; Power Beam and Bomb doors; `platform/port_custom_assets_data.inc`), embedded from randomprime's `extra_assets` | MIT, © 2018 April Wade | `packaging/licenses/randomprime.txt` |
 
 The notices are also collected into what is actually shipped: `dist/licenses/` on
-Windows, `usr/share/licenses/metroid-prime-port/` in the AppImage, and `assets/`
-in the APK. See `docs/RELEASING.md` for the per-platform position, including
+Windows and macOS, `share/licenses/metroid-prime-port/` in the Linux tarball and
+the AppImage (both through `tools/collect_licenses.sh`), `/app/share/licenses/`
+in the Flatpak, and `assets/` in the APK. See `docs/RELEASING.md` for the per-platform position, including
 what is still missing.
 
 The separate PrimeDecomp **GPL** recompilation toolchain is not part of this

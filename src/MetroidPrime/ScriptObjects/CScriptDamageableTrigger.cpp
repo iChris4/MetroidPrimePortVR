@@ -13,6 +13,12 @@
 #include "Kyoto/Math/CRelAngle.hpp"
 #include "Kyoto/Math/CloseEnough.hpp"
 
+#ifdef TARGET_PC
+#include "port_beam_doors.h"
+
+#include <new>
+#endif
+
 CScriptDamageableTrigger::CScriptDamageableTrigger(
     TUniqueId uid, const rstl::string& name, const CEntityInfo& info, const CVector3f& position,
     const CVector3f& extent, const CHealthInfo& hInfo, const CDamageVulnerability& dVuln,
@@ -161,10 +167,16 @@ void CScriptDamageableTrigger::Think(float dt, CStateManager& mgr) {
       }
       SetLinkedObjectAlpha(0.f, mgr);
       x300_25_alphaOut = false;
+#ifdef TARGET_PC
+      PortBeamDoors::OnForceFaded(mgr, area.GetAreaAssetId(), GetEditorId().Value());
+#endif
       return;
     }
   } else if (x16c_hInfo.GetHP() <= 0.f && GetActive()) {
     SendScriptMsgs(kSS_Dead, mgr, kSM_None);
+#ifdef TARGET_PC
+    PortBeamDoors::OnForceBroken(mgr, area.GetAreaAssetId(), GetEditorId().Value());
+#endif
     RemoveMaterial(kMT_Orbit, mgr);
     x300_25_alphaOut = true;
     x250_alphaTimer = 0.f;
@@ -177,6 +189,19 @@ void CScriptDamageableTrigger::Think(float dt, CStateManager& mgr) {
   x1e0_alpha = 0.2f * alpha;
   SetLinkedObjectAlpha(alpha, mgr);
 }
+
+#ifdef TARGET_PC
+void CScriptDamageableTrigger::PortRestyle(const CDamageVulnerability& vuln, CAssetId patternTex1,
+                                           CAssetId patternTex2, CAssetId colorTex) {
+  x174_dVuln = vuln;
+  // The plane has no assignment of its own; build it again as the constructor does.
+  // Safe in place: this is only called outside rendering (from Think or the console).
+  x254_fluidPlane.~CFluidPlaneDoor();
+  new (&x254_fluidPlane) CFluidPlaneDoor(patternTex1, patternTex2, colorTex, 1.f, 2,
+                                         CFluidPlane::kFT_NormalWater, 1.f,
+                                         CFluidUVMotion(6.f, 0.f));
+}
+#endif
 
 CHealthInfo* CScriptDamageableTrigger::HealthInfo(CStateManager&) { return &x16c_hInfo; }
 

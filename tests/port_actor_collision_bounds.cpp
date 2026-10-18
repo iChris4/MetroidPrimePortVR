@@ -4,6 +4,7 @@
 // than answering a box the disc never had.
 
 #include "port_actor_collision_bounds.h"
+#include "port_test.h"
 
 #include <algorithm>
 #include <cmath>
@@ -14,14 +15,6 @@
 #include <vector>
 
 namespace {
-int sFailures = 0;
-
-void Check(bool condition, const char* what) {
-  if (!condition) {
-    std::fprintf(stderr, "FAIL: %s\n", what);
-    ++sFailures;
-  }
-}
 
 void Put32(std::vector<uint8_t>& out, uint32_t value) {
   out.push_back(uint8_t(value >> 24));
@@ -192,29 +185,29 @@ void TestOriginalVsReplacement() {
   });
 
   PortActorCollisionBounds::Reader reader(MakeIo());
-  Check(reader.Build(), "the index builds over a synthetic PAK");
-  Check(reader.Indexed() && reader.ModelCount() == 3, "every model is indexed");
-  Check(reader.ModelCount() == 3 && sDisc.opens == 1, "one file is opened once");
+  CHECK_MSG(reader.Build(), "the index builds over a synthetic PAK");
+  CHECK_MSG(reader.Indexed() && reader.ModelCount() == 3, "every model is indexed");
+  CHECK_MSG(reader.ModelCount() == 3 && sDisc.opens == 1, "one file is opened once");
 
   float bounds[6] = {};
-  Check(Box(reader, 0xC8C4E650, bounds) && bounds[0] == kFlat[0] && bounds[5] == kFlat[5],
-        "an uncompressed model gives the disc's flat box, not a thick one");
-  Check(bounds[2] == 0.f && bounds[5] == 0.f, "the disc's flat box stays flat in Z");
-  Check(Box(reader, 0x11111111, bounds) && bounds[0] == kFlat[0] && bounds[4] == kFlat[4],
-        "a compressed model gives the same box as an uncompressed one");
-  Check(Box(reader, 0x22222222, bounds) && bounds[5] == kThick[5], "a thick model on the disc is read as it is");
+  CHECK_MSG(Box(reader, 0xC8C4E650, bounds) && bounds[0] == kFlat[0] && bounds[5] == kFlat[5],
+            "an uncompressed model gives the disc's flat box, not a thick one");
+  CHECK_MSG(bounds[2] == 0.f && bounds[5] == 0.f, "the disc's flat box stays flat in Z");
+  CHECK_MSG(Box(reader, 0x11111111, bounds) && bounds[0] == kFlat[0] && bounds[4] == kFlat[4],
+            "a compressed model gives the same box as an uncompressed one");
+  CHECK_MSG(Box(reader, 0x22222222, bounds) && bounds[5] == kThick[5], "a thick model on the disc is read as it is");
 
   // A model the disc does not have is not invented.
   float missing[6];
-  Check(!Box(reader, 0xDEADBEEF, missing), "an id the disc lacks has no box");
-  Check(!Box(reader, 0, missing), "id zero has no box");
+  CHECK_MSG(!Box(reader, 0xDEADBEEF, missing), "an id the disc lacks has no box");
+  CHECK_MSG(!Box(reader, 0, missing), "id zero has no box");
 
   // Reading again must not touch the file: every answer is cached.
   const int opens = sDisc.opens;
   float again[6] = {};
-  Check(Box(reader, 0xC8C4E650, again) && again[5] == kFlat[5], "a cached box is the same box");
-  Check(Box(reader, 0xDEADBEEF, missing) == false, "a cached miss stays a miss");
-  Check(sDisc.opens == opens, "cached answers do not reopen or reread");
+  CHECK_MSG(Box(reader, 0xC8C4E650, again) && again[5] == kFlat[5], "a cached box is the same box");
+  CHECK_MSG(Box(reader, 0xDEADBEEF, missing) == false, "a cached miss stays a miss");
+  CHECK_MSG(sDisc.opens == opens, "cached answers do not reopen or reread");
 }
 
 void TestModFilesAreNotCanonical() {
@@ -229,11 +222,11 @@ void TestModFilesAreNotCanonical() {
   sDisc.files[3] = MakePak({Entry{0x99999999, MakeCmdl(kThick)}});
 
   PortActorCollisionBounds::Reader reader(MakeIo());
-  Check(reader.Build(), "the index builds with mod PAKs present");
-  Check(reader.ModelCount() == 1, "only the base PAK's models are indexed");
+  CHECK_MSG(reader.Build(), "the index builds with mod PAKs present");
+  CHECK_MSG(reader.ModelCount() == 1, "only the base PAK's models are indexed");
   float bounds[6] = {};
-  Check(Box(reader, 0xC8C4E650, bounds) && bounds[5] == kFlat[5], "the base PAK's box wins over a mod's");
-  Check(!Box(reader, 0x99999999, bounds), "a model only a mod brings is not read");
+  CHECK_MSG(Box(reader, 0xC8C4E650, bounds) && bounds[5] == kFlat[5], "the base PAK's box wins over a mod's");
+  CHECK_MSG(!Box(reader, 0x99999999, bounds), "a model only a mod brings is not read");
 }
 
 void TestMalformed() {
@@ -267,39 +260,39 @@ void TestMalformed() {
   sDisc.files[1].assign(16, 0); // not a PAK at all
 
   PortActorCollisionBounds::Reader reader(MakeIo());
-  Check(reader.Build(), "the index builds past a PAK that does not parse");
+  CHECK_MSG(reader.Build(), "the index builds past a PAK that does not parse");
   float bounds[6] = {};
-  Check(!Box(reader, 0x01, bounds), "a NaN coordinate is rejected");
-  Check(!Box(reader, 0x02, bounds), "a wrong magic is rejected");
-  Check(!Box(reader, 0x03, bounds), "an unknown version is rejected");
-  Check(!Box(reader, 0x04, bounds), "a reversed box is rejected");
-  Check(!Box(reader, 0x05, bounds), "an infinite coordinate is rejected");
-  Check(!Box(reader, 0x06, bounds), "a truncated resource is rejected");
-  Check(!Box(reader, 0x07, bounds), "a corrupt compressed stream is rejected");
-  Check(Box(reader, 0x08, bounds) && bounds[5] == kFlat[5], "a good model beside bad ones still reads");
+  CHECK_MSG(!Box(reader, 0x01, bounds), "a NaN coordinate is rejected");
+  CHECK_MSG(!Box(reader, 0x02, bounds), "a wrong magic is rejected");
+  CHECK_MSG(!Box(reader, 0x03, bounds), "an unknown version is rejected");
+  CHECK_MSG(!Box(reader, 0x04, bounds), "a reversed box is rejected");
+  CHECK_MSG(!Box(reader, 0x05, bounds), "an infinite coordinate is rejected");
+  CHECK_MSG(!Box(reader, 0x06, bounds), "a truncated resource is rejected");
+  CHECK_MSG(!Box(reader, 0x07, bounds), "a corrupt compressed stream is rejected");
+  CHECK_MSG(Box(reader, 0x08, bounds) && bounds[5] == kFlat[5], "a good model beside bad ones still reads");
 }
 
 void TestHeaderParser() {
   float bounds[6] = {};
   const std::vector<uint8_t> good = MakeCmdl(kFlat);
-  Check(PortActorCollisionBounds::ParseCmdlBounds(good.data(), good.size(), bounds) && bounds[0] == kFlat[0] &&
-            bounds[5] == kFlat[5],
-        "ParseCmdlBounds reads a box");
-  Check(!PortActorCollisionBounds::ParseCmdlBounds(nullptr, good.size(), bounds), "no data, no box");
-  Check(!PortActorCollisionBounds::ParseCmdlBounds(good.data(), 0x0c, bounds), "a header cut short has no box");
-  Check(!PortActorCollisionBounds::ParseCmdlBounds(good.data(), 0x2b, bounds), "one byte short of the header");
-  Check(PortActorCollisionBounds::ParseCmdlBounds(good.data(), 0x2c, bounds), "exactly the header is enough");
+  CHECK_MSG(PortActorCollisionBounds::ParseCmdlBounds(good.data(), good.size(), bounds) && bounds[0] == kFlat[0] &&
+                bounds[5] == kFlat[5],
+            "ParseCmdlBounds reads a box");
+  CHECK_MSG(!PortActorCollisionBounds::ParseCmdlBounds(nullptr, good.size(), bounds), "no data, no box");
+  CHECK_MSG(!PortActorCollisionBounds::ParseCmdlBounds(good.data(), 0x0c, bounds), "a header cut short has no box");
+  CHECK_MSG(!PortActorCollisionBounds::ParseCmdlBounds(good.data(), 0x2b, bounds), "one byte short of the header");
+  CHECK_MSG(PortActorCollisionBounds::ParseCmdlBounds(good.data(), 0x2c, bounds), "exactly the header is enough");
 
   // A box flat in one axis is a real one (the frozen lava's Z).
   const std::vector<uint8_t> flat = MakeCmdl(kFlat);
-  Check(PortActorCollisionBounds::ParseCmdlBounds(flat.data(), flat.size(), bounds) && bounds[2] == bounds[5],
-        "a flat box parses");
+  CHECK_MSG(PortActorCollisionBounds::ParseCmdlBounds(flat.data(), flat.size(), bounds) && bounds[2] == bounds[5],
+            "a flat box parses");
   const float point6[6] = {1.f, 2.f, 3.f, 1.f, 2.f, 3.f};
   const std::vector<uint8_t> point = MakeCmdl(point6);
-  Check(PortActorCollisionBounds::ParseCmdlBounds(point.data(), point.size(), bounds) && bounds[0] == 1.f,
-        "a box of no extent parses");
+  CHECK_MSG(PortActorCollisionBounds::ParseCmdlBounds(point.data(), point.size(), bounds) && bounds[0] == 1.f,
+            "a box of no extent parses");
   const std::vector<uint8_t> v1 = MakeCmdl(kFlat, 0xDEADBABE, 1);
-  Check(PortActorCollisionBounds::ParseCmdlBounds(v1.data(), v1.size(), bounds), "version 1 parses");
+  CHECK_MSG(PortActorCollisionBounds::ParseCmdlBounds(v1.data(), v1.size(), bounds), "version 1 parses");
 }
 
 void TestNoDisc() {
@@ -307,15 +300,15 @@ void TestNoDisc() {
   // Nothing open, and no PAKs at all: the reader has to answer false for
   // everything rather than crash, so the caller keeps the drawn bounds.
   PortActorCollisionBounds::Reader reader(MakeIo());
-  Check(!reader.Build(), "an empty disc has no models");
-  Check(!reader.Indexed() && reader.ModelCount() == 0, "and says so");
+  CHECK_MSG(!reader.Build(), "an empty disc has no models");
+  CHECK_MSG(!reader.Indexed() && reader.ModelCount() == 0, "and says so");
   float bounds[6];
-  Check(!Box(reader, 0xC8C4E650, bounds), "no box without a disc");
+  CHECK_MSG(!Box(reader, 0xC8C4E650, bounds), "no box without a disc");
 
   PortActorCollisionBounds::SourceIo empty;
   PortActorCollisionBounds::Reader blind(empty);
-  Check(!blind.Build(), "a reader with no io builds nothing");
-  Check(!blind.Bounds(1, bounds), "and answers nothing");
+  CHECK_MSG(!blind.Build(), "a reader with no io builds nothing");
+  CHECK_MSG(!blind.Bounds(1, bounds), "and answers nothing");
 }
 } // namespace
 
@@ -325,10 +318,8 @@ int main() {
   TestMalformed();
   TestHeaderParser();
   TestNoDisc();
-  if (sFailures != 0) {
-    std::fprintf(stderr, "%d check(s) failed\n", sFailures);
-    return 1;
+  if (port_test::Failures() == 0) {
+    std::printf("port_actor_collision_bounds: all checks passed\n");
   }
-  std::printf("port_actor_collision_bounds: all checks passed\n");
-  return 0;
+  return PORT_TEST_RESULT();
 }

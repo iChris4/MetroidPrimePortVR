@@ -9,7 +9,9 @@ be fetched. Keep their license files and source notices when updating them.
 | `aurora` | <https://github.com/encounter/aurora> | Local port fork `d39404c803d28657c94159a8f44addffdd85a781`, based on port snapshot `32c926ca0f59994249ba4dae5d606a66f8bbd87f` |
 | `astcenc` | <https://github.com/ARM-software/astc-encoder> | Release `5.7.0` (`baff485b0ff36d2f95d28961605106502c653966`), Apache-2.0 |
 | `adrenotools` | <https://github.com/bylaws/libadrenotools> | `8fae8ce254dfc1344527e05301e43f37dea2df80`, with `lib/linkernsbypass` at `aa3975893d83ef1bc84c321ec60c65fbf1287887`, BSD-2-Clause |
+| `sdk` | PrimeDecomp (decompiled) | Dolphin SDK, Metrowerks libc headers and CodeWarrior runtime, decompiled from the retail executable; **not** open source and not covered by `LICENSE` (see `NOTICE`) |
 | `musyx` | <https://github.com/AxioDL/musyx> | Local SDL3 port fork `dc8bed3d6b253113a9f0c7bed57378f91b8dc788`, based on port snapshot `ab6d648668f2c6871eef2c079e8edccf51d7f8ec` |
+| `GamepadMotionHelpers` | <https://github.com/JibbSmart/GamepadMotionHelpers> | `f1a76007ec058122a4bb6f19c816c6c0c7b7f12a` (`GamepadMotion.hpp` only), MIT |
 
 These commit IDs record provenance; they are not download requirements. Existing
 developer checkouts retain their old submodule object databases under

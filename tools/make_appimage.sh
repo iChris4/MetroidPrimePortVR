@@ -17,7 +17,10 @@ BIN="$BUILD/metroid_prime_port"
 TEXTURES="$ROOT/textures"
 ICON="$ROOT/packaging/metroid_prime_port.png"
 TOOL="$OUT/appimagetool-x86_64.AppImage"
-TOOL_URL="https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage"
+# A fixed release, checked by hash: the tool runs on the release runner.
+TOOL_VERSION=1.9.1
+TOOL_SHA256=ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
+TOOL_URL="https://github.com/AppImage/appimagetool/releases/download/$TOOL_VERSION/appimagetool-x86_64.AppImage"
 
 if [[ ! -x "$BIN" ]]; then
     echo "no executable at $BIN - build first" >&2
@@ -37,8 +40,14 @@ mkdir -p "$APPDIR/usr/bin"
 
 install -m755 "$BIN" "$APPDIR/usr/bin/metroid_prime_port"
 # Otherwise the port looks for replacements next to the executable.
+# Tracked files only in a git checkout, so nothing dropped into textures/ locally
+# (a dump, a pack made from game data) is handed out with the package.
 if [[ $EMBEDDED = 0 ]]; then
-    cp -r "$TEXTURES" "$APPDIR/usr/bin/textures"
+    if git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        (cd "$ROOT" && git ls-files -z textures | xargs -0 cp --parents -t "$APPDIR/usr/bin")
+    else
+        cp -r "$TEXTURES" "$APPDIR/usr/bin/textures"
+    fi
 fi
 install -m644 "$ICON" "$APPDIR/metroid-prime.png"
 # File managers and AppImage launchers read the icon from here.
@@ -53,31 +62,9 @@ ln -s metroid-prime.png "$APPDIR/.DirIcon"
 # new as that desktop.
 
 # Third-party notices have to travel with anything that is handed out. The
-# vendored components are in the tree; the fetched ones are in the build
-# directory, so the AppDir is assembled from whichever of those exist.
-mkdir -p "$APPDIR/usr/share/licenses/metroid-prime-port"
-collect_notice() {
-    # $1 = source licence file, $2 = name it is filed under.
-    [[ -f "$1" ]] || return 0
-    cp "$1" "$APPDIR/usr/share/licenses/metroid-prime-port/$2"
-}
-repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-build_dir=${build_dir:-$(dirname -- "$BIN")}
-# The port's own grant and notice first. A build that links MIT and zlib
-# components has to carry their terms, and a grant nobody can read inside the
-# package is not much of a grant.
-collect_notice "$repo_root/LICENSE" port-license.txt
-collect_notice "$repo_root/NOTICE" port-notice.txt
-collect_notice "$repo_root/extern/aurora/LICENSE" aurora.txt
-collect_notice "$repo_root/extern/musyx/LICENSE" musyx.txt
-collect_notice "$repo_root/extern/astcenc/LICENSE.txt" astcenc.txt
-for dep in sdl-src imgui-src fmt-src zstd-src; do
-    for notice in "$build_dir"/_deps/"$dep"/LICENSE* "$build_dir"/_deps/"$dep"/COPYING*; do
-        [[ -f "$notice" ]] || continue
-        cp "$notice" "$APPDIR/usr/share/licenses/metroid-prime-port/${dep}.txt"
-        break
-    done
-done
+# shared collector covers the vendored and fetched components, the prebuilt
+# packages that ship no licence, and the generated data tables.
+"$ROOT/tools/collect_licenses.sh" "$BUILD" "$APPDIR/usr/share/licenses/metroid-prime-port"
 
 cat > "$APPDIR/AppRun" <<'EOF'
 #!/bin/sh
@@ -97,9 +84,14 @@ Categories=Game;
 Terminal=false
 EOF
 
-if [[ ! -x "$TOOL" ]]; then
-    echo "fetching appimagetool"
-    curl -sSL -o "$TOOL" "$TOOL_URL"
+# A cached copy is reused only if it is the pinned one.
+if [[ ! -x "$TOOL" ]] || ! echo "$TOOL_SHA256  $TOOL" | sha256sum -c --quiet - 2>/dev/null; then
+    echo "fetching appimagetool $TOOL_VERSION"
+    mkdir -p "$OUT"
+    curl -fsSL -o "$TOOL.part" "$TOOL_URL"
+    echo "$TOOL_SHA256  $TOOL.part" | sha256sum -c --quiet - ||
+        { echo "appimagetool download does not match its pinned SHA-256" >&2; rm -f "$TOOL.part"; exit 1; }
+    mv "$TOOL.part" "$TOOL"
     chmod +x "$TOOL"
 fi
 

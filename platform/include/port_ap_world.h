@@ -177,8 +177,47 @@ struct DoorChange {
 // shield and, as with randomprime's PrimaryBlastShield door mode, the plain
 // colour of the door that was under it.
 enum { kShieldBits = 128 };
+//
+// `unlocked` (kBeamDoorBits bits, one per BeamDoorwayBit) is the beam doorways
+// the player has opened under the "unlock beam doors once opened" setting:
+// such a door, on either side, turns plain Blue whatever its lock (the disc's
+// or the seed's colour mapping) unless a blast shield still sits on it. It
+// works without a seed: a default Layout then yields only those doors.
+enum { kBeamDoorBits = 128, kBeamDoorWords = kBeamDoorBits / 32 };
 std::vector< DoorChange > Doors(const Layout& layout, uint32_t mrea,
-                                const uint32_t* broken = nullptr);
+                                const uint32_t* broken = nullptr,
+                                const uint32_t* unlocked = nullptr);
+
+// The beam doorways of the disc (a door whose lock on the disc is Wave, Ice,
+// Plasma or Power Beam Only), numbered in door table order with a doorway's two
+// sides sharing a number, so a number is stable for a build. A door the disc
+// has Blue and only a seed's per-door lock colours has no number.
+int BeamDoorwayCount();
+// The doorway number of door table index `door`, -1 when it has none.
+int BeamDoorwayBit(int door);
+// The door table index whose damageable trigger in area `mrea` has this editor
+// id, -1 when none does.
+int FindDoorByForce(uint32_t mrea, uint32_t forceId);
+// Whether door `door` of area `mrea` is, as this seed (a default Layout for
+// none) and the broken shields leave it, a beam door with no blast shield on
+// it: one the setting may unlock.
+bool BeamDoorUnlockable(const Layout& layout, uint32_t mrea, int door,
+                        const uint32_t* broken = nullptr);
+// The geometry of a doorway's doors (both sides, those with a door object):
+// index, area, ids and orientation only; `type` is left empty.
+std::vector< DoorChange > BeamDoorway(int bit);
+
+// What a Blue door is made of, for restyling a door that is already loaded.
+struct DoorStyle {
+  uint32_t cmdl = 0;
+  uint32_t cmdlVertical = 0;
+  uint32_t pattern0 = 0;
+  uint32_t pattern1 = 0;
+  uint32_t color = 0;
+};
+bool BlueDoorStyle(DoorStyle& out);
+// The force field's weaknesses as a script stores them (a CDamageVulnerability).
+std::vector< uint8_t > BlueDoorVulnerability();
 
 // The script patch (PortSkipCutscenes::ApplyOps) that gives a room's doors
 // their types, as randomprime's patch_door does: the door's force field
@@ -221,7 +260,8 @@ struct MapDoor {
   int type = 0;
 };
 std::vector< MapDoor > MapDoors(const Layout& layout, uint32_t mapa,
-                                const uint32_t* broken = nullptr);
+                                const uint32_t* broken = nullptr,
+                                const uint32_t* unlocked = nullptr);
 
 } // namespace PortApWorld
 

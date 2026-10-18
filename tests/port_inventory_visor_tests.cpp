@@ -6,6 +6,7 @@
 #include "port_remastered_convert.h"
 
 #include "Kyoto/Graphics/CCubeModel.hpp"
+#include "port_test.h"
 
 #include <cmath>
 #include <cstdint>
@@ -18,15 +19,6 @@
 using namespace PortRemastered;
 
 namespace {
-
-int sFailures = 0;
-
-void Check(bool condition, const char* what) {
-  if (!condition) {
-    std::fprintf(stderr, "FAIL: %s\n", what);
-    ++sFailures;
-  }
-}
 
 constexpr uint32_t FourCC(char a, char b, char c, char d) {
   return (uint32_t(uint8_t(a)) << 24) | (uint32_t(uint8_t(b)) << 16) | (uint32_t(uint8_t(c)) << 8) | uint8_t(d);
@@ -261,13 +253,13 @@ void TestConverter(bool standalone) {
   std::string error;
   if (!converter.Convert(BuildModel(), opt, error)) {
     std::fprintf(stderr, "FAIL: %s: the conversion failed: %s\n", pathName, error.c_str());
-    ++sFailures;
+    port_test::CountFailure();
     return;
   }
   auto check = [pathName](bool condition, const char* what) {
     if (!condition) {
       std::fprintf(stderr, "FAIL: %s: %s\n", pathName, what);
-      ++sFailures;
+      port_test::CountFailure();
     }
   };
   check(decisions.size() == 2, "two materials decided");
@@ -304,31 +296,31 @@ void TestDrawDecision() {
   const int additive = CModelFlags::kT_Additive;
   const int opaque = CModelFlags::kT_Opaque;
   // No pass: the visor's kinds draw as they would anywhere else.
-  Check(M::PortInventoryDraw(false, base, 36.f, blend, true, true) == M::kPID_Outside, "no pass: 36 outside");
-  Check(M::PortInventoryDraw(false, pulse, 37.f, additive, true, true) == M::kPID_Outside, "no pass: 37 outside");
+  CHECK_MSG(M::PortInventoryDraw(false, base, 36.f, blend, true, true) == M::kPID_Outside, "no pass: 36 outside");
+  CHECK_MSG(M::PortInventoryDraw(false, pulse, 37.f, additive, true, true) == M::kPID_Outside, "no pass: 37 outside");
   // Under a pass, other kinds are untouched, in either pass and whatever the screen copy.
   for (float kind : {-1.f, 0.f, 8.f, 34.f, 35.f, 38.f}) {
     for (int trans : {opaque, blend, additive}) {
-      Check(M::PortInventoryDraw(true, base, kind, trans, true, false) == M::kPID_Outside &&
-                M::PortInventoryDraw(true, pulse, kind, trans, false, true) == M::kPID_Outside,
-            "a pass leaves other kinds outside");
+      CHECK_MSG(M::PortInventoryDraw(true, base, kind, trans, true, false) == M::kPID_Outside &&
+                    M::PortInventoryDraw(true, pulse, kind, trans, false, true) == M::kPID_Outside,
+                "a pass leaves other kinds outside");
     }
   }
   // The pass's own mode, the glass with its screen copy: alternating, each decided alone.
   for (int round = 0; round < 2; ++round) {
-    Check(M::PortInventoryDraw(true, base, 36.f, blend, true, true) == M::kPID_Pbr, "base pass: 36 PBR");
-    Check(M::PortInventoryDraw(true, base, 37.f, blend, true, false) == M::kPID_Pbr, "base pass: 37 PBR");
-    Check(M::PortInventoryDraw(true, pulse, 36.f, additive, true, true) == M::kPID_Pbr, "pulse pass: 36 PBR");
-    Check(M::PortInventoryDraw(true, pulse, 37.f, additive, true, false) == M::kPID_Pbr, "pulse pass: 37 PBR");
+    CHECK_MSG(M::PortInventoryDraw(true, base, 36.f, blend, true, true) == M::kPID_Pbr, "base pass: 36 PBR");
+    CHECK_MSG(M::PortInventoryDraw(true, base, 37.f, blend, true, false) == M::kPID_Pbr, "base pass: 37 PBR");
+    CHECK_MSG(M::PortInventoryDraw(true, pulse, 36.f, additive, true, true) == M::kPID_Pbr, "pulse pass: 36 PBR");
+    CHECK_MSG(M::PortInventoryDraw(true, pulse, 37.f, additive, true, false) == M::kPID_Pbr, "pulse pass: 37 PBR");
   }
-  Check(M::PortInventoryDraw(true, base, 36.f, blend, true, false) == M::kPID_Tev, "36 without the copy: TEV");
-  Check(M::PortInventoryDraw(true, base, 37.f, blend, false, true) == M::kPID_Tev, "not PBR-allowed: TEV");
+  CHECK_MSG(M::PortInventoryDraw(true, base, 36.f, blend, true, false) == M::kPID_Tev, "36 without the copy: TEV");
+  CHECK_MSG(M::PortInventoryDraw(true, base, 37.f, blend, false, true) == M::kPID_Tev, "not PBR-allowed: TEV");
   // Another mode than the pass's falls back.
   for (float kind : {36.f, 37.f}) {
-    Check(M::PortInventoryDraw(true, base, kind, opaque, true, true) == M::kPID_Tev, "base pass, opaque: TEV");
-    Check(M::PortInventoryDraw(true, base, kind, additive, true, true) == M::kPID_Tev, "base pass, additive: TEV");
-    Check(M::PortInventoryDraw(true, pulse, kind, blend, true, true) == M::kPID_Tev, "pulse pass, blended: TEV");
-    Check(M::PortInventoryDraw(true, pulse, kind, opaque, true, true) == M::kPID_Tev, "pulse pass, opaque: TEV");
+    CHECK_MSG(M::PortInventoryDraw(true, base, kind, opaque, true, true) == M::kPID_Tev, "base pass, opaque: TEV");
+    CHECK_MSG(M::PortInventoryDraw(true, base, kind, additive, true, true) == M::kPID_Tev, "base pass, additive: TEV");
+    CHECK_MSG(M::PortInventoryDraw(true, pulse, kind, blend, true, true) == M::kPID_Tev, "pulse pass, blended: TEV");
+    CHECK_MSG(M::PortInventoryDraw(true, pulse, kind, opaque, true, true) == M::kPID_Tev, "pulse pass, opaque: TEV");
   }
 }
 
@@ -346,20 +338,20 @@ void TestDrawFlags() {
     const CModelFlags opaque(CModelFlags::kT_Opaque, 3, static_cast< CModelFlags::EFlags >(other), tint);
     const CModelFlags flags = M::PortDrawFlags(true, false, opaque, model);
     const uint expected = (other & ~static_cast< uint >(CModelFlags::kF_DepthUpdate));
-    Check(flags.GetTrans() == CModelFlags::kT_Opaque, "inventory: shaded as opaque");
-    Check((flags.GetOtherFlags() & CModelFlags::kF_DepthCompare) != 0, "inventory: depth compare on");
-    Check((flags.GetOtherFlags() & CModelFlags::kF_DepthUpdate) == 0, "inventory: depth write off");
-    Check(static_cast< uint >(flags.GetOtherFlags()) == expected, "inventory: other flag bits preserved");
-    Check(flags.GetShaderSet() == 3, "inventory: shader set preserved");
-    Check(flags.GetColor() == tint, "inventory: colour preserved");
+    CHECK_MSG(flags.GetTrans() == CModelFlags::kT_Opaque, "inventory: shaded as opaque");
+    CHECK_MSG((flags.GetOtherFlags() & CModelFlags::kF_DepthCompare) != 0, "inventory: depth compare on");
+    CHECK_MSG((flags.GetOtherFlags() & CModelFlags::kF_DepthUpdate) == 0, "inventory: depth write off");
+    CHECK_MSG(static_cast< uint >(flags.GetOtherFlags()) == expected, "inventory: other flag bits preserved");
+    CHECK_MSG(flags.GetShaderSet() == 3, "inventory: shader set preserved");
+    CHECK_MSG(flags.GetColor() == tint, "inventory: colour preserved");
     // A doll that already compares nothing is still compared against.
     const CModelFlags none(trans, 3, CModelFlags::kF_Nothing, tint);
     const CModelFlags noneOpaque(CModelFlags::kT_Opaque, 3, CModelFlags::kF_Nothing, tint);
     const CModelFlags forced = M::PortDrawFlags(true, true, noneOpaque, none);
-    Check(forced.GetOtherFlags() == CModelFlags::kF_DepthCompare, "inventory: compare on, write off from none");
+    CHECK_MSG(forced.GetOtherFlags() == CModelFlags::kF_DepthCompare, "inventory: compare on, write off from none");
     // The other families.
-    Check(M::PortDrawFlags(false, false, opaque, model) == model, "outside: the doll's flags");
-    Check(M::PortDrawFlags(false, true, opaque, model) == opaque, "solid blend: opaque flags unchanged");
+    CHECK_MSG(M::PortDrawFlags(false, false, opaque, model) == model, "outside: the doll's flags");
+    CHECK_MSG(M::PortDrawFlags(false, true, opaque, model) == opaque, "solid blend: opaque flags unchanged");
   }
 }
 
@@ -372,39 +364,39 @@ bool Eq4(const float* v, float a, float b, float c, float d) {
 void TestModulation() {
   float diffuse[4], incan[4], coverage = -1.f;
   CCubeModel::PortInventoryPass pass = {false, {0.75f, 0.75f, 0.75f, 0.6f}, 0.5f, 0.6f};
-  Check(CCubeModel::PortInventoryModulation(pass, diffuse, incan, coverage), "the base pass draws");
-  Check(Eq4(diffuse, 0.75f, 0.75f, 0.75f, 0.6f), "base pass: DIFC is the visor colour");
-  Check(Eq4(incan, 0.f, 0.f, 0.f, 1.f), "base pass: ICMC is (0, 0, 0, 1)");
-  Check(Near(coverage, 0.6f), "base pass: C is drawAlpha");
+  CHECK_MSG(CCubeModel::PortInventoryModulation(pass, diffuse, incan, coverage), "the base pass draws");
+  CHECK_MSG(Eq4(diffuse, 0.75f, 0.75f, 0.75f, 0.6f), "base pass: DIFC is the visor colour");
+  CHECK_MSG(Eq4(incan, 0.f, 0.f, 0.f, 1.f), "base pass: ICMC is (0, 0, 0, 1)");
+  CHECK_MSG(Near(coverage, 0.6f), "base pass: C is drawAlpha");
 
   pass.additive = true;
   pass.coverage = 1.f;
   pass.pulse = 0.5f;
-  Check(CCubeModel::PortInventoryModulation(pass, diffuse, incan, coverage), "a pulse draws");
-  Check(Eq4(diffuse, 1.f, 1.f, 1.f, 1.f), "pulse at full coverage: DIFC white");
-  Check(Eq4(incan, 0.2f, 0.05f, 0.f, 1.f), "pulse at full coverage: ICMC is the pulse colour");
-  Check(Near(coverage, 1.f), "pulse at full coverage: C 1");
+  CHECK_MSG(CCubeModel::PortInventoryModulation(pass, diffuse, incan, coverage), "a pulse draws");
+  CHECK_MSG(Eq4(diffuse, 1.f, 1.f, 1.f, 1.f), "pulse at full coverage: DIFC white");
+  CHECK_MSG(Eq4(incan, 0.2f, 0.05f, 0.f, 1.f), "pulse at full coverage: ICMC is the pulse colour");
+  CHECK_MSG(Near(coverage, 1.f), "pulse at full coverage: C 1");
 
   pass.coverage = 1.f - 5e-6f;
-  Check(CCubeModel::PortInventoryModulation(pass, diffuse, incan, coverage) && Eq4(incan, 0.2f, 0.05f, 0.f, 1.f),
-        "coverage within 1e-5 of 1 counts as full");
+  CHECK_MSG(CCubeModel::PortInventoryModulation(pass, diffuse, incan, coverage) && Eq4(incan, 0.2f, 0.05f, 0.f, 1.f),
+            "coverage within 1e-5 of 1 counts as full");
 
   pass.coverage = 0.5f;
   pass.pulse = 0.25f;
-  Check(CCubeModel::PortInventoryModulation(pass, diffuse, incan, coverage), "a partial pulse draws");
-  Check(Eq4(diffuse, 0.1f, 0.025f, 0.f, 0.25f), "partial coverage: DIFC is the pulse colour, alpha the pulse");
-  Check(Eq4(incan, 0.f, 0.f, 0.f, 1.f), "partial coverage: ICMC neutral");
-  Check(Near(coverage, 0.5f), "partial coverage: C is drawAlpha");
+  CHECK_MSG(CCubeModel::PortInventoryModulation(pass, diffuse, incan, coverage), "a partial pulse draws");
+  CHECK_MSG(Eq4(diffuse, 0.1f, 0.025f, 0.f, 0.25f), "partial coverage: DIFC is the pulse colour, alpha the pulse");
+  CHECK_MSG(Eq4(incan, 0.f, 0.f, 0.f, 1.f), "partial coverage: ICMC neutral");
+  CHECK_MSG(Near(coverage, 0.5f), "partial coverage: C is drawAlpha");
 
   pass.pulse = 0.f;
-  Check(!CCubeModel::PortInventoryModulation(pass, diffuse, incan, coverage), "no pulse, no second pass");
+  CHECK_MSG(!CCubeModel::PortInventoryModulation(pass, diffuse, incan, coverage), "no pulse, no second pass");
   pass.additive = false;
-  Check(CCubeModel::PortInventoryModulation(pass, diffuse, incan, coverage), "the base pass draws at no pulse");
+  CHECK_MSG(CCubeModel::PortInventoryModulation(pass, diffuse, incan, coverage), "the base pass draws at no pulse");
 
-  Check(CCubeModel::PortInventoryKind(36.f) && CCubeModel::PortInventoryKind(37.f), "kinds 36 and 37 are the visor's");
-  Check(!CCubeModel::PortInventoryKind(34.f) && !CCubeModel::PortInventoryKind(35.f) &&
-            !CCubeModel::PortInventoryKind(38.f) && !CCubeModel::PortInventoryKind(-1.f),
-        "no other kind is");
+  CHECK_MSG(CCubeModel::PortInventoryKind(36.f) && CCubeModel::PortInventoryKind(37.f), "kinds 36 and 37 are the visor's");
+  CHECK_MSG(!CCubeModel::PortInventoryKind(34.f) && !CCubeModel::PortInventoryKind(35.f) &&
+                !CCubeModel::PortInventoryKind(38.f) && !CCubeModel::PortInventoryKind(-1.f),
+            "no other kind is");
 }
 
 }  // namespace
@@ -415,8 +407,8 @@ int main() {
   TestModulation();
   TestDrawDecision();
   TestDrawFlags();
-  if (sFailures == 0) {
+  if (port_test::Failures() == 0) {
     std::printf("port_inventory_visor_tests: ok\n");
   }
-  return sFailures == 0 ? 0 : 1;
+  return PORT_TEST_RESULT();
 }

@@ -1,9 +1,10 @@
-#include "port_strings.h"
+#include "port_hash.h"
 #include "port_rando_gen.h"
 
 #include "port_ap_logic.h"
 #include "port_ap_metroidprime.h"
 #include "port_ap_world.h"
+#include "port_json_writer.h"
 
 #include <algorithm>
 #include <array>
@@ -47,6 +48,8 @@ enum Item : int {
   kWavebuster = 28,
   kArtifactFirst = 29,
   kArtifactLast = 40,
+  kUnlimitedMissiles = 41,
+  kUnlimitedPowerBombs = 42,
   kLauncher = 43,
   kMainPb = 44,
   kProgPower = 49,
@@ -132,11 +135,8 @@ public:
   uint64_t Value() const { return mHash; }
 
 private:
-  void Byte(uint8_t byte) {
-    mHash ^= byte;
-    mHash *= 0x100000001B3ull;
-  }
-  uint64_t mHash = 0xCBF29CE484222325ull;
+  void Byte(uint8_t byte) { mHash = port::Fnv1a64Step(mHash, byte); }
+  uint64_t mHash = port::kFnv64Basis;
 };
 
 uint64_t HashInput(const Settings& s, const std::string& seedText) {
@@ -163,11 +163,19 @@ uint64_t HashInput(const Settings& s, const std::string& seedText) {
   for (const std::string& name : s.trickDeny)
     h.Add(name);
   h.Add(s.flaahgraPowerBombs);
+  // Only a changed capacity enters the hash, so older seeds keep their text.
+  if (s.etankCapacity != 100)
+    h.Add(s.etankCapacity);
   h.Add(s.backwardsLowerMines);
   h.Add(s.removeXray);
   h.Add(s.removeThermal);
   h.Add(s.removeHiveMecha);
   h.Add(s.springBall);
+  // Off leaves the hash as it was, so older seeds keep their text.
+  if (s.shuffleUnlimitedMissiles)
+    h.Add(std::string("shuffle_unlimited_missiles"));
+  if (s.shuffleUnlimitedPowerBombs)
+    h.Add(std::string("shuffle_unlimited_power_bombs"));
   h.Add(s.startingRoom);
   h.Add(s.randomizeStartingBeam);
   h.Add(s.blastShieldRandomization);
@@ -741,6 +749,7 @@ PortApWorld::Layout MakeLayout(const Settings& s, const Start& start, const Elev
       s.removeHiveMecha || ((room == "Landing Site" || room == "Save Station 1") && start.beam != kPower);
   layout.backwardsLowerMines = s.backwardsLowerMines;
   layout.flaahgraPowerBombs = s.flaahgraPowerBombs;
+  layout.etankCapacity = s.etankCapacity;
   return layout;
 }
 
@@ -843,6 +852,10 @@ std::vector< PoolItem > BuildPool(const Settings& s, const std::vector< int >& p
     for (const int id : {kPower, kWave, kIce, kPlasma, kCharge, kSuper, kWavebuster, kIceSpreader, kFlamethrower})
       items.push_back({id, true});
   }
+  if (s.shuffleUnlimitedMissiles)
+    items.push_back({kUnlimitedMissiles, false});
+  if (s.shuffleUnlimitedPowerBombs)
+    items.push_back({kUnlimitedPowerBombs, false});
   const auto remove = [&items](int id) {
     for (size_t i = 0; i < items.size(); ++i) {
       if (items[i].id == id) {
@@ -944,26 +957,25 @@ bool CanComplete(const Settings& s, const Counts& have) {
 // ---------------------------------------------------------------------------
 // Output.
 
-void AppendNames(std::ostringstream& text, const char* key, const std::vector< std::string >& names) {
-  text << ",\"" << key << "\":[";
-  for (size_t i = 0; i < names.size(); ++i)
-    text << (i != 0 ? "," : "") << port::JsonQuote(names[i]);
-  text << ']';
+void AppendNames(port::JsonWriter& json, const char* key, const std::vector< std::string >& names) {
+  json.Key(key).BeginArray();
+  for (const std::string& name : names)
+    json.String(name);
+  json.EndArray();
 }
 
-void AppendMapping(std::ostringstream& text, const ElevatorMap& mapping, bool withArea) {
-  bool firstArea = true;
-  for (const auto& area : mapping) {
-    text << (firstArea ? "" : ",") << port::JsonQuote(area.first) << ":{";
-    firstArea = false;
+// area -> name -> name, with the area repeated inside each area's object as
+// the apworld writes door_color_mapping.
+void AppendMapping(port::JsonWriter& json, const ElevatorMap& mapping, bool withArea) {
+  for (const auto& [area, entries] : mapping) {
+    json.Key(area).BeginObject();
     if (withArea)
-      text << "\"area\":" << port::JsonQuote(area.first) << ",\"type_mapping\":{";
-    bool first = true;
-    for (const auto& entry : area.second) {
-      text << (first ? "" : ",") << port::JsonQuote(entry.first) << ':' << port::JsonQuote(entry.second);
-      first = false;
-    }
-    text << (withArea ? "}}" : "}");
+      json.Key("area").String(area).Key("type_mapping").BeginObject();
+    for (const auto& [from, to] : entries)
+      json.Key(from).String(to);
+    if (withArea)
+      json.EndObject();
+    json.EndObject();
   }
 }
 
@@ -983,80 +995,82 @@ struct Attempt {
 };
 
 std::string SlotData(const Settings& s, const Attempt& a, const std::vector< int64_t >& locationIds) {
-  std::ostringstream text;
+  port::JsonWriter json;
   const auto flag = [](bool value) { return value ? 1 : 0; };
-  text << "{\"missile_launcher\":" << flag(s.missileLauncher) << ",\"main_power_bomb\":" << flag(s.mainPowerBomb)
-       << ",\"progressive_beam_upgrades\":" << flag(s.progressiveBeams)
-       << ",\"shuffle_scan_visor\":" << flag(s.shuffleScanVisor)
-       << ",\"pre_scan_elevators\":" << flag(s.preScanElevators)
-       << ",\"elevator_randomization\":" << flag(s.elevatorRandomization)
-       << ",\"door_color_randomization\":" << s.doorColorRandomization
-       << ",\"trick_difficulty\":" << s.trickDifficulty << ",\"combat_logic_difficulty\":" << s.combatLogic
-       << ",\"remove_xray_requirements\":" << s.removeXray << ",\"remove_thermal_requirements\":" << s.removeThermal
-       << ",\"flaahgra_power_bombs\":" << flag(s.flaahgraPowerBombs)
-       << ",\"non_varia_heat_damage\":" << flag(s.nonVariaHeatDamage)
-       << ",\"staggered_suit_damage\":" << s.staggeredSuitDamage
-       << ",\"backwards_lower_mines\":" << flag(s.backwardsLowerMines)
-       << ",\"remove_hive_mecha\":" << flag(a.layout.removeHiveMecha) << ",\"spring_ball\":" << flag(s.springBall)
-       << ",\"required_artifacts\":" << s.requiredArtifacts << ",\"final_bosses\":" << s.finalBosses
-       << ",\"artifact_hints\":" << flag(s.artifactHints) << ",\"starting_room\":" << s.startingRoom
-       << ",\"randomize_starting_beam\":" << flag(s.randomizeStartingBeam)
-       << ",\"blast_shield_randomization\":" << s.blastShieldRandomization
-       << ",\"blast_shield_frequency\":" << s.blastShieldFrequency
-       << ",\"blast_shield_available_types\":" << s.blastShieldAvailableTypes
-       << ",\"locked_door_count\":" << s.lockedDoorCount
-       << ",\"include_power_beam_doors\":" << flag(s.includePowerBeamDoors)
-       << ",\"include_morph_ball_bomb_doors\":" << flag(s.includeMorphBallBombDoors);
+  json.BeginObject();
+  json.Key("missile_launcher").Number(flag(s.missileLauncher));
+  json.Key("main_power_bomb").Number(flag(s.mainPowerBomb));
+  json.Key("progressive_beam_upgrades").Number(flag(s.progressiveBeams));
+  json.Key("shuffle_scan_visor").Number(flag(s.shuffleScanVisor));
+  json.Key("pre_scan_elevators").Number(flag(s.preScanElevators));
+  json.Key("elevator_randomization").Number(flag(s.elevatorRandomization));
+  json.Key("door_color_randomization").Number(s.doorColorRandomization);
+  json.Key("trick_difficulty").Number(s.trickDifficulty);
+  json.Key("combat_logic_difficulty").Number(s.combatLogic);
+  json.Key("remove_xray_requirements").Number(s.removeXray);
+  json.Key("remove_thermal_requirements").Number(s.removeThermal);
+  json.Key("flaahgra_power_bombs").Number(flag(s.flaahgraPowerBombs));
+  json.Key("etank_capacity").Number(s.etankCapacity);
+  json.Key("non_varia_heat_damage").Number(flag(s.nonVariaHeatDamage));
+  json.Key("staggered_suit_damage").Number(s.staggeredSuitDamage);
+  json.Key("backwards_lower_mines").Number(flag(s.backwardsLowerMines));
+  json.Key("remove_hive_mecha").Number(flag(a.layout.removeHiveMecha));
+  json.Key("spring_ball").Number(flag(s.springBall));
+  json.Key("shuffle_unlimited_missiles").Number(flag(s.shuffleUnlimitedMissiles));
+  json.Key("shuffle_unlimited_power_bombs").Number(flag(s.shuffleUnlimitedPowerBombs));
+  json.Key("required_artifacts").Number(s.requiredArtifacts);
+  json.Key("final_bosses").Number(s.finalBosses);
+  json.Key("artifact_hints").Number(flag(s.artifactHints));
+  json.Key("starting_room").Number(s.startingRoom);
+  json.Key("randomize_starting_beam").Number(flag(s.randomizeStartingBeam));
+  json.Key("blast_shield_randomization").Number(s.blastShieldRandomization);
+  json.Key("blast_shield_frequency").Number(s.blastShieldFrequency);
+  json.Key("blast_shield_available_types").Number(s.blastShieldAvailableTypes);
+  json.Key("locked_door_count").Number(s.lockedDoorCount);
+  json.Key("include_power_beam_doors").Number(flag(s.includePowerBeamDoors));
+  json.Key("include_morph_ball_bomb_doors").Number(flag(s.includeMorphBallBombDoors));
   if (a.beamReplaced)
-    text << ",\"starting_beam\":" << port::JsonQuote(ItemLabel(MP::kItemBase + a.beam)); // a SuitUpgrade, not a lock
-  AppendNames(text, "trick_allow_list", s.trickAllow);
-  AppendNames(text, "trick_deny_list", s.trickDeny);
-  text << ",\"starting_room_name\":" << port::JsonQuote(a.layout.startRoom) << ",\"elevator_mapping\":{";
-  AppendMapping(text, a.layout.elevators, false);
-  text << '}';
+    json.Key("starting_beam").String(ItemLabel(MP::kItemBase + a.beam)); // a SuitUpgrade, not a lock
+  AppendNames(json, "trick_allow_list", s.trickAllow);
+  AppendNames(json, "trick_deny_list", s.trickDeny);
+  json.Key("starting_room_name").String(a.layout.startRoom);
+  json.Key("elevator_mapping").BeginObject();
+  AppendMapping(json, a.layout.elevators, false);
+  json.EndObject();
   if (a.layout.hasDoorColors) {
-    text << ",\"door_color_mapping\":{";
-    AppendMapping(text, a.layout.doorColors, true);
-    text << '}';
+    json.Key("door_color_mapping").BeginObject();
+    AppendMapping(json, a.layout.doorColors, true);
+    json.EndObject();
   }
   if (a.layout.hasShields) {
-    text << ",\"blast_shield_mapping\":{";
-    bool firstArea = true;
-    for (const auto& area : a.layout.shields) {
-      text << (firstArea ? "" : ",") << port::JsonQuote(area.first) << ":{\"area\":" << port::JsonQuote(area.first)
-           << ",\"type_mapping\":{";
-      firstArea = false;
-      bool firstRoom = true;
-      for (const auto& room : area.second) {
-        text << (firstRoom ? "" : ",") << port::JsonQuote(room.first) << ":{";
-        firstRoom = false;
-        bool first = true;
-        for (const auto& entry : room.second) {
-          text << (first ? "" : ",") << '"' << entry.first << "\":" << port::JsonQuote(entry.second);
-          first = false;
-        }
-        text << '}';
+    // area -> {area, type_mapping: room -> dock -> blast shield}
+    json.Key("blast_shield_mapping").BeginObject();
+    for (const auto& [area, rooms] : a.layout.shields) {
+      json.Key(area).BeginObject().Key("area").String(area).Key("type_mapping").BeginObject();
+      for (const auto& [room, docks] : rooms) {
+        json.Key(room).BeginObject();
+        for (const auto& [dock, shield] : docks)
+          json.Key(std::to_string(dock)).String(shield);
+        json.EndObject();
       }
-      text << "}}";
+      json.EndObject().EndObject();
     }
-    text << '}';
+    json.EndObject();
   }
   if (s.artifactHints) {
-    text << ",\"artifact_locations\":{";
-    bool first = true;
+    // artifact -> [location id, player]
+    json.Key("artifact_locations").BeginObject();
     for (int artifact = kArtifactFirst; artifact <= kArtifactLast; ++artifact) {
       for (size_t i = 0; i < kLocationCount; ++i) {
         if (a.placed[i] != artifact)
           continue;
-        text << (first ? "" : ",") << port::JsonQuote(ItemLabel(MP::kItemBase + artifact)) << ":["
-             << locationIds[i] << ",1]";
-        first = false;
+        json.Key(ItemLabel(MP::kItemBase + artifact)).BeginArray().Number(locationIds[i]).Number(1).EndArray();
       }
     }
-    text << '}';
+    json.EndObject();
   }
-  text << '}';
-  return text.str();
+  json.EndObject();
+  return json.Take();
 }
 
 std::string Spoiler(const std::string& name, const Settings& s, const Attempt& a, const MP::Location* locations) {
@@ -1312,6 +1326,7 @@ bool Generate(const Settings& settings, const std::string& seedText, Seed& out, 
   s.finalBosses = std::clamp(s.finalBosses, 0, 3);
   s.doorColorRandomization = std::clamp(s.doorColorRandomization, 0, 2);
   s.combatLogic = std::clamp(s.combatLogic, -1, 1);
+  s.etankCapacity = std::clamp(s.etankCapacity, 10, 200);
   s.trickDifficulty = std::clamp(s.trickDifficulty, -1, 2);
   s.removeXray = std::clamp(s.removeXray, 0, 2);
   s.removeThermal = std::clamp(s.removeThermal, 0, 2);

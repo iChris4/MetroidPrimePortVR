@@ -1,4 +1,5 @@
 #include "port_remastered_effect.h"
+#include "port_test.h"
 
 #include <cstdio>
 #include <cstring>
@@ -8,14 +9,6 @@
 using namespace PortRemastered;
 
 namespace {
-int sFailures = 0;
-
-void Check(bool condition, const char* what) {
-  if (!condition) {
-    std::fprintf(stderr, "FAIL: %s\n", what);
-    ++sFailures;
-  }
-}
 
 void Put32(std::vector<uint8_t>& out, uint32_t value) {
   for (int i = 0; i < 4; ++i) {
@@ -95,43 +88,43 @@ void TestParse() {
   const std::vector<uint8_t> data = Effect();
   EffectNode effect;
   std::string error;
-  Check(ParseEffect(data.data(), data.size(), effect, error), "effect parses");
-  Check(effect.root && effect.form == EffectFourCC("GPSM"), "root is a GPSM");
-  Check(effect.properties.size() == 4, "root has four properties");
+  CHECK_MSG(ParseEffect(data.data(), data.size(), effect, error), "effect parses");
+  CHECK_MSG(effect.root && effect.form == EffectFourCC("GPSM"), "root is a GPSM");
+  CHECK_MSG(effect.properties.size() == 4, "root has four properties");
   if (effect.properties.size() == 4) {
     const EffectProperty& dvvn = effect.properties[0];
-    Check(dvvn.fourcc == EffectFourCC("DVVN") && dvvn.tag == 1, "DVVN per emitter");
-    Check(dvvn.value.size() == 1 && dvvn.value[0].kind == EffectValue::Kind::Byte && dvvn.value[0].word == 4,
-          "DVVN is a byte");
+    CHECK_MSG(dvvn.fourcc == EffectFourCC("DVVN") && dvvn.tag == 1, "DVVN per emitter");
+    CHECK_MSG(dvvn.value.size() == 1 && dvvn.value[0].kind == EffectValue::Kind::Byte && dvvn.value[0].word == 4,
+              "DVVN is a byte");
     const EffectProperty& maxp = effect.properties[1];
-    Check(maxp.value.size() == 1 && maxp.value[0].fourcc == EffectFourCC("CNST") &&
-              maxp.value[0].args.size() == 1 && maxp.value[0].args[0].word == 20,
-          "MAXP is CNST(20)");
+    CHECK_MSG(maxp.value.size() == 1 && maxp.value[0].fourcc == EffectFourCC("CNST") &&
+                  maxp.value[0].args.size() == 1 && maxp.value[0].args[0].word == 20,
+              "MAXP is CNST(20)");
     const EffectProperty& size = effect.properties[2];
-    Check(size.tag == 3 && size.value.size() == 1 && size.value[0].fourcc == EffectFourCC("MULT") &&
-              size.value[0].args.size() == 2,
-          "SIZE is MULT of two elements");
+    CHECK_MSG(size.tag == 3 && size.value.size() == 1 && size.value[0].fourcc == EffectFourCC("MULT") &&
+                  size.value[0].args.size() == 2,
+              "SIZE is MULT of two elements");
     const EffectProperty& texr = effect.properties[3];
-    Check(texr.value.size() == 2 && texr.value[0].args.size() == 1 &&
-              texr.value[0].args[0].kind == EffectValue::Kind::Guid && texr.value[0].args[0].guid == Guid(0x10) &&
-              texr.value[1].fourcc == EffectFourCC("NONE"),
-          "TEXR is CNST(guid), NONE");
+    CHECK_MSG(texr.value.size() == 2 && texr.value[0].args.size() == 1 &&
+                  texr.value[0].args[0].kind == EffectValue::Kind::Guid && texr.value[0].args[0].guid == Guid(0x10) &&
+                  texr.value[1].fourcc == EffectFourCC("NONE"),
+              "TEXR is CNST(guid), NONE");
   }
-  Check(effect.children.size() == 1, "one child");
+  CHECK_MSG(effect.children.size() == 1, "one child");
   if (effect.children.size() == 1) {
     const EffectNode& child = effect.children[0];
-    Check(child.id == Guid(0x40) && !child.root && child.form == EffectFourCC("GPSM"), "child id and form");
-    Check(child.properties.size() == 1 && child.properties[0].fourcc == EffectFourCC("MAXP"), "child MAXP");
+    CHECK_MSG(child.id == Guid(0x40) && !child.root && child.form == EffectFourCC("GPSM"), "child id and form");
+    CHECK_MSG(child.properties.size() == 1 && child.properties[0].fourcc == EffectFourCC("MAXP"), "child MAXP");
   }
 
   const std::vector<EffectGuid> references = EffectReferences(effect);
   // Embedded children are not references; the texture is.
-  Check(references.size() == 1 && references[0] == Guid(0x10), "texture is referenced");
-  Check(EffectGuidString(Guid(0x00)) == "03020100-0504-0706-0809-0a0b0c0d0e0f", "ids print as little-endian UUIDs");
+  CHECK_MSG(references.size() == 1 && references[0] == Guid(0x10), "texture is referenced");
+  CHECK_MSG(EffectGuidString(Guid(0x00)) == "03020100-0504-0706-0809-0a0b0c0d0e0f", "ids print as little-endian UUIDs");
 
   const std::string dump = DumpEffect(effect, data.data());
-  Check(dump.find("MAXP 01 CNST(20)") != std::string::npos, "dump shows MAXP");
-  Check(dump.find("SIZE 03 MULT(CNST(2f), CNST(3f))") != std::string::npos, "dump shows SIZE");
+  CHECK_MSG(dump.find("MAXP 01 CNST(20)") != std::string::npos, "dump shows MAXP");
+  CHECK_MSG(dump.find("SIZE 03 MULT(CNST(2f), CNST(3f))") != std::string::npos, "dump shows SIZE");
 }
 
 void TestFailure() {
@@ -144,13 +137,52 @@ void TestFailure() {
   EffectNode effect;
   std::string error;
   size_t failOffset = 0;
-  Check(!ParseEffect(data.data(), data.size(), effect, error, &failOffset), "broken effect fails");
-  Check(!error.empty(), "failure says why");
-  Check(failOffset == kSizeAt, "failure points at SIZE");
+  CHECK_MSG(!ParseEffect(data.data(), data.size(), effect, error, &failOffset), "broken effect fails");
+  CHECK_MSG(!error.empty(), "failure says why");
+  CHECK_MSG(failOffset == kSizeAt, "failure points at SIZE");
 
   std::vector<uint8_t> notEffect = Effect();
   std::memcpy(notEffect.data() + 0x14, "PART", 4);
-  Check(!ParseEffect(notEffect.data(), notEffect.size(), effect, error), "non-GENP rejected");
+  CHECK_MSG(!ParseEffect(notEffect.data(), notEffect.size(), effect, error), "non-GENP rejected");
+}
+
+// SIZE nested `depth` MULTs deep, then `properties` more MAXPs: a file built to
+// run the parser out of stack is refused instead.
+std::vector<uint8_t> Nested(size_t depth, size_t properties) {
+  std::vector<uint8_t> out(0x3c, 0);
+  std::memcpy(out.data(), "RFRM", 4);
+  std::memcpy(out.data() + 0x14, "GENP", 4);
+  PutGenerator(out, true);
+  PutProperty(out, "SIZE", 3);
+  for (size_t i = 0; i < depth; ++i) {
+    PutFourCC(out, "MULT");
+  }
+  PutFourCC(out, "CNST");
+  PutFloat(out, 2.0f);
+  for (size_t i = 0; i < depth; ++i) {
+    PutFourCC(out, "CNST");
+    PutFloat(out, 1.0f);
+  }
+  for (size_t i = 0; i < properties; ++i) {
+    PutProperty(out, "MAXP", 1);
+    PutFourCC(out, "CNST");
+    Put32(out, 5);
+  }
+  PutProperty(out, "_END", 4);
+  Put32(out, 0);
+  out.insert(out.end(), {'F', 'O', 'O', 'T'});
+  return out;
+}
+
+void TestDeepNesting() {
+  EffectNode effect;
+  std::string error;
+  std::vector<uint8_t> data = Nested(20, 50);
+  CHECK_MSG(ParseEffect(data.data(), data.size(), effect, error), "nested effect parses");
+  data = Nested(200000, 0);
+  CHECK_MSG(!ParseEffect(data.data(), data.size(), effect, error), "too deeply nested effect is refused");
+  data = Nested(1, 200000);
+  CHECK_MSG(!ParseEffect(data.data(), data.size(), effect, error), "too long a property list is refused");
 }
 } // namespace
 
@@ -235,7 +267,7 @@ void TestTypedNesting() {
   PutProperty(out, "_END", 4);
   EffectNode effect;
   std::string error;
-  Check(ParseEffect(out.data(), out.size(), effect, error), "typed effect parses");
+  CHECK_MSG(ParseEffect(out.data(), out.size(), effect, error), "typed effect parses");
   const std::string dump = DumpEffect(effect, out.data());
   const char* want =
       "GPSM\n"
@@ -248,7 +280,7 @@ void TestTypedNesting() {
       "RLPT(CNST(100f))), FADE(CNST(CNST(1f), CNST(1f), CNST(0), CNST(0.2f)), CNST(CNST(1f), CNST(0), CNST(0), "
       "CNST(0)), RLPT(CNST(100f))), RLPT(CNST(100f)))\n"
       "  SMVR 01 SMOV(EXTT, CNST(CNST(0), CNST(0), CNST(0)), EXTR, NONE, NONE)\n";
-  Check(dump == want, "nested values read as their types");
+  CHECK_MSG(dump == want, "nested values read as their types");
   if (dump != want) {
     std::fprintf(stderr, "%s", dump.c_str());
   }
@@ -273,10 +305,10 @@ void TestFlaggedChild() {
   }
   EffectNode effect;
   std::string error;
-  Check(ParseEffect(out.data(), out.size(), effect, error), "flagged child parses");
-  Check(effect.children.size() == 2 && effect.children[0].root && effect.children[0].children.empty() &&
-            effect.children[1].properties.size() == 1 && effect.children[1].properties[0].tag == 5,
-        "flagged child ends at its _END");
+  CHECK_MSG(ParseEffect(out.data(), out.size(), effect, error), "flagged child parses");
+  CHECK_MSG(effect.children.size() == 2 && effect.children[0].root && effect.children[0].children.empty() &&
+                effect.children[1].properties.size() == 1 && effect.children[1].properties[0].tag == 5,
+            "flagged child ends at its _END");
 }
 
 // TEXR can hold a TXP2 (an id and three elements) or a TXFB (an id and an
@@ -318,10 +350,10 @@ void TestTextureElements() {
   out.insert(out.end(), {'F', 'O', 'O', 'T'});
   EffectNode effect;
   std::string error;
-  Check(ParseEffect(out.data(), out.size(), effect, error), "texture elements parse");
-  Check(effect.properties.size() == 5 && effect.properties[3].fourcc == EffectFourCC("ANTH") &&
-            effect.properties[3].value.size() == 1 && effect.properties[3].value[0].args.size() == 5,
-        "ANTH takes five arguments");
+  CHECK_MSG(ParseEffect(out.data(), out.size(), effect, error), "texture elements parse");
+  CHECK_MSG(effect.properties.size() == 5 && effect.properties[3].fourcc == EffectFourCC("ANTH") &&
+                effect.properties[3].value.size() == 1 && effect.properties[3].value[0].args.size() == 5,
+            "ANTH takes five arguments");
 }
 
 // The GPSM flag word is not a boolean: a root with flag 2 (and a child with
@@ -358,13 +390,13 @@ void TestGeneratorFlags() {
   out.insert(out.end(), {'F', 'O', 'O', 'T'});
   EffectNode effect;
   std::string error;
-  Check(ParseEffect(out.data(), out.size(), effect, error), "flag 2 root parses");
-  Check(effect.root && effect.children.size() == 1 && effect.children[0].children.size() == 1,
-        "flags 2 and 4 have children");
-  Check(effect.children.size() == 1 && effect.children[0].properties.size() == 1 &&
-            effect.children[0].properties[0].value.size() == 1 &&
-            effect.children[0].properties[0].value[0].args.size() == 5,
-        "ATX2 takes an id and four elements");
+  CHECK_MSG(ParseEffect(out.data(), out.size(), effect, error), "flag 2 root parses");
+  CHECK_MSG(effect.root && effect.children.size() == 1 && effect.children[0].children.size() == 1,
+            "flags 2 and 4 have children");
+  CHECK_MSG(effect.children.size() == 1 && effect.children[0].properties.size() == 1 &&
+                effect.children[0].properties[0].value.size() == 1 &&
+                effect.children[0].properties[0].value[0].args.size() == 5,
+            "ATX2 takes an id and four elements");
 }
 
 int main() {
@@ -374,10 +406,9 @@ int main() {
   TestFlaggedChild();
   TestTextureElements();
   TestGeneratorFlags();
-  if (sFailures != 0) {
-    std::fprintf(stderr, "%d failure(s)\n", sFailures);
-    return 1;
+  TestDeepNesting();
+  if (port_test::Failures() == 0) {
+    std::printf("port_remastered_effect: ok\n");
   }
-  std::printf("port_remastered_effect: ok\n");
-  return 0;
+  return PORT_TEST_RESULT();
 }

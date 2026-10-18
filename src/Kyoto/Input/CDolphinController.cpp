@@ -21,6 +21,8 @@
 #include "vr/openxr_integration.h"
 #endif
 
+#include <algorithm>
+#include <cmath>
 #include <string.h>
 
 namespace {
@@ -148,10 +150,27 @@ void CDolphinController::ReadDevices() {
     if (keyboard.cStick) {
       PortDebug::SetTwinStickRightY(0.f);
     } else {
-      const float sx = static_cast< float >(x4_status[0].substickX) / 127.f;
-      const float sy = static_cast< float >(x4_status[0].substickY) / 127.f;
+      // PADClamp has cut the C-stick to the GameCube's octagonal gate: 59 on an
+      // axis and 31 on each axis at a diagonal. Map that gate back to the unit
+      // circle, so full tilt turns at the full stick aim speed in any direction.
+      const float cx = static_cast< float >(x4_status[0].substickX);
+      const float cy = static_cast< float >(x4_status[0].substickY);
+      float sx = 0.f;
+      float sy = 0.f;
+      if (cx != 0.f || cy != 0.f) {
+        constexpr float kGateMax = 59.f;
+        constexpr float kGateXY = 31.f;
+        const float major = std::max(std::fabs(cx), std::fabs(cy));
+        const float minor = std::min(std::fabs(cx), std::fabs(cy));
+        const float tilt =
+            std::min((kGateXY * major + (kGateMax - kGateXY) * minor) / (kGateXY * kGateMax), 1.f);
+        const float length = std::sqrt(cx * cx + cy * cy);
+        sx = cx / length * tilt;
+        sy = cy / length * tilt;
+      }
       PortDebug::AddStickAim(sx, sy, PortDebug::TickPeriod());
-      PortDebug::SetTwinStickRightY(sy);
+      // The spring ball's flick threshold was tuned on the clamped scale.
+      PortDebug::SetTwinStickRightY(cy / 127.f);
       x4_status[0].substickX = 0;
       x4_status[0].substickY = 0;
     }

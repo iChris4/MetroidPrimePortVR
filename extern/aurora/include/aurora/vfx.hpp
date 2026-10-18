@@ -94,6 +94,7 @@ struct DrawDesc {
          paletteSlot = -1;
   float modulate = 1.f;
   float depthSoften = 0.f;
+  float opacityGain = 1.f, opacityBias = 0.f; // gain * clamp(smooth3(f) - bias, 0, 1)
   int8_t rampRow[2] = {0, 1}; // extra[] rows read whole as the ramp colours c0, c1
   int8_t addRow = 0;          // AddColor: the extra[] row (add.rgb, scale)
   Src erosion;

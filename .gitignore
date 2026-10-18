@@ -9,8 +9,8 @@ __pycache__
 .cache/
 
 # Original files
-orig/*/*
-!orig/*/.gitkeep
+decomp/orig/*/*
+!decomp/orig/*/.gitkeep
 
 # Build files
 build/
@@ -28,8 +28,29 @@ report*.json
 
 # Miscellaneous
 /*.txt
+!/CMakeLists.txt
 *.exe
 *.dol
+
+# Game data: disc images and dumps are the user's own and must never be committed.
+*.iso
+*.gcm
+*.rvz
+*.ciso
+*.gcz
+*.wbfs
+*.wia
+*.nsp
+*.xci
+*.nca
+prod.keys
+title.keys
+
+# Packaging output from the CI steps when run locally
+/dist/
+/ffmpeg-min/
+/build-mac/
+/build-win/
 
 # Port runtime output
 screenshots/

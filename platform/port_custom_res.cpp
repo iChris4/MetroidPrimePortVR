@@ -80,9 +80,79 @@ bool BuildText(uint32_t id, Resource& out) {
   return true;
 }
 
+// A 16x16 RGBA8 TXTR (format 9, one mip): 4x4 tiles of 32 AR bytes then 32 GB
+// bytes, for the map legend's swatches.
+bool BuildLegend(uint32_t id, Resource& out) {
+  constexpr int kSize = 16;
+  uint8_t px[kSize][kSize][4] = {};
+  auto put = [&](int x, int y, uint32_t rgb) {
+    px[y][x][0] = uint8_t(rgb >> 16);
+    px[y][x][1] = uint8_t(rgb >> 8);
+    px[y][x][2] = uint8_t(rgb);
+    px[y][x][3] = 255;
+  };
+  for (int y = 0; y < kSize; ++y) {
+    for (int x = 0; x < kSize; ++x) {
+      const float dx = x + 0.5f - kSize / 2.f;
+      const float dy = y + 0.5f - kSize / 2.f;
+      const float r2 = dx * dx + dy * dy;
+      switch (id) {
+      case kLegendDotTxtr:
+        if (r2 <= 6.f * 6.f)
+          put(x, y, 0xFFFFFF);
+        break;
+      case kLegendRingTxtr:
+        if (r2 <= 6.5f * 6.5f && r2 >= 4.2f * 4.2f)
+          put(x, y, 0xFFFFFF);
+        break;
+      case kLegendCrossTxtr: {
+        const float a = dx - dy < 0 ? dy - dx : dx - dy;
+        const float b = dx + dy < 0 ? -(dx + dy) : dx + dy;
+        if (dx > -6.f && dx < 6.f && dy > -6.f && dy < 6.f) {
+          if (a < 1.3f || b < 1.3f)
+            put(x, y, 0x808080);
+          else if (a < 2.4f || b < 2.4f)
+            put(x, y, 0x202020);
+        }
+        break;
+      }
+      default:
+        if (dx > -6.f && dx < 6.f && dy > -6.f && dy < 6.f)
+          put(x, y, 0x40E0FF);
+        break;
+      }
+    }
+  }
+  std::vector<uint8_t> txtr(12);
+  SetBE32(txtr, 0, 9);
+  txtr[4] = 0;
+  txtr[5] = kSize;
+  txtr[6] = 0;
+  txtr[7] = kSize;
+  SetBE32(txtr, 8, 1);
+  for (int ty = 0; ty < kSize; ty += 4) {
+    for (int tx = 0; tx < kSize; tx += 4) {
+      for (int pass = 0; pass < 2; ++pass) {
+        for (int y = 0; y < 4; ++y) {
+          for (int x = 0; x < 4; ++x) {
+            const uint8_t* p = px[ty + y][tx + x];
+            txtr.push_back(pass == 0 ? p[3] : p[1]);
+            txtr.push_back(pass == 0 ? p[0] : p[2]);
+          }
+        }
+      }
+    }
+  }
+  out.type = kTXTR;
+  out.data.swap(txtr);
+  return true;
+}
+
 bool Build(uint32_t id, const DiscReader& read, Resource& out) {
   if (id >= kTextBase)
     return BuildText(id, out);
+  if (id >= kLegendDotTxtr && id <= kLegendMarkTxtr)
+    return BuildLegend(id, out);
   // Each model's texture patches (material set 0 index -> texture).
   struct TexturePatch {
     uint32_t index, texture;

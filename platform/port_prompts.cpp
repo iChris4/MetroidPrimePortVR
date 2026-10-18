@@ -1,6 +1,8 @@
 // Binding-aware button prompt icons; see port_prompts.h.
 
 #include "port_prompts.h"
+#include "port_log.h"
+#include "port_env.h"
 
 #include "port_debug.h"
 #include "port_embedded.h"
@@ -779,7 +781,7 @@ namespace PortPrompts {
 // (GameCubeStemForButton).
 const char* ActiveDevice() {
   // Read once: it is asked every frame, and nothing sets it while the game runs.
-  static const char* const env = std::getenv("MP_TEXTURE_DEVICE");
+  static const char* const env = port::EnvString("MP_TEXTURE_DEVICE");
   if (env != nullptr && env[0] != '\0') {
     return env;
   }
@@ -810,11 +812,12 @@ const char* ActiveDevice() {
 
 void Initialize(const char* textureRoot) {
   const bool embedded = textureRoot == nullptr && !PortEmbedded::Under("textures/bindings/").empty();
+  // Tracked even without generated icons, since the static set and rumble
+  // (KeyboardActive) follow it too.
+  SDL_AddEventWatch(active_input_watch, nullptr);
   if (!embedded && (textureRoot == nullptr || textureRoot[0] == '\0')) {
     return;
   }
-  // Tracked even without generated icons, since the static set follows it too.
-  SDL_AddEventWatch(active_input_watch, nullptr);
   if (embedded) {
     sBindingsDir = "textures/bindings";
     sEmbedded = true;
@@ -864,11 +867,13 @@ void Poll() {
       ++applied;
     }
     if (applied != 0) {
-      std::fprintf(stderr, "metroid_prime_port: prompt %s %s\n", action.label,
-                   stem.empty() ? "(back to the static icon)" : stem.c_str());
+      PortLog::Write("metroid_prime_port: prompt %s %s\n", action.label,
+                     stem.empty() ? "(back to the static icon)" : stem.c_str());
     }
   }
 }
+bool KeyboardActive() { return sActiveInput.load(std::memory_order_relaxed) == ActiveInput::Keyboard; }
+
 void NoteTouchInput(bool xboxLayout) {
   sActiveInput.store(xboxLayout ? ActiveInput::TouchXbox : ActiveInput::TouchGameCube,
                      std::memory_order_relaxed);

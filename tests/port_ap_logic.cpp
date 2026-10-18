@@ -1,24 +1,13 @@
 #include "port_ap_logic.h"
 
 #include "port_ap_metroidprime.h"
+#include "port_test.h"
 
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
 namespace {
-int sLine = 0;
-void Check(bool condition) {
-  if (!condition) {
-    std::fprintf(stderr, "AP logic regression failed at line %d\n", sLine);
-    std::abort();
-  }
-}
-#define CHECK(cond)                                                                                \
-  do {                                                                                             \
-    sLine = __LINE__;                                                                              \
-    Check(cond);                                                                                   \
-  } while (0)
 
 using PortApLogic::Items;
 using PortApLogic::Level;
@@ -34,7 +23,7 @@ Level At(const Options& options, const Items& items, const char* room, const cha
     if (std::strcmp(checks[i].room, room) == 0 && std::strcmp(checks[i].section, section) == 0)
       return levels[i];
   }
-  CHECK(false);
+  REQUIRE(false);
   return Level::None;
 }
 
@@ -52,10 +41,10 @@ int main() {
   const PortApLogic::Check* checks = PortApLogic::Checks(count);
   size_t locationCount = 0;
   const PortAp::MetroidPrime::Location* locations = PortAp::MetroidPrime::Locations(locationCount);
-  CHECK(count == 100 && locationCount == count);
+  REQUIRE(count == 100 && locationCount == count);
   for (size_t i = 0; i < count; ++i) {
-    CHECK(checks[i].id == locations[i].id);
-    CHECK(checks[i].area[0] != 0 && checks[i].room[0] != 0 && checks[i].section != nullptr);
+    REQUIRE(checks[i].id == locations[i].id);
+    REQUIRE(checks[i].area[0] != 0 && checks[i].room[0] != 0 && checks[i].section != nullptr);
   }
 
   // With nothing, the only thing in sight is the Landing Site pickup, behind
@@ -63,37 +52,37 @@ int main() {
   {
     const Options options;
     const Items items;
-    CHECK(PortApLogic::Evaluate(options, items).size() == count);
-    CHECK(CountOf(options, items, Level::Normal) == 0);
-    CHECK(At(options, items, "Landing Site", "Morph Ball tunnel") == Level::Inspect);
-    CHECK(At(options, items, "Elite Quarters", "Omega Pirate") == Level::None);
+    REQUIRE(PortApLogic::Evaluate(options, items).size() == count);
+    REQUIRE(CountOf(options, items, Level::Normal) == 0);
+    REQUIRE(At(options, items, "Landing Site", "Morph Ball tunnel") == Level::Inspect);
+    REQUIRE(At(options, items, "Elite Quarters", "Omega Pirate") == Level::None);
   }
 
   // The Morph Ball puts it in logic; the Hive Totem needs a way to Chozo Ruins.
   {
     const Options options;
     Items items{{kBase + 16, 1}};
-    CHECK(At(options, items, "Landing Site", "Morph Ball tunnel") == Level::Normal);
-    CHECK(At(options, items, "Hive Totem", "Hive Mecha") == Level::None);
+    REQUIRE(At(options, items, "Landing Site", "Morph Ball tunnel") == Level::Normal);
+    REQUIRE(At(options, items, "Hive Totem", "Hive Mecha") == Level::None);
     items = {{kBase + 0, 1}, {kBase + 5, 1}};
-    CHECK(At(options, items, "Hive Totem", "Hive Mecha") == Level::Normal);
+    REQUIRE(At(options, items, "Hive Totem", "Hive Mecha") == Level::Normal);
     // Alcove without Space Jump is a trick: a sequence break with no tricks in logic,
-    CHECK(At(options, items, "Alcove", "") == Level::SequenceBreak);
+    REQUIRE(At(options, items, "Alcove", "") == Level::SequenceBreak);
     // in logic once the seed allows easy tricks, or the trick by name,
     Options easy;
     easy.trickDifficulty = 0;
-    CHECK(At(easy, items, "Alcove", "") == Level::Normal);
+    REQUIRE(At(easy, items, "Alcove", "") == Level::Normal);
     Options allowed;
     allowed.trickAllow = {"Alcove Escape"};
     // (one trick is not enough: the way in is the Landing Site scan dash)
-    CHECK(At(allowed, items, "Alcove", "") == Level::SequenceBreak);
+    REQUIRE(At(allowed, items, "Alcove", "") == Level::SequenceBreak);
     allowed.trickAllow.push_back("Landing Site Scan Dash");
-    CHECK(At(allowed, items, "Alcove", "") == Level::Normal);
+    REQUIRE(At(allowed, items, "Alcove", "") == Level::Normal);
     // and out again when the seed denies it; the allow list wins over the deny list.
     easy.trickDeny = {"Alcove Escape"};
-    CHECK(At(easy, items, "Alcove", "") == Level::SequenceBreak);
+    REQUIRE(At(easy, items, "Alcove", "") == Level::SequenceBreak);
     easy.trickAllow = {"Alcove Escape"};
-    CHECK(At(easy, items, "Alcove", "") == Level::Normal);
+    REQUIRE(At(easy, items, "Alcove", "") == Level::Normal);
   }
 
   // A Missile Expansion is five missiles, and counts for nothing without the
@@ -101,12 +90,12 @@ int main() {
   {
     Options options;
     Items items{{kBase + 0, 1}, {kBase + 5, 1}, {kBase + 16, 1}, {kBase + 4, 1}};
-    CHECK(At(options, items, "Ruined Gallery", "Missile Wall") == Level::Normal);
+    REQUIRE(At(options, items, "Ruined Gallery", "Missile Wall") == Level::Normal);
     options.mainMissile = true;
-    CHECK(At(options, items, "Ruined Gallery", "Missile Wall") != Level::Normal);
+    REQUIRE(At(options, items, "Ruined Gallery", "Missile Wall") != Level::Normal);
     items[kBase + 43] = 1;
     items.erase(kBase + 4);
-    CHECK(At(options, items, "Ruined Gallery", "Missile Wall") == Level::Normal);
+    REQUIRE(At(options, items, "Ruined Gallery", "Missile Wall") == Level::Normal);
   }
 
   // Everything is in logic with every item, whichever way the beams come.
@@ -115,11 +104,11 @@ int main() {
     Items items;
     for (int i = 0; i <= 45; ++i)
       items[kBase + i] = 20;
-    CHECK(CountOf(options, items, Level::Normal) == count);
+    REQUIRE(CountOf(options, items, Level::Normal) == count);
     // Without the X-Ray Visor the Omega Pirate is out, whatever the seed removes.
     items.erase(kBase + 13);
     options.removeXray = 2;
-    CHECK(At(options, items, "Elite Quarters", "Omega Pirate") == Level::None);
+    REQUIRE(At(options, items, "Elite Quarters", "Omega Pirate") == Level::None);
 
     options = Options();
     options.progressiveBeams = true;
@@ -130,13 +119,13 @@ int main() {
     }
     for (int beam : {49, 51, 52, 53})
       items[kBase + beam] = 3;
-    CHECK(CountOf(options, items, Level::Normal) == count);
+    REQUIRE(CountOf(options, items, Level::Normal) == count);
     // The second Power Beam is its charge, the third the Super Missile.
     items[kBase + 49] = 2;
     const size_t charged = CountOf(options, items, Level::Normal);
-    CHECK(charged < count);
+    REQUIRE(charged < count);
     items[kBase + 49] = 1;
-    CHECK(CountOf(options, items, Level::Normal) <= charged);
+    REQUIRE(CountOf(options, items, Level::Normal) <= charged);
   }
 
   // The seed's layout. A game that starts in the Ruined Fountain has no way
@@ -144,14 +133,14 @@ int main() {
   {
     Options options;
     const Items items{{kBase + 16, 1}, {kBase + 19, 1}};
-    CHECK(At(options, items, "Ruined Fountain", "Spider tracks") == Level::None);
+    REQUIRE(At(options, items, "Ruined Fountain", "Spider tracks") == Level::None);
     options.startRoom = "Ruined Fountain";
-    CHECK(At(options, items, "Landing Site", "Morph Ball tunnel") == Level::None);
-    CHECK(At(options, items, "Ruined Fountain", "Spider tracks") != Level::None);
+    REQUIRE(At(options, items, "Landing Site", "Morph Ball tunnel") == Level::None);
+    REQUIRE(At(options, items, "Ruined Fountain", "Spider tracks") != Level::None);
     // A room the pack has no rule for is in reach all the same.
     options.startRoom = "Hive Totem";
-    CHECK(At(options, items, "Hive Totem", "Hive Mecha") != Level::None);
-    CHECK(At(Options(), items, "Hive Totem", "Hive Mecha") == Level::None);
+    REQUIRE(At(options, items, "Hive Totem", "Hive Mecha") != Level::None);
+    REQUIRE(At(Options(), items, "Hive Totem", "Hive Mecha") == Level::None);
   }
 
   // Elevators: with the Landing Site's west elevator leading to Magmoor, the
@@ -160,16 +149,16 @@ int main() {
   {
     Options options;
     const Items items{{kBase + 0, 1}, {kBase + 5, 1}};
-    CHECK(At(options, items, "Hive Totem", "Hive Mecha") == Level::Normal);
+    REQUIRE(At(options, items, "Hive Totem", "Hive Mecha") == Level::Normal);
     options.elevators["Tallon Overworld"]["Transport to Chozo Ruins West"] = "Transport to Tallon Overworld West";
     options.elevators["Magmoor Caverns"]["Transport to Tallon Overworld West"] = "Transport to Chozo Ruins West";
     options.elevators["Chozo Ruins"]["Transport to Tallon Overworld North"] =
         "Phazon Mines: Transport to Tallon Overworld South";
     options.elevators["Phazon Mines"]["Transport to Tallon Overworld South"] =
         "Transport to Tallon Overworld North";
-    CHECK(At(options, items, "Hive Totem", "Hive Mecha") == Level::None);
+    REQUIRE(At(options, items, "Hive Totem", "Hive Mecha") == Level::None);
     options.elevators["Tallon Overworld"]["Transport to Chozo Ruins West"] = "Transport to Tallon Overworld North";
-    CHECK(At(options, items, "Hive Totem", "Hive Mecha") == Level::Normal);
+    REQUIRE(At(options, items, "Hive Totem", "Hive Mecha") == Level::Normal);
   }
 
   // Transport Tunnel E reaches Hydro Access Tunnel over Great Tree Hall's
@@ -178,9 +167,9 @@ int main() {
     Options options;
     options.startRoom = "Transport to Phazon Mines East";
     Items items{{kBase + 6, 1}, {kBase + 16, 1}, {kBase + 21, 1}};
-    CHECK(At(options, items, "Hydro Access Tunnel", "Underwater bomb puzzle") == Level::None);
+    REQUIRE(At(options, items, "Hydro Access Tunnel", "Underwater bomb puzzle") == Level::None);
     items[kBase + 1] = 1;
-    CHECK(At(options, items, "Hydro Access Tunnel", "Underwater bomb puzzle") == Level::Normal);
+    REQUIRE(At(options, items, "Hydro Access Tunnel", "Underwater bomb puzzle") == Level::Normal);
   }
 
   // Doors: the Landing Site's door to the Alcove behind a blast shield, a
@@ -189,18 +178,18 @@ int main() {
     Options options;
     options.trickDifficulty = 0;
     Items items{{kBase + 0, 1}, {kBase + 5, 1}};
-    CHECK(At(options, items, "Alcove", "") == Level::Normal);
+    REQUIRE(At(options, items, "Alcove", "") == Level::Normal);
     options.doors["Tallon Overworld|Landing Site|Alcove"] = {"Blue", "Power Bomb"};
-    CHECK(At(options, items, "Alcove", "") == Level::None);
+    REQUIRE(At(options, items, "Alcove", "") == Level::None);
     items[kBase + 16] = 1;
     items[kBase + 7] = 1;
-    CHECK(At(options, items, "Alcove", "") == Level::Normal);
+    REQUIRE(At(options, items, "Alcove", "") == Level::Normal);
     options.doors["Tallon Overworld|Landing Site|Alcove"] = {"Disabled", ""};
-    CHECK(At(options, items, "Alcove", "") == Level::None);
+    REQUIRE(At(options, items, "Alcove", "") == Level::None);
     options.doors["Tallon Overworld|Landing Site|Alcove"] = {"Ice Beam", ""};
-    CHECK(At(options, items, "Alcove", "") == Level::None);
+    REQUIRE(At(options, items, "Alcove", "") == Level::None);
     items[kBase + 1] = 1;
-    CHECK(At(options, items, "Alcove", "") == Level::Normal);
+    REQUIRE(At(options, items, "Alcove", "") == Level::Normal);
   }
 
   // A recoloured area: every item but the Wave Beam reaches everything once
@@ -214,7 +203,7 @@ int main() {
     const size_t before = CountOf(options, items, Level::Normal);
     for (const char* area : {"Tallon Overworld", "Chozo Ruins", "Magmoor Caverns", "Phendrana Drifts", "Phazon Mines"})
       options.doorColors[area]["Wave Beam"] = "Ice Beam";
-    CHECK(CountOf(options, items, Level::Normal) > before);
+    REQUIRE(CountOf(options, items, Level::Normal) > before);
   }
 
   // The Hive Mecha fight needs nothing once the seed removes it, and the
@@ -227,26 +216,26 @@ int main() {
     const size_t all = CountOf(options, items, Level::Normal);
     options.removeHiveMecha = true;
     options.backwardsLowerMines = true;
-    CHECK(CountOf(options, items, Level::Normal) == all);
+    REQUIRE(CountOf(options, items, Level::Normal) == all);
     Options other;
-    CHECK(options != other);
+    REQUIRE(options != other);
     other.removeHiveMecha = other.backwardsLowerMines = true;
-    CHECK(options == other);
+    REQUIRE(options == other);
     other.doors["a|b|c"] = {"Blue", "Missile"};
-    CHECK(options != other);
+    REQUIRE(options != other);
   }
 
   // Tricks are named as the seed's allow and deny lists name them.
-  CHECK(PortApLogic::TrickName(0) != nullptr && PortApLogic::TrickName(100000) == nullptr);
+  REQUIRE(PortApLogic::TrickName(0) != nullptr && PortApLogic::TrickName(100000) == nullptr);
   bool found = false;
   for (size_t i = 0; PortApLogic::TrickName(i) != nullptr; ++i)
     found = found || std::strcmp(PortApLogic::TrickName(i), "Alcove Escape") == 0;
-  CHECK(found);
+  REQUIRE(found);
 
   Options a, b;
-  CHECK(a == b);
+  REQUIRE(a == b);
   b.trickDeny = {"Alcove Escape"};
-  CHECK(a != b);
+  REQUIRE(a != b);
 
   std::puts("AP logic tests passed");
   return 0;

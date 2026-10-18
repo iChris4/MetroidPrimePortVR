@@ -55,9 +55,21 @@
        android/app/build.gradle; tools/make_flatpak.sh refuses to build when the
        two differ, since Flatpak reports the newest entry as the app's version. -->
   <releases>
-    <release version="0.28.0" date="2026-10-16">
+    <release version="0.29.0" date="2026-10-18">
       <description>
-        <p>Remastered actor shadows and a world-wide baked-lighting volume, Wave Beam trails and electric arcs, Remastered jumps and airborne movement, map pickup kinds, a Warp to start option on the save prompt for randomizer seeds, and screenshots that are no longer blank.</p>
+        <p>Per-visor HUD opacity, a Remastered-style crosshair, an option to keep beam doors unlocked once opened, a Rumble toggle, an Android setting to turn the on-screen controls off, Remastered movement on moving and rotating platforms, and fixes for rapid charge locking the weapons, bombs after a savestate load in morph ball, twin-stick aim speed, credits layout on wide screens, Archipelago item ids and the Remastered Power charge effect.</p>
+      </description>
+      <url type="details">https://github.com/Odrannnn/MetroidPrimePort/releases/tag/v0.29.0</url>
+    </release>
+    <release version="0.28.1" date="2026-10-17">
+      <description>
+        <p>Smooth right-stick turning at high frame rates, map rotation with one finger on touch (with an option to swap one- and two-finger gestures), lock-on no longer keeping Remastered movement going, and Driver workarounds settings with a more detailed GPU self-test.</p>
+      </description>
+      <url type="details">https://github.com/Odrannnn/MetroidPrimePort/releases/tag/v0.28.1</url>
+    </release>
+    <release version="0.28.0" date="2026-10-17">
+      <description>
+        <p>Gyro aim, mouse sensitivity on the Quake/Source scale, Remastered actor shadows and a world-wide baked-lighting volume, Wave Beam trails and electric arcs, Remastered movement, map pickup kinds and room marks, new randomizer options, smoother dynamic resolution, a faster Remastered import, adjustable touch control opacity on Android, a graphics backend choice on Windows, and screenshots that are no longer blank.</p>
       </description>
       <url type="details">https://github.com/Odrannnn/MetroidPrimePort/releases/tag/v0.28.0</url>
     </release>

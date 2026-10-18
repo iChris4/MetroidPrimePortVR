@@ -195,6 +195,131 @@ bool CMetroidAreaCollider::AABoxCollisionCheck_Cached(const COctreeLeafCache& le
   return ret;
 }
 
+bool CMetroidAreaCollider::AABoxCollisionCheck_CollectTriangles(const COctreeLeafCache& leafCache,
+                                                                const CAABox& aabb,
+                                                                const CMaterialFilter& filter,
+                                                                rstl::vector< CTerrainTriangle >& out,
+                                                                bool candidatesOnly) {
+  const CVector3f center = aabb.GetCenterPoint();
+  const CVector3f halfExtent = aabb.GetHalfExtent();
+  bool ret = false;
+
+  // Same per-query duplicate window as the _Cached entry points: one query, one
+  // check count, so a triangle shared by overlapping leaves is taken once and no
+  // other query can be disturbed.
+  ResetInternalCounters();
+
+  for (int i = 0; i < leafCache.GetNumLeaves(); ++i) {
+    const CAreaOctTree::Node& node = leafCache.GetLeaf(i);
+    if (!aabb.DoBoundsOverlap(node.GetBoundingBox())) {
+      continue;
+    }
+    CAreaOctTree::TriListReference listRef = node.GetTriangleArray();
+    const CAreaOctTree& owner = node.GetOwner();
+    const int size = listRef.GetSize();
+    for (int j = 0; j < size; ++j) {
+      ++gTrianglesProcessed;
+      const ushort triIdx = listRef.GetAt(j);
+      if (sDupPrimitiveCheckCount == sDupTriangleList[triIdx]) {
+        ++gDupTrianglesProcessed;
+        continue;
+      }
+      sDupTriangleList[triIdx] = sDupPrimitiveCheckCount;
+      const CCollisionSurface& surf = owner.GetMasterListTriangle(triIdx);
+      const CMaterialList material(surf.GetSurfaceFlags());
+      if (!filter.Passes(material)) {
+        continue;
+      }
+      if (!candidatesOnly && !CollisionUtil::TriBoxOverlap(center, halfExtent, surf.GetVert(0), surf.GetVert(1),
+                                        surf.GetVert(2))) {
+        continue;
+      }
+      CTerrainTriangle tri;
+      tri.x0_a = surf.GetVert(0);
+      tri.xc_b = surf.GetVert(1);
+      tri.x18_c = surf.GetVert(2);
+      tri.x24_flags = surf.GetSurfaceFlags();
+      out.push_back(tri);
+      ret = true;
+    }
+  }
+
+  return ret;
+}
+
+bool CMetroidAreaCollider::AABoxCollisionCheck_CollectTriangles(const CAreaOctTree& octTree,
+                                                                const CAABox& aabb,
+                                                                const CMaterialFilter& filter,
+                                                                rstl::vector< CTerrainTriangle >& out,
+                                                                bool candidatesOnly) {
+  // The cached collector's body over `AABoxCollisionCheck_Internal`'s descent:
+  // branch nodes are pruned by their bounding box, leaves contribute their
+  // triangles. Used when the leaf cache is incomplete, so no leaf may be lost.
+  const CVector3f center = aabb.GetCenterPoint();
+  const CVector3f halfExtent = aabb.GetHalfExtent();
+  bool ret = false;
+  ResetInternalCounters();
+  CollectLeafTriangles(CAreaOctTree::Node(octTree.GetTreeMemory(), octTree.GetBoundingBox(),
+                                          octTree, octTree.GetTreeType()),
+                       aabb, filter, center, halfExtent, out, ret, candidatesOnly);
+  return ret;
+}
+
+bool CMetroidAreaCollider::CollectLeafTriangles(const CAreaOctTree::Node& node, const CAABox& aabb,
+                                                const CMaterialFilter& filter,
+                                                const CVector3f& center,
+                                                const CVector3f& halfExtent,
+                                                rstl::vector< CTerrainTriangle >& out,
+                                                bool& ret, bool candidatesOnly) {
+  switch (node.GetTreeType()) {
+  case CAreaOctTree::Node::kTT_Invalid:
+    return false;
+  case CAreaOctTree::Node::kTT_Branch: {
+    for (int i = 0; i < 8; ++i) {
+      CAreaOctTree::Node ch = node.GetChild(i);
+      if (ch.GetBoundingBox().DoBoundsOverlap(aabb)) {
+        CollectLeafTriangles(ch, aabb, filter, center, halfExtent, out, ret, candidatesOnly);
+      }
+    }
+    break;
+  }
+  case CAreaOctTree::Node::kTT_Leaf: {
+    CAreaOctTree::TriListReference listRef = node.GetTriangleArray();
+    const CAreaOctTree& owner = node.GetOwner();
+    const int size = listRef.GetSize();
+    for (int j = 0; j < size; ++j) {
+      ++gTrianglesProcessed;
+      const ushort triIdx = listRef.GetAt(j);
+      if (sDupPrimitiveCheckCount == sDupTriangleList[triIdx]) {
+        ++gDupTrianglesProcessed;
+        continue;
+      }
+      sDupTriangleList[triIdx] = sDupPrimitiveCheckCount;
+      const CCollisionSurface& surf = owner.GetMasterListTriangle(triIdx);
+      const CMaterialList material(surf.GetSurfaceFlags());
+      if (!filter.Passes(material)) {
+        continue;
+      }
+      if (!candidatesOnly && !CollisionUtil::TriBoxOverlap(center, halfExtent, surf.GetVert(0), surf.GetVert(1),
+                                        surf.GetVert(2))) {
+        continue;
+      }
+      CTerrainTriangle tri;
+      tri.x0_a = surf.GetVert(0);
+      tri.xc_b = surf.GetVert(1);
+      tri.x18_c = surf.GetVert(2);
+      tri.x24_flags = surf.GetSurfaceFlags();
+      out.push_back(tri);
+      ret = true;
+    }
+    break;
+  }
+  default:
+    break;
+  }
+  return ret;
+}
+
 CAABoxAreaCache::CAABoxAreaCache(const CAABox& aabb, const CPlane* pl,
                                  const CMaterialFilter& filter, const CMaterialList& material,
                                  CCollisionInfoList& collisionList)

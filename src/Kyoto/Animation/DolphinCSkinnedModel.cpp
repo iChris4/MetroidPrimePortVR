@@ -1,4 +1,5 @@
 #include "Kyoto/Animation/CSkinnedModel.hpp"
+#include "port_env.h"
 
 #include "Kyoto/Alloc/CCircularBuffer.hpp"
 #include "Kyoto/Alloc/CMemory.hpp"
@@ -29,10 +30,7 @@
 namespace PortSkin {
 typedef std::chrono::steady_clock Clock;
 
-static bool Flag(const char* name) {
-  const char* value = getenv(name);
-  return value != nullptr && value[0] != '\0' && value[0] != '0';
-}
+static bool Flag(const char* name) { return port::EnvFlag(name); }
 bool Legacy() {
   static const bool legacy = Flag("MP_SKIN_LEGACY");
   return legacy;

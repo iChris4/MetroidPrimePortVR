@@ -138,7 +138,12 @@ void CHudVisorBeamMenu::SetPlayerHas(const rstl::reserved_vector< bool, 4 >& ena
 }
 
 void CHudVisorBeamMenu::UpdateHudAlpha(float alpha) {
+#ifdef TARGET_PC
+  // CSamusHud folds in the opacity of the visor in use (issue #144).
+  const float hudAlpha = 1.f;
+#else
   const float hudAlpha = gpGameState->GameOptions().GetHudAlpha();
+#endif
   x18_basewidget_menu->SetColor(CColor::White().WithAlphaOf(alpha * hudAlpha));
 }
 

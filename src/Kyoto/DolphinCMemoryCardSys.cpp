@@ -31,6 +31,13 @@ namespace {
 // card, or that one).
 std::string sDefaultCardBase;
 std::string sCardBase;
+// Port: the game id and maker the card's files are created with, as CARDInit
+// was given them ("GM8E01"), for the map side files' key.
+std::string sCardIdMaker;
+// Port: the channel the port's save driver uses: CSaveGameScreen builds its
+// CMemoryCardDriver with kCS_SlotA, and nothing here mounts a second card.
+constexpr int kCardChannel = CMemoryCardSys::kCS_SlotA;
+constexpr const char* kCardMaker = "01";
 
 // Port: move a pre-native PAL save ("MetroidPrime A/B") into the PAL disc's own
 // format once the card folder is known.
@@ -370,7 +377,8 @@ void CMemoryCardSys::Initialize() {
     PortLog::Write("memory card: storing under %s\n", base);
     // Aurora's CARDInit takes the game id and maker code: the disc's (GM8P on
     // PAL, whose card aurora keeps under EUR).
-    CARDInit(PortGci::GameCode(), "01");
+    CARDInit(PortGci::GameCode(), kCardMaker);
+    sCardIdMaker = std::string(PortGci::GameCode()) + kCardMaker;
     mIsInitialized = true;
     MigrateLegacyPalSave();
     // Sharing the emulator's card: quick resume and boot-to-game save there too.
@@ -380,6 +388,26 @@ void CMemoryCardSys::Initialize() {
     }
   }
 }
+
+const char* CMemoryCardSys::PortCardResolvedDirectory() {
+  if (!mIsInitialized) {
+    return "";
+  }
+  // The channel's active path when its card is mounted, else the one it would
+  // get under the current base (both are the identity to key on; a card switch
+  // changes it).
+  static std::string sResolved;
+  char buffer[1024];
+  const int channel = PortCardChannel();
+  const size_t size = aurora_card_get_path(PortGci::GameCode(), aurora_card_get_type(channel),
+                                           channel, buffer, sizeof(buffer));
+  sResolved = size != 0 && size <= sizeof(buffer) ? std::string(buffer) : std::string();
+  return sResolved.c_str();
+}
+
+const char* CMemoryCardSys::PortCardIdMaker() { return sCardIdMaker.c_str(); }
+
+int CMemoryCardSys::PortCardChannel() { return kCardChannel; }
 
 bool CMemoryCardSys::PortSwitchCard(const char* directory) {
   if (!mIsInitialized || sDefaultCardBase.empty())

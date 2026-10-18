@@ -11,6 +11,7 @@
 #include <fstream>
 #include <iterator>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace port {
@@ -52,6 +53,40 @@ inline bool EndsWith(const std::string& s, const char* tail) {
   return s.size() >= n && s.compare(s.size() - n, n, tail) == 0;
 }
 
+inline bool StartsWith(std::string_view s, std::string_view prefix) {
+  return s.size() >= prefix.size() && s.compare(0, prefix.size(), prefix) == 0;
+}
+
+// `s` without the leading and trailing bytes found in `chars`. The view
+// points into `s`; Trim makes a copy for callers that keep the result.
+inline std::string_view TrimView(std::string_view s, std::string_view chars = " \t\r\n") {
+  const size_t begin = s.find_first_not_of(chars);
+  if (begin == std::string_view::npos) {
+    return {};
+  }
+  return s.substr(begin, s.find_last_not_of(chars) - begin + 1);
+}
+
+inline std::string Trim(std::string_view s, std::string_view chars = " \t\r\n") {
+  return std::string(TrimView(s, chars));
+}
+
+// The fields of `line` between each `sep`, empty ones included: "a,,b" is
+// three fields and "" is one.
+inline std::vector<std::string> Split(const std::string& line, char sep) {
+  std::vector<std::string> out;
+  size_t start = 0;
+  for (;;) {
+    const size_t at = line.find(sep, start);
+    if (at == std::string::npos) {
+      out.push_back(line.substr(start));
+      return out;
+    }
+    out.push_back(line.substr(start, at - start));
+    start = at + 1;
+  }
+}
+
 // An 8-hex-digit id followed by `suffix`, whose letters match either case:
 // the mod file name for one baked resource id.
 inline bool ParseHexFileName(const std::string& fileName, const char* suffix, uint32_t& id) {
@@ -76,11 +111,10 @@ inline bool ParseHexFileName(const std::string& fileName, const char* suffix, ui
   return true;
 }
 
-// The whole file, in one read when its size is known. The stream is left as
-// a read through istreambuf_iterator leaves it: failed only when the file
-// did not open.
-inline std::vector<uint8_t> ReadAll(std::ifstream& in) {
-  std::vector<uint8_t> data;
+namespace detail {
+template <typename Bytes>
+Bytes ReadAllAs(std::ifstream& in) {
+  Bytes data;
   if (!in) {
     return data;
   }
@@ -98,11 +132,24 @@ inline std::vector<uint8_t> ReadAll(std::ifstream& in) {
   in.clear();
   return data;
 }
+} // namespace detail
 
-// text as a JSON string literal, quotes included. Bytes past ASCII pass
-// through (UTF-8 stays UTF-8); control characters are escaped.
-inline std::string JsonQuote(const std::string& text) {
-  std::string out = "\"";
+// The whole file, in one read when its size is known. The stream is left as
+// a read through istreambuf_iterator leaves it: failed only when the file
+// did not open.
+inline std::vector<uint8_t> ReadAll(std::ifstream& in) { return detail::ReadAllAs<std::vector<uint8_t>>(in); }
+
+// The same, as a string: for text, and for the formats kept in one.
+inline std::string ReadAllText(std::ifstream& in) { return detail::ReadAllAs<std::string>(in); }
+
+// Appends text as a JSON string literal, quotes included. This is the port's
+// one JSON string escaper (JsonQuote and port::JsonWriter both come here),
+// and it follows RFC 8259: '"' and '\' are escaped, control characters below
+// 0x20 become \n, \r, \t or \u00XX, and every other byte passes through, so
+// UTF-8 stays UTF-8 and '/' and DEL are left as they are. The text is not
+// checked for valid UTF-8.
+inline void AppendJsonQuoted(std::string& out, std::string_view text) {
+  out.push_back('"');
   for (const char c : text) {
     switch (c) {
     case '"': out += "\\\""; break;
@@ -121,6 +168,13 @@ inline std::string JsonQuote(const std::string& text) {
     }
   }
   out.push_back('"');
+}
+
+// text as a JSON string literal, quotes included (AppendJsonQuoted).
+inline std::string JsonQuote(std::string_view text) {
+  std::string out;
+  out.reserve(text.size() + 2);
+  AppendJsonQuoted(out, text);
   return out;
 }
 

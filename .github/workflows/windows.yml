@@ -4,25 +4,35 @@ name: windows
 # by far, and running it on every push held up each release. Start it from the
 # Actions tab or with `gh workflow run windows.yml --ref port` when a Windows
 # zip is wanted. Restore the push/pull_request triggers to run it on every push.
+# It also runs once a week, so a Windows break shows up within days and its
+# caches are used often enough not to be evicted between manual runs.
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "17 4 * * 1"
+
+# Nothing here writes to the repository.
+permissions:
+  contents: read
 
 jobs:
   build:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: ilammy/msvc-dev-cmd@v1
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
 
-      - uses: hendrikmuhs/ccache-action@v1
+      - uses: hendrikmuhs/ccache-action@f09c25b45002a07be2955cbe52e8cee55643f89d # v1.2.24
         with:
           key: ${{ runner.os }}-clangcl
+          # Objects this build did not use are dropped before saving.
+          evict-old-files: job
 
       # Configure downloads and unpacks about a dozen dependencies. Keep the
       # unpacked sources and the stamps that say they are current; the build
       # directories beside them are left out, since ccache covers those.
-      - uses: actions/cache@v4
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             build-win/_deps/*-src
@@ -45,36 +55,24 @@ jobs:
           -DAURORA_NOD_LINKAGE=static
           -DOPENSSL_USE_STATIC_LIBS=TRUE
 
-      - name: Build
-        run: cmake --build build-win -j
-
-      - name: Test
-        run: ctest --test-dir build-win -L port --output-on-failure
-
-      # ctest only prints a test's output when it fails, so the wss:// evidence
-      # - the verified handshake and the rejections - would otherwise never
-      # appear in the log. Run it once more directly to record it.
-      - name: Show the TLS handshake result
-        run: ./build-win/port_ws_tests.exe
-
-      - name: Build FIFO regressions
-        run: cmake --build build-win --target gx_fifo_tests -j
-
-      - name: Test FIFO regressions
-        run: ./build-win/extern/aurora/tests/gx_fifo_tests.exe --gtest_brief=1
+      # Build, the port's tests, the TLS log and the GX FIFO regressions.
+      - uses: ./.github/actions/build-and-test
+        with:
+          build-dir: build-win
+          jobs: "-j"
 
       # The Remastered import decodes that game's H.264 movies with ffmpeg, run
       # as a separate program, and Windows has none of its own. The package
       # carries a small LGPL build made here from the official source: the
       # H.264 decoder and the JPEG encoder, nothing else. Rebuilt only when
       # the script changes.
-      - uses: actions/cache@v4
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         id: ffmpeg
         with:
           path: ffmpeg-min/out
           key: ffmpeg-min-${{ hashFiles('tools/build_ffmpeg_min.sh') }}
 
-      - uses: msys2/setup-msys2@v2
+      - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
         if: steps.ffmpeg.outputs.cache-hit != 'true'
         with:
           msystem: MINGW64
@@ -104,13 +102,9 @@ jobs:
           $root = Split-Path $include
           # The button-prompt textures and the pipeline cache seed are built into
           # the executable (MP_EMBED_RESOURCES), so the zip carries no copies.
+          # The licences come from tools/collect_licenses.sh in the next step;
+          # the ones only this package needs are added here.
           New-Item -ItemType Directory -Force -Path dist/licenses | Out-Null
-          # The port's own grant and notice travel with the package too.
-          Copy-Item LICENSE dist/licenses/port-license.txt
-          Copy-Item NOTICE dist/licenses/port-notice.txt
-          Copy-Item extern/aurora/LICENSE dist/licenses/aurora.txt
-          Copy-Item extern/musyx/LICENSE dist/licenses/musyx.txt
-          Copy-Item extern/astcenc/LICENSE.txt dist/licenses/astcenc.txt
           Copy-Item docs/NATIVE_PORT.md dist/README.md
           Copy-Item docs/SETTINGS.md dist/SETTINGS.md
           Copy-Item docs/MODS.md dist/MODS.md
@@ -120,20 +114,17 @@ jobs:
           Copy-Item ffmpeg-min/out/ffmpeg.exe dist/
           Copy-Item ffmpeg-min/out/COPYING.LGPLv2.1 dist/licenses/ffmpeg-LGPL-2.1.txt
           Copy-Item ffmpeg-min/out/ffmpeg-build.txt dist/licenses/ffmpeg.txt
-          # Keep notices supplied by the fetched runtime packages too.
-          Get-ChildItem build-win/_deps -Recurse -File -Include LICENSE*,COPYING*,NOTICE* |
-            ForEach-Object {
-              $relative = [System.IO.Path]::GetRelativePath((Resolve-Path build-win/_deps), $_.FullName)
-              $destination = Join-Path dist/licenses $relative
-              New-Item -ItemType Directory -Force -Path (Split-Path $destination) | Out-Null
-              Copy-Item $_.FullName $destination
-            }
-          # nod is now linked in: ship its licence (dual MIT / Apache-2.0).
-          Invoke-WebRequest https://raw.githubusercontent.com/encounter/nod/v2.0.0-alpha.12/LICENSE-MIT -OutFile dist/licenses/nod-MIT.txt
-          Invoke-WebRequest https://raw.githubusercontent.com/encounter/nod/v2.0.0-alpha.12/LICENSE-APACHE -OutFile dist/licenses/nod-Apache-2.0.txt
+          # The runner's OpenSSL is linked in, and its licence is not in _deps.
           $license = @("$root/license.txt", "$root/LICENSE.txt") | Where-Object { Test-Path $_ } | Select-Object -First 1
           if ($license) { Copy-Item $license dist/licenses/openssl.txt }
           else { Invoke-WebRequest https://raw.githubusercontent.com/openssl/openssl/openssl-3.5/LICENSE.txt -OutFile dist/licenses/openssl.txt }
+
+      # The port's own grant and notice, the vendored snapshots', every fetched
+      # package's and packaging/licenses/, as the Linux packages collect them.
+      # Git Bash, which every Windows runner has, runs it.
+      - name: Collect licences
+        shell: bash
+        run: bash tools/collect_licenses.sh build-win dist/licenses
 
       # Fail if a library that should be static is imported as a DLL again.
       - name: Check the executable's imports
@@ -167,7 +158,7 @@ jobs:
           # reads as malformed and feeds Dawn bad pipeline blobs.
           Remove-Item -Force -ErrorAction SilentlyContinue ./dist/metroid_prime_port.log, ./dist/dawn_cache.db*, ./dist/pipeline_cache.db*
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: metroid_prime_port-windows
           path: dist

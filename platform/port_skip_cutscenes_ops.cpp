@@ -42,53 +42,16 @@ struct Layer {
   std::vector< Object > objects;
 };
 
-struct Reader {
-  const uint8_t* p;
-  const uint8_t* end;
-  bool ok = true;
-
-  bool Need(size_t n) {
-    if (!ok || static_cast< size_t >(end - p) < n) {
-      ok = false;
-      return false;
-    }
-    return true;
-  }
-  uint8_t U8() {
-    if (!Need(1))
-      return 0;
-    return *p++;
-  }
-  uint16_t U16() {
-    if (!Need(2))
-      return 0;
-    const uint16_t v = static_cast< uint16_t >(p[0] << 8 | p[1]);
-    p += 2;
-    return v;
-  }
-  uint32_t U32() {
-    if (!Need(4))
-      return 0;
-    const uint32_t v = uint32_t(p[0]) << 24 | uint32_t(p[1]) << 16 | uint32_t(p[2]) << 8 | p[3];
-    p += 4;
-    return v;
-  }
-  const uint8_t* Bytes(size_t n) {
-    if (!Need(n))
-      return nullptr;
-    const uint8_t* b = p;
-    p += n;
-    return b;
-  }
-};
+// Big-endian; a read past the end yields zeros and clears `ok` for good.
+using Reader = port::ByteCursor;
 
 using port::AppendBE32;
 
 bool Parse(const uint8_t* scly, size_t size, uint32_t& version, std::vector< Layer >& layers) {
-  Reader r{scly, scly + size};
+  Reader r{scly, size};
   if (size < 12 || std::memcmp(scly, "SCLY", 4) != 0)
     return false;
-  r.p += 4;
+  r.at += 4;
   version = r.U32();
   const uint32_t count = r.U32();
   if (count > 64)
@@ -96,23 +59,23 @@ bool Parse(const uint8_t* scly, size_t size, uint32_t& version, std::vector< Lay
   std::vector< uint32_t > sizes(count);
   for (uint32_t& s : sizes)
     s = r.U32();
-  const uint8_t* layerStart = r.p;
+  const uint8_t* layerStart = r.data + r.at;
   layers.resize(count);
   for (uint32_t i = 0; i < count && r.ok; ++i) {
-    Reader lr{layerStart, scly + size};
-    if (!lr.Need(sizes[i]))
+    Reader lr{layerStart, size_t(scly + size - layerStart)};
+    if (!lr.Has(sizes[i]))
       return false;
-    lr.end = layerStart + sizes[i];
+    lr.size = sizes[i];
     layers[i].unk = lr.U8();
     const uint32_t objects = lr.U32();
     for (uint32_t k = 0; k < objects && lr.ok; ++k) {
       Object o;
       o.type = lr.U8();
       const uint32_t len = lr.U32();
-      if (!lr.Need(len) || len < 8)
+      if (!lr.Has(len) || len < 8)
         return false;
-      Reader orr{lr.p, lr.p + len};
-      lr.p += len;
+      Reader orr{lr.data + lr.at, len};
+      lr.at += len;
       o.id = orr.U32();
       const uint32_t conns = orr.U32();
       for (uint32_t c = 0; c < conns && orr.ok; ++c) {
@@ -124,7 +87,7 @@ bool Parse(const uint8_t* scly, size_t size, uint32_t& version, std::vector< Lay
       }
       if (!orr.ok)
         return false;
-      o.props.assign(orr.p, orr.end);
+      o.props.assign(orr.data + orr.at, orr.data + orr.size);
       layers[i].objects.push_back(std::move(o));
     }
     if (!lr.ok)
@@ -192,8 +155,8 @@ int ApplyOps(const uint8_t* scly, size_t size, const uint8_t* ops, size_t opsSiz
     return -1;
 
   int misses = 0;
-  Reader r{ops, ops + opsSize};
-  while (r.ok && r.p < r.end) {
+  Reader r{ops, opsSize};
+  while (r.ok && r.at < r.size) {
     const uint8_t op = r.U8();
     if (op == kClone) {
       const uint8_t li = r.U8();

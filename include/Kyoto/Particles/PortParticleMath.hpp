@@ -7,7 +7,27 @@
 
 #include <cmath>
 
+#include "Kyoto/Math/CTransform4f.hpp"
+#include "Kyoto/Math/CVector3f.hpp"
+
 namespace PortParticleMath {
+
+// XFMD3 particles already carry the emitter's global orientation in their positions.
+// Their center/sort transform therefore removes only the camera rotation; the legacy
+// system-camera transform remains in use for XFMD2/default positions and directions.
+inline CVector3f ParticlePositionForSort(const CTransform4f& cameraRotationInverse,
+                                         const CTransform4f& systemCameraCopy,
+                                         bool followsEmitter, const CVector3f& current,
+                                         const CVector3f& previous, float deltaScale) {
+  const CVector3f pos = (current - previous) * deltaScale + previous;
+  const CTransform4f& positionCameraCopy = followsEmitter ? cameraRotationInverse : systemCameraCopy;
+  return positionCameraCopy * pos;
+}
+
+inline CVector3f ParticleDirectionInCamera(const CTransform4f& systemCameraCopy,
+                                           const CVector3f& direction) {
+  return systemCameraCopy.Rotate(direction);
+}
 
 // DFCS/DFCP: 1 at distance a, 0 at distance b, clamped; 0 when a and b coincide.
 inline float DistanceBlend(float d, float a, float b) {

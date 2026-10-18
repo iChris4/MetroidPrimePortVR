@@ -2,7 +2,7 @@
 
 // Runtime half of the native Remastered particle material (VMAT). The draw itself is
 // aurora::gfx::vfx::draw_quads; this file evaluates the per-particle properties (SSZE, ITEN, VPMT)
-// and the per-frame VSMT, and expands the quads. Contract: build/mpr/vfx/DESIGN.md.
+// and the per-frame VSMT, and expands the quads. Contract: docs/REMASTERED_VFX.md.
 // A PART without VMAT never reaches any of it.
 
 #include "Kyoto/Particles/CElementGen.hpp"
@@ -13,9 +13,9 @@
 #include "Kyoto/Graphics/CColor.hpp"
 #include "aurora/vfx.hpp"
 
-// True when the description carries a VMAT this runtime understands (version 2).
+// True when the description carries a VMAT this runtime understands (version 2 or 3).
 inline bool PortVfxActive(const CGenDescription& desc) {
-  return desc.xPortVfx != nullptr && desc.xPortVfx->mat.version == 2;
+  return desc.xPortVfx != nullptr && (desc.xPortVfx->mat.version == 2 || desc.xPortVfx->mat.version == 3);
 }
 
 // Evaluates SSZE (default: the particle's SIZE), ITEN (default 1) and the VPMT rows into the
@@ -49,8 +49,8 @@ struct CPortVfxMeshBatch {
 bool PortVfxBuildDesc(const CPortVfxData& vfx, const float* vsmt, uint vsmtMask,
                       aurora::gfx::vfx::DrawDesc& desc);
 
-// Evaluates the VSMT overrides at `frame` into `vsmt` (19 slots); returns the mask.
-uint PortVfxEvalVsmt(const CPortVfxData& vfx, int frame, float vsmt[19]);
+// Evaluates the VSMT overrides at `frame` into `vsmt`; returns the mask.
+uint PortVfxEvalVsmt(const CPortVfxData& vfx, int frame, float vsmt[kPortVfxVsmtCount]);
 
 // ITEN (default 1) and the VPMT rows at `frame`, for a swoosh point. The caller has set
 // CParticleGlobals' particle context.

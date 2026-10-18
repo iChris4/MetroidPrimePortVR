@@ -16,7 +16,12 @@
 #include <cstdlib>
 #include <sstream>
 
-#if !defined(_WIN32)
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
 #include <fcntl.h>
 #include <unistd.h>
 #endif
@@ -45,6 +50,20 @@ bool SourceFile::Open(const std::string& path) {
   if (m_fd >= 0) {
     return true;
   }
+#else
+  // A handle of its own opened for overlapped reads, so that reads at different
+  // offsets can run side by side instead of queueing on one stream.
+  const int wideSize = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path.c_str(), -1, nullptr, 0);
+  if (wideSize > 0) {
+    std::wstring wide(size_t(wideSize), L'\0');
+    MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path.c_str(), -1, wide.data(), wideSize);
+    const HANDLE handle = CreateFileW(wide.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                                      FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED, nullptr);
+    if (handle != INVALID_HANDLE_VALUE) {
+      m_handle = handle;
+      return true;
+    }
+  }
 #endif
   m_stream.open(path, std::ios::binary);
   return bool(m_stream);
@@ -55,6 +74,11 @@ void SourceFile::Close() {
   if (m_fd >= 0) {
     close(m_fd);
     m_fd = -1;
+  }
+#else
+  if (m_handle != nullptr) {
+    CloseHandle(static_cast<HANDLE>(m_handle));
+    m_handle = nullptr;
   }
 #endif
   m_stream.close();
@@ -73,6 +97,36 @@ size_t SourceFile::ReadSome(uint64_t offset, void* out, size_t size) {
       }
       done += size_t(got);
     }
+    return done;
+  }
+#else
+  if (m_handle != nullptr) {
+    // Each read waits on an event of its own: the handle's own signal would be
+    // shared by every thread reading at once.
+    const HANDLE event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (event == nullptr) {
+      return 0;
+    }
+    size_t done = 0;
+    while (done < size) {
+      const uint64_t at = offset + done;
+      const DWORD want = DWORD(std::min<size_t>(size - done, 1u << 30));
+      OVERLAPPED overlapped{};
+      overlapped.Offset = DWORD(at);
+      overlapped.OffsetHigh = DWORD(at >> 32);
+      overlapped.hEvent = event;
+      DWORD got = 0;
+      const HANDLE handle = static_cast<HANDLE>(m_handle);
+      if (!ReadFile(handle, static_cast<char*>(out) + done, want, nullptr, &overlapped) &&
+          GetLastError() != ERROR_IO_PENDING) {
+        break;
+      }
+      if (!GetOverlappedResult(handle, &overlapped, &got, TRUE) || got == 0) {
+        break;
+      }
+      done += got;
+    }
+    CloseHandle(event);
     return done;
   }
 #endif
@@ -261,7 +315,13 @@ bool ReadFileTable(SourceFile& file, uint64_t at, const char* magic, size_t entr
       return false;
     }
     size_t len = strnlen(strings + nameOffset, stringSize - nameOffset);
-    out.push_back({std::string(strings + nameOffset, len), dataStart + ReadLE64(e), ReadLE64(e + 8)});
+    const uint64_t offset = ReadLE64(e), size = ReadLE64(e + 8);
+    // A wrapped offset would read the wrong part of the image rather than fail.
+    if (offset > UINT64_MAX - dataStart || size > UINT64_MAX - (dataStart + offset)) {
+      error = std::string("bad ") + magic + " file range";
+      return false;
+    }
+    out.push_back({std::string(strings + nameOffset, len), dataStart + offset, size});
   }
   return true;
 }
@@ -568,6 +628,10 @@ bool Nsp::Open(const std::string& nspPath, const std::string& keysPath, std::str
   m_sectionInNca = start;
   m_sectionBase = nca->offset + start;
   m_sectionSize = end - start;
+  if (m_romfsOffset >= m_sectionSize) {
+    error = "RomFS level lies outside its section";
+    return false;
+  }
 
   // --- RomFS tables -----------------------------------------------------------
   std::string readError;
@@ -587,6 +651,16 @@ bool Nsp::Open(const std::string& nspPath, const std::string& keysPath, std::str
   m_dataOffset = ReadLE64(rh + 0x48);
   if (dirSize > kMaxRomfsTable || fileSize > kMaxRomfsTable) {
     error = "implausible RomFS table size";
+    Close();
+    return false;
+  }
+  // Every offset from here on is relative to the RomFS, inside the section.
+  const uint64_t romfsSize = m_sectionSize - m_romfsOffset;
+  auto inRomfs = [romfsSize](uint64_t offset, uint64_t size) {
+    return offset <= romfsSize && size <= romfsSize - offset;
+  };
+  if (!inRomfs(dirOffset, dirSize) || !inRomfs(fileOffset, fileSize) || m_dataOffset > romfsSize) {
+    error = "RomFS tables lie outside the RomFS";
     Close();
     return false;
   }
@@ -632,8 +706,14 @@ bool Nsp::Open(const std::string& nspPath, const std::string& keysPath, std::str
       }
       RomfsFile file;
       file.path = cur.path + std::string(reinterpret_cast<const char*>(fe + 32), nameSize);
-      file.offset = m_dataOffset + ReadLE64(fe + 8);
+      const uint64_t dataOffset = ReadLE64(fe + 8);
       file.size = ReadLE64(fe + 16);
+      if (dataOffset > romfsSize - m_dataOffset || !inRomfs(m_dataOffset + dataOffset, file.size)) {
+        error = "RomFS file " + file.path + " lies outside the RomFS";
+        Close();
+        return false;
+      }
+      file.offset = m_dataOffset + dataOffset;
       m_files.push_back(std::move(file));
       f = ReadLE32(fe + 4);
     }

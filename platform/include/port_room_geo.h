@@ -253,6 +253,10 @@ std::vector<uint8_t> WriteLods(const std::vector<Lods>& models);
 
 // The areas in memory now. Loads the files of new ones and frees those of areas that left.
 void SetLoadedAreas(const uint32_t* mreas, size_t count);
+// The game started streaming the area in (CGameArea::StartStreamIn): reads and parses its
+// file on a worker, so that loading it once it is in only has to make the models. Any number
+// of calls per area; nothing changes until the area loads.
+void Prefetch(uint32_t mrea);
 // Draws the area's room geometry. True when it stands in for the area's own, which is
 // when the area has a file, the mode says so and every model of it has loaded.
 bool Draw(const CStateManager& mgr, const CGameArea& area, const CFrustumPlanes& frustum);

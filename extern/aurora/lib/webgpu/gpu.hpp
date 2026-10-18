@@ -47,6 +47,9 @@ extern wgpu::BackendType g_backendType;
 extern bool g_vulkanLibraryFailed;
 extern GraphicsConfig g_graphicsConfig;
 extern TextureWithSampler g_frameBuffer;
+// Frames left to time after an EFB resize (end_frame logs them): the new targets' first use
+// can cost more than the resize itself.
+extern int g_resizeFramesToTime;
 extern TextureWithSampler g_frameBufferResolved;
 extern TextureWithSampler g_depthBuffer;
 // Linear HDR scene colour (MSAA + resolved), the world EFB's size, sharing g_depthBuffer. Empty until
@@ -97,9 +100,23 @@ uint32_t scene_hdr_sample_count() noexcept;
 void release_scene_hdr_target() noexcept;
 // A depth attachment in the configured depth format and MSAA sample count.
 TextureWithSampler create_depth_texture(uint32_t width, uint32_t height);
+// The EFB's targets as the calling thread sees them. The main thread records each frame against
+// the newest (g_frameBuffer, g_frameBufferResolved, g_depthBuffer); the render worker encodes
+// frames handed to it earlier, so on the worker these are the ones the frame it is encoding was
+// recorded against. A resize that only changes the EFB scale hands the new set to the worker as a
+// queued item between the last frame at the old size and the first at the new one, instead of
+// waiting for the worker to drain (resize_swapchain).
+struct EfbTargets {
+  TextureWithSampler color;
+  TextureWithSampler resolved;
+  TextureWithSampler depth;
+};
+EfbTargets efb_targets() noexcept;
+// What is presented (the resolved EFB with MSAA, else the EFB), as the calling thread sees it.
 const TextureWithSampler& present_source() noexcept;
 wgpu::BindGroup create_copy_bind_group(const TextureWithSampler& source);
 void set_resampler(AuroraSampler sampler) noexcept;
+void set_present_sharpness(float sharpness) noexcept;
 AuroraSampler get_resampler() noexcept;
 Viewport calculate_present_viewport(uint32_t surface_width, uint32_t surface_height, uint32_t content_width,
                                     uint32_t content_height) noexcept;

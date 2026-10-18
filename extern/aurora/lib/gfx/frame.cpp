@@ -872,6 +872,7 @@ void end_frame(EndFrameCallback callback) {
   const size_t stagingSlot = frame.stagingBuffer;
   render_worker::enqueue_end_frame(frameId, [frameSlot, stagingSlot, callback = std::move(callback)]() mutable {
     auto& packet = g_framePackets[frameSlot];
+    const uint32_t finishedFrame = packet.frameIndex;
     g_stagingBuffers[stagingSlot].Unmap();
     g_mappingStates[stagingSlot].store(BufferMapState::Unmapped, std::memory_order_release);
     auto encoder = std::move(packet.encoder);
@@ -890,7 +891,7 @@ void end_frame(EndFrameCallback callback) {
       callback(encoder, std::move(afterSubmitCallbacks));
     }
     g_frameSlots.release(frameSlot);
-    expire_cached_bind_groups();
+    expire_cached_bind_groups(finishedFrame);
     map_staging_buffer(stagingSlot, true);
     process_events();
   });

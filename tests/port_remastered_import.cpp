@@ -1,4 +1,5 @@
 #include "port_remastered_import.h"
+#include "port_test.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -9,14 +10,6 @@
 using namespace PortRemastered::ImportDetail;
 
 namespace {
-int sFailures = 0;
-
-void Check(bool condition, const char* what) {
-  if (!condition) {
-    std::fprintf(stderr, "FAIL: %s\n", what);
-    ++sFailures;
-  }
-}
 
 void PutFourCC(std::vector<uint8_t>& data, const char (&tag)[5]) { data.insert(data.end(), tag, tag + 4); }
 
@@ -228,7 +221,7 @@ MissileDefaultRoleInput Input(const Fixture& fixture) {
 
 void ExpectRejected(const Fixture& fixture, const char* what) {
   MissileDefaultRolePair pair;
-  Check(!ResolveMissileDefaultRole(Input(fixture), pair), what);
+  CHECK_MSG(!ResolveMissileDefaultRole(Input(fixture), pair), what);
 }
 
 Fixture MakePowerBallFixture(uint32_t crsc = kPowerBallCrsc, uint32_t part = kPowerBallDefaultPart,
@@ -307,7 +300,7 @@ PowerBallDefaultRoleInput PowerBallInput(const Fixture& fixture) {
 
 void ExpectPowerBallRejected(const Fixture& fixture, const char* what) {
   PowerBallDefaultRolePair pair;
-  Check(!ResolvePowerBallDefaultRole(PowerBallInput(fixture), pair), what);
+  CHECK_MSG(!ResolvePowerBallDefaultRole(PowerBallInput(fixture), pair), what);
 }
 
 enum class PlasmaRoleField { None, WpscColr, CrscDefs, WpsmColr, CrsmDefs };
@@ -401,24 +394,24 @@ PlasmaBeamDefaultRoleInput PlasmaBeamInput(const Fixture& fixture) {
 
 void ExpectPlasmaBeamRejected(const Fixture& fixture, const char* what) {
   PlasmaBeamDefaultRolePair pair;
-  Check(!ResolvePlasmaBeamDefaultRole(PlasmaBeamInput(fixture), pair), what);
+  CHECK_MSG(!ResolvePlasmaBeamDefaultRole(PlasmaBeamInput(fixture), pair), what);
 }
 
 void TestExactPairAndNestedDecoys() {
   const Fixture fixture = MakeFixture();
   MissileDefaultRolePair pair;
-  Check(ResolveMissileDefaultRole(Input(fixture), pair), "the exact missile default chain resolves with a retail vector decoy");
-  Check(pair.genp == kMissileDefaultGenp && pair.retailPart == kMissileDefaultPart,
-        "the pair is the pinned full GENP GUID and retail PART id");
+  CHECK_MSG(ResolveMissileDefaultRole(Input(fixture), pair), "the exact missile default chain resolves with a retail vector decoy");
+  CHECK_MSG(pair.genp == kMissileDefaultGenp && pair.retailPart == kMissileDefaultPart,
+            "the pair is the pinned full GENP GUID and retail PART id");
   uint32_t retailLink = 0;
-  Check(detail::ReadUniqueRetailAssetId(fixture.retailWpsc.data(), fixture.retailWpsc.size(), "WPSM", "COLR",
+  CHECK_MSG(detail::ReadUniqueRetailAssetId(fixture.retailWpsc.data(), fixture.retailWpsc.size(), "WPSM", "COLR",
                                        retailLink) && retailLink == kMissileCrsc,
         "a nested retail decoy is ignored by the top-level field reader");
   Fixture trailingDecoy = MakeFixture();
   PutRetailLink(trailingDecoy.retailWpsc, "COLR", kMissileCrsc);
   MissileDefaultRolePair trailingPair;
-  Check(ResolveMissileDefaultRole(Input(trailingDecoy), trailingPair),
-        "retail bytes after the factory's _END do not create a duplicate role link");
+  CHECK_MSG(ResolveMissileDefaultRole(Input(trailingDecoy), trailingPair),
+            "retail bytes after the factory's _END do not create a duplicate role link");
   ExpectRejected(MakeFixture(kMissileCrsc, kMissileDefaultPart, kMissileCrsmLink, kMissileDefaultGenpLink, false,
                              false, false, false),
                  "role fields missing from the top-level WPSC and CRSC are rejected");
@@ -445,8 +438,8 @@ void TestRetailSchemaAndBounds() {
   MissileDefaultRoleInput input = Input(fixture);
   MissileDefaultRolePair pair;
   std::string error;
-  Check(!ResolveMissileDefaultRole(input, pair, &error) && error.find("unknown factory field BAD_") != std::string::npos,
-        "unknown retail WPSC fields fail closed with a precise diagnostic");
+  CHECK_MSG(!ResolveMissileDefaultRole(input, pair, &error) && error.find("unknown factory field BAD_") != std::string::npos,
+            "unknown retail WPSC fields fail closed with a precise diagnostic");
 }
 
 void TestRemasteredSchemaAndBounds() {
@@ -498,9 +491,9 @@ void TestRemasteredSchemaAndBounds() {
   fixture = MakeFixture();
   PortRemastered::EffectNode node;
   std::string error;
-  Check(PortRemastered::ParseRemasteredRoleAsset(fixture.remasteredWpsm.data(), fixture.remasteredWpsm.size(),
-                                                  PortRemastered::EffectFourCC("WPSM"), node, error),
-        "valid resource parses while ignoring footer bytes beyond the RFRM form");
+  CHECK_MSG(PortRemastered::ParseRemasteredRoleAsset(fixture.remasteredWpsm.data(), fixture.remasteredWpsm.size(),
+                                                      PortRemastered::EffectFourCC("WPSM"), node, error),
+            "valid resource parses while ignoring footer bytes beyond the RFRM form");
 }
 
 void TestStrictRolePropertySchemas() {
@@ -522,10 +515,10 @@ void TestStrictRolePropertySchemas() {
   roleInputWithProperties(decoy, std::move(properties));
   MissileDefaultRolePair pair;
   std::string error;
-  Check(!ResolveMissileDefaultRole(Input(decoy), pair, &error),
-        "unknown-property payload bytes cannot be promoted into a role link");
-  Check(error.find("unknown role property ZZZZ at 0x40") != std::string::npos,
-        "unknown role property failure reports its FourCC and absolute offset");
+  CHECK_MSG(!ResolveMissileDefaultRole(Input(decoy), pair, &error),
+            "unknown-property payload bytes cannot be promoted into a role link");
+  CHECK_MSG(error.find("unknown role property ZZZZ at 0x40") != std::string::npos,
+            "unknown role property failure reports its FourCC and absolute offset");
 
   // Even with a real, correctly typed link after it, an unknown property has
   // no proven boundary and invalidates the complete role asset.
@@ -537,9 +530,9 @@ void TestStrictRolePropertySchemas() {
   PutReversedGuidLink(properties, "COLR", 0, kMissileCrsmLink);
   roleInputWithProperties(beforeRealLink, std::move(properties));
   error.clear();
-  Check(!ResolveMissileDefaultRole(Input(beforeRealLink), pair, &error) &&
-            error.find("unknown role property ZZZZ") != std::string::npos,
-        "unknown property before a true COLR link fails closed");
+  CHECK_MSG(!ResolveMissileDefaultRole(Input(beforeRealLink), pair, &error) &&
+                error.find("unknown role property ZZZZ") != std::string::npos,
+            "unknown property before a true COLR link fails closed");
 
   // PVAR is a globally known property but is not a WPSM factory field, even
   // though its payload is length-delimited and contains no real role link.
@@ -549,7 +542,7 @@ void TestStrictRolePropertySchemas() {
   PutReversedGuidLink(properties, "COLR", 0, kMissileCrsmLink);
   roleInputWithProperties(globalPvar, std::move(properties));
   error.clear();
-  Check(!ResolveMissileDefaultRole(Input(globalPvar), pair, &error) &&
+  CHECK_MSG(!ResolveMissileDefaultRole(Input(globalPvar), pair, &error) &&
             error.find("unknown role property PVAR") != std::string::npos,
         "globally-known PVAR is rejected when it is absent from the WPSM factory allowlist");
 
@@ -569,8 +562,8 @@ void TestStrictRolePropertySchemas() {
   PutLe32(effect, 0); // no child generators
   PortRemastered::EffectNode node;
   error.clear();
-  Check(PortRemastered::ParseEffect(effect.data(), effect.size(), node, error),
-        "standard ParseEffect retains permissive unknown-property behavior");
+  CHECK_MSG(PortRemastered::ParseEffect(effect.data(), effect.size(), node, error),
+            "standard ParseEffect retains permissive unknown-property behavior");
 }
 
 void TestStrictRoleAllowlistAndBudgets() {
@@ -587,10 +580,10 @@ void TestStrictRoleAllowlistAndBudgets() {
   PutReversedFourCC(sizeDecoy, "_END");
   sizeDecoy.push_back(4);
   const std::vector<uint8_t> sizeDecoyAsset = RemasteredForm("WPSM", "WPSM", std::move(sizeDecoy));
-  Check(!PortRemastered::ParseRemasteredRoleAsset(sizeDecoyAsset.data(), sizeDecoyAsset.size(),
-                                                   PortRemastered::EffectFourCC("WPSM"), node, error) &&
-            error.find("unknown role property SIZE") != std::string::npos,
-        "globally-known SIZE cannot use a generic fallback or promote its COLR decoy");
+  CHECK_MSG(!PortRemastered::ParseRemasteredRoleAsset(sizeDecoyAsset.data(), sizeDecoyAsset.size(),
+                                                       PortRemastered::EffectFourCC("WPSM"), node, error) &&
+                error.find("unknown role property SIZE") != std::string::npos,
+            "globally-known SIZE cannot use a generic fallback or promote its COLR decoy");
 
   Fixture knownGlobalBeforeLink = MakeFixture();
   std::vector<uint8_t> properties;
@@ -603,9 +596,9 @@ void TestStrictRoleAllowlistAndBudgets() {
   knownGlobalBeforeLink.remasteredWpsm = RemasteredForm("WPSM", "WPSM", std::move(properties));
   MissileDefaultRolePair pair;
   error.clear();
-  Check(!ResolveMissileDefaultRole(Input(knownGlobalBeforeLink), pair, &error) &&
-            error.find("unknown role property SIZE") != std::string::npos,
-        "globally-known but factory-unknown root field before a real COLR is rejected");
+  CHECK_MSG(!ResolveMissileDefaultRole(Input(knownGlobalBeforeLink), pair, &error) &&
+                error.find("unknown role property SIZE") != std::string::npos,
+            "globally-known but factory-unknown root field before a real COLR is rejected");
 
   const auto parseOneField = [&](const char (&root)[5], const char (&field)[5]) {
     std::vector<uint8_t> stream;
@@ -617,9 +610,9 @@ void TestStrictRoleAllowlistAndBudgets() {
     return PortRemastered::ParseRemasteredRoleAsset(asset.data(), asset.size(),
                                                      PortRemastered::EffectFourCC(root), node, error);
   };
-  Check(!parseOneField("WPSM", "DEFS") && error.find("unknown role property DEFS") != std::string::npos,
-        "CRSM-only DEFS is rejected at a WPSM root");
-  Check(!parseOneField("CRSM", "COLR") && error.find("unknown role property COLR") != std::string::npos,
+  CHECK_MSG(!parseOneField("WPSM", "DEFS") && error.find("unknown role property DEFS") != std::string::npos,
+            "CRSM-only DEFS is rejected at a WPSM root");
+  CHECK_MSG(!parseOneField("CRSM", "COLR") && error.find("unknown role property COLR") != std::string::npos,
         "WPSM-only COLR is rejected at a CRSM root");
 
   std::vector<uint8_t> atLimit;
@@ -630,10 +623,10 @@ void TestStrictRoleAllowlistAndBudgets() {
   atLimit.push_back(4);
   const std::vector<uint8_t> atLimitAsset = RemasteredForm("WPSM", "WPSM", std::move(atLimit));
   error.clear();
-  Check(PortRemastered::ParseRemasteredRoleAsset(atLimitAsset.data(), atLimitAsset.size(),
-                                                  PortRemastered::EffectFourCC("WPSM"), node, error) &&
-            node.properties.size() == 1024,
-        "the inclusive 1024-record boundary parses without semantic link rejection");
+  CHECK_MSG(PortRemastered::ParseRemasteredRoleAsset(atLimitAsset.data(), atLimitAsset.size(),
+                                                      PortRemastered::EffectFourCC("WPSM"), node, error) &&
+                node.properties.size() == 1024,
+            "the inclusive 1024-record boundary parses without semantic link rejection");
 
   std::vector<uint8_t> tooMany;
   for (size_t i = 0; i < 4097; ++i) {
@@ -643,10 +636,10 @@ void TestStrictRoleAllowlistAndBudgets() {
   tooMany.push_back(4);
   const std::vector<uint8_t> tooManyAsset = RemasteredForm("WPSM", "WPSM", std::move(tooMany));
   error.clear();
-  Check(!PortRemastered::ParseRemasteredRoleAsset(tooManyAsset.data(), tooManyAsset.size(),
-                                                   PortRemastered::EffectFourCC("WPSM"), node, error) &&
-            error.find("property-count limit") != std::string::npos,
-        "4097 fixed-size root records fail closed at the bounded record limit");
+  CHECK_MSG(!PortRemastered::ParseRemasteredRoleAsset(tooManyAsset.data(), tooManyAsset.size(),
+                                                       PortRemastered::EffectFourCC("WPSM"), node, error) &&
+                error.find("property-count limit") != std::string::npos,
+            "4097 fixed-size root records fail closed at the bounded record limit");
 
   std::vector<uint8_t> nodeBudget;
   for (size_t i = 0; i < 512; ++i) {
@@ -663,10 +656,10 @@ void TestStrictRoleAllowlistAndBudgets() {
   nodeBudget.push_back(4);
   const std::vector<uint8_t> nodeBudgetAsset = RemasteredForm("WPSM", "WPSM", std::move(nodeBudget));
   error.clear();
-  Check(!PortRemastered::ParseRemasteredRoleAsset(nodeBudgetAsset.data(), nodeBudgetAsset.size(),
-                                                   PortRemastered::EffectFourCC("WPSM"), node, error) &&
-            error.find("value-node budget") != std::string::npos,
-        "typed expression nodes are bounded independently of the root property count");
+  CHECK_MSG(!PortRemastered::ParseRemasteredRoleAsset(nodeBudgetAsset.data(), nodeBudgetAsset.size(),
+                                                       PortRemastered::EffectFourCC("WPSM"), node, error) &&
+                error.find("value-node budget") != std::string::npos,
+            "typed expression nodes are bounded independently of the root property count");
 
   std::vector<uint8_t> deep;
   PutReversedFourCC(deep, "PSCL");
@@ -688,10 +681,10 @@ void TestStrictRoleAllowlistAndBudgets() {
   deep.push_back(4);
   const std::vector<uint8_t> deepAsset = RemasteredForm("WPSM", "WPSM", std::move(deep));
   error.clear();
-  Check(!PortRemastered::ParseRemasteredRoleAsset(deepAsset.data(), deepAsset.size(),
-                                                   PortRemastered::EffectFourCC("WPSM"), node, error) &&
-            error.find("expression-depth limit") != std::string::npos,
-        "deep typed expressions reject at the explicit depth limit");
+  CHECK_MSG(!PortRemastered::ParseRemasteredRoleAsset(deepAsset.data(), deepAsset.size(),
+                                                       PortRemastered::EffectFourCC("WPSM"), node, error) &&
+                error.find("expression-depth limit") != std::string::npos,
+            "deep typed expressions reject at the explicit depth limit");
 }
 
 void TestStrictRoleKeyframeWidths() {
@@ -718,7 +711,7 @@ void TestStrictRoleKeyframeWidths() {
   fakeVectorLink.remasteredWpsm = RemasteredForm("WPSM", "WPSM", std::move(properties));
   MissileDefaultRolePair pair;
   error.clear();
-  Check(!ResolveMissileDefaultRole(Input(fakeVectorLink), pair, &error),
+  CHECK_MSG(!ResolveMissileDefaultRole(Input(fakeVectorLink), pair, &error),
         "a 4-byte-per-key IVEC KEYE cannot promote a following COLR");
 
   // A genuine vector KEYE has seven CVector3f payloads (12 bytes each). A
@@ -737,13 +730,13 @@ void TestStrictRoleKeyframeWidths() {
   properties.push_back(4);
   vectorKeys.remasteredWpsm = RemasteredForm("WPSM", "WPSM", std::move(properties));
   error.clear();
-  Check(ResolveMissileDefaultRole(Input(vectorKeys), pair, &error) &&
-            pair.genp == kMissileDefaultGenp && pair.retailPart == kMissileDefaultPart,
-        "a valid 12-byte vector KEYE ignores embedded COLR bytes and resolves the later root link");
+  CHECK_MSG(ResolveMissileDefaultRole(Input(vectorKeys), pair, &error) &&
+                pair.genp == kMissileDefaultGenp && pair.retailPart == kMissileDefaultPart,
+            "a valid 12-byte vector KEYE ignores embedded COLR bytes and resolves the later root link");
   bool vectorKeyWidthParsed = false;
-  Check(PortRemastered::ParseRemasteredRoleAsset(vectorKeys.remasteredWpsm.data(), vectorKeys.remasteredWpsm.size(),
-                                                 PortRemastered::EffectFourCC("WPSM"), node, error),
-        "strict role parser accepts the complete vector KEYE block");
+  CHECK_MSG(PortRemastered::ParseRemasteredRoleAsset(vectorKeys.remasteredWpsm.data(), vectorKeys.remasteredWpsm.size(),
+                                                     PortRemastered::EffectFourCC("WPSM"), node, error),
+            "strict role parser accepts the complete vector KEYE block");
   if (!node.properties.empty() && node.properties.front().value.size() == 1) {
     const PortRemastered::EffectValue& value = node.properties.front().value.front();
     vectorKeyWidthParsed = value.kind == PortRemastered::EffectValue::Kind::Element &&
@@ -752,7 +745,7 @@ void TestStrictRoleKeyframeWidths() {
                            value.args.front().kind == PortRemastered::EffectValue::Kind::Keys &&
                            value.args.front().size == 22 + 7 * 12;
   }
-  Check(vectorKeyWidthParsed, "vector KEYE records expose their exact factory-sized key payload");
+  CHECK_MSG(vectorKeyWidthParsed, "vector KEYE records expose their exact factory-sized key payload");
 
   // Real and integer factory key emitters store one 32-bit value per key.
   Fixture scalarKeys = MakeFixture();
@@ -764,9 +757,9 @@ void TestStrictRoleKeyframeWidths() {
   properties.push_back(4);
   scalarKeys.remasteredWpsm = RemasteredForm("WPSM", "WPSM", std::move(properties));
   error.clear();
-  Check(PortRemastered::ParseRemasteredRoleAsset(scalarKeys.remasteredWpsm.data(), scalarKeys.remasteredWpsm.size(),
-                                                  PortRemastered::EffectFourCC("WPSM"), node, error),
-        "real KEYE and integer KEYP use their proven four-byte key widths");
+  CHECK_MSG(PortRemastered::ParseRemasteredRoleAsset(scalarKeys.remasteredWpsm.data(), scalarKeys.remasteredWpsm.size(),
+                                                      PortRemastered::EffectFourCC("WPSM"), node, error),
+            "real KEYE and integer KEYP use their proven four-byte key widths");
   bool scalarKeyWidthsParsed = false;
   bool realKeyWidthParsed = false;
   bool intKeyWidthParsed = false;
@@ -782,7 +775,7 @@ void TestStrictRoleKeyframeWidths() {
     }
   }
   scalarKeyWidthsParsed = realKeyWidthParsed && intKeyWidthParsed;
-  Check(scalarKeyWidthsParsed, "real KEYE and integer KEYP expose exact 4-byte key payloads");
+  CHECK_MSG(scalarKeyWidthsParsed, "real KEYE and integer KEYP expose exact 4-byte key payloads");
 
   // CColor(CInputStream&) reads four floats, so a vector CTVC carrying a color
   // KEYE has a source-proven 16-byte key width (not an inferred candidate).
@@ -805,11 +798,11 @@ void TestStrictRoleKeyframeWidths() {
   properties.push_back(4);
   colorKeys.remasteredWpsm = RemasteredForm("WPSM", "WPSM", std::move(properties));
   error.clear();
-  Check(ResolveMissileDefaultRole(Input(colorKeys), pair, &error),
-        "source-proven 16-byte color KEYE ignores embedded COLR bytes and preserves the later role link");
-  Check(PortRemastered::ParseRemasteredRoleAsset(colorKeys.remasteredWpsm.data(), colorKeys.remasteredWpsm.size(),
-                                                  PortRemastered::EffectFourCC("WPSM"), node, error),
-        "strict parser accepts the complete color KEYE block");
+  CHECK_MSG(ResolveMissileDefaultRole(Input(colorKeys), pair, &error),
+            "source-proven 16-byte color KEYE ignores embedded COLR bytes and preserves the later role link");
+  CHECK_MSG(PortRemastered::ParseRemasteredRoleAsset(colorKeys.remasteredWpsm.data(), colorKeys.remasteredWpsm.size(),
+                                                      PortRemastered::EffectFourCC("WPSM"), node, error),
+            "strict parser accepts the complete color KEYE block");
   bool colorKeyWidthParsed = false;
   if (!node.properties.empty() && node.properties.front().value.size() == 1 &&
       node.properties.front().value.front().args.size() == 1) {
@@ -820,7 +813,7 @@ void TestStrictRoleKeyframeWidths() {
                           keyEmitter.args.front().kind == PortRemastered::EffectValue::Kind::Keys &&
                           keyEmitter.args.front().size == 22 + 2 * 16;
   }
-  Check(colorKeyWidthParsed, "color KEYE records expose their exact 16-byte factory-sized payload");
+  CHECK_MSG(colorKeyWidthParsed, "color KEYE records expose their exact 16-byte factory-sized payload");
 
   std::vector<uint8_t> truncatedVector;
   PutReversedFourCC(truncatedVector, "IVEC");
@@ -833,9 +826,9 @@ void TestStrictRoleKeyframeWidths() {
   truncatedVector.push_back(4);
   const auto truncatedVectorAsset = RemasteredForm("WPSM", "WPSM", std::move(truncatedVector));
   error.clear();
-  Check(!PortRemastered::ParseRemasteredRoleAsset(truncatedVectorAsset.data(), truncatedVectorAsset.size(),
-                                                   PortRemastered::EffectFourCC("WPSM"), node, error),
-        "a vector KEYE truncated to one scalar key fails closed");
+  CHECK_MSG(!PortRemastered::ParseRemasteredRoleAsset(truncatedVectorAsset.data(), truncatedVectorAsset.size(),
+                                                       PortRemastered::EffectFourCC("WPSM"), node, error),
+            "a vector KEYE truncated to one scalar key fails closed");
 
   std::vector<uint8_t> excessiveCount;
   PutReversedFourCC(excessiveCount, "IVEC");
@@ -847,10 +840,10 @@ void TestStrictRoleKeyframeWidths() {
   excessiveCount.push_back(4);
   const auto excessiveCountAsset = RemasteredForm("WPSM", "WPSM", std::move(excessiveCount));
   error.clear();
-  Check(!PortRemastered::ParseRemasteredRoleAsset(excessiveCountAsset.data(), excessiveCountAsset.size(),
-                                                   PortRemastered::EffectFourCC("WPSM"), node, error) &&
-            error.find("value-node budget") != std::string::npos,
-        "keyframe count over the per-asset node budget fails before length arithmetic");
+  CHECK_MSG(!PortRemastered::ParseRemasteredRoleAsset(excessiveCountAsset.data(), excessiveCountAsset.size(),
+                                                       PortRemastered::EffectFourCC("WPSM"), node, error) &&
+                error.find("value-node budget") != std::string::npos,
+            "keyframe count over the per-asset node budget fails before length arithmetic");
 
   std::vector<uint8_t> longHeaderOnly;
   PutReversedFourCC(longHeaderOnly, "IVEC");
@@ -866,9 +859,9 @@ void TestStrictRoleKeyframeWidths() {
   longHeaderOnly.push_back(4);
   const auto longHeaderAsset = RemasteredForm("WPSM", "WPSM", std::move(longHeaderOnly));
   error.clear();
-  Check(!PortRemastered::ParseRemasteredRoleAsset(longHeaderAsset.data(), longHeaderAsset.size(),
-                                                   PortRemastered::EffectFourCC("WPSM"), node, error),
-        "strict KEYE parsing does not backtrack to a generic 26-byte header candidate");
+  CHECK_MSG(!PortRemastered::ParseRemasteredRoleAsset(longHeaderAsset.data(), longHeaderAsset.size(),
+                                                       PortRemastered::EffectFourCC("WPSM"), node, error),
+            "strict KEYE parsing does not backtrack to a generic 26-byte header candidate");
 
   std::vector<uint8_t> untypedKey;
   PutReversedFourCC(untypedKey, "PSCL");
@@ -882,9 +875,9 @@ void TestStrictRoleKeyframeWidths() {
   untypedKey.push_back(4);
   const auto untypedKeyAsset = RemasteredForm("WPSM", "WPSM", std::move(untypedKey));
   error.clear();
-  Check(!PortRemastered::ParseRemasteredRoleAsset(untypedKeyAsset.data(), untypedKeyAsset.size(),
-                                                   PortRemastered::EffectFourCC("WPSM"), node, error),
-        "generic untyped KEYE without factory-known value type is rejected");
+  CHECK_MSG(!PortRemastered::ParseRemasteredRoleAsset(untypedKeyAsset.data(), untypedKeyAsset.size(),
+                                                       PortRemastered::EffectFourCC("WPSM"), node, error),
+            "generic untyped KEYE without factory-known value type is rejected");
 }
 
 void TestProvenRolePropertySchemas() {
@@ -912,9 +905,9 @@ void TestProvenRolePropertySchemas() {
   PortRemastered::EffectNode node;
   std::string error;
   bool apsmParsed = false;
-  Check(PortRemastered::ParseRemasteredRoleAsset(wpsm.data(), wpsm.size(), PortRemastered::EffectFourCC("WPSM"),
-                                                  node, error),
-        "WPSM APSM parses under its factory-backed GUID schema");
+  CHECK_MSG(PortRemastered::ParseRemasteredRoleAsset(wpsm.data(), wpsm.size(), PortRemastered::EffectFourCC("WPSM"),
+                                                      node, error),
+            "WPSM APSM parses under its factory-backed GUID schema");
   for (const PortRemastered::EffectProperty& property : node.properties) {
     if (property.fourcc == PortRemastered::EffectFourCC("APSM")) {
       apsmParsed = property.value.size() == 1 &&
@@ -922,7 +915,7 @@ void TestProvenRolePropertySchemas() {
                    property.value.front().guid == apsmGuid;
     }
   }
-  Check(apsmParsed, "WPSM APSM exposes the exact typed GUID value");
+  CHECK_MSG(apsmParsed, "WPSM APSM exposes the exact typed GUID value");
   const std::array<std::pair<uint32_t, uint8_t>, 13> expectedBools = {{
       {PortRemastered::EffectFourCC("FC60"), 1}, {PortRemastered::EffectFourCC("SPS1"), 1},
       {PortRemastered::EffectFourCC("HOMG"), 1}, {PortRemastered::EffectFourCC("AP11"), 1},
@@ -948,8 +941,8 @@ void TestProvenRolePropertySchemas() {
       ++parsedRoleBools;
     }
   }
-  Check(parsedRoleBools == expectedBools.size(),
-        "all production WPSM boolean fields retain their exact CNST byte values");
+  CHECK_MSG(parsedRoleBools == expectedBools.size(),
+            "all production WPSM boolean fields retain their exact CNST byte values");
   std::vector<uint8_t> truncatedApsm;
   PutReversedFourCC(truncatedApsm, "APSM");
   truncatedApsm.push_back(0);
@@ -958,9 +951,9 @@ void TestProvenRolePropertySchemas() {
   truncatedApsm.push_back(4);
   const std::vector<uint8_t> truncatedApsmAsset = RemasteredForm("WPSM", "WPSM", std::move(truncatedApsm));
   error.clear();
-  Check(!PortRemastered::ParseRemasteredRoleAsset(truncatedApsmAsset.data(), truncatedApsmAsset.size(),
-                                                   PortRemastered::EffectFourCC("WPSM"), node, error),
-        "WPSM APSM's fixed GUID schema rejects a truncated value");
+  CHECK_MSG(!PortRemastered::ParseRemasteredRoleAsset(truncatedApsmAsset.data(), truncatedApsmAsset.size(),
+                                                       PortRemastered::EffectFourCC("WPSM"), node, error),
+            "WPSM APSM's fixed GUID schema rejects a truncated value");
 
   std::vector<uint8_t> crsmProperties;
   PutReversedGuidLink(crsmProperties, "BHFX", 4, kMissileDefaultGenpLink);
@@ -970,9 +963,9 @@ void TestProvenRolePropertySchemas() {
   const std::vector<uint8_t> crsm = RemasteredForm("CRSM", "CRSM", std::move(crsmProperties));
   error.clear();
   bool bhfxParsed = false;
-  Check(PortRemastered::ParseRemasteredRoleAsset(crsm.data(), crsm.size(), PortRemastered::EffectFourCC("CRSM"),
-                                                  node, error),
-        "CRSM BHFX parses under its factory-backed GUID schema");
+  CHECK_MSG(PortRemastered::ParseRemasteredRoleAsset(crsm.data(), crsm.size(), PortRemastered::EffectFourCC("CRSM"),
+                                                      node, error),
+            "CRSM BHFX parses under its factory-backed GUID schema");
   for (const PortRemastered::EffectProperty& property : node.properties) {
     if (property.fourcc == PortRemastered::EffectFourCC("BHFX")) {
       bhfxParsed = property.tag == 4 && property.value.size() == 1 &&
@@ -980,7 +973,7 @@ void TestProvenRolePropertySchemas() {
                    property.value.front().guid == kMissileDefaultGenpLink;
     }
   }
-  Check(bhfxParsed, "CRSM BHFX exposes the exact typed GUID value");
+  CHECK_MSG(bhfxParsed, "CRSM BHFX exposes the exact typed GUID value");
   std::vector<uint8_t> truncatedBhfx;
   PutReversedFourCC(truncatedBhfx, "BHFX");
   truncatedBhfx.push_back(4);
@@ -989,9 +982,9 @@ void TestProvenRolePropertySchemas() {
   truncatedBhfx.push_back(4);
   const std::vector<uint8_t> truncatedBhfxAsset = RemasteredForm("CRSM", "CRSM", std::move(truncatedBhfx));
   error.clear();
-  Check(!PortRemastered::ParseRemasteredRoleAsset(truncatedBhfxAsset.data(), truncatedBhfxAsset.size(),
-                                                   PortRemastered::EffectFourCC("CRSM"), node, error),
-        "CRSM BHFX's fixed GUID schema rejects a truncated value");
+  CHECK_MSG(!PortRemastered::ParseRemasteredRoleAsset(truncatedBhfxAsset.data(), truncatedBhfxAsset.size(),
+                                                       PortRemastered::EffectFourCC("CRSM"), node, error),
+            "CRSM BHFX's fixed GUID schema rejects a truncated value");
 
   const std::vector<uint8_t> wrongForm = RemasteredForm("WPSM", "WPSM", [&] {
     std::vector<uint8_t> properties;
@@ -1001,10 +994,10 @@ void TestProvenRolePropertySchemas() {
     return properties;
   }());
   error.clear();
-  Check(!PortRemastered::ParseRemasteredRoleAsset(wrongForm.data(), wrongForm.size(),
-                                                   PortRemastered::EffectFourCC("WPSM"), node, error) &&
-            error.find("unknown role property BHFX") != std::string::npos,
-        "CRSM-only BHFX schema does not make the field generally permissive");
+  CHECK_MSG(!PortRemastered::ParseRemasteredRoleAsset(wrongForm.data(), wrongForm.size(),
+                                                       PortRemastered::EffectFourCC("WPSM"), node, error) &&
+                error.find("unknown role property BHFX") != std::string::npos,
+            "CRSM-only BHFX schema does not make the field generally permissive");
 
   std::vector<uint8_t> malformedBool;
   PutReversedFourCC(malformedBool, "FC60");
@@ -1015,9 +1008,9 @@ void TestProvenRolePropertySchemas() {
   malformedBool.push_back(4);
   const std::vector<uint8_t> malformedBoolAsset = RemasteredForm("WPSM", "WPSM", std::move(malformedBool));
   error.clear();
-  Check(!PortRemastered::ParseRemasteredRoleAsset(malformedBoolAsset.data(), malformedBoolAsset.size(),
-                                                   PortRemastered::EffectFourCC("WPSM"), node, error),
-        "factory-backed boolean schema rejects a word-shaped CNST payload");
+  CHECK_MSG(!PortRemastered::ParseRemasteredRoleAsset(malformedBoolAsset.data(), malformedBoolAsset.size(),
+                                                       PortRemastered::EffectFourCC("WPSM"), node, error),
+            "factory-backed boolean schema rejects a word-shaped CNST payload");
 
   std::vector<uint8_t> tratProperties;
   PutReversedFourCC(tratProperties, "TRAT");
@@ -1029,9 +1022,9 @@ void TestProvenRolePropertySchemas() {
   const std::vector<uint8_t> tratAsset = RemasteredForm("WPSM", "WPSM", std::move(tratProperties));
   error.clear();
   bool tratParsed = false;
-  Check(PortRemastered::ParseRemasteredRoleAsset(tratAsset.data(), tratAsset.size(),
-                                                  PortRemastered::EffectFourCC("WPSM"), node, error),
-        "WPSM TRAT parses as one factory-typed real element");
+  CHECK_MSG(PortRemastered::ParseRemasteredRoleAsset(tratAsset.data(), tratAsset.size(),
+                                                      PortRemastered::EffectFourCC("WPSM"), node, error),
+            "WPSM TRAT parses as one factory-typed real element");
   for (const PortRemastered::EffectProperty& property : node.properties) {
     if (property.fourcc == PortRemastered::EffectFourCC("TRAT")) {
       tratParsed = property.tag == 1 && property.value.size() == 1 &&
@@ -1042,7 +1035,7 @@ void TestProvenRolePropertySchemas() {
                    property.value.front().args.front().word == 0x43b40000;
     }
   }
-  Check(tratParsed, "WPSM TRAT retains the exact tag and real CNST word");
+  CHECK_MSG(tratParsed, "WPSM TRAT retains the exact tag and real CNST word");
 
   std::vector<uint8_t> malformedTrat;
   PutReversedFourCC(malformedTrat, "TRAT");
@@ -1052,9 +1045,9 @@ void TestProvenRolePropertySchemas() {
   malformedTrat.push_back(4);
   const std::vector<uint8_t> malformedTratAsset = RemasteredForm("WPSM", "WPSM", std::move(malformedTrat));
   error.clear();
-  Check(!PortRemastered::ParseRemasteredRoleAsset(malformedTratAsset.data(), malformedTratAsset.size(),
-                                                   PortRemastered::EffectFourCC("WPSM"), node, error),
-        "WPSM TRAT rejects a raw float instead of the typed real-element shape");
+  CHECK_MSG(!PortRemastered::ParseRemasteredRoleAsset(malformedTratAsset.data(), malformedTratAsset.size(),
+                                                       PortRemastered::EffectFourCC("WPSM"), node, error),
+            "WPSM TRAT rejects a raw float instead of the typed real-element shape");
 
   std::vector<uint8_t> psclProperties;
   PutReversedFourCC(psclProperties, "PSCL");
@@ -1070,9 +1063,9 @@ void TestProvenRolePropertySchemas() {
   const std::vector<uint8_t> psclAsset = RemasteredForm("WPSM", "WPSM", std::move(psclProperties));
   error.clear();
   bool psclParsed = false;
-  Check(PortRemastered::ParseRemasteredRoleAsset(psclAsset.data(), psclAsset.size(),
-                                                  PortRemastered::EffectFourCC("WPSM"), node, error),
-        "WPSM PSCL parses as a factory-typed vector element");
+  CHECK_MSG(PortRemastered::ParseRemasteredRoleAsset(psclAsset.data(), psclAsset.size(),
+                                                      PortRemastered::EffectFourCC("WPSM"), node, error),
+            "WPSM PSCL parses as a factory-typed vector element");
   for (const PortRemastered::EffectProperty& property : node.properties) {
     if (property.fourcc != PortRemastered::EffectFourCC("PSCL")) {
       continue;
@@ -1092,7 +1085,7 @@ void TestProvenRolePropertySchemas() {
                    component.args.front().word == 0x40400000;
     }
   }
-  Check(psclParsed, "WPSM PSCL retains all three exact vector CNST components");
+  CHECK_MSG(psclParsed, "WPSM PSCL retains all three exact vector CNST components");
 
   std::vector<uint8_t> malformedPscl;
   PutReversedFourCC(malformedPscl, "PSCL");
@@ -1104,9 +1097,9 @@ void TestProvenRolePropertySchemas() {
   malformedPscl.push_back(4);
   const std::vector<uint8_t> malformedPsclAsset = RemasteredForm("WPSM", "WPSM", std::move(malformedPscl));
   error.clear();
-  Check(!PortRemastered::ParseRemasteredRoleAsset(malformedPsclAsset.data(), malformedPsclAsset.size(),
-                                                   PortRemastered::EffectFourCC("WPSM"), node, error),
-        "WPSM PSCL rejects a real-shaped CNST instead of a three-component vector");
+  CHECK_MSG(!PortRemastered::ParseRemasteredRoleAsset(malformedPsclAsset.data(), malformedPsclAsset.size(),
+                                                       PortRemastered::EffectFourCC("WPSM"), node, error),
+            "WPSM PSCL rejects a real-shaped CNST instead of a three-component vector");
 
   std::vector<uint8_t> dshxProperties;
   constexpr std::array<uint8_t, 16> dshxGuid = {0x00, 0x00, 0x00, 0x10, 0x1a, 0x00, 0x20, 0xfd,
@@ -1117,9 +1110,9 @@ void TestProvenRolePropertySchemas() {
   const std::vector<uint8_t> dshxAsset = RemasteredForm("CRSM", "CRSM", std::move(dshxProperties));
   error.clear();
   bool dshxParsed = false;
-  Check(PortRemastered::ParseRemasteredRoleAsset(dshxAsset.data(), dshxAsset.size(),
-                                                  PortRemastered::EffectFourCC("CRSM"), node, error),
-        "CRSM DSHX parses as one sound-response GUID");
+  CHECK_MSG(PortRemastered::ParseRemasteredRoleAsset(dshxAsset.data(), dshxAsset.size(),
+                                                      PortRemastered::EffectFourCC("CRSM"), node, error),
+            "CRSM DSHX parses as one sound-response GUID");
   for (const PortRemastered::EffectProperty& property : node.properties) {
     if (property.fourcc == PortRemastered::EffectFourCC("DSHX")) {
       dshxParsed = property.tag == 4 && property.value.size() == 1 &&
@@ -1127,7 +1120,7 @@ void TestProvenRolePropertySchemas() {
                    property.value.front().guid == dshxGuid;
     }
   }
-  Check(dshxParsed, "CRSM DSHX preserves the exact sound-response GUID");
+  CHECK_MSG(dshxParsed, "CRSM DSHX preserves the exact sound-response GUID");
 
   std::vector<uint8_t> truncatedDshx;
   PutReversedFourCC(truncatedDshx, "DSHX");
@@ -1137,9 +1130,9 @@ void TestProvenRolePropertySchemas() {
   truncatedDshx.push_back(4);
   const std::vector<uint8_t> truncatedDshxAsset = RemasteredForm("CRSM", "CRSM", std::move(truncatedDshx));
   error.clear();
-  Check(!PortRemastered::ParseRemasteredRoleAsset(truncatedDshxAsset.data(), truncatedDshxAsset.size(),
-                                                   PortRemastered::EffectFourCC("CRSM"), node, error),
-        "CRSM DSHX's fixed GUID schema rejects a truncated value");
+  CHECK_MSG(!PortRemastered::ParseRemasteredRoleAsset(truncatedDshxAsset.data(), truncatedDshxAsset.size(),
+                                                       PortRemastered::EffectFourCC("CRSM"), node, error),
+            "CRSM DSHX's fixed GUID schema rejects a truncated value");
 
   const std::vector<uint8_t> wrongDshxForm = RemasteredForm("WPSM", "WPSM", [&] {
     std::vector<uint8_t> properties;
@@ -1149,10 +1142,10 @@ void TestProvenRolePropertySchemas() {
     return properties;
   }());
   error.clear();
-  Check(!PortRemastered::ParseRemasteredRoleAsset(wrongDshxForm.data(), wrongDshxForm.size(),
-                                                   PortRemastered::EffectFourCC("WPSM"), node, error) &&
-            error.find("unknown role property DSHX") != std::string::npos,
-        "CRSM-only DSHX schema does not make the field generally permissive");
+  CHECK_MSG(!PortRemastered::ParseRemasteredRoleAsset(wrongDshxForm.data(), wrongDshxForm.size(),
+                                                       PortRemastered::EffectFourCC("WPSM"), node, error) &&
+                error.find("unknown role property DSHX") != std::string::npos,
+            "CRSM-only DSHX schema does not make the field generally permissive");
 
   constexpr std::array<uint8_t, 16> ddclGuid = {0x9d, 0x85, 0xcd, 0xe4, 0x29, 0x49, 0x43, 0x45,
                                                  0x95, 0xfa, 0x19, 0x99, 0x6c, 0xe4, 0x98, 0x2e};
@@ -1163,9 +1156,9 @@ void TestProvenRolePropertySchemas() {
   const std::vector<uint8_t> ddclAsset = RemasteredForm("CRSM", "CRSM", std::move(ddclProperties));
   error.clear();
   bool ddclParsed = false;
-  Check(PortRemastered::ParseRemasteredRoleAsset(ddclAsset.data(), ddclAsset.size(),
-                                                  PortRemastered::EffectFourCC("CRSM"), node, error),
-        "CRSM DDCL parses as a decal asset GUID");
+  CHECK_MSG(PortRemastered::ParseRemasteredRoleAsset(ddclAsset.data(), ddclAsset.size(),
+                                                      PortRemastered::EffectFourCC("CRSM"), node, error),
+            "CRSM DDCL parses as a decal asset GUID");
   for (const PortRemastered::EffectProperty& property : node.properties) {
     if (property.fourcc == PortRemastered::EffectFourCC("DDCL")) {
       ddclParsed = property.tag == 4 && property.value.size() == 1 &&
@@ -1173,7 +1166,7 @@ void TestProvenRolePropertySchemas() {
                    property.value.front().guid == ddclGuid;
     }
   }
-  Check(ddclParsed, "CRSM DDCL preserves the exact decal GUID");
+  CHECK_MSG(ddclParsed, "CRSM DDCL preserves the exact decal GUID");
 
   std::vector<uint8_t> truncatedDdcl;
   PutReversedFourCC(truncatedDdcl, "DDCL");
@@ -1183,9 +1176,9 @@ void TestProvenRolePropertySchemas() {
   truncatedDdcl.push_back(4);
   const std::vector<uint8_t> truncatedDdclAsset = RemasteredForm("CRSM", "CRSM", std::move(truncatedDdcl));
   error.clear();
-  Check(!PortRemastered::ParseRemasteredRoleAsset(truncatedDdclAsset.data(), truncatedDdclAsset.size(),
-                                                   PortRemastered::EffectFourCC("CRSM"), node, error),
-        "CRSM DDCL's fixed GUID schema rejects a truncated value");
+  CHECK_MSG(!PortRemastered::ParseRemasteredRoleAsset(truncatedDdclAsset.data(), truncatedDdclAsset.size(),
+                                                       PortRemastered::EffectFourCC("CRSM"), node, error),
+            "CRSM DDCL's fixed GUID schema rejects a truncated value");
 
   const std::vector<uint8_t> wrongDdclForm = RemasteredForm("WPSM", "WPSM", [&] {
     std::vector<uint8_t> properties;
@@ -1195,10 +1188,10 @@ void TestProvenRolePropertySchemas() {
     return properties;
   }());
   error.clear();
-  Check(!PortRemastered::ParseRemasteredRoleAsset(wrongDdclForm.data(), wrongDdclForm.size(),
-                                                    PortRemastered::EffectFourCC("WPSM"), node, error) &&
-            error.find("unknown role property DDCL") != std::string::npos,
-        "CRSM-only DDCL schema does not make the field generally permissive");
+  CHECK_MSG(!PortRemastered::ParseRemasteredRoleAsset(wrongDdclForm.data(), wrongDdclForm.size(),
+                                                        PortRemastered::EffectFourCC("WPSM"), node, error) &&
+                error.find("unknown role property DDCL") != std::string::npos,
+            "CRSM-only DDCL schema does not make the field generally permissive");
 }
 
 void TestPlasmaRoleSchemaExtensions() {
@@ -1227,31 +1220,31 @@ void TestPlasmaRoleSchemaExtensions() {
   const std::array<uint8_t, 16> nilGuid{};
   std::vector<uint8_t> aps2;
   PutReversedGuidLink(aps2, "APS2", 0, nilGuid);
-  Check(parseRoot("WPSM", std::move(aps2)), "raw WPSM APS2 accepts its source-proven nil generator GUID");
-  Check(hasGuidProperty(EffectFourCC("APS2"), 0, nilGuid), "WPSM APS2 exposes the exact nil GUID value");
+  CHECK_MSG(parseRoot("WPSM", std::move(aps2)), "raw WPSM APS2 accepts its source-proven nil generator GUID");
+  CHECK_MSG(hasGuidProperty(EffectFourCC("APS2"), 0, nilGuid), "WPSM APS2 exposes the exact nil GUID value");
 
   std::vector<uint8_t> truncatedAps2;
   PutReversedFourCC(truncatedAps2, "APS2");
   truncatedAps2.push_back(0);
   truncatedAps2.insert(truncatedAps2.end(), nilGuid.begin(), nilGuid.begin() + 8);
-  Check(!parseRoot("WPSM", std::move(truncatedAps2)), "WPSM APS2 rejects a truncated fixed GUID");
+  CHECK_MSG(!parseRoot("WPSM", std::move(truncatedAps2)), "WPSM APS2 rejects a truncated fixed GUID");
 
   std::vector<uint8_t> wrongKindAps2;
   PutReversedGuidLink(wrongKindAps2, "APS2", 4, nilGuid);
-  Check(!parseRoot("WPSM", std::move(wrongKindAps2)) && error.find("unexpected input-header tag") != std::string::npos,
-        "WPSM APS2 rejects a valid GUID under the wrong source input-header kind");
+  CHECK_MSG(!parseRoot("WPSM", std::move(wrongKindAps2)) && error.find("unexpected input-header tag") != std::string::npos,
+            "WPSM APS2 rejects a valid GUID under the wrong source input-header kind");
 
   std::vector<uint8_t> aps2InCrsm;
   PutReversedGuidLink(aps2InCrsm, "APS2", 0, nilGuid);
-  Check(!parseRoot("CRSM", std::move(aps2InCrsm)) && error.find("unknown role property APS2") != std::string::npos,
-        "WPSM-only APS2 is not admitted by the CRSM role schema");
+  CHECK_MSG(!parseRoot("CRSM", std::move(aps2InCrsm)) && error.find("unknown role property APS2") != std::string::npos,
+            "WPSM-only APS2 is not admitted by the CRSM role schema");
 
   std::vector<uint8_t> validInrt;
   PutReversedFourCC(validInrt, "INRT");
   validInrt.push_back(0);
   PutReversedEulerRotation(validInrt, 5);
-  Check(parseRoot("WPSM", std::move(validInrt)),
-        "raw WPSM INRT accepts exact REUL with three typed reals and order byte");
+  CHECK_MSG(parseRoot("WPSM", std::move(validInrt)),
+            "raw WPSM INRT accepts exact REUL with three typed reals and order byte");
   bool inrtParsed = false;
   for (const PortRemastered::EffectProperty& property : node.properties) {
     if (property.fourcc != EffectFourCC("INRT") || property.tag != 0 || property.value.size() != 1) {
@@ -1268,13 +1261,13 @@ void TestPlasmaRoleSchemaExtensions() {
                    real.args.front().word == 0;
     }
   }
-  Check(inrtParsed, "WPSM INRT retains three typed real constants plus its exact order byte");
+  CHECK_MSG(inrtParsed, "WPSM INRT retains three typed real constants plus its exact order byte");
 
   std::vector<uint8_t> truncatedInrt;
   PutReversedFourCC(truncatedInrt, "INRT");
   truncatedInrt.push_back(0);
   PutReversedEulerRotation(truncatedInrt, 0, 2, false);
-  Check(!parseRoot("WPSM", std::move(truncatedInrt)), "WPSM INRT rejects a truncated three-real REUL expression");
+  CHECK_MSG(!parseRoot("WPSM", std::move(truncatedInrt)), "WPSM INRT rejects a truncated three-real REUL expression");
 
   std::vector<uint8_t> unknownRotation;
   PutReversedFourCC(unknownRotation, "INRT");
@@ -1284,7 +1277,7 @@ void TestPlasmaRoleSchemaExtensions() {
   PutReversedRealConstant(unknownRotation);
   PutReversedRealConstant(unknownRotation);
   unknownRotation.push_back(0);
-  Check(!parseRoot("WPSM", std::move(unknownRotation)), "WPSM INRT rejects unproved rotation opcodes without fallback");
+  CHECK_MSG(!parseRoot("WPSM", std::move(unknownRotation)), "WPSM INRT rejects unproved rotation opcodes without fallback");
 
   std::vector<uint8_t> unknownReal;
   PutReversedFourCC(unknownReal, "INRT");
@@ -1294,7 +1287,7 @@ void TestPlasmaRoleSchemaExtensions() {
   PutReversedRealConstant(unknownReal);
   PutReversedRealConstant(unknownReal);
   unknownReal.push_back(0);
-  Check(!parseRoot("WPSM", std::move(unknownReal)), "WPSM INRT rejects an unproved typed-real opcode");
+  CHECK_MSG(!parseRoot("WPSM", std::move(unknownReal)), "WPSM INRT rejects an unproved typed-real opcode");
 
   std::vector<uint8_t> ambiguousReal;
   PutReversedFourCC(ambiguousReal, "INRT");
@@ -1304,8 +1297,8 @@ void TestPlasmaRoleSchemaExtensions() {
   PutReversedRealConstant(ambiguousReal);
   PutReversedRealConstant(ambiguousReal);
   ambiguousReal.push_back(0);
-  Check(!parseRoot("WPSM", std::move(ambiguousReal)),
-        "WPSM INRT rejects a typed-real opcode with ambiguous arities rather than backtracking");
+  CHECK_MSG(!parseRoot("WPSM", std::move(ambiguousReal)),
+            "WPSM INRT rejects a typed-real opcode with ambiguous arities rather than backtracking");
 
   std::vector<uint8_t> malformedReal;
   PutReversedFourCC(malformedReal, "INRT");
@@ -1316,27 +1309,27 @@ void TestPlasmaRoleSchemaExtensions() {
   PutReversedRealConstant(malformedReal);
   PutReversedRealConstant(malformedReal);
   malformedReal.push_back(0);
-  Check(!parseRoot("WPSM", std::move(malformedReal)), "WPSM INRT rejects a malformed/truncated typed real");
+  CHECK_MSG(!parseRoot("WPSM", std::move(malformedReal)), "WPSM INRT rejects a malformed/truncated typed real");
 
   std::vector<uint8_t> invalidOrder;
   PutReversedFourCC(invalidOrder, "INRT");
   invalidOrder.push_back(0);
   PutReversedEulerRotation(invalidOrder, 6);
-  Check(!parseRoot("WPSM", std::move(invalidOrder)), "WPSM INRT rejects an out-of-range Euler-order enum byte");
+  CHECK_MSG(!parseRoot("WPSM", std::move(invalidOrder)), "WPSM INRT rejects an out-of-range Euler-order enum byte");
 
   constexpr std::array<uint8_t, 16> plasmaDecalGuid = {0x40, 0x3c, 0x04, 0x71, 0x0e, 0x58, 0x05, 0x4c,
                                                         0xb0, 0xb4, 0x4f, 0xe1, 0xf2, 0x0e, 0x11, 0x2d};
   const auto checkDecalField = [&](const char (&field)[5]) {
     std::vector<uint8_t> valid;
     PutReversedGuidLink(valid, field, 4, plasmaDecalGuid);
-    Check(parseRoot("CRSM", std::move(valid)), "CRSM source decal field parses as its fixed decal GUID");
-    Check(hasGuidProperty(EffectFourCC(field), 4, plasmaDecalGuid), "CRSM decal field retains its exact GUID");
+    CHECK_MSG(parseRoot("CRSM", std::move(valid)), "CRSM source decal field parses as its fixed decal GUID");
+    CHECK_MSG(hasGuidProperty(EffectFourCC(field), 4, plasmaDecalGuid), "CRSM decal field retains its exact GUID");
 
     std::vector<uint8_t> truncated;
     PutReversedFourCC(truncated, field);
     truncated.push_back(4);
     truncated.insert(truncated.end(), plasmaDecalGuid.begin(), plasmaDecalGuid.begin() + 8);
-    Check(!parseRoot("CRSM", std::move(truncated)), "CRSM source decal field rejects a truncated GUID");
+    CHECK_MSG(!parseRoot("CRSM", std::move(truncated)), "CRSM source decal field rejects a truncated GUID");
   };
   checkDecalField("3MUD");
   checkDecalField("3LAV");
@@ -1344,14 +1337,14 @@ void TestPlasmaRoleSchemaExtensions() {
 
   std::vector<uint8_t> decalInWpsm;
   PutReversedGuidLink(decalInWpsm, "3MUD", 4, plasmaDecalGuid);
-  Check(!parseRoot("WPSM", std::move(decalInWpsm)) && error.find("unknown role property 3MUD") != std::string::npos,
-        "CRSM-only decal fields are not admitted by the WPSM role schema");
+  CHECK_MSG(!parseRoot("WPSM", std::move(decalInWpsm)) && error.find("unknown role property 3MUD") != std::string::npos,
+            "CRSM-only decal fields are not admitted by the WPSM role schema");
 
   std::vector<uint8_t> unknownCrsmField;
   PutReversedGuidLink(unknownCrsmField, "ZZZZ", 4, plasmaDecalGuid);
-  Check(!parseRoot("CRSM", std::move(unknownCrsmField)) &&
-            error.find("unknown role property ZZZZ") != std::string::npos,
-        "CRSM still rejects unproved properties rather than accepting a GUID fallback");
+  CHECK_MSG(!parseRoot("CRSM", std::move(unknownCrsmField)) &&
+                error.find("unknown role property ZZZZ") != std::string::npos,
+            "CRSM still rejects unproved properties rather than accepting a GUID fallback");
 }
 
 void TestPlasmaSyntheticSourceShape() {
@@ -1359,18 +1352,18 @@ void TestPlasmaSyntheticSourceShape() {
   PortRemastered::EffectNode wpsm;
   PortRemastered::EffectNode crsm;
   std::string error;
-  Check(PortRemastered::ParseRemasteredRoleAsset(fixture.remasteredWpsm.data(), fixture.remasteredWpsm.size(),
-                                                  PortRemastered::EffectFourCC("WPSM"), wpsm, error),
-        "complete synthetic Plasma WPSM with APS2, INRT, and COLR passes strict role parsing");
+  CHECK_MSG(PortRemastered::ParseRemasteredRoleAsset(fixture.remasteredWpsm.data(), fixture.remasteredWpsm.size(),
+                                                      PortRemastered::EffectFourCC("WPSM"), wpsm, error),
+            "complete synthetic Plasma WPSM with APS2, INRT, and COLR passes strict role parsing");
   error.clear();
-  Check(PortRemastered::ParseRemasteredRoleAsset(fixture.remasteredCrsm.data(), fixture.remasteredCrsm.size(),
-                                                  PortRemastered::EffectFourCC("CRSM"), crsm, error),
-        "complete synthetic Plasma CRSM with DEFS and all three decals passes strict role parsing");
+  CHECK_MSG(PortRemastered::ParseRemasteredRoleAsset(fixture.remasteredCrsm.data(), fixture.remasteredCrsm.size(),
+                                                      PortRemastered::EffectFourCC("CRSM"), crsm, error),
+            "complete synthetic Plasma CRSM with DEFS and all three decals passes strict role parsing");
   PlasmaBeamDefaultRolePair pair;
   error.clear();
-  Check(ResolvePlasmaBeamDefaultRole(PlasmaBeamInput(fixture), pair, &error) &&
-            pair.genp == kPlasmaBeamDefaultGenp && pair.retailPart == kPlasmaBeamDefaultPart,
-        "complete source-shaped Remastered and retail Plasma chain resolves to its pinned GENP/PART");
+  CHECK_MSG(ResolvePlasmaBeamDefaultRole(PlasmaBeamInput(fixture), pair, &error) &&
+                pair.genp == kPlasmaBeamDefaultGenp && pair.retailPart == kPlasmaBeamDefaultPart,
+            "complete source-shaped Remastered and retail Plasma chain resolves to its pinned GENP/PART");
 }
 
 void TestIdentityAndTypedGates() {
@@ -1378,52 +1371,52 @@ void TestIdentityAndTypedGates() {
   MissileDefaultRoleInput input = Input(fixture);
   MissileDefaultRolePair pair;
   input.weaponName = "supermissile";
-  Check(!ResolveMissileDefaultRole(input, pair), "other weapon name is rejected");
+  CHECK_MSG(!ResolveMissileDefaultRole(input, pair), "other weapon name is rejected");
   input = Input(fixture);
   input.retailWpscId++;
-  Check(!ResolveMissileDefaultRole(input, pair), "wrong WPSC identity is rejected");
+  CHECK_MSG(!ResolveMissileDefaultRole(input, pair), "wrong WPSC identity is rejected");
   input = Input(fixture);
   input.retailWpscExists = false;
-  Check(!ResolveMissileDefaultRole(input, pair), "missing typed WPSC is rejected");
+  CHECK_MSG(!ResolveMissileDefaultRole(input, pair), "missing typed WPSC is rejected");
   input = Input(fixture);
   input.retailCrscExists = false;
-  Check(!ResolveMissileDefaultRole(input, pair), "missing typed CRSC is rejected");
+  CHECK_MSG(!ResolveMissileDefaultRole(input, pair), "missing typed CRSC is rejected");
   input = Input(fixture);
   input.retailPartExists = false;
-  Check(!ResolveMissileDefaultRole(input, pair), "missing typed PART is rejected");
+  CHECK_MSG(!ResolveMissileDefaultRole(input, pair), "missing typed PART is rejected");
   input = Input(fixture);
   input.remasteredWpsmExists = false;
-  Check(!ResolveMissileDefaultRole(input, pair), "missing unique WPSM is rejected");
+  CHECK_MSG(!ResolveMissileDefaultRole(input, pair), "missing unique WPSM is rejected");
   input = Input(fixture);
   input.remasteredCrsmExists = false;
-  Check(!ResolveMissileDefaultRole(input, pair), "missing unique CRSM is rejected");
+  CHECK_MSG(!ResolveMissileDefaultRole(input, pair), "missing unique CRSM is rejected");
   input = Input(fixture);
   input.remasteredGenpExists = false;
-  Check(!ResolveMissileDefaultRole(input, pair), "missing unique GENP is rejected");
+  CHECK_MSG(!ResolveMissileDefaultRole(input, pair), "missing unique GENP is rejected");
 }
 
 void TestPowerBallExactChainAndConflicts() {
   const Fixture fixture = MakePowerBallFixture();
   PowerBallDefaultRolePair pair;
-  Check(ResolvePowerBallDefaultRole(PowerBallInput(fixture), pair),
-        "the exact USA PowerBall role chain resolves despite nested retail decoys");
-  Check(pair.genp == kPowerBallDefaultGenp && pair.retailPart == kPowerBallDefaultPart,
-        "PowerBall resolves only to the pinned full GENP GUID and retail PART id");
+  CHECK_MSG(ResolvePowerBallDefaultRole(PowerBallInput(fixture), pair),
+            "the exact USA PowerBall role chain resolves despite nested retail decoys");
+  CHECK_MSG(pair.genp == kPowerBallDefaultGenp && pair.retailPart == kPowerBallDefaultPart,
+            "PowerBall resolves only to the pinned full GENP GUID and retail PART id");
   uint32_t retailLink = 0;
-  Check(detail::ReadUniqueRetailAssetId(fixture.retailWpsc.data(), fixture.retailWpsc.size(), "WPSM", "COLR",
+  CHECK_MSG(detail::ReadUniqueRetailAssetId(fixture.retailWpsc.data(), fixture.retailWpsc.size(), "WPSM", "COLR",
                                         retailLink) && retailLink == kPowerBallCrsc,
         "PowerBall WPSC COLR is read as a top-level typed link");
 
-  Check(!ConflictsWithPowerBallDefaultRolePair(pair, pair.genp, pair.retailPart),
-        "an identical existing PowerBall pair is not a conflict");
+  CHECK_MSG(!ConflictsWithPowerBallDefaultRolePair(pair, pair.genp, pair.retailPart),
+            "an identical existing PowerBall pair is not a conflict");
   auto otherGenp = pair.genp;
   otherGenp[0] ^= 1;
-  Check(ConflictsWithPowerBallDefaultRolePair(pair, otherGenp, pair.retailPart),
-        "a different effect claiming the pinned retail PART is a conflict");
-  Check(ConflictsWithPowerBallDefaultRolePair(pair, pair.genp, pair.retailPart + 1),
-        "the pinned effect claiming another retail id is a conflict");
-  Check(!ConflictsWithPowerBallDefaultRolePair(pair, otherGenp, pair.retailPart + 1),
-        "an unrelated effect/id pair does not conflict");
+  CHECK_MSG(ConflictsWithPowerBallDefaultRolePair(pair, otherGenp, pair.retailPart),
+            "a different effect claiming the pinned retail PART is a conflict");
+  CHECK_MSG(ConflictsWithPowerBallDefaultRolePair(pair, pair.genp, pair.retailPart + 1),
+            "the pinned effect claiming another retail id is a conflict");
+  CHECK_MSG(!ConflictsWithPowerBallDefaultRolePair(pair, otherGenp, pair.retailPart + 1),
+            "an unrelated effect/id pair does not conflict");
 }
 
 void TestPowerBallWrongLinksAndMalformedResources() {
@@ -1466,28 +1459,28 @@ void TestPowerBallIdentityAndTypedGates() {
   PowerBallDefaultRoleInput input = PowerBallInput(fixture);
   PowerBallDefaultRolePair pair;
   input.weaponName = "superpowerball";
-  Check(!ResolvePowerBallDefaultRole(input, pair), "a different WPSM name is rejected");
+  CHECK_MSG(!ResolvePowerBallDefaultRole(input, pair), "a different WPSM name is rejected");
   input = PowerBallInput(fixture);
   input.retailWpscId++;
-  Check(!ResolvePowerBallDefaultRole(input, pair), "a different regional WPSC identity is rejected");
+  CHECK_MSG(!ResolvePowerBallDefaultRole(input, pair), "a different regional WPSC identity is rejected");
   input = PowerBallInput(fixture);
   input.retailWpscExists = false;
-  Check(!ResolvePowerBallDefaultRole(input, pair), "a missing or ambiguous typed WPSC is rejected");
+  CHECK_MSG(!ResolvePowerBallDefaultRole(input, pair), "a missing or ambiguous typed WPSC is rejected");
   input = PowerBallInput(fixture);
   input.retailCrscExists = false;
-  Check(!ResolvePowerBallDefaultRole(input, pair), "a missing or ambiguous typed CRSC is rejected");
+  CHECK_MSG(!ResolvePowerBallDefaultRole(input, pair), "a missing or ambiguous typed CRSC is rejected");
   input = PowerBallInput(fixture);
   input.retailPartExists = false;
-  Check(!ResolvePowerBallDefaultRole(input, pair), "a missing or ambiguous typed PART is rejected");
+  CHECK_MSG(!ResolvePowerBallDefaultRole(input, pair), "a missing or ambiguous typed PART is rejected");
   input = PowerBallInput(fixture);
   input.remasteredWpsmExists = false;
-  Check(!ResolvePowerBallDefaultRole(input, pair), "a missing or ambiguous named WPSM is rejected");
+  CHECK_MSG(!ResolvePowerBallDefaultRole(input, pair), "a missing or ambiguous named WPSM is rejected");
   input = PowerBallInput(fixture);
   input.remasteredCrsmExists = false;
-  Check(!ResolvePowerBallDefaultRole(input, pair), "a missing or ambiguous typed CRSM is rejected");
+  CHECK_MSG(!ResolvePowerBallDefaultRole(input, pair), "a missing or ambiguous typed CRSM is rejected");
   input = PowerBallInput(fixture);
   input.remasteredGenpExists = false;
-  Check(!ResolvePowerBallDefaultRole(input, pair), "a missing, ambiguous, or wrong-type GENP is rejected");
+  CHECK_MSG(!ResolvePowerBallDefaultRole(input, pair), "a missing, ambiguous, or wrong-type GENP is rejected");
 }
 
 void TestPlasmaBeamExactChainAndConflicts() {
@@ -1500,32 +1493,32 @@ void TestPlasmaBeamExactChainAndConflicts() {
   if (!resolved) {
     std::fprintf(stderr, "PlasmaBeam role resolver: %s\n", roleError.c_str());
   }
-  Check(resolved,
-        "the exact PlasmaBeam role chain resolves despite a nested retail decoy");
-  Check(pair.genp == kPlasmaBeamDefaultGenp && pair.retailPart == kPlasmaBeamDefaultPart,
-        "PlasmaBeam resolves only to the pinned full GENP GUID and retail PART id");
+  CHECK_MSG(resolved,
+            "the exact PlasmaBeam role chain resolves despite a nested retail decoy");
+  CHECK_MSG(pair.genp == kPlasmaBeamDefaultGenp && pair.retailPart == kPlasmaBeamDefaultPart,
+            "PlasmaBeam resolves only to the pinned full GENP GUID and retail PART id");
   uint32_t retailLink = 0;
-  Check(detail::ReadUniqueRetailAssetId(fixture.retailWpsc.data(), fixture.retailWpsc.size(), "WPSM", "COLR",
+  CHECK_MSG(detail::ReadUniqueRetailAssetId(fixture.retailWpsc.data(), fixture.retailWpsc.size(), "WPSM", "COLR",
                                         retailLink) && retailLink == kPlasmaBeamCrsc,
         "PlasmaBeam WPSC COLR is read as a top-level typed link");
 
-  Check(!ConflictsWithPlasmaBeamDefaultRolePair(pair, pair.genp, pair.retailPart),
-        "an identical existing PlasmaBeam pair is idempotent");
+  CHECK_MSG(!ConflictsWithPlasmaBeamDefaultRolePair(pair, pair.genp, pair.retailPart),
+            "an identical existing PlasmaBeam pair is idempotent");
   auto otherGenp = pair.genp;
   otherGenp[0] ^= 1;
-  Check(ConflictsWithPlasmaBeamDefaultRolePair(pair, otherGenp, pair.retailPart),
-        "a different effect claiming the pinned PlasmaBeam retail PART is a conflict");
-  Check(ConflictsWithPlasmaBeamDefaultRolePair(pair, pair.genp, pair.retailPart + 1),
-        "the pinned PlasmaBeam effect claiming another retail id is a conflict");
-  Check(!ConflictsWithPlasmaBeamDefaultRolePair(pair, otherGenp, pair.retailPart + 1),
-        "an unrelated PlasmaBeam effect/id pair does not conflict");
+  CHECK_MSG(ConflictsWithPlasmaBeamDefaultRolePair(pair, otherGenp, pair.retailPart),
+            "a different effect claiming the pinned PlasmaBeam retail PART is a conflict");
+  CHECK_MSG(ConflictsWithPlasmaBeamDefaultRolePair(pair, pair.genp, pair.retailPart + 1),
+            "the pinned PlasmaBeam effect claiming another retail id is a conflict");
+  CHECK_MSG(!ConflictsWithPlasmaBeamDefaultRolePair(pair, otherGenp, pair.retailPart + 1),
+            "an unrelated PlasmaBeam effect/id pair does not conflict");
 
   Fixture trailing = MakePlasmaBeamFixture();
   PutRetailLink(trailing.retailWpsc, "COLR", kPlasmaBeamCrsc); // after retail _END
   PutReversedGuidLink(trailing.remasteredWpsm, "COLR", 0, kPlasmaBeamCrsmLink); // after declared RFRM form
   PlasmaBeamDefaultRolePair trailingPair;
-  Check(ResolvePlasmaBeamDefaultRole(PlasmaBeamInput(trailing), trailingPair),
-        "bytes beyond retail _END and the declared RFRM form do not add duplicate role links");
+  CHECK_MSG(ResolvePlasmaBeamDefaultRole(PlasmaBeamInput(trailing), trailingPair),
+            "bytes beyond retail _END and the declared RFRM form do not add duplicate role links");
 }
 
 void TestPlasmaBeamWrongLinksAndMalformedResources() {
@@ -1608,28 +1601,28 @@ void TestPlasmaBeamIdentityAndTypedGates() {
   PlasmaBeamDefaultRoleInput input = PlasmaBeamInput(fixture);
   PlasmaBeamDefaultRolePair pair;
   input.weaponName = "plasma-beam";
-  Check(!ResolvePlasmaBeamDefaultRole(input, pair), "a different PlasmaBeam FrameKey is rejected");
+  CHECK_MSG(!ResolvePlasmaBeamDefaultRole(input, pair), "a different PlasmaBeam FrameKey is rejected");
   input = PlasmaBeamInput(fixture);
   input.retailWpscId++;
-  Check(!ResolvePlasmaBeamDefaultRole(input, pair), "a different regional PlasmaBeam WPSC identity is rejected");
+  CHECK_MSG(!ResolvePlasmaBeamDefaultRole(input, pair), "a different regional PlasmaBeam WPSC identity is rejected");
   input = PlasmaBeamInput(fixture);
   input.retailWpscExists = false;
-  Check(!ResolvePlasmaBeamDefaultRole(input, pair), "a missing or ambiguous PlasmaBeam typed WPSC is rejected");
+  CHECK_MSG(!ResolvePlasmaBeamDefaultRole(input, pair), "a missing or ambiguous PlasmaBeam typed WPSC is rejected");
   input = PlasmaBeamInput(fixture);
   input.retailCrscExists = false;
-  Check(!ResolvePlasmaBeamDefaultRole(input, pair), "a missing or ambiguous PlasmaBeam typed CRSC is rejected");
+  CHECK_MSG(!ResolvePlasmaBeamDefaultRole(input, pair), "a missing or ambiguous PlasmaBeam typed CRSC is rejected");
   input = PlasmaBeamInput(fixture);
   input.retailPartExists = false;
-  Check(!ResolvePlasmaBeamDefaultRole(input, pair), "a missing or ambiguous PlasmaBeam typed PART is rejected");
+  CHECK_MSG(!ResolvePlasmaBeamDefaultRole(input, pair), "a missing or ambiguous PlasmaBeam typed PART is rejected");
   input = PlasmaBeamInput(fixture);
   input.remasteredWpsmExists = false;
-  Check(!ResolvePlasmaBeamDefaultRole(input, pair), "a missing or ambiguous named PlasmaBeam WPSM is rejected");
+  CHECK_MSG(!ResolvePlasmaBeamDefaultRole(input, pair), "a missing or ambiguous named PlasmaBeam WPSM is rejected");
   input = PlasmaBeamInput(fixture);
   input.remasteredCrsmExists = false;
-  Check(!ResolvePlasmaBeamDefaultRole(input, pair), "a missing or ambiguous typed PlasmaBeam CRSM is rejected");
+  CHECK_MSG(!ResolvePlasmaBeamDefaultRole(input, pair), "a missing or ambiguous typed PlasmaBeam CRSM is rejected");
   input = PlasmaBeamInput(fixture);
   input.remasteredGenpExists = false;
-  Check(!ResolvePlasmaBeamDefaultRole(input, pair), "a missing, ambiguous, or wrong-type PlasmaBeam GENP is rejected");
+  CHECK_MSG(!ResolvePlasmaBeamDefaultRole(input, pair), "a missing, ambiguous, or wrong-type PlasmaBeam GENP is rejected");
 }
 } // namespace
 
@@ -1651,9 +1644,8 @@ int main() {
   TestPlasmaBeamWrongLinksAndMalformedResources();
   TestPlasmaBeamIndividualRoleFieldPresence();
   TestPlasmaBeamIdentityAndTypedGates();
-  if (sFailures != 0) {
-    std::fprintf(stderr, "%d remastered-import tests failed\n", sFailures);
-    return 1;
+  if (port_test::Failures() == 0) {
+    std::puts("missile, PowerBall, and PlasmaBeam import pairing tests passed");
   }
-  std::puts("missile, PowerBall, and PlasmaBeam import pairing tests passed");
+  return PORT_TEST_RESULT();
 }

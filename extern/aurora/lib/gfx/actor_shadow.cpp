@@ -1,6 +1,7 @@
 #include "actor_shadow.hpp"
 
 #include "../gx/pipeline.hpp"
+#include "../internal.hpp"
 #include "../logging.hpp"
 #include "../webgpu/gpu.hpp"
 #include "../webgpu/gpu_prof.hpp"
@@ -153,7 +154,7 @@ bool record() {
     return false;
   }
   ensure_map();
-  if (std::getenv("MP_ACTOR_SHADOW_DEBUG") != nullptr) {
+  if (env_flag("MP_ACTOR_SHADOW_DEBUG")) {
     for (uint32_t l = 0; l < MaxLayers; ++l) {
       if (!g_casters[l].empty()) {
         Log.info("actor shadow record: layer {} casters {}", l, g_casters[l].size());

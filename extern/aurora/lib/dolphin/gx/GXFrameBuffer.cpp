@@ -101,7 +101,7 @@ void copy_tex(const void* dest, GXBool clear) noexcept {
       handle = gfx::new_render_texture(dstWidth, dstHeight, fmt, "Resolved Texture", mipCount);
     }
     it = g_gxState.copyTextureCache.emplace(key, GXState::CopyTextureRef{.handle = handle, .revision = 0}).first;
-    static const bool logNew = std::getenv("MP_LOG_COPY_TEX") != nullptr;
+    static const bool logNew = aurora::env_flag("MP_LOG_COPY_TEX");
     if (logNew) {
       std::fprintf(stderr, "[copytex] new %p %ux%u (logical %ux%u) fmt %u%s, %zu cached\n", dest, dstWidth,
                    dstHeight, g_gxState.texCopyDstWidth, g_gxState.texCopyDstHeight,

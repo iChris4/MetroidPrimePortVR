@@ -1,5 +1,6 @@
 // A mod's bar shapes for a HUD frame, by frame. See port_hud_bars.h.
 #include "port_hud_bars.h"
+#include "port_log.h"
 
 #include "port_mods.h"
 
@@ -28,7 +29,7 @@ std::shared_ptr<const Bars> Load(uint32_t frame) {
   }
   auto bars = std::make_shared<Bars>();
   if (!ParseFile(data.data(), data.size(), *bars)) {
-    std::fprintf(stderr, "mods: %s is not a hud bars file\n", path.c_str());
+    PortLog::Write("mods: %s is not a hud bars file\n", path.c_str());
     return nullptr;
   }
   return bars;

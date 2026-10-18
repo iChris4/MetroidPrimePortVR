@@ -21,12 +21,25 @@
   the whole screen on desktop, toggled with F11; on Android it hides the status
   and navigation bars (on by default there; a swipe from the edge shows them
   for a moment).
+- Vsync (F1 > Video > Display, persisted as `vsync`): presents in step with the
+  display's refresh. On by default on macOS, where Dawn's Metal backend has no
+  other tear-free mode, off elsewhere. The 60 FPS cap (F10, or F1 > Video > Frame
+  rate "60 FPS cap (target)", persisted as `frame_limit`, on by default, always on
+  under Original experience) holds presented frames to the game's 60 Hz; with it
+  off, `fps_cap` sets the limit.
 - Settings changed in the F1 overlay (aspect, vsync, render scale, frame limit,
   mouse aim/inversion/sensitivity, audio mutes) are saved to
   `port_settings.ini` in the user folder (`user/` beside the executable, see above) and restored on the next launch. The System page shows the
   path and has a **Save settings now** button. Environment variables still
   override the file for that run, and are written back into it if any setting is
-  changed during that run.
+  changed during that run. Each key is one row of `kSettingKeys` in
+  `platform/debug_ui/settings.cpp`, which both reads and writes it, with two sample
+  values; ctest `port_settings_roundtrip` (`metroid_prime_port
+  --settings-selftest`) checks that every sampled key reads back as written and
+  that the whole file survives being read back. A new setting is a new row (a
+  plain on/off one is `BoolKey< &variable >("key")`), and a mention of its key
+  in this file: ctest `port_settings_index` fails on a key not written here as
+  `` `key` `` or `` `key=...` ``.
 - F1 > System > Settings > **Reset configuration...** puts every port setting and
   control mapping back to its default: after a confirmation it saves the current
   settings, moves `port_settings.ini`, `controls.toml`, `imgui.ini`,
@@ -61,9 +74,41 @@
   supersamples (4x at 16:9 is 3755x2112; with MSAA 4 the targets take
   several hundred MB). "Dynamic
   resolution" (`dynamic_res`, `dynamic_res_target` in fps, 0 = the display's
-  rate) lowers the scale while the frame rate is below the target, in quarter
-  steps (half steps above 2x), down to "Lowest scale" (`dynamic_res_min`: 0.5,
-  0.75 or 1, default 1). The file also takes a manual `render_scale` under 1.
+  rate) lowers the scale while the GPU cannot hold the target, down to "Lowest
+  scale" (`dynamic_res_min`: 0.5, 0.75 or 1, default 1), and raises it back when
+  there is room. Where the GPU can time itself (timestamp queries, Aurora's
+  `gpu_prof`, switched on while dynamic resolution is) it reads the GPU's time per
+  frame: a slow scene whose GPU has time to spare is CPU-bound and left alone, and
+  a GPU-bound one goes toward the scale predicted to fit 85% of the frame budget
+  (GPU time taken as a fixed part plus a part growing with the scale squared, the
+  fixed part learnt from two scales, capped at half the GPU time and forgotten
+  after a minute), at most to 0.6x of the scale in one step. The GPU time is the
+  span of the frame's passes, or their sum when the passes cover less than half
+  the span (gaps where the GPU waited). It lowers after two slow seconds and,
+  once settled, checks the frame rate rose: if not it undoes the step and holds
+  off, and after twice stops using GPU times. It raises after a steady stretch,
+  undoes a raise that proves too slow and waits longer before the next, and skips
+  changes under 0.1x, since each one reallocates the EFB and stutters. Without GPU
+  times (none, none published within 5 s of seconds with frames to judge, or
+  `MP_DYNRES_GPU_TIMES=0`, which forces this path for testing) it steps on the
+  frame rate in quarter steps (half above 2x). F1 > Video shows the GPU time, the budget and
+  why the scale is what it is; the log has a `port: dynamic resolution` line per
+  change. The controller is `platform/port_dynamic_res.cpp` (test
+  `port_dynamic_res_tests`). A step keeps Aurora's cached bind groups, dropping two
+  frames later those the new frames did not use (the old size's), and clears the
+  offscreen targets. A step does not wait for the render worker to finish the
+  frames it already has (that wait was most of a step's stutter on a busy GPU):
+  those frames are encoded against the old targets and the worker takes the new
+  ones after them; a window or surface change still waits, and
+  `MP_RESIZE_WAIT=1` makes every resize wait, to rule this out. The log times
+  each EFB resize and its parts (`aurora::gpu: EFB WxH: resized in N ms (worker
+  wait W, caches C, targets T)`) and the two frames after it. "Sharpen when upscaled"
+  (`upscale_sharpen`: `off`, `dynamic` (default: only while dynamic resolution has
+  lowered the scale) or `always`; strength "Sharpening", `upscale_sharpen_amount`
+  0-100, default 50) applies CAS-style contrast-adaptive sharpening to the
+  stretched image in the present resample (not AMD's CAS proper, which scales and
+  sharpens in one filter), and only to a frame smaller than the window. The file also
+  takes a manual `render_scale` under 1.
 - `MP_ASPECT=4:3|16:9|window` (default `window`, persisted as `aspect`); the legacy `MP_WIDESCREEN` selects 16:9.
 - `MP_TWIN_STICK=1` (Controls > Options, persisted as `twin_stick`): twin-stick aiming. The
   right stick feeds the first-person aim through the same path as the mouse (so
@@ -76,6 +121,36 @@
   a C-stick held from the keyboard is not consumed, so keyboard beam keys still
   pick beams, and an L from a key or mouse button stays lock-on. Fire
   stays on whatever is bound to A; remap it in Controls > Remap.
+- Gyro aim (Controls > Touch & gyro): tilting the pad or phone aims through the
+  same free aim as the mouse, so it needs mouse aim, twin stick or the touch
+  controls. `gyro_mode` is 0 off, 1 hold to aim (aims while the "Gyro aim" action
+  is held), 2 always, 3 hold to pause (aims except while it is held, to recentre
+  the pad: ratcheting), 4 toggle to aim (starts off; press once to enable,
+  again to disable). Changing modes resets the toggle. "Gyro aim" is right
+  stick click and left ctrl by default and can be remapped on the Remap page
+  ("Gyro" group). With toggle mode, leave the binding itself as a normal press.
+  `gyro_source` is 0 auto, 1 controller, 2 phone. `gyro_sensitivity` (0.1-10,
+  default 2) is camera angle per pad angle: 1 turns the camera as far as the pad
+  turned. It ignores the mouse sensitivity and invert. An older `gyro_rate` (aim
+  pixels per rad/s, which also scaled with the mouse sensitivity) is read once as
+  `gyro_rate × mouse_sensitivity` and no longer written.
+  `gyro_space` picks which turn moves the camera left/right (GyroWiki's terms):
+  1 player (default: turning the pad, flat or upright), 2 world (turning about
+  the real vertical only), 0 local yaw (the pad's flat turn), 3 local roll (the
+  turn of a pad held upright) or 4 local yaw and roll (both, Overwatch-style).
+  Player and world use the accelerometer; without one they act as local yaw.
+  `gyro_auto_calibrate` (default on) learns the gyro's drift while the pad is
+  still; F1 shows the calibration confidence and has a Recalibrate button. Both
+  use GamepadMotionHelpers (`extern/GamepadMotionHelpers`).
+  `gyro_smoothing` and `gyro_tightening` (deg/s, 0-50, both 0 = off by default)
+  are JoyShockMapper-style: turns below the smoothing threshold are averaged over
+  0.125 s, fading to direct by twice it; turns below the tightening threshold are
+  scaled by speed/threshold.
+  With pointer aim on, the gyro moves the pointer like a mouse cursor:
+  `gyro_cursor_angle` (degrees, 5-180, default 40) is how far the pad turns to
+  sweep it across the screen, independent of the mouse sensitivity. With
+  `gyro_cursor_camera` (default off) the gyro also turns the camera at
+  `gyro_sensitivity` while it moves the pointer.
 - Spring Ball (Controls > Options, persisted as `spring_ball`, off by default): C-stick
   up in morph ball jumps, as in Metroid Prime Trilogy and the randomprime discs
   the Archipelago world makes, once the Morph Ball Bombs are held. It is a bomb
@@ -95,6 +170,24 @@
   where the stroke began, once per stroke (`TouchControlsView.trackSwipe` →
   `PortDebug::TouchSpringSwipe` → the Spring Ball request). Touch aim does
   nothing in the ball, so the swipe takes nothing away there.
+  **On-screen controls** (Android, Touch controls, `touch_controls`, on by
+  default, saved in `controls.toml`; #137): off, only the MENU and START buttons
+  stay on screen (fully opaque, at their default spots, never auto-hidden), and
+  the pointer screens keep their back and cog buttons. Any other touch does
+  nothing, so stray touches from a pad player don't bring the controls back.
+  MENU opens F1, where the setting can be turned back on. Edit layout still
+  shows every control.
+  **Touch controls opacity** (Android, Touch controls, `touch_opacity`, 10-100,
+  default 100, saved in `controls.toml`): fades every gameplay control, so more of
+  the game shows through the overlay; the layout editor and the menu buttons (the
+  pointer screens' back and cog buttons, the map button) stay fully opaque. The
+  slider is the only way to set it and the view reads it every draw
+  (`TouchControlsView.onDraw` draws the gameplay controls inside a
+  `canvas.saveLayerAlpha`, F1's value through `nativeTouchOpacity` /
+  `PortDebug::TouchOpacity`), so it applies at once, and at 100% exactly as
+  before. Side margin, Stick inset and Button inset on the same page
+  (`touch_side_margin`, `touch_stick_inset`, `touch_button_inset`) move those
+  controls instead, in dp.
   **Touch aim** (Android, `touch_aim`, on by default; `touch_aim_speed`, default
   2.25 aim px per dp): with twin stick on, the right stick is gone and a finger
   dragged on the free screen area turns the view by the distance dragged, like a
@@ -174,6 +267,10 @@
 - Swap the Scan and X-Ray visor buttons (Controls > Options, persisted as
   `swap_scan_xray`, off by default): each visor takes the other's D-pad
   direction, as in Remastered (D-pad right Scan, left X-Ray).
+- Button glyphs (Controls > Options, persisted as `prompt_glyphs`: `auto`, the
+  default, `xbox`, `playstation`, `switch`, `gamecube` or `keyboard`): which
+  buttons the game's prompts and tutorials show. Auto follows the keyboard,
+  controller or touch layout last used; `gamecube` shows the game's own art.
 - Fast Morph (Controls > Options and pause Options > Controller, persisted as
   `fast_morph`, off by default): morph ball transitions in the style of Metroid
   Prime 4. Morphing and unmorphing each take 0.2 s instead of 1 s; both
@@ -191,6 +288,18 @@
   for 0.35 s or more keeps the charge held after letting go, and the next press
   fires it; shorter taps shoot as usual. Both are off in morph ball and while
   input is disabled. The console's `status` prints the game's L/A and the charge.
+- Remastered charge (Controls > Options, "Remastered charge (rapid fire)", persisted as
+  `rapid_charge`, off by default, `MP_RAPID_CHARGE=<0|1>`): as in Remastered, holding
+  fire fires a few shots before charging (3 in all with Power, 2 with Wave or Plasma,
+  1 with Ice), then charges faster, so a full charge takes about as long as before.
+  Without the Charge Beam it fires the same shots, then waits for fire to be let go.
+- Remastered movement (Controls > Controller settings > Stick aim, persisted as
+  `remastered_movement`, on by default, `MP_REMASTERED_MOVEMENT=<0|1>`): under twin
+  stick or mouse aim, diagonals are as fast as straight ahead and the air drag is
+  steady, so a jump keeps a smooth arc, as in Remastered and PrimeHack. Off, jumps
+  move as on the GameCube. Classic controls always move as on the GameCube. Both
+  are off under the original experience. What the port implements on the ground
+  under this setting, and what it does not, is in `docs/REMASTERED_MOVEMENT.md`.
 - The overlay's **Controls** page keeps settings only: "Mouse settings" (inversion,
   crosshair) and "Controller settings" (stick aim and dead
   zones). **Remap > Active controller** selects any detected gamepad, including
@@ -226,9 +335,11 @@
   button hint presses that button. The wheel or a drag pages the log book text, a press
   or drag sets a slider, and in the Samus doll view a drag turns the doll, a right drag
   or two fingers move it and the wheel or a pinch zooms.
-  On the map a left drag rotates (one finger pans), a right or middle drag or two
-  fingers pan, a two-finger twist turns it, the wheel or a pinch zooms, a click selects a world or room and a click
-  on the selected one opens it. While such a screen is up the mouse is released and the
+  On the map a left drag or one finger rotates (yaw and pitch), a right or middle drag
+  or two fingers pan, a two-finger twist turns it, the wheel or a pinch zooms, a click selects a world or room and a click
+  on the selected one opens it. "Swap map finger gestures" (off by default;
+  `map_swap_fingers=`, `MP_MAP_SWAP_FINGERS`) swaps the touch drags: one finger pans and
+  two fingers rotate; the mouse is unchanged. While such a screen is up the mouse is released and the
   cursor shown; the button prompts show mouse glyphs after the mouse was last used; on
   Android the gameplay touch buttons hide, leaving a back button. Escape pauses, backs out
   of menus (resuming from the pause screen's top level) and closes the map while this is
@@ -278,7 +389,10 @@
   45-90, retail 55): the first-person camera's vertical FOV. The overlay also
   shows the horizontal FOV it gives at the current aspect. The arm cannon is
   drawn at the retail FOV whatever the setting (a view-model FOV), so it keeps
-  its size and place. Morph ball, cutscene and other scripted cameras keep
+  its size and place. Shots start where the cannon is drawn and are aimed at
+  where retail's would arrive (the aim target at its depth when assist aimed
+  the shot at it, else what lies on retail's line), so they hit what retail's
+  hit (#134). Morph ball, cutscene and other scripted cameras keep
   their own FOVs; cutscenes that end in Samus's eyes ease to the setting.
 - Arm cannon offset (Video > Display, persisted as `gun_offset=right,forward,up`,
   metres, each -1 to 1, default 0,0,0; like PrimeHack's): moves the arm
@@ -304,7 +418,12 @@
   in outdoor rooms. Remastered does not draw sun shadows; turn off for the
   Remastered look. Off behaves like a room with no sun (no cascades, no
   receiver sampling); room point/spot lights are unaffected. Console:
-  `sunshadow [0|1]`.
+  `sunshadow [0|1]`. `MP_SHADOWS=0` turns them off for the run. For tuning:
+  `MP_SHADOW_DIR=<x,y,z>` (the way the light travels; else the room's sun, then
+  the area's first directional light), `MP_SHADOW_COLOR=<r,g,b>` (the sun light's
+  colour; else the room sun's) and `MP_SHADOW_DISTANCE=<units>` (how far from the
+  camera it shadows, default 350). Actors the frustum or PVS rejects still cast,
+  as base models only, as in Remastered; `MP_SHADOW_OFFSCREEN_ACTORS=0` stops that.
 - Projected actor shadows (Video > Quality, persisted as `projected_shadows`,
   default on): Remastered's actor shadow. Each shadowed actor renders depth
   only into a 256x256 map looking straight down, and the room geometry under it
@@ -313,6 +432,68 @@
   retail blob quad is drawn. Known gaps: dynamic receivers (platforms) and
   sorted/cutout geometry are not decaled; at most 16 actors per frame.
   Console: `projshadow [0|1]`.
+- Renderer (Video > Compatibility, **Windows only**, persisted as
+  `graphics_backend`: `auto`, `d3d12`, `vulkan` or `d3d11`, default `auto`,
+  issue #135): which graphics API the port asks Aurora for. `auto` asks for
+  nothing in particular, so Aurora takes its own order (Direct3D 12, then Vulkan,
+  then Direct3D 11); an explicit choice is tried first, and if the driver can't
+  start it, that run falls back to the same order. The setting is left as it was
+  by a fallback, so the page keeps showing the choice and names the API actually
+  in use, including "no graphics device" when nothing started.
+  `MP_GRAPHICS_BACKEND=auto|d3d12|vulkan|d3d11` overrides the setting for one run
+  and outranks it (per-run `MP_*` precedence, like `MP_OPENGLES`); any other value
+  warns and starts on the saved selection. While an override is set the page names
+  the API it starts on and says the saved selection applies once the variable is
+  unset, and the fallback message describes what the override asked for, not what
+  the file says. Read at window creation, so a change needs a restart: the page
+  shows "Restart to apply" while the saved selection differs from the one this run
+  started with, and selecting the startup choice again clears it.
+  On Windows this replaces asking for OpenGL ES: Dawn's Windows build has no GLES
+  backend. Elsewhere the setting is ignored and Android's choice stays `opengles` /
+  `MP_OPENGLES`.
+- Vulkan driver (Android, Video > Compatibility, persisted as `gpu_driver`: an
+  installed driver's id, empty for the phone's own, the default): a custom Vulkan
+  driver such as Mesa Turnip, installed from a driver zip with "Install driver
+  (.zip)...". Takes effect at the next start, and a start that crashes with it
+  goes back to the system driver. `MP_GPU_DRIVER=<id>` overrides it for one run.
+  Details in `NATIVE_PORT.md`, "Custom Vulkan drivers".
+- Adreno shader fix (Video > Compatibility, persisted as `storage_clamp`: -1 Auto,
+  the default, 0 Off, 1 On): reads GPU buffers with a clamp instead of the
+  bounds-check branch some Adreno Vulkan drivers miscompile (the world draws
+  black, issue #7). Auto turns it on for Vulkan on an Adreno 7xx. Read once when
+  shaders are first made, so a change needs a restart. `MP_STORAGE_CLAMP=1`
+  forces it on and any other non-empty value off, over the setting. When the
+  setting is On or Off (and the variable is unset), the port sets
+  `MP_STORAGE_CLAMP` itself before starting Aurora; the log's `port: env:` line
+  then ends in `(from storage_clamp)`, so it isn't mistaken for a user's variable.
+- Driver workarounds (Video > Compatibility, a collapsed group, persisted as
+  `driver_workarounds`: a comma-separated list of the ticked ones' names, empty by
+  default, issue #143): opt-in Dawn toggles for a GPU that draws wrong, applied when
+  the GPU device is made, so a change shows "Restart to apply". `keep_depth` ("Keep
+  depth buffers") turns off `d3d11_use_discard_view`; `gpu_constants` turns on
+  `d3d11_disable_cpu_buffers`; `unmonitored_fence` ("Alternative GPU sync") turns on
+  `d3d11_use_unmonitored_fence`; `validation` ("Driver error checks") turns off
+  `skip_validation` and `disable_robustness`, so Dawn names a rejected command in the
+  log (slower). The first three are passed only to a Direct3D 11 device; on another
+  API the log lists them as `(ignored: not Direct3D 11)`. The log's `Dawn toggles`
+  block lists what the device got, each one also as a `driver workaround on|off:` line;
+  `MP_DAWN_ENABLE` / `MP_DAWN_DISABLE` apply after them.
+  - Driver error checks last one start: the box is unticked as the start applies it,
+    the log says `driver error checks are on for this run`, and the section shows it.
+  - A way out when one breaks the start: while any are on, the user folder holds
+    `driver_workarounds_starting` until the game's 60th frame. If a start leaves it
+    behind (a crash or hang before then), the next start unticks them all, logs
+    `did not reach the game; turning them off` and says so in the section.
+  - `MP_DRIVER_WORKAROUNDS=0` starts one run without them, whatever is ticked;
+    `MP_DRIVER_WORKAROUNDS=keep_depth,validation` (names as above) uses those
+    instead. The setting is left as it was, and so is the crash marker: a run on the
+    override neither trips it nor clears it. After a start clears them, the marker
+    stays until a start reaches frame 60, so repeated crashes keep them off.
+- Show shader compilation and Show F1 hint at launch (Video > Quality, persisted
+  as `show_shader_compilation` and `show_menu_hint`, both on by default): a small
+  progress bar while the shader cache compiles at startup (draws whose shader
+  isn't ready are skipped meanwhile), and a note in the top left corner for the
+  first seconds of each launch saying how to open the overlay.
 - HUD scale (Video > Display and pause Options > Display, persisted as `hud_scale`,
   50-100 percent, default 100): shrinks the combat HUD, radar, beam and visor
   menus and the minimap toward the screen centre, each frame as a whole so the
@@ -324,12 +505,33 @@
   near the centre, clear of a phone's touch controls; the rest of the HUD still
   spreads. No effect at 4:3, without the widescreen HUD, or under Original
   experience. Console: `scanspread <0..100>`.
+- Per-visor HUD opacity (Video > Display, issue #144, persisted as `hud_opacity_xray`,
+  `hud_opacity_thermal`, `hud_opacity_scan` and `hud_opacity_energy`, each `visor` or 0-100
+  percent): the game's Visor Opacity is one value for every visor. With a percent instead of
+  `visor` (the default), the X-Ray, Thermal or Scan HUD uses that, and so do the visor and beam
+  menus and the minimap while that visor is on; the Combat and Morph Ball HUDs keep Visor
+  Opacity. The energy readout (bar, tanks, digits, low-energy warning) is drawn at full strength
+  whatever Visor Opacity is, so `hud_opacity_energy` defaults to 100; `visor` makes it follow the
+  opacity of the HUD it is on. The ENERGY label and the frame around the readout are part of the
+  visor's HUD and follow that visor's opacity instead. In F1 the tick box beside each slider is `visor`. Original
+  experience ignores all four. Console: `hudopacity <xray|thermal|scan|energy> <visor|0..100>`.
 - Crosshair opacity and colour (Video > Display, persisted as `crosshair_opacity`,
   0-100 percent, default 100, and `crosshair_color`, `RRGGBB` or empty for the
   game's own colour): the centre crosshair of free aim, mouse aim and twin stick.
   The opacity is the crosshair's alpha, so 100% draws it at full strength (the
   game's own alpha is 19%).
   Original experience ignores both.
+- Crosshair style (Video > Display, `crosshair_style`, `MP_CROSSHAIR_STYLE`, `classic`
+  or `remastered`, default `classic`; console `crosshair style ...`): `remastered` draws
+  Remastered's combat aiming cursor in place of the ring, built by the port (no Remastered
+  assets): a small soft centre dot and three tapered spikes turned 120 degrees apart (one up,
+  two down), tips toward the centre. Like Remastered's, the dot and spikes shrink with the
+  distance to what the aim ray meets (full size at 1 m, 0.45 and 0.33 at 50 m or more) and the
+  colour is cyan, orange in X-Ray, pale blue in Thermal, fading to red over a living, active,
+  targetable enemy (a `CPatterned`, or the owner of the collision actor hit). 100% crosshair
+  size is Remastered's size at a 55 degree vertical FOV (it scales with the screen height);
+  the size slider scales it. A custom crosshair colour replaces the idle colour, opacity
+  multiplies the alpha. Classic under Original experience.
 - Secondary crosshairs (Video > Display, `secondary_crosshairs`, `MP_SECONDARY_CROSSHAIRS`,
   default on): off hides the next-target reticles: the combat visor's seeker and the
   X-ray ring and thermal crosshair on the target Lock-On would pick. The lock-on
@@ -422,7 +624,39 @@
   capacity (in packs of 5, launcher included), power bombs, artifacts, missing
   upgrades, logbook scans per category (artifacts count at the game's 50%),
   rooms visited per world and the current world's unvisited rooms (their names
-  load on first view). Console: `reveal <0|1>`, `pickups <off|seen|rooms|all>`, `pickups kinds|station <on|off>`, `tracker`.
+  load on first view). Extra map UI (`map_extra_ui`, off by default) adds the
+  port's own lines to the world map screen: legend entries for the pickup shapes
+  in use (see Show major and minor items) and for the marked-room colour, and the
+  "Mark room" prompt in the map's upper right, clear of the room title, the
+  legend and the prompts along the bottom. Off, the legend is the disc's own text
+  at the disc's own size, and there is no prompt; the legend is drawn scaled by
+  its row count against the disc's so the port's entries never reach the
+  Key/Legend prompt under it. Console: `reveal <0|1>`, `pickups <off|seen|rooms|all>`, `pickups kinds|station <on|off>`, `pickups collect <dot>`, `mapui <0|1>`, `tracker`.
+  Room marks: on the world map screen X marks or unmarks the shown room. With
+  Extra map UI on, a click or tap on the "Mark room" prompt does the same (with
+  pointer menus; touch needs the setting on, since the prompt is what is tapped).
+  Marked rooms draw cyan on the map and the minimap, over the Rooms amber,
+  whatever `map_pickups` is, and marking works whether Extra map UI is on or off. A save keeps up to 64 marks, and which pickups it has seen,
+  in a small side file beside the card: `mapdata/<card>-<slot>.bin` under the
+  port's user folder. The card's identity keys the name - the directory it
+  resolves to, the game id and maker its files are created with, and the card
+  port - so the port's card, a shared emulator card, an Archipelago room's card
+  and even a PAL and a USA card under one directory each keep their own, and
+  nothing is written into the emulator's folder. The file holds a fingerprint of
+  the exact slot bytes and is only used on the card it was written for, so a
+  save replaced elsewhere - Dolphin, an import, a conversion, an older build -
+  falls back to what the slot itself carries. It is written after a memory card
+  write has finished (never for one that failed) and read back when that slot is
+  loaded. Beside it the slot still holds an "RMMK" trailer after the
+  pickup-seen one - the first 20 marks, exactly the format earlier builds wrote,
+  so either build reads the other's save - and that trailer is all a slot gets
+  without the side file: a USA slot with an Archipelago trailer has no room for
+  it at all, a save copied to another machine by hand or brought in by an import
+  or a conversion carries the 20 until the game next saves it, and the front end
+  has no slot-copy feature of its own. Save states carry the whole list
+  themselves (the blob's tail), so a state round trip keeps every mark. The map
+  legend lists the pickup shapes in use and the marked-room colour. Console:
+  `mark`.
 - Skippable cutscenes (F1 > Game > Cutscenes, pause Options > Visor,
   `skippable_cutscenes`, off by default; always on in randomizer and
   Archipelago games) lets Start skip every cutscene, including the ones retail
@@ -432,6 +666,36 @@
   finish at once, a Reset ends a beetle's emergence, no skip without a
   cutscene camera). Rooms a mod replaced are left unpatched. Archipelago
   games also skip the Landing Site intro: Samus starts on top of her ship.
+- Unlock beam doors once opened (F1 > Game > Cutscenes, `beam_doors_stay_unlocked`,
+  off by default and off in the Original experience): a door locked to the Wave,
+  Ice, Plasma or Power Beam that you open by breaking its force field becomes a
+  plain blue door for good in that save, on both sides: the blue shield and
+  force-field textures, blue weaknesses (any beam opens it), the blue map icon
+  and the blue door's scan. Missile, Bomb and Disabled doors and blast shields
+  are out of scope, and a door that still has an unbroken Archipelago blast
+  shield stays as it is. It works with or without a randomizer or Archipelago
+  seed (a seed's colour mapping decides what a door is first; an unlocked beam
+  door is blue whatever the seed coloured it). A door only a seed's per-door lock
+  colours (blue on the disc) is not covered. The doors of the rooms already loaded
+  change at once (both sides, the force field's weaknesses and textures, the
+  shield's model, the map icons); other rooms load blue. Turning the setting on
+  only affects doors you open afterwards; turning it off shows the original
+  colours again in rooms loaded afterwards (the unlocks stay recorded). The
+  record is one bit per doorway (111, `PortApWorld::BeamDoorwayBit`, stable for a
+  build). It is not in the save slot (nothing of the card changes): it is a small
+  file per slot beside the map side files,
+  `<user folder>/mapdata/beam-doors-<card key>-slot<N>.bin` (`port_beam_doors.h`
+  has the format). It is written after the card write succeeds, and only when a
+  doorway is open (also with the setting off: the unlocks are kept); a save with
+  none deletes a stale file. It belongs to the slot's exact bytes (a hash of
+  them), so a slot overwritten by a new save, an import or a conversion starts
+  with no unlocks, and so does a damaged or other-version file (logged once).
+  Copying only the card file to another install loses the unlocks; copy the
+  `mapdata` folder with it. Savestates carry the doorways. A state from an older
+  build keeps the running game's. A restore
+  skips an area whose unlocked doors changed since the snapshot (its room patch
+  differs), as for any patched room, and the doors come back blue from the game
+  state. Console: `beamdoors`.
 - 1.00 sequence-break compatibility (F1 > Game > Cutscenes > Revision
   compatibility, `revision_100_compatibility`, off by default; always on in
   randomizer and Archipelago games, where the box shows ticked and disabled)
@@ -462,8 +726,28 @@
   current logo with its 0.5 s fade out; Off goes straight to the opening
   (which A or Start already skips to the title). Read at launch. The quick
   resume prompt takes A and Start first while it is up.
-- F1 > Debug > Audio holds the audio switches and the MusyX voice list (collapsed), and F1 > Debug > Cheats holds the
-  cheats: health, items, ammo, area and world teleport. The cheats stay hidden
+- Language (F1 > Game > Language, persisted as `text_language`, empty for
+  English, the default; `MP_LANGUAGE=<code>` for one run): the language of the
+  game's text, by its code (`EUFR`, `USFR`, `EUSP`, `USSP`, `EUGE`, `EUIT`,
+  `EUDU`). A USA disc has only English; a PAL disc adds French, German, Spanish
+  and Italian, and the Remastered import adds its languages (its text wins).
+  Text missing in a language stays English (`MODS.md`).
+- Settings other pages keep, described with them: F1 > Mods' "Load mods"
+  (`mods`, on by default) and per-mod boxes (`mods_disabled`, the names left
+  out, `/`-separated), read at startup (`MODS.md`); the Remastered import's "What
+  to import" (`remastered_skip`: the parts left out, comma-separated from
+  `geometry`, `effects`, `hud`, `text`, `movies` and `gallery`; `MODS.md`); the
+  Randomizer page's options (`rando_settings`, one line of JSON;
+  `RANDOMIZER.md`); and Archipelago's "Staggered suit damage" (`ap_suit_damage`:
+  0 Default, 1 Progressive, the default, 2 Additive), set by hand to match the
+  seed's YAML because the server doesn't send it (`ARCHIPELAGO.md`).
+- F1 > Debug > Audio holds the audio switches, "Streamed audio (music/movies)"
+  (`ai_audio`, on by default; `MP_DISABLE_AI_AUDIO=1` starts with it off) and
+  "MusyX audio (effects/streams)" (`musyx_audio`, on by default), and the MusyX
+  voice list (collapsed), whose mutes are kept as `voices_muted` (the muted
+  sample ids, comma-separated; no line when none is muted).
+- F1 > Debug > Cheats holds the cheats: health, items, ammo, area and world
+  teleport. The cheats stay hidden
   until Show cheats is ticked (`cheats`, off by default). Invulnerable
   (`invulnerable`, off by default) makes Samus take no damage; it stays on
   across runs until unticked, and `MP_GODMODE=<0|1>` overrides it for one run (see below).
@@ -505,14 +789,37 @@ other `X:\Users\<name>`: `X:\Users\<user>`); the
   (`savestate_hotkeys`, on by default). A state holds the whole game save
   (items, ammo, doors, pickups, map, scans, world layers) plus Samus's room,
   position, facing and morph ball state; loading reloads that world and puts
-  her back. With `savestate_room_state` (F1 > Save states, on by default) it
+  her back. The room marks and the seen pickups come with it, whatever the
+  card's `mapdata` side file holds: the state carries the whole list in its own
+  blob, so a round trip does not shorten it. With `savestate_room_state` (F1 >
+  Save states, on by default) it
   also keeps the live script objects of the loaded rooms by editor id: killed
   enemies stay dead, enemies, platforms and moving objects keep position,
   velocity and health, doors keep open or closed (set directly, without firing their connections), timers and counters keep
   their count (about 5 KB, 0.2 ms to capture). Enemy AI state is not kept
   (they resume from their start behaviour), nor are projectiles, cutscene or
   boss-fight progress. States without the section, or with the setting off,
-  bring the room back as if just entered. Every load
+  bring the room back as if just entered.
+  A door saved while it was closing comes back closed with that close still owed:
+  the door finishes closing, the messages a live close sends still go out (its
+  shield rearms) and it opens again as usual. Its close animation replays from the
+  start rather than from the exact frame it was interrupted at. A close a refused
+  opening or a neighbouring door asked for is kept as well. Snapshots written
+  before this carry the open flag alone and are not repaired: a door an earlier
+  restore left stuck stays as it is.
+  A room's objects are restored only while its script still matches the
+  snapshot: each captured room records a fingerprint of the room script it had
+  loaded, and a room whose script changed since keeps nothing of the saved
+  objects — it comes back as a memory card load leaves it, while the rooms that
+  do match still restore. Scripts change when a room is patched differently: a
+  mods reload, the Original experience setting (which turns the
+  skippable-cutscene room patches on and off), and the scripts a randomizer or
+  Archipelago game generates (a changed blast-shield state, for example), which
+  fall back room by room the same way (this has not been exercised with a live
+  Archipelago game). A snapshot is never rewritten, so a room a mismatched
+  restore already damaged stays as it is: load the memory card save to recover
+  it. States written before this check existed carry no fingerprint and restore
+  as they always did. Every load
   first writes slot 0, so "Undo last load" goes back to where you were.
   Saving is refused while Samus is dead. A state saved on an elevator pad
   rides the elevator after loading, like stepping onto it. Console:
@@ -541,7 +848,7 @@ other `X:\Users\<name>`: `X:\Users\<user>`); the
   or use the pad or keyboard (D-pad left/right to choose, A or Start to
   answer); Yes starts the file it came from and loads the state like a
   save state, straight from black without the file-select movie (a Yes during a
-  splash skips the rest of the splashes; with `savestate_room_state` the room keeps its enemies and doors as saved; boss progress is not kept),
+  splash skips the rest of the splashes; with `savestate_room_state` the room keeps its enemies and doors as saved, for the rooms whose script still matches: see the note under Save states; boss progress is not kept),
   No dismisses the prompt and keeps the file; B does nothing. The file stays after Yes too, until the next safe point replaces it. Nothing is written
   (and a previous resume file stays) on the title screen or before the first
   safe point of a session.
@@ -614,6 +921,10 @@ other `X:\Users\<name>`: `X:\Users\<user>`); the
   while the overlay is visible or relative capture/focus is absent. Mouse mode
   uses immediate yaw/pitch with an approximately ±87° pitch range. Up moves aim
   up by default; `MP_MOUSE_INVERT_X=1` and `MP_MOUSE_INVERT_Y=1` invert either axis.
+  `MP_MOUSE_SENS` and `mouse_sensitivity` are radians per mouse count; the F1
+  slider shows them on the Quake/Source/Apex scale (0.022 degrees a count per
+  unit, so the default 0.0035 is about 9.12), with a cm/360 readout for
+  `mouse_dpi` (display only, default 800).
   SDL and the compositor own pointer locking; capture is released outside
   playable first person (menus, cinematics, and scripted input locks). Morph ball
   has no mouse aim but keeps the pointer locked, so a bomb click can't land
@@ -660,7 +971,8 @@ other `X:\Users\<name>`: `X:\Users\<user>`); the
   drag moves the crosshair over the screen and shots leave along the ray through it;
   the gun model turns toward it, at most 25 degrees. Past the dead box (`pointer_aim_box`,
   20-95 percent of the half screen, default 70) the view turns toward that edge, up to
-  `pointer_aim_turn` degrees/second (30-720, default 180) at the edge itself. The mouse
+  `pointer_aim_turn` degrees/second (30-720, default 180) at the edge itself (0.28.0 and
+  earlier turned the view at twice the set speed). The mouse
   sensitivity slider scales the pointer speed for every input (the default follows the
   cursor), on top of the stick aim, gyro and touch aim speeds; Invert X/Y do not apply. The crosshair is always shown. Lock-on, scanning and grappling
   re-centre the pointer and aim as before; auto-aim does not bend pointer shots.
@@ -731,6 +1043,8 @@ other `X:\Users\<name>`: `X:\Users\<user>`); the
   when a mod has room geometry and `MP_ROOM_GEO_RESIDENT` is off (6 on Android),
   and 2 with it on (the default).
   A frame that outgrows them aborts with a buffer overflow.
+  `MP_STORAGE_BUFFERS=<1..16>` pins the storage buffers' scale, which otherwise
+  follows it and, with `MP_ROOM_GEO_RESIDENT` on, grows after an overflow (up to 6x).
 - `MP_ROOM_GEO_RESIDENT=<0|1>` (setting `room_geo_gpu`, F1 > Debug >
   Remastered room models > Keep on the GPU; on by default, read at
   startup; an old `room_geo_resident=1` still turns it on). On a POCO F8 Ultra it
@@ -807,6 +1121,18 @@ other `X:\Users\<name>`: `X:\Users\<user>`); the
   applies to Remastered room-environment scenes with a valid tone curve in the Combat or Scan
   visor, outside visor transitions; Thermal/X-ray, HUD/UI, and inventory remain LDR. This is
   not full beam/effect parity: other legacy effects may still use inherited exposure.
+  Legacy non-PBR GX draws using exactly SRCALPHA/ONE additive blending convert their
+  alpha-weighted display colour into exposed light before blending, then divide RGB by the
+  locally clamped alpha (zero alpha emits zero RGB). With `a = clamp(alpha, 0, 1)`, the helper
+  obeys `postTone(a * H_add(c, alpha)) = clamp(c, 0, 1) * a`, within inverse-curve/target precision.
+  Hardware still applies the preserved TEV source alpha once. Its over-black display-colour
+  times alpha identity therefore assumes normalized alpha in [0,1] and an isolated, unfogged
+  contribution: TEV alpha can slightly exceed one, and subsequent volumetric fog attenuates light.
+  Other legacy SRCALPHA/ONE effects intentionally share this policy; this is not full visual
+  certification of those effects.
+  This is not exact LDR compositing over a nonblack background: the tone curve is nonlinear.
+  It does not claim Remastered parity or change other blend modes, native HDR writers, bloom,
+  room tone or exposure.
   The morph ball's light is Remastered's HDR one on PBR surfaces: a hotspot
   within 2.3 units of the ball, which brightens with boost and in water (see
   `docs/REMASTERED_EFFECTS.md`, "HDR dynamic lights").
@@ -837,6 +1163,19 @@ other `X:\Users\<name>`: `X:\Users\<user>`); the
   `MP_ROOM_GEO_AREA_LIGHTS=1`. For tuning: `MP_ROOM_ENV_VOLUME_BIAS` (metres off
   the surface a sample is taken; default 0, as Remastered samples at the
   surface) and `MP_ROOM_ENV_VOLUME_SHOW` (1 draws the texture coordinates, 2 the light alone, 3 the shading normal).
+  `MP_ROOM_ENV_FILL_LAYERS=<n>` (for comparisons; default 0, as Remastered) lets
+  the grid's empty points take their lit neighbours' light first, n layers deep.
+  The rooms' baked lightmaps light room geometry in place of the coarser grid:
+  `MP_ROOM_ENV_LIGHTMAP=0` leaves them out, and `MP_ROOM_ENV_LIGHTMAP_SCALE`
+  scales them (default 1; 0 drops them too).
+  `MP_ROOM_LIGHTS=0` drops Remastered's point and spot lights of the loaded areas
+  (only drawn while the rooms are exposed). `MP_REMASTERED_GLOW_EXPOSURE=0` scales
+  glow by a fixed 0.10, the converter's old factor, instead of the room's exposure.
+  `MP_VOLFOG=0` (console `roomenv volfog on|off`) drops Remastered's volumetric fog
+  and fog regions (files of version 12 on). `MP_THERMAL_POST=0` and
+  `MP_XRAY_POST=0` keep the retail Thermal and X-ray visors instead of
+  Remastered's visor post effects (both are retail under the original experience,
+  and Thermal also with a mod that lacks the imported gradient).
 - `tools/pbr_shots.py`: contact sheets of models under PBR, for comparing mod
   builds. One game per (variant, place), each booted straight into the room
   with `MP_BOOT_WORLD` on its own console port and an Xvfb display, about 10 s
@@ -848,6 +1187,14 @@ other `X:\Users\<name>`: `X:\Users\<user>`); the
   first-person gameplay. Needs a smoke build (`--build`, default
   `build/fm-smoke`) and `MP_ISO` or `--iso`. Do not use `MP_SMOKE_WORLD` for
   this: it starts a new game and only warps once the Frigate intro has played.
+- F1 > System > Overlay: "Overlay as a floating window" (desktop,
+  `overlay_windowed`, off by default) draws the overlay as the old floating
+  tabbed window instead of the full-screen page layout. "Menu theme" (`ui_theme`:
+  `auto`, the default, `prime`, `remastered` or `plain`) is its look: Auto uses
+  the Remastered style while the Remastered import is loaded and the Metroid
+  Prime pause-screen style otherwise; Plain is stock Dear ImGui. "Menu sounds"
+  (`ui_sounds`, on by default) plays the game's own menu sounds for opening,
+  choosing and moving through the overlay; none with the Plain theme.
 - `MP_TOUCH_UI=1`: force the page layout for the debug overlay even when
   System > Overlay > "Overlay as a floating window" is set. The page layout is the default
   everywhere (the only one on Android): a full-screen window inside the safe
@@ -858,7 +1205,8 @@ other `X:\Users\<name>`: `X:\Users\<user>`); the
   60 is console-accurate; higher values step the game logic at the display rate
   instead of interpolating the camera. `MP_SIM_ADAPTIVE=1` instead takes one
   step per frame with `dt` = the measured frame time (clamped 30–480 Hz), so a
-  variable frame rate is matched exactly. Both are also settable from F1 > Video > Frame rate and persisted. See `docs/HIGH_FPS_AUDIT.md` for what still
+  variable frame rate is matched exactly. Both are also settable from F1 > Video > Frame rate and persisted (`sim_rate`,
+  `sim_adaptive`). See `docs/HIGH_FPS_AUDIT.md` for what still
   assumes 60 Hz.
 
 The simulation uses a fixed-step accumulator (60 Hz by default) independently of
@@ -911,6 +1259,68 @@ their last two 60 Hz positions when the frame limiter is off, using the game's
 own sub-frame particle path. Beam trails (swooshes), electric effects and
 the flamethrower still step at 60 Hz.
 
+## Diagnostics and test drivers
+
+For development only; none is saved. The on/off variables follow the rule above
+(`platform/include/port_env.h`): unset leaves the default, and empty, `0`,
+`false`, `off` or `no` mean off. Aurora, which cannot include the port's
+headers, applies the same rule to its own on/off variables (`MP_LOG_COPY_TEX`,
+`MP_LOG_TEX_INVALID`, and its half of `MP_ACTOR_SHADOW_DEBUG`).
+
+- `MP_WATCHDOG=0`: no stall watchdog. On by default: with no frame for 5, 15, 30
+  and 60 s it logs where the main and render threads are, the main thread's stack
+  at 5 and 30 s, and on Android a logcat dump. `MP_WATCHDOG_TEST_STALL=<frame>`
+  sleeps 8 s on that frame and `MP_WATCHDOG_TEST_THROW=<frame>` throws an exception
+  there, to test it and the crash report.
+- `MP_HEAP_CHECK=1`: deep checks of the game
+  heap's block links on every normal-heap free and of each frame's delayed deletions (queued
+  twice, freed or reused before the flush); a fault logs `HEAP CHECK:` lines and aborts.
+- `MP_PIPELINE_SEED=0`: start from an empty pipeline cache instead of the shipped
+  seed (`tools/pipeline_seed.py` records with it).
+- `MP_HOLD_FRONTEND_SHADERS=<0|1>`: hold the seed's background shader builds while no
+  game is loaded. On by default under D3D11 only, whose drivers made the front end
+  crawl behind them (issue #54).
+- `MP_SKIN_LEGACY=1`: skin with the retail locked-cache path; `MP_SKIN_VERIFY=1`
+  runs both paths and reports any difference; `MP_SKIN_STATS=1` logs skinning time
+  every 5 s. `MP_SKIN_THREAD_MIN=<vertices>` (default 20000): models at least
+  that big are skinned across threads.
+- `MP_LOG_HUD=1`: log HUD models and frames that are not loaded, HUD state
+  transitions and visor/HUD visibility changes to stderr.
+- `MP_STREAM_TRACE=1`: per-chunk streamed-music refill tracing (`mpstream:`;
+  logcat on Android); starts, stops and stale completions are always logged.
+- `MP_ELC2_LOG=1`: log Remastered electric effects (ELC2) as they are made,
+  and their bolt count every 30 frames.
+- `MP_ACTOR_SHADOW_DEBUG=1`: every 120 frames, log each projected actor
+  shadow's opacity, fade and map and receiver boxes.
+- `MP_SHADOW_ACTOR_CHECK=1`: log the first off-screen actor drawn into the sun
+  shadow, and every 300 frames how many were eligible and drawn.
+- `MP_VISORMESH_LOG=1`: every 60 frames, log how many surfaces the visor and
+  shadow bits skipped.
+- `MP_SHADOW_SIZE=<256-8192>`: the sun shadow map's size in texels (1024 by
+  default; a value outside the range keeps the default).
+- `MP_LOG_COPY_TEX=1`: log each new texture an EFB copy makes
+  (`[copytex]`), with its size, format and how many are cached.
+- `MP_ROOMENV_TIMING=1`: log where a `.roomenv` load's time goes.
+  `MP_ROOM_ENV_EXPOSURE_LOG=1`: log the room exposure state (area, hint values,
+  EV, target) each time it is worked out.
+- Remastered import: `MP_REMASTERED_REUSE=0` makes every stage again instead of
+  reusing the previous import's unchanged ones (`textures`: only the converted
+  textures are reused); `MP_REMASTERED_JOINTS=1` logs the models' skin matching
+  (each joint's vote and the bones it got) to stderr; `MP_REMASTERED_MISS=1`
+  lists each room's untraced script connections by kind in the import log.
+- `MP_RANDO_SWEEP_LAYERS=1`: with `MP_RANDO_SWEEP`, tour each area once per script
+  layer (up to the world's widest area), with only that layer active.
+- Smoke driver (`-DMP_ENABLE_SMOKE_DRIVER=ON` builds, see `docs/NATIVE_PORT.md`):
+  `MP_SMOKE_WORLD_RESTARTS=<n>` repeats the `MP_SMOKE_WORLD` jump n times (default
+  1); `MP_SMOKE_WORLD_TICKS=<n>` waits n gameplay ticks before each (default 120,
+  and when set it does not wait for the first-person camera);
+  `MP_SMOKE_MORPH=1` presses X 120 and 360 ticks into first-person gameplay
+  (morph, unmorph); `MP_SMOKE_SAVE=<ticks>` opens the in-game save screen that
+  many ticks in and confirms it (answering one "file corrupt" by deleting the file);
+  `MP_SMOKE_WATER=<cycles>` puts the player in the area's first active water for
+  2 s, walking forward, then back out for 2 s, that many times; `MP_SMOKE_RESIZE=<w>x<h>`
+  resizes the window at frame 300.
+
 ## Photo mode
 
 A frozen free camera for screenshots, entered from the pause menu's "Photo
@@ -962,3 +1372,15 @@ more.
 
 Saved: `photo_supersample` (1, 2 or 4) and `photo_speed` (camera speed).
 Filters, vignette and depth of field are not part of it.
+
+## PrimedGun VR additions
+
+- `hide_minimap=0|1` hides the minimap (default off).
+- `draw_tags=0|1` controls model draw tags used by GPU diagnostics (default on).
+- `vr_*` settings are read and written by `platform/vr/vr_settings.cpp`; the launcher,
+  VR menu and F1 VR tab share them. Live launcher edits are polled during play.
+- PrimedGun defaults `hud_wide` off and `hide_helmet` on. In the headset, monitor
+  vsync and widescreen HUD are disabled, and Original Experience retains VR comfort
+  interpolation and the helmet choice. Desktop behavior follows the native port.
+- Native-port update checks remain disabled to avoid directing PrimedGun players to
+  the desktop port's downloads.

@@ -4,6 +4,7 @@
 // (One, Zero), a transparent one of class 1 (SrcAlpha, InvSrcAlpha) and one of class 3 (SrcAlpha, One).
 
 #include "port_remastered_convert.h"
+#include "port_test.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -15,15 +16,6 @@
 using namespace PortRemastered;
 
 namespace {
-
-int sFailures = 0;
-
-void Check(bool condition, const char* what) {
-  if (!condition) {
-    std::fprintf(stderr, "FAIL: %s\n", what);
-    ++sFailures;
-  }
-}
 
 constexpr uint32_t FourCC(char a, char b, char c, char d) {
   return (uint32_t(uint8_t(a)) << 24) | (uint32_t(uint8_t(b)) << 16) | (uint32_t(uint8_t(c)) << 8) | uint8_t(d);
@@ -97,7 +89,7 @@ bool Convert(const Model& model, std::vector<uint8_t>& cmdl) {
   std::string error;
   if (!converter.Convert(model, opt, error)) {
     std::fprintf(stderr, "FAIL: the conversion failed: %s\n", error.c_str());
-    ++sFailures;
+    port_test::CountFailure();
     return false;
   }
   return true;
@@ -154,15 +146,15 @@ void TestClasses() {
   }
   std::vector<std::pair<uint32_t, uint32_t>> f;
   if (!Factors(cmdl, f)) {
-    Check(false, "the converted CMDL's materials are readable");
+    CHECK_MSG(false, "the converted CMDL's materials are readable");
     return;
   }
-  Check(f.size() == 3, "three surfaces, three materials");
+  CHECK_MSG(f.size() == 3, "three surfaces, three materials");
   const std::set<std::pair<uint32_t, uint32_t>> got(f.begin(), f.end());
-  Check(got.count({1, 0}), "an opaque surface blends (One, Zero)");
-  Check(got.count({4, 5}), "a class 1 transparent surface blends (SrcAlpha, InvSrcAlpha)");
-  Check(got.count({4, 1}), "a class 3 transparent surface blends (SrcAlpha, One)");
-  Check(got.size() == 3, "each class has factors of its own");
+  CHECK_MSG(got.count({1, 0}), "an opaque surface blends (One, Zero)");
+  CHECK_MSG(got.count({4, 5}), "a class 1 transparent surface blends (SrcAlpha, InvSrcAlpha)");
+  CHECK_MSG(got.count({4, 1}), "a class 3 transparent surface blends (SrcAlpha, One)");
+  CHECK_MSG(got.size() == 3, "each class has factors of its own");
 }
 
 // Lit glass of Remastered's premultiplied families (here 11B30369) adds its own colour:
@@ -178,8 +170,8 @@ void TestPremultipliedGlass() {
     return;
   }
   std::vector<std::pair<uint32_t, uint32_t>> f;
-  Check(Factors(cmdl, f) && f.size() == 1, "the glass's material is readable");
-  Check(f.size() == 1 && f[0] == std::pair<uint32_t, uint32_t>(1, 5), "premultiplied glass blends (One, InvSrcAlpha)");
+  CHECK_MSG(Factors(cmdl, f) && f.size() == 1, "the glass's material is readable");
+  CHECK_MSG((f.size() == 1 && f[0] == std::pair<uint32_t, uint32_t>(1, 5)), "premultiplied glass blends (One, InvSrcAlpha)");
 }
 
 // Glass_DX11 (03407341, the Waste Disposal tank) with its distortion map and colours is
@@ -207,8 +199,8 @@ void TestHoloGlass() {
     return;
   }
   std::vector<std::pair<uint32_t, uint32_t>> f;
-  Check(Factors(cmdl, f) && f.size() == 1, "the tank glass's material is readable");
-  Check(f.size() == 1 && f[0] == std::pair<uint32_t, uint32_t>(1, 5), "the tank glass blends (One, InvSrcAlpha)");
+  CHECK_MSG(Factors(cmdl, f) && f.size() == 1, "the tank glass's material is readable");
+  CHECK_MSG((f.size() == 1 && f[0] == std::pair<uint32_t, uint32_t>(1, 5)), "the tank glass blends (One, InvSrcAlpha)");
 }
 
 }  // namespace
@@ -217,8 +209,8 @@ int main() {
   TestClasses();
   TestPremultipliedGlass();
   TestHoloGlass();
-  if (sFailures == 0) {
+  if (port_test::Failures() == 0) {
     std::printf("port_remastered_blend_tests: ok\n");
   }
-  return sFailures == 0 ? 0 : 1;
+  return PORT_TEST_RESULT();
 }

@@ -15,6 +15,9 @@ public:
   virtual ~CMemoryStreamOut();
 
   void Write(const void* ptr, size_t len);
+#ifdef TARGET_PC
+  uint PortCapacityBits() const override { return static_cast< uint >(mOutLength * 8); }
+#endif
 
 private:
   void* mOutPtr;

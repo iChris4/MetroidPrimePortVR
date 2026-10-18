@@ -20,9 +20,7 @@
 namespace PortRemastered {
 namespace {
 
-constexpr uint32_t Tag(char a, char b, char c, char d) {
-  return uint32_t(uint8_t(a)) << 24 | uint32_t(uint8_t(b)) << 16 | uint32_t(uint8_t(c)) << 8 | uint32_t(uint8_t(d));
-}
+using port::FourCC;
 
 // GUIF widget types.
 enum : uint32_t {
@@ -180,57 +178,7 @@ double AxisLength(const Mat& a, int k) {
 // --- Reading and writing ---------------------------------------------------------
 
 // Bounds-checked: a read past the end yields zeros and clears `ok`.
-struct Reader {
-  const uint8_t* data;
-  size_t size;
-  size_t at;
-  bool big;
-  bool ok = true;
-
-  bool Has(size_t count) {
-    if (at > size || count > size - at) {
-      ok = false;
-    }
-    return ok;
-  }
-  uint8_t U8() { return Has(1) ? data[at++] : 0; }
-  uint16_t U16() {
-    if (!Has(2)) {
-      return 0;
-    }
-    const uint16_t v = big ? uint16_t(data[at] << 8 | data[at + 1]) : uint16_t(data[at + 1] << 8 | data[at]);
-    at += 2;
-    return v;
-  }
-  uint32_t U32() {
-    if (!Has(4)) {
-      return 0;
-    }
-    const uint8_t* p = data + at;
-    at += 4;
-    return big ? uint32_t(p[0]) << 24 | uint32_t(p[1]) << 16 | uint32_t(p[2]) << 8 | uint32_t(p[3])
-               : uint32_t(p[3]) << 24 | uint32_t(p[2]) << 16 | uint32_t(p[1]) << 8 | uint32_t(p[0]);
-  }
-  float Float() {
-    const uint32_t bits = U32();
-    float v;
-    std::memcpy(&v, &bits, sizeof(v));
-    return v;
-  }
-  void Skip(size_t count) {
-    if (Has(count)) {
-      at += count;
-    }
-  }
-  std::string CString() {
-    std::string s;
-    while (Has(1) && data[at] != 0) {
-      s.push_back(char(data[at++]));
-    }
-    Skip(1);
-    return s;
-  }
-};
+using Reader = port::ByteCursor;
 
 using Blob = std::vector<uint8_t>;
 
@@ -297,36 +245,36 @@ bool ParseFrame(const Blob& data, uint32_t header[4], std::vector<Widget>& out, 
     w.draw = in.U32();
     const size_t start = in.at;
     switch (w.type) {
-    case Tag('C', 'A', 'M', 'R'):
+    case FourCC('C', 'A', 'M', 'R'):
       in.Skip(in.U32() == 0 ? 16 : 24);
       break;
-    case Tag('L', 'I', 'T', 'E'): {
+    case FourCC('L', 'I', 'T', 'E'): {
       const uint32_t light = in.U32();
       in.Skip(light == 0 ? 32 : 28);
       break;
     }
-    case Tag('M', 'O', 'D', 'L'):
+    case FourCC('M', 'O', 'D', 'L'):
       in.Skip(kModelSize);
       break;
-    case Tag('M', 'E', 'T', 'R'):
+    case FourCC('M', 'E', 'T', 'R'):
       in.Skip(10);
       break;
-    case Tag('G', 'R', 'U', 'P'):
+    case FourCC('G', 'R', 'U', 'P'):
       in.Skip(3);
       break;
-    case Tag('T', 'B', 'G', 'P'):
+    case FourCC('T', 'B', 'G', 'P'):
       in.Skip(35);
       break;
-    case Tag('S', 'L', 'G', 'P'):
+    case FourCC('S', 'L', 'G', 'P'):
       in.Skip(16);
       break;
-    case Tag('P', 'A', 'N', 'E'):
+    case FourCC('P', 'A', 'N', 'E'):
       in.Skip(20);
       break;
-    case Tag('T', 'X', 'P', 'N'):
+    case FourCC('T', 'X', 'P', 'N'):
       in.Skip(kTextPaneSize);
       break;
-    case Tag('I', 'M', 'G', 'P'): {
+    case FourCC('I', 'M', 'G', 'P'): {
       in.Skip(12);
       const uint32_t coords = in.U32();
       in.Skip(size_t(coords) * 12);
@@ -334,11 +282,11 @@ bool ParseFrame(const Blob& data, uint32_t header[4], std::vector<Widget>& out, 
       in.Skip(size_t(uvs) * 8);
       break;
     }
-    case Tag('E', 'N', 'R', 'G'):
+    case FourCC('E', 'N', 'R', 'G'):
       in.Skip(4);
       break;
-    case Tag('H', 'W', 'I', 'G'):
-    case Tag('B', 'W', 'I', 'G'):
+    case FourCC('H', 'W', 'I', 'G'):
+    case FourCC('B', 'W', 'I', 'G'):
       break;
     default:
       error = "the disc's frame has a widget of an unknown type (" + w.name + ")";
@@ -348,7 +296,7 @@ bool ParseFrame(const Blob& data, uint32_t header[4], std::vector<Widget>& out, 
       break;
     }
     w.typeData.assign(data.begin() + long(start), data.begin() + long(in.at));
-    if (w.type == Tag('T', 'X', 'P', 'N') && version >= 1) {
+    if (w.type == FourCC('T', 'X', 'P', 'N') && version >= 1) {
       in.Skip(kPalTextPaneExtra);
     }
     w.hasWorker = in.U8() != 0;
@@ -578,7 +526,7 @@ bool MeshPart(const Model& model, uint32_t mesh, Part& out) {
 // The picture a HUD material shows: its base colour map, or failing that its
 // diffuse one. In a pak's byte order.
 bool MaterialTexture(const ModelMaterial& material, ModelUuid& out) {
-  for (uint32_t usage : {Tag('B', 'C', 'L', 'R'), Tag('D', 'I', 'F', 'T')}) {
+  for (uint32_t usage : {FourCC('B', 'C', 'L', 'R'), FourCC('D', 'I', 'F', 'T')}) {
     for (const ModelMaterialData& d : material.data) {
       if (d.kind != ModelMaterialData::Kind::Texture || d.usage != usage || d.texture.id == ModelUuid{}) {
         continue;
@@ -597,7 +545,7 @@ bool MaterialTexture(const ModelMaterial& material, ModelUuid& out) {
 uint32_t ShaderOf(const ModelMaterial& material) {
   uint8_t sid[4];
   std::memcpy(sid, &material.shaderId, 4);
-  return uint32_t(sid[0]) << 24 | uint32_t(sid[1]) << 16 | uint32_t(sid[2]) << 8 | sid[3];
+  return port::ReadBE32(sid);
 }
 
 // Whether a material's shader writes its base map's sampled alpha squared: ca1106b0 (the
@@ -620,7 +568,7 @@ bool InterferenceRows(const ModelMaterial& material, uint32_t& index) {
     return false;
   }
   for (const ModelMaterialData& d : material.data) {
-    if (d.usage == Tag('C', 'C', 'H', '5') && d.kind == ModelMaterialData::Kind::Color) {
+    if (d.usage == FourCC('C', 'C', 'H', '5') && d.kind == ModelMaterialData::Kind::Color) {
       for (uint32_t i = 0; i < std::size(kHudInterferenceRows); ++i) {
         if (std::fabs(d.color[0] - kHudInterferenceRows[i]) < 0.01f) {
           index = i;
@@ -653,7 +601,7 @@ bool HudGlow(const ModelMaterial& material) {
   }
   const ModelMaterialData* icnc = nullptr;
   for (const ModelMaterialData& d : material.data) {
-    if (d.usage == Tag('I', 'C', 'N', 'C') && d.kind == ModelMaterialData::Kind::Color) {
+    if (d.usage == FourCC('I', 'C', 'N', 'C') && d.kind == ModelMaterialData::Kind::Color) {
       icnc = &d;
     }
   }
@@ -998,7 +946,7 @@ uint32_t HudConverter::NewId(uint32_t& next) {
 bool HudConverter::LoadMaterial(std::string& error) {
   for (const uint32_t id : kTemplateModels) {
     Blob templateModel;
-    if (m_material.empty() && m_io.retail && m_io.retail(Tag('C', 'M', 'D', 'L'), id, templateModel)) {
+    if (m_material.empty() && m_io.retail && m_io.retail(FourCC('C', 'M', 'D', 'L'), id, templateModel)) {
       TemplateMaterial(templateModel, m_material);
     }
   }
@@ -1123,7 +1071,7 @@ bool HudConverter::Convert(uint32_t retailFrame, const uint8_t* guif, size_t siz
     }
   };
   Blob retail;
-  if (!m_io.retail || !m_io.write || !m_io.retail(Tag('F', 'R', 'M', 'E'), retailFrame, retail)) {
+  if (!m_io.retail || !m_io.write || !m_io.retail(FourCC('F', 'R', 'M', 'E'), retailFrame, retail)) {
     error = "the disc has no frame " + Hex8(retailFrame);
     return false;
   }
@@ -1199,7 +1147,7 @@ bool HudConverter::Convert(uint32_t retailFrame, const uint8_t* guif, size_t siz
     const Mat eye = remWorld(size_t(camera));
     const RemWidget& g = rem[size_t(camera)];
     for (const Widget& w : disc) {
-      if (w.type == Tag('C', 'A', 'M', 'R') && w.typeData.size() >= 8 && GetBE32(w.typeData, 0) == 0 &&
+      if (w.type == FourCC('C', 'A', 'M', 'R') && w.typeData.size() >= 8 && GetBE32(w.typeData, 0) == 0 &&
           g.projection == 0) {
         const double was = -w.world.m[1][3] * std::tan(double(GetBEFloat(w.typeData, 4)) * kPi / 360.0);
         const double now = -eye.m[1][3] * std::tan(double(g.camera[0]) * kPi / 360.0);
@@ -1220,7 +1168,7 @@ bool HudConverter::Convert(uint32_t retailFrame, const uint8_t* guif, size_t siz
   };
   int discCamera = -1;
   for (size_t i = 0; i < original.size() && discCamera < 0; ++i) {
-    if (original[i].type == Tag('C', 'A', 'M', 'R') && original[i].typeData.size() >= 20) {
+    if (original[i].type == FourCC('C', 'A', 'M', 'R') && original[i].typeData.size() >= 20) {
       discCamera = int(i);
     }
   }
@@ -1351,23 +1299,23 @@ bool HudConverter::Convert(uint32_t retailFrame, const uint8_t* guif, size_t siz
       newName[Lower(rem[found->second].name)] = w.name;
       found = remByName.end();
     } else if (found == remByName.end() && map &&
-               (w.type == Tag('T', 'X', 'P', 'N') || (w.type == Tag('M', 'O', 'D', 'L') && name == kMapPromptBox))) {
+               (w.type == FourCC('T', 'X', 'P', 'N') || (w.type == FourCC('M', 'O', 'D', 'L') && name == kMapPromptBox))) {
       Mat s = Identity();
       s.m[0][0] = s.m[2][2] = keep;
       w.world = Mul(s, w.world);
-      w.kept = w.type == Tag('M', 'O', 'D', 'L');
+      w.kept = w.type == FourCC('M', 'O', 'D', 'L');
       w.row = true;
     }
     if (found != remByName.end()) {
       w.guif = int(found->second);
       newName[Lower(rem[found->second].name)] = w.name;
       switch (w.type) {
-      case Tag('B', 'W', 'I', 'G'):
-      case Tag('E', 'N', 'R', 'G'):
-      case Tag('G', 'R', 'U', 'P'):
-      case Tag('M', 'E', 'T', 'R'):
-      case Tag('M', 'O', 'D', 'L'):
-      case Tag('T', 'X', 'P', 'N'):
+      case FourCC('B', 'W', 'I', 'G'):
+      case FourCC('E', 'N', 'R', 'G'):
+      case FourCC('G', 'R', 'U', 'P'):
+      case FourCC('M', 'E', 'T', 'R'):
+      case FourCC('M', 'O', 'D', 'L'):
+      case FourCC('T', 'X', 'P', 'N'):
         w.world = place(found->second);
         break;
       default:
@@ -1379,8 +1327,8 @@ bool HudConverter::Convert(uint32_t retailFrame, const uint8_t* guif, size_t siz
       Blob cmdl;
       double lo[3], hi[3];
       if (found != remByName.end() || name != stand[0] || pane == remByName.end() ||
-          w.type != Tag('M', 'O', 'D', 'L') || w.typeData.size() < 4 ||
-          !m_io.retail(Tag('C', 'M', 'D', 'L'), GetBE32(w.typeData, 0), cmdl) || cmdl.size() < 36 ||
+          w.type != FourCC('M', 'O', 'D', 'L') || w.typeData.size() < 4 ||
+          !m_io.retail(FourCC('C', 'M', 'D', 'L'), GetBE32(w.typeData, 0), cmdl) || cmdl.size() < 36 ||
           !meshBox(pane->second, lo, hi)) {
         continue;
       }
@@ -1419,7 +1367,7 @@ bool HudConverter::Convert(uint32_t retailFrame, const uint8_t* guif, size_t siz
       w.kept = true;
       newName[Lower(rem[pane->second].name)] = w.name;
     }
-    if (w.type == Tag('C', 'A', 'M', 'R') && camera >= 0 && w.typeData.size() >= 20) {
+    if (w.type == FourCC('C', 'A', 'M', 'R') && camera >= 0 && w.typeData.size() >= 20) {
       // The layout is made for Remastered's camera, a 16:9 one. The clip planes stay the disc's.
       const RemWidget& g = rem[size_t(camera)];
       const float zNear = GetBEFloat(w.typeData, w.typeData.size() - 8);
@@ -1456,7 +1404,7 @@ bool HudConverter::Convert(uint32_t retailFrame, const uint8_t* guif, size_t siz
   if (map && promptLeft) {
     for (const Widget& w : out) {
       Blob cmdl;
-      if (!w.kept || w.typeData.size() < 4 || !m_io.retail(Tag('C', 'M', 'D', 'L'), GetBE32(w.typeData, 0), cmdl) ||
+      if (!w.kept || w.typeData.size() < 4 || !m_io.retail(FourCC('C', 'M', 'D', 'L'), GetBE32(w.typeData, 0), cmdl) ||
           cmdl.size() < 36) {
         continue;
       }
@@ -1524,7 +1472,7 @@ bool HudConverter::Convert(uint32_t retailFrame, const uint8_t* guif, size_t siz
     }
     newName[name] = g.name;
     Widget w;
-    w.type = g.type == kBaseWidget ? Tag('B', 'W', 'I', 'G') : Tag('M', 'O', 'D', 'L');
+    w.type = g.type == kBaseWidget ? FourCC('B', 'W', 'I', 'G') : FourCC('M', 'O', 'D', 'L');
     w.name = g.name;
     w.parent = under->second;
     w.flags[1] = g.flags[0];
@@ -1570,7 +1518,7 @@ bool HudConverter::Convert(uint32_t retailFrame, const uint8_t* guif, size_t siz
   };
   PortHudBars::Bars bars;
   for (Widget& w : out) {
-    if (w.type == Tag('M', 'O', 'D', 'L') && w.typeData.size() >= kModelSize) {
+    if (w.type == FourCC('M', 'O', 'D', 'L') && w.typeData.size() >= kModelSize) {
       if (w.kept) {
         continue;
       }
@@ -1618,7 +1566,7 @@ bool HudConverter::Convert(uint32_t retailFrame, const uint8_t* guif, size_t siz
       SetBE32(w.typeData, 4, 0);
       std::memcpy(w.color, g.color, sizeof(w.color));
       w.draw = g.draw;
-    } else if (w.type == Tag('T', 'X', 'P', 'N') && w.guif >= 0 && w.typeData.size() >= kTextPaneSize) {
+    } else if (w.type == FourCC('T', 'X', 'P', 'N') && w.guif >= 0 && w.typeData.size() >= kTextPaneSize) {
       // The box is Remastered's mesh for the text. The disc's text is laid out
       // in whole units of its font: the box's extent in those units gives the
       // glyphs the proportions they had, filling the box's height or, where
@@ -1684,7 +1632,7 @@ bool HudConverter::Convert(uint32_t retailFrame, const uint8_t* guif, size_t siz
       SetBEFloat(w.typeData, kTextPaneExtent,
                float(std::max(1.0, std::nearbyint(dim[0] * AxisLength(w.world, 0) / (unit * scale)))));
       SetBEFloat(w.typeData, kTextPaneExtent + 4, float(std::max(1.0, std::nearbyint(extent[1] / scale))));
-    } else if (w.type == Tag('E', 'N', 'R', 'G') && w.guif >= 0 && w.typeData.size() >= 4) {
+    } else if (w.type == FourCC('E', 'N', 'R', 'G') && w.guif >= 0 && w.typeData.size() >= 4) {
       const RemWidget& g = rem[size_t(w.guif)];
       Part part;
       if (g.meshes.empty() || !MeshPart(model, g.meshes[0], part)) {

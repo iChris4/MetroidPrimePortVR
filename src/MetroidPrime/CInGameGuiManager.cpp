@@ -1,4 +1,5 @@
 #include "MetroidPrime/CInGameGuiManager.hpp"
+#include "port_env.h"
 
 #include "Kyoto/Audio/CSfxManager.hpp"
 #include "Kyoto/CFrameDelayedKiller.hpp"
@@ -430,7 +431,7 @@ void CInGameGuiManager::Draw(const CStateManager& mgr) const {
     const int key = static_cast< int >(x1e0_helmetVisMode) | (x1f0_enablePlayerVisor << 8) |
                     (x1ec_hudVisMode << 16) | (drawVisor ? 1 << 24 : 0) |
                     (notInCine ? 1 << 25 : 0);
-    if (std::getenv("MP_LOG_HUD") != nullptr && key != sLastKey) {
+    if (port::EnvFlag("MP_LOG_HUD") && key != sLastKey) {
       sLastKey = key;
       std::fprintf(stderr,
                    "[hud] drawVisor=%d notInCine=%d helmetVis=%u enableVisor=%d hudVisMode=%d\n",

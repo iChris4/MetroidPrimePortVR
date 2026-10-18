@@ -14,6 +14,7 @@
 
 #include "port_remastered_pak.h"
 #include "port_bytes.h"
+#include "port_remastered_lzss.h"
 
 #include <cstring>
 #include <string>
@@ -21,10 +22,7 @@
 namespace PortRemastered {
 namespace {
 
-constexpr uint32_t FourCC(char a, char b, char c, char d) {
-  return (uint32_t(uint8_t(a)) << 24) | (uint32_t(uint8_t(b)) << 16) | (uint32_t(uint8_t(c)) << 8) |
-         uint32_t(uint8_t(d));
-}
+using port::FourCC;
 
 constexpr uint32_t kFormRFRM = FourCC('R', 'F', 'R', 'M'); // the magic of every form
 constexpr uint32_t kFormPACK = FourCC('P', 'A', 'C', 'K');
@@ -156,55 +154,6 @@ std::string Hex(uint8_t byte) {
   text[0] = kDigits[byte >> 4];
   text[1] = kDigits[byte & 0x0F];
   return text;
-}
-
-// retrotool's LZSS (util/lzss.rs), one variant per mode: mode is the log2 of the
-// group's byte count, a clear header bit copies a group verbatim and a set bit
-// copies a back reference. Unlike the Rust version this one checks every range
-// instead of trusting the data, and reports failure rather than panicking.
-bool LzssDecompress(uint32_t mode, const uint8_t* in, size_t inSize, uint8_t* out, size_t outSize) {
-  const size_t groupLen = size_t(1) << (mode - 1);
-  size_t inCur = 0;
-  size_t outCur = 0;
-  uint8_t header = 0;
-  int group = 0;
-  while (inCur < inSize) {
-    if (group == 0) {
-      header = in[inCur++];
-      group = 8;
-    }
-    if ((header & 0x80) == 0) {
-      if (inSize - inCur < groupLen || outSize - outCur < groupLen) {
-        return false;
-      }
-      std::memcpy(out + outCur, in + inCur, groupLen);
-      inCur += groupLen;
-      outCur += groupLen;
-    } else {
-      if (inSize - inCur < 2) {
-        return false;
-      }
-      const size_t count = size_t(in[inCur] >> 4) + (4 - size_t(mode));
-      const size_t length = (size_t(in[inCur] & 0x0F) * 256 + size_t(in[inCur + 1])) << (mode - 1);
-      inCur += 2;
-      if (length > outCur) {
-        return false;
-      }
-      const size_t total = count * groupLen;
-      if (outSize - outCur < total) {
-        return false;
-      }
-      // Copied one byte at a time: a back reference may overlap the bytes it is
-      // writing, which is how the format gets runs of the same byte.
-      for (size_t i = 0; i < total; ++i) {
-        out[outCur + i] = out[outCur - length + i];
-      }
-      outCur += total;
-    }
-    header = uint8_t(header << 1);
-    group -= 1;
-  }
-  return outCur == outSize;
 }
 
 // retrotool's decompress_into (util/compression.rs) over a whole asset blob.
@@ -459,7 +408,12 @@ bool Pak::ParseMeta(uint64_t body, uint64_t chunkSize,
     // The entry's offset is from the start of the chunk data, and points at the
     // metadata's own little endian length. Last entry wins for a repeated id,
     // as in retrotool's read_full.
-    metaOffsets[UuidFromLe(p)] = body + ReadLE32(p + 16);
+    const uint64_t offset = ReadLE32(p + 16);
+    if (!RangeFits(offset, 4, chunkSize)) {
+      error = "remastered pak: metadata entry points outside its table";
+      return false;
+    }
+    metaOffsets[UuidFromLe(p)] = body + offset;
   }
   return true;
 }
@@ -563,6 +517,13 @@ bool Pak::ReadAsset(const PakAsset& asset, std::vector<uint8_t>& out, std::strin
       // A zero mode means the rest of the blob is the asset as it is.
       out.assign(stored.begin() + 4, stored.end());
     } else {
+      // A back reference is two bytes plus a header bit and copies at most 64 (about
+      // 30 times its size), so anything claiming 40 times its stored size is corrupt, and
+      // is refused before the buffer is allocated.
+      if (asset.decompressedSize > stored.size() * 40) {
+        error = "remastered pak: asset " + IdToString(asset.id) + " claims more than its data can hold";
+        return false;
+      }
       out.assign(size_t(asset.decompressedSize), 0);
       if (!DecompressAsset(stored.data(), stored.size(), out, mode, error)) {
         return false;
@@ -611,6 +572,10 @@ bool Pak::ReadAsset(const PakAsset& asset, std::vector<uint8_t>& out, std::strin
       return false;
     }
     const uint64_t metaLength = ReadLE32(lengthBytes);
+    if (!RangeFits(asset.metaLengthOffset + 4, metaLength, m_size)) {
+      error = "remastered pak: metadata for " + IdToString(asset.id) + " runs past the end of the pak";
+      return false;
+    }
     std::vector<uint8_t> meta;
     meta.resize(size_t(metaLength));
     if (!meta.empty() && !ReadAt(asset.metaLengthOffset + 4, meta.size(), meta.data(), error)) {

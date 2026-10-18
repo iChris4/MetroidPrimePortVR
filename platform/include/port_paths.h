@@ -33,6 +33,8 @@
 #include <SDL3/SDL_filesystem.h>
 #include <SDL3/SDL_stdinc.h>
 
+#include "port_env.h"
+
 namespace PortPaths {
 
 namespace detail {
@@ -114,17 +116,14 @@ inline std::string LegacyFolder() {
   const char* root = SDL_getenv("APPDATA");
   return root != nullptr && root[0] != '\0' ? std::string(root) + "\\Metroid Prime\\" : std::string();
 #elif defined(__APPLE__)
-  const char* home = std::getenv("HOME");
-  return home != nullptr && home[0] != '\0'
-             ? std::string(home) + "/Library/Application Support/Metroid Prime/"
-             : std::string();
+  const char* home = port::HomeFolder();
+  return home != nullptr ? std::string(home) + "/Library/Application Support/Metroid Prime/" : std::string();
 #else
   if (const char* data = std::getenv("XDG_DATA_HOME"); data != nullptr && data[0] == '/') {
     return WithSeparator(data) + "Metroid Prime/";
   }
-  const char* home = std::getenv("HOME");
-  return home != nullptr && home[0] != '\0' ? std::string(home) + "/.local/share/Metroid Prime/"
-                                            : std::string();
+  const char* home = port::HomeFolder();
+  return home != nullptr ? std::string(home) + "/.local/share/Metroid Prime/" : std::string();
 #endif
 }
 
@@ -242,7 +241,7 @@ inline void MigrateLooseData(const std::string& exe) {
 #endif
 
 inline std::string Resolve() {
-  if (const char* env = std::getenv("MP_USER_PATH"); env != nullptr && env[0] != '\0') {
+  if (const char* env = port::EnvString("MP_USER_PATH"); env != nullptr && env[0] != '\0') {
     return WithSeparator(env);
   }
 #if defined(__ANDROID__)
@@ -334,7 +333,7 @@ inline bool IsPortable() {
 // permission), or empty.
 inline std::string UnavailableFolder() {
   const std::string chosen = detail::ReadMarker();
-  if (chosen.empty() || chosen == UserFolder() || std::getenv("MP_USER_PATH") != nullptr) {
+  if (chosen.empty() || chosen == UserFolder() || port::EnvString("MP_USER_PATH") != nullptr) {
     return {};
   }
   return chosen;

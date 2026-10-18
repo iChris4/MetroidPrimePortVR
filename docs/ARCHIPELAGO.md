@@ -1,9 +1,10 @@
 # Archipelago client
 
 The port can join an Archipelago multiworld directly: a native client in
-`platform/port_apclient.cpp` speaks the AP protocol over a WebSocket and hands
-items to the player state, and collected pickups are reported back as location
-checks. All of it is opt-in; with no configuration the port is unaffected.
+`platform/port_apclient.cpp` (its socket thread in
+`platform/port_apclient_worker.cpp`) speaks the AP protocol over a WebSocket and
+hands items to the player state, and collected pickups are reported back as
+location checks. All of it is opt-in; with no configuration the port is unaffected.
 
 Seeds come from Archipelago's Metroid Prime world, maintained at
 `github.com/UltiNaruto/MetroidAPrime` (a fork of `Electro1512/MetroidAPrime`,
@@ -225,7 +226,7 @@ back to `/system/etc/security/cacerts`; the first directory with a certificate
 wins) and fails loudly, naming every directory tried, when none exist.
 
 Both halves are proven on the Android emulator; the recipe and the expected log
-lines are in [ANDROID_BUILD_PROBE.md](ANDROID_BUILD_PROBE.md#wss-on-android-proven-end-to-end).
+lines are in [ANDROID.md](ANDROID.md#wss-on-android-proven-end-to-end).
 
 ## Configuration
 
@@ -439,6 +440,29 @@ dots; console `tracker` prints the same list); its rules are compiled from the
 (MIT) by `tools/gen_ap_logic.py`; rerun it when the apworld's logic changes.
 The port's screenshot capture does not
 include Aurora's UI layer, so an F1 screenshot will not show either.
+
+## What the log records
+
+`metroid_prime_port.log` (attach it to a report) follows every item and check, so a
+missing item can be traced to where it stopped (`archipelago:` lines):
+
+- `connected as slot N, team T; the server has K location(s) checked; seed options: ...`:
+  the handshake, and the options that change grants (`missile_launcher`, `main_power_bomb`).
+- `check <world:area:entity> (location ID) queued to send` when a pickup is collected, or
+  `... was recorded already ...; not sent again` when the server or the game had it, so
+  no item comes back for it.
+- `received N item(s) from #I (next expected #E, ...)`, then one `item #I <id> <name>: game
+  item T, capacity +C, amount +A` per item; `(the loaded game holds it already: counted,
+  not granted)` during a replay, and a line for a gap and the resend it asks for.
+- `applied item #I <name>: <item> a/c -> a/c (amount/capacity)`: the inventory before and
+  after, once the game takes the grant.
+- `lining up a loaded game: ...`, then `in step`, `holds X of Y ...; asking the server for
+  the rest` with `rewinding: ...`, or `taking the loaded game to hold ...`: what a save,
+  resume or save state brings, and what the client does about it.
+- `DeathLink: N death(s) from the multiworld`.
+
+Without Archipelago, a seed's pickups log `randomizer: picked up <key>: <item>, capacity
++C, amount +A; now a/c` (the per-check `randomizer_checks.log` is unchanged).
 
 ## Verified
 

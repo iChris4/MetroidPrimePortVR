@@ -20,10 +20,14 @@ the port asks for the image on first launch when it cannot find one.
 | Aurora (windowing, WebGPU/Dawn plumbing) | MIT | `extern/aurora/LICENSE` |
 | MusyX (audio mixer) | MIT | `extern/musyx/LICENSE` |
 | astc-encoder (ASTC texture writer) | Apache-2.0 | `extern/astcenc/LICENSE.txt` |
+| GamepadMotionHelpers (gyro calibration) | MIT | `extern/GamepadMotionHelpers/LICENSE` |
 | SDL3 | zlib | fetched at configure time, `build/*/_deps/sdl-src/LICENSE.txt` |
 | Dear ImGui | MIT | fetched, `imgui-src/LICENSE` |
 | fmt | MIT | fetched, `fmt-src/LICENSE` |
 | zstd | BSD | fetched, `zstd-src/LICENSE` |
+| Abseil, libpng, FreeType, xxHash | Apache-2.0, libpng, FTL, BSD-2 | fetched, `<name>-src/` |
+| Dawn, nod | BSD-3 (and bundled), MIT or Apache-2.0 | `packaging/licenses/` (prebuilt archives carry none) |
+| randomprime, apworld, PopTracker pack data tables | MIT | `packaging/licenses/` |
 | Button prompt icons | Kenney CC0 | `tools/prompt_icons/`, built into `textures/` |
 
 **The repository's own work is MIT, and the game code is not.** `LICENSE` grants
@@ -56,9 +60,9 @@ self-contained — and it is why `MP_USER_PATH` cannot be used to move saves.
 - **All four do.** Each ships the port's own `LICENSE` and `NOTICE` alongside
   the third-party terms, because a grant nobody can read inside the package is
   not much of a grant.
-- **Windows**: `windows.yml` copies the port's grant and notice, Aurora's and
-  MusyX's licences, and every `LICENSE*`/`COPYING*`/`NOTICE*` from the fetched
-  packages into `dist/licenses/`, preserving the dependency path, and puts
+- **Windows**: `windows.yml` collects the licences into `dist/licenses/`
+  with `tools/collect_licenses.sh`, the same set as the Linux packages (see
+  below), adds the statically linked OpenSSL's, and puts
   `docs/NATIVE_PORT.md` in as the `README`, with `docs/SETTINGS.md`, `docs/MODS.md`
   and `docs/CONSOLE.md` alongside it. It also packages `textures/` (the
   HD and button-prompt sets), so the artefact zips as-is with no copy from a
@@ -81,15 +85,17 @@ self-contained — and it is why `MP_USER_PATH` cannot be used to move saves.
   SDL3, nod, OpenSSL, zstd and xxhash linked in statically (the workflow fails
   if `otool -L` shows anything outside `/usr/lib` and `/System/Library`), puts
   the same LGPL `ffmpeg` as Windows in `Contents/MacOS`, and collects the
-  licences into `licenses/` beside the app. Both are ad-hoc signed, not
+  licences into `licenses/` beside the app with `tools/collect_licenses.sh`,
+  plus ffmpeg's and OpenSSL's. Both are ad-hoc signed, not
   notarised.
-- **The AppImage and the APK**: `tools/make_appimage.sh` collects them into
-  `usr/share/licenses/metroid-prime-port/`. It bundles no shared libraries.
-  The APK's `syncLicenseNotices` task gathers the same set into `assets/`,
-  verified present in a built package (0.21.0, twelve files): `port-license.txt`,
-  `port-notice.txt`, `aurora.txt`, `musyx.txt`, `astcenc.txt`, `adrenotools.txt`,
-  `linkernsbypass.txt`, `sdl-src.txt`, `imgui-src.txt`, `fmt-src.txt`,
-  `zstd-src.txt` and `openssl-license.txt`.
+- **The AppImage, the Linux tarball and the APK**: `tools/collect_licenses.sh`
+  gathers the AppImage's and the tarball's into `share/licenses/metroid-prime-port/`:
+  the port's grant and notice, the vendored snapshots, every fetched package's
+  licence (`<dep>.txt`), the notices deeper in a fetched package's tree under
+  `<dep>/` (SDL's hidapi, for one) and `packaging/licenses/` (Dawn and nod,
+  whose prebuilt archives carry none). It bundles no shared libraries. The APK's
+  `syncLicenseNotices` task gathers the same set into `assets/`, plus
+  `adrenotools.txt`, `linkernsbypass.txt` and `openssl-license.txt`.
 - **The Flatpak** collects them in the manifest's `post-install`: the two
   vendored snapshots out of the tree, and the four fetched packages by glob,
   because the fetched ones only exist once `cmake-ninja` has run.
@@ -130,7 +136,7 @@ in `assets/`, and no `.iso`, `.pak` or `.strg` is in the package. An earlier
 revision of this section recorded the signer as `d8814c79…` and six notices; both
 were wrong.
 
-The port targets `versionName "0.28.0"` and `versionCode 31`. A version bump
+The port targets `versionName "0.29.0"` and `versionCode 33`. A version bump
 also adds a `<release>` entry (newest first) to
 `packaging/io.github.odrannnn.metroidprimeport.metainfo.xml`, which is the
 version Flatpak reports; `tools/make_flatpak.sh` stops if the two differ.
@@ -149,7 +155,14 @@ version Flatpak reports; `tools/make_flatpak.sh` stops if the two differ.
    - Windows: run `windows.yml`, `gh run download <id> -n metroid_prime_port-windows`,
      drop CI's `user/` folder (log, `dawn_cache.db`, `pipeline_cache.db`), and zip
      the rest as `metroid-prime-port-X-windows-x86_64.zip`.
+   - macOS: run `macos.yml`, download its artifact and zip `Metroid Prime Port.app`
+     and `licenses/` as `metroid-prime-port-X-macos-arm64.zip`.
+   - Flatpak: `tools/make_flatpak.sh` (committed `port` branch), shipped as
+     `MetroidPrimePort.flatpak`.
    - Android: the signed APK, staged as `metroid-prime-port-X-android-arm64.apk`.
+
+   Every release ships all six assets (AppImage, tarball, Flatpak, Windows,
+   macOS, APK); start all the builds together.
 3. Check each artefact's version string, then `git tag -a vX` and `git push user vX`.
 4. `gh release create vX --notes-file …` with every asset passed explicitly, and
    confirm with `gh release view vX --json assets`. Base the notes on the
@@ -162,8 +175,8 @@ version Flatpak reports; `tools/make_flatpak.sh` stops if the two differ.
 | Linux | `cmake -S . -B build/port-gcc` | executable | works; tests green. `cmake --install` also produces a complete tree, verified by running it |
 | Linux | `.github/workflows/linux-release.yml` | AppImage + tarball | manual trigger; builds on AlmaLinux 9 and runs `tools/make_appimage.sh`. Use these for releases, not a desktop build |
 | Linux | `tools/make_flatpak.sh` | Flatpak | manifest installs a working tree and collects notices; builds (`tools/make_flatpak.sh` writes `build/flatpak/MetroidPrimePort.flatpak`). The app id is `io.github.odrannnn.metroidprimeport`, with AppStream metainfo shipped |
-| Windows | `.github/workflows/windows.yml` | zipped `dist/` | manual trigger only for now; green when run, artifact uploaded, packaged startup checked |
-| macOS | `.github/workflows/macos.yml` | ad-hoc signed `.app` (arm64) + `licenses/` | experimental; builds, tests and packaged startup checked in CI, never run on a real Mac |
+| Windows | `.github/workflows/windows.yml` | zipped `dist/` | weekly (Mondays) and manual trigger; green when run, artifact uploaded, packaged startup checked |
+| macOS | `.github/workflows/macos.yml` | ad-hoc signed `.app` (arm64) + `licenses/` | experimental; weekly and manual trigger; builds, tests and packaged startup checked in CI, never run on a real Mac |
 | Android | `tools/android_apk.sh :app:assembleRelease` | APK | builds, signed with this project's own key; runs on-device (POCO F8 Ultra, 60 FPS), touch/Continue-load still unverified |
 
 The Linux binary is the only one with a test suite attached: 54 `port`-labelled
@@ -213,10 +226,10 @@ under GNOME unless the port's own X11 preference applies — see
    corrupt, and answering that dialog deletes the file and re-creates it blank, with
    no save data. A save needs a second confirmation, at the screen's `SaveReady`
    state, and the driver was only ever pressing once. With that fixed, a save
-   writes real data and the front end loads it — evidence in
-   `docs/images/save-main-menu.png` (the main menu showing
-   `[Samus A] 00% | Space Pirate Frigate | 00:00 Elapsed`) and
-   `docs/images/save-loaded.png` (the loaded game, on the Frigate). The saved
+   writes real data and the front end loads it: captures showed the main menu
+   listing `[Samus A] 00% | Space Pirate Frigate | 00:00 Elapsed` and the loaded
+   game on the Frigate (not kept in the repository, being pictures of Nintendo's
+   game). The saved
    file's 3004-byte data region has 134 non-zero bytes, a valid CRC and slot 1
    flagged present.
 
@@ -230,7 +243,7 @@ under GNOME unless the port's own X11 preference applies — see
 3. ~~**The AppImage only names the shared libraries it copies.**~~ It no longer
    copies any.
 4. **Android on-device behaviour is partly verified** — the release build runs on
-   a POCO F8 Ultra at a steady 60 FPS (see `docs/ANDROID_BUILD_PROBE.md`). Still
+   a POCO F8 Ultra at a steady 60 FPS (see `docs/ANDROID.md`). Still
    unverified: loading a save from the title screen's Continue, touch ergonomics
    and tap reliability, and performance on any other device.
 5. **~~`wss://` does not work on Android~~ — resolved.** OpenSSL 3.5.8 is built
@@ -242,8 +255,8 @@ under GNOME unless the port's own X11 preference applies — see
    enumerated by hand from `/apex/com.android.conscrypt/cacerts`, and zero
    certificates is a loud error naming the directories rather than an obscure
    verification failure later. Both halves are proven on the emulator — see
-   `docs/ANDROID_BUILD_PROBE.md`. Costs about 2 MB of APK — the measured numbers
-   are in `docs/ANDROID_BUILD_PROBE.md`.
+   `docs/ANDROID.md`. Costs about 2 MB of APK — the measured numbers
+   are in `docs/ANDROID.md`.
 6. **The Flatpak is not on Flathub.** `tools/make_flatpak.sh` builds a bundle
    from the committed `port` branch; the project's own install rules put a
    runnable tree in `/app`, and the notices are collected. Before it could be

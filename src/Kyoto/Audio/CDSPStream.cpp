@@ -1,4 +1,5 @@
 #include "Kyoto/Audio/CDSPStream.hpp"
+#include "port_env.h"
 
 #include "Kyoto/Alloc/CMemory.hpp"
 
@@ -29,7 +30,7 @@
 
 namespace {
 bool StreamTraceVerbose() {
-  static const bool verbose = getenv("MP_STREAM_TRACE") != nullptr;
+  static const bool verbose = port::EnvFlag("MP_STREAM_TRACE");
   return verbose;
 }
 } // namespace

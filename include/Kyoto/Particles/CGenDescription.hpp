@@ -23,8 +23,10 @@ class CSwooshDescription;
 class CTexture;
 
 #ifdef TARGET_PC
-// Port-only Remastered particle material (VMAT and friends, build/mpr/vfx/DESIGN.md
-// section 1). Present only when the PART carries a VMAT; everything else draws as retail.
+// Port-only Remastered particle material (VMAT and friends, docs/REMASTERED_VFX.md).
+// Present only when the PART carries a VMAT; everything else draws as retail.
+#include "Kyoto/Particles/CPortVfxConstants.hpp"
+
 struct CPortVfxElem {
   enum EKind : u32 { kReal = 0, kVector = 1, kInt = 2, kColor = 3 };
   u32 kind = kReal;
@@ -56,6 +58,7 @@ struct CPortVfxMat {
   // erosion, thrX, thrY, thrW, fresnelX, fresnelY, fadeX, fadeY, indexScale, indexOffset, indexRow
   Src src[11];
   float modulate = 1.f, depthSoften = 0.f;
+  float opacityGain = 1.f, opacityBias = 0.f; // v3 tail; v2 keeps the identity
   u32 spriteCenter = 0; // 0..8, a row of the sprite pivot table
 };
 

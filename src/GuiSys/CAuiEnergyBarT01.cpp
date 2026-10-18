@@ -1,4 +1,5 @@
 #include "GuiSys/CAuiEnergyBarT01.hpp"
+#include "port_env.h"
 #include "GuiSys/CGuiFrame.hpp"
 #include "GuiSys/CGuiSys.hpp"
 #include "GuiSys/CGuiWidget.hpp"
@@ -17,7 +18,7 @@
 #include <cstdlib>
 
 static bool HudLogEnabled() {
-  static const bool enabled = std::getenv("MP_LOG_HUD") != nullptr;
+  static const bool enabled = port::EnvFlag("MP_LOG_HUD");
   return enabled;
 }
 

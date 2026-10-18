@@ -1,4 +1,5 @@
 #include "GuiSys/CGuiModel.hpp"
+#include "port_env.h"
 
 #include "GuiSys/CGuiFrame.hpp"
 #include "GuiSys/CGuiSys.hpp"
@@ -132,7 +133,7 @@ bool CGuiModel::GetIsFinishedLoadingWidgetSpecific() const {
   if (const CModel* model = xb8_model->GetObject()) {
     model->Touch(0);
     const bool loaded = model->IsLoaded(0);
-    if (!loaded && std::getenv("MP_LOG_HUD") != nullptr) {
+    if (!loaded && port::EnvFlag("MP_LOG_HUD")) {
       static int sLogCount = 0;
       if (sLogCount < 80) {
         ++sLogCount;
@@ -142,7 +143,7 @@ bool CGuiModel::GetIsFinishedLoadingWidgetSpecific() const {
     return loaded;
   }
 
-  if (std::getenv("MP_LOG_HUD") != nullptr) {
+  if (port::EnvFlag("MP_LOG_HUD")) {
     static int sLogCount = 0;
     if (sLogCount < 80) {
       ++sLogCount;

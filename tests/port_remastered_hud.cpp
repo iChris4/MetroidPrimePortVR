@@ -1,4 +1,5 @@
 #include "port_remastered_hud.h"
+#include "port_test.h"
 
 #include <cmath>
 #include <cstdio>
@@ -8,14 +9,6 @@
 using namespace PortRemastered;
 
 namespace {
-int sFailures = 0;
-
-void Check(bool condition, const char* what) {
-  if (!condition) {
-    std::fprintf(stderr, "FAIL: %s\n", what);
-    ++sFailures;
-  }
-}
 
 bool Close(float a, float b) { return std::fabs(a - b) < 1e-5f; }
 
@@ -214,81 +207,81 @@ void TestFrame() {
   };
   const Blob frame = RemFrame();
   ModelUuid modelId{};
-  Check(HudFrameModel(frame.data(), frame.size(), modelId) && modelId[0] == 3 && modelId[3] == 0 && modelId[4] == 5 &&
-            modelId[8] == 8,
-        "the frame's model id, in a pak's order");
-  Check(!HudFrameModel(disc.data(), disc.size(), modelId), "a disc frame is not a Remastered one");
+  CHECK_MSG(HudFrameModel(frame.data(), frame.size(), modelId) && modelId[0] == 3 && modelId[3] == 0 && modelId[4] == 5 &&
+                modelId[8] == 8,
+            "the frame's model id, in a pak's order");
+  CHECK_MSG(!HudFrameModel(disc.data(), disc.size(), modelId), "a disc frame is not a Remastered one");
 
   HudConverter converter(io);
   HudCounts counts;
   std::string error;
-  Check(converter.Convert(0x12345678, frame.data(), frame.size(), Square(), counts, error), "the frame converts");
-  Check(counts.widgets == 5 && counts.models == 2 && counts.textures == 1 && counts.bars == 0, "what was made");
-  Check(asked[3] == 1 && asked[0] == 0, "the texture is asked for in a pak's order");
+  CHECK_MSG(converter.Convert(0x12345678, frame.data(), frame.size(), Square(), counts, error), "the frame converts");
+  CHECK_MSG(counts.widgets == 5 && counts.models == 2 && counts.textures == 1 && counts.bars == 0, "what was made");
+  CHECK_MSG(asked[3] == 1 && asked[0] == 0, "the texture is asked for in a pak's order");
   // The first model id is the disc's, so the models start one past it; a small picture needs no native copy.
-  Check(files.count("52480001.CMDL") == 1 && files.count("52480002.CMDL") == 1 && files.count("52470000.TXTR") == 1 &&
+  CHECK_MSG(files.count("52480001.CMDL") == 1 && files.count("52480002.CMDL") == 1 && files.count("52470000.TXTR") == 1 &&
             files.count("52470000.dds") == 0 && files.size() == 4,
         "the files");
-  Check(!converter.Convert(0x99999999, frame.data(), frame.size(), Square(), counts, error), "no such disc frame");
-  Check(!converter.Convert(0x12345678, frame.data(), frame.size() - 30, Square(), counts, error), "a cut frame");
+  CHECK_MSG(!converter.Convert(0x99999999, frame.data(), frame.size(), Square(), counts, error), "no such disc frame");
+  CHECK_MSG(!converter.Convert(0x12345678, frame.data(), frame.size() - 30, Square(), counts, error), "a cut frame");
 
   const auto found = files.find("12345678.FRME");
-  Check(found != files.end(), "the frame is written under the disc's id");
+  CHECK_MSG(found != files.end(), "the frame is written under the disc's id");
   if (found == files.end()) {
     return;
   }
   Read in{found->second, 16};
-  Check(in.U32() == 5, "the disc's four widgets and Remastered's trim");
+  CHECK_MSG(in.U32() == 5, "the disc's four widgets and Remastered's trim");
   const char* names[5] = {"kGSYS_HeadWidgetID", "camera", "model_frame", "model_trim", "model_gone"};
   const char* parents[5] = {"kGSYS_DummyWidgetID", "kGSYS_HeadWidgetID", "kGSYS_HeadWidgetID", "model_frame",
                             "kGSYS_HeadWidgetID"};
   for (int i = 0; i < 5; ++i) {
     const uint32_t type = in.U32();
-    Check(in.String() == names[i], names[i]);
-    Check(in.String() == parents[i], "its parent");
+    CHECK_MSG(in.String() == names[i], names[i]);
+    CHECK_MSG(in.String() == parents[i], "its parent");
     in.at += 4;
     const float red = in.Float(), green = in.Float();
     in.at += 8;
     const uint32_t draw = in.U32();
     uint32_t model = 0;
     if (type == Tag("CAMR")) {
-      Check(in.U32() == 0 && Close(in.Float(), 40.0f) && Close(in.Float(), 1.75f) && Close(in.Float(), 0.25f) &&
-                Close(in.Float(), 500.0f),
-            "Remastered's projection between the disc's clip planes");
+      CHECK_MSG(in.U32() == 0 && Close(in.Float(), 40.0f) && Close(in.Float(), 1.75f) && Close(in.Float(), 0.25f) &&
+                    Close(in.Float(), 500.0f),
+                "Remastered's projection between the disc's clip planes");
     } else if (type == Tag("MODL")) {
       model = in.U32();
       in.at += 4;
-      Check(in.U32() == (i == 3 ? 0u : 7u), "the model's light mask");
+      CHECK_MSG(in.U32() == (i == 3 ? 0u : 7u), "the model's light mask");
     }
-    Check(found->second[in.at] == 0, "no worker");
+    CHECK_MSG(found->second[in.at] == 0, "no worker");
     in.at += 1;
     const float x = in.Float(), y = in.Float(), z = in.Float();
     in.at += 36 + 18;
     if (i == 2) {
       // Remastered's y is up, the disc's z.
-      Check(model == 0x52480001 && draw == 2 && Close(green, 0.5f), "the widget is drawn as Remastered's");
-      Check(Close(x, 0.0f) && Close(y, 0.0f) && Close(z, 3.0f), "and stands where Remastered has it");
+      CHECK_MSG(model == 0x52480001 && draw == 2 && Close(green, 0.5f), "the widget is drawn as Remastered's");
+      CHECK_MSG(Close(x, 0.0f) && Close(y, 0.0f) && Close(z, 3.0f), "and stands where Remastered has it");
     } else if (i == 3) {
-      Check(model == 0x52480002 && Close(z, 1.0f) && Close(red, 1.0f), "a widget only Remastered has, under its parent");
+      CHECK_MSG(model == 0x52480002 && Close(z, 1.0f) && Close(red, 1.0f), "a widget only Remastered has, under its parent");
     } else if (i == 4) {
-      Check(model == 0xFFFFFFFF && Close(x, 2.0f), "a model only the disc has is emptied, and stays put");
+      CHECK_MSG(model == 0xFFFFFFFF && Close(x, 2.0f), "a model only the disc has is emptied, and stays put");
     }
   }
-  Check(in.at == found->second.size(), "nothing after the last widget");
+  CHECK_MSG(in.at == found->second.size(), "nothing after the last widget");
 
   // The model: the square stood up, drawn with the disc's material.
   const Blob& cmdl = files["52480001.CMDL"];
   Read model{cmdl, 0};
-  Check(model.U32() == 0xDEADBABE && cmdl.size() % 32 == 0, "a disc model");
+  CHECK_MSG(model.U32() == 0xDEADBABE && cmdl.size() % 32 == 0, "a disc model");
   model.at = 12;
   float bounds[6];
   for (float& v : bounds) {
     v = model.Float();
   }
-  Check(Close(bounds[0], 0.0f) && Close(bounds[3], 1.0f) && Close(bounds[1], 0.0f) && Close(bounds[4], 0.0f) &&
-            Close(bounds[2], 0.0f) && Close(bounds[5], 1.0f),
-        "its bounds, in the disc's axes");
-  Check(model.U32() == 8, "seven data sections and one surface");
+  CHECK_MSG(Close(bounds[0], 0.0f) && Close(bounds[3], 1.0f) && Close(bounds[1], 0.0f) && Close(bounds[4], 0.0f) &&
+                Close(bounds[2], 0.0f) && Close(bounds[5], 1.0f),
+            "its bounds, in the disc's axes");
+  CHECK_MSG(model.U32() == 8, "seven data sections and one surface");
 }
 
 void Little16(Blob& out, uint32_t v) {
@@ -322,25 +315,25 @@ void TestBeamTints() {
   TweakColor(ldta, 0xB7B9CFBC, {{kR, .8f}, {kG, .1f}, {kB, 2.f}});  // Plasma, clamped
   std::map<std::string, std::array<float, 4>> tints;
   std::string error;
-  Check(HudBeamIconTints(ldta.data(), ldta.size(), tints, error) && tints.size() == 4, "four beam colours");
-  Check(tints["model_beamicon3"] == std::array<float, 4>{1.f, 1.f, 0.f, 1.f}, "Power is yellow");
-  Check(tints["model_beamicon2"] == std::array<float, 4>{1.f, 1.f, 1.f, 1.f}, "Ice keeps the defaults");
-  Check(Close(tints["model_beamicon1"][0], .5f) && Close(tints["model_beamicon1"][1], .2f) &&
-            Close(tints["model_beamicon1"][2], 1.f),
-        "Wave is purple");
-  Check(Close(tints["model_beamicon0"][1], .1f) && Close(tints["model_beamicon0"][2], 1.f), "Plasma, clamped");
+  CHECK_MSG(HudBeamIconTints(ldta.data(), ldta.size(), tints, error) && tints.size() == 4, "four beam colours");
+  CHECK_MSG((tints["model_beamicon3"] == std::array<float, 4>{1.f, 1.f, 0.f, 1.f}), "Power is yellow");
+  CHECK_MSG((tints["model_beamicon2"] == std::array<float, 4>{1.f, 1.f, 1.f, 1.f}), "Ice keeps the defaults");
+  CHECK_MSG(Close(tints["model_beamicon1"][0], .5f) && Close(tints["model_beamicon1"][1], .2f) &&
+                Close(tints["model_beamicon1"][2], 1.f),
+            "Wave is purple");
+  CHECK_MSG(Close(tints["model_beamicon0"][1], .1f) && Close(tints["model_beamicon0"][2], 1.f), "Plasma, clamped");
   tints.clear();
-  Check(!HudBeamIconTints(ldta.data(), 0x30, tints, error), "a cut file");
+  CHECK_MSG(!HudBeamIconTints(ldta.data(), 0x30, tints, error), "a cut file");
   ldta[0] = 'X';
-  Check(!HudBeamIconTints(ldta.data(), ldta.size(), tints, error), "not a tweak file");
+  CHECK_MSG(!HudBeamIconTints(ldta.data(), ldta.size(), tints, error), "not a tweak file");
 }
 }  // namespace
 
 int main() {
   TestFrame();
   TestBeamTints();
-  if (sFailures == 0) {
+  if (port_test::Failures() == 0) {
     std::printf("port_remastered_hud: ok\n");
   }
-  return sFailures == 0 ? 0 : 1;
+  return PORT_TEST_RESULT();
 }

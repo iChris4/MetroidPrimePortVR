@@ -8,8 +8,8 @@
 // Minimal strict JSON for the port's data files (randomizer seeds, Archipelago
 // configuration) and for Archipelago protocol packets. Parses into a value
 // tree; objects keep insertion order so files read in the order they were
-// written and packet fields stay inspectable. There is no writer: callers
-// compose the little JSON they send by hand.
+// written and packet fields stay inspectable. The writer is port::JsonWriter
+// (port_json_writer.h); it is built from port_json.cpp too.
 namespace PortJson {
 
 class Value {

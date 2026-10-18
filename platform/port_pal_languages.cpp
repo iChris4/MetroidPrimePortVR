@@ -1,4 +1,5 @@
 #include "port_pal_languages.h"
+#include "port_bytes.h"
 
 #include "port_mods.h"
 
@@ -26,7 +27,7 @@ bool MatchesId(const std::wstring& text, size_t at, const wchar_t* id) {
   return true;
 }
 
-uint32_t Be32(const uint8_t* p) { return uint32_t(p[0]) << 24 | uint32_t(p[1]) << 16 | uint32_t(p[2]) << 8 | p[3]; }
+using port::ReadBE32;
 
 std::string TypeName(uint32_t type) {
   const char name[4] = {char(type >> 24), char(type >> 16), char(type >> 8), char(type)};
@@ -102,10 +103,10 @@ bool ReadPakStrgs(const ReadAt& read, std::map<uint32_t, std::vector<uint8_t>>& 
 bool FontTexture(const std::vector<uint8_t>& font, uint32_t& texture) {
   // FONT, version, mono width/height, baseline (v1+), line margin (v2+), two
   // bools, two ints, a NUL-ended name, then the TXTR id (CRasterFont).
-  if (font.size() < 8 || Be32(font.data()) != 0x464F4E54u) {
+  if (font.size() < 8 || ReadBE32(font.data()) != 0x464F4E54u) {
     return false;
   }
-  const uint32_t version = Be32(font.data() + 4);
+  const uint32_t version = ReadBE32(font.data() + 4);
   if (version > 4) {
     return false;
   }
@@ -116,7 +117,7 @@ bool FontTexture(const std::vector<uint8_t>& font, uint32_t& texture) {
   if (at + 5 > font.size()) {
     return false;
   }
-  texture = Be32(font.data() + at + 1);
+  texture = ReadBE32(font.data() + at + 1);
   return true;
 }
 
@@ -158,7 +159,7 @@ bool ReadPakResources(const ReadAt& read, const std::function<bool(uint32_t type
         error = what + " is cut short";
         return false;
       }
-      std::vector<uint8_t> data(Be32(raw.data()));
+      std::vector<uint8_t> data(ReadBE32(raw.data()));
       uLongf length = uLongf(data.size());
       if (uncompress(data.data(), &length, raw.data() + 4, uLong(raw.size() - 4)) != Z_OK || length != data.size()) {
         error = "could not decompress " + what;
@@ -172,17 +173,17 @@ bool ReadPakResources(const ReadAt& read, const std::function<bool(uint32_t type
 }
 
 bool IsStringTable(const std::vector<uint8_t>& data) {
-  if (data.size() < 16 || Be32(data.data()) != 0x87654321u || Be32(data.data() + 4) != 0) {
+  if (data.size() < 16 || ReadBE32(data.data()) != 0x87654321u || ReadBE32(data.data() + 4) != 0) {
     return false;
   }
-  const uint64_t languages = Be32(data.data() + 8);
+  const uint64_t languages = ReadBE32(data.data() + 8);
   const uint64_t tableEnd = 16 + languages * 8;
   if (languages == 0 || tableEnd > data.size()) {
     return false;
   }
   for (uint64_t i = 0; i < languages; ++i) {
-    const uint64_t at = tableEnd + Be32(data.data() + 16 + i * 8 + 4);
-    if (at + 4 > data.size() || at + 4 + Be32(data.data() + at) > data.size()) {
+    const uint64_t at = tableEnd + ReadBE32(data.data() + 16 + i * 8 + 4);
+    if (at + 4 > data.size() || at + 4 + ReadBE32(data.data() + at) > data.size()) {
       return false;
     }
   }

@@ -1,14 +1,15 @@
 // See port_remastered_nso.h.
 
 #include "port_remastered_nso.h"
+#include "port_bytes.h"
 
 #include <cstring>
 
 namespace PortRemastered {
 namespace {
 
-uint32_t LE32(const uint8_t* p) { return p[0] | p[1] << 8 | p[2] << 16 | uint32_t(p[3]) << 24; }
-uint64_t LE64(const uint8_t* p) { return LE32(p) | uint64_t(LE32(p + 4)) << 32; }
+using port::ReadLE32;
+using port::ReadLE64;
 
 constexpr uint32_t kMaxPfs0Files = 4096;
 constexpr uint32_t kMaxPfs0Strings = 1u << 20;
@@ -93,7 +94,7 @@ size_t Pfs0HeaderSize(const uint8_t* h) {
   if (std::memcmp(h, "PFS0", 4) != 0) {
     return 0;
   }
-  const uint32_t count = LE32(h + 4), strings = LE32(h + 8);
+  const uint32_t count = ReadLE32(h + 4), strings = ReadLE32(h + 8);
   if (count == 0 || count > kMaxPfs0Files || strings > kMaxPfs0Strings) {
     return 0;
   }
@@ -111,12 +112,12 @@ bool Pfs0Parse(const uint8_t* data, size_t size, std::vector<Pfs0Entry>& out, st
     error = "implausible PFS0 header";
     return false;
   }
-  const uint32_t count = LE32(data + 4), stringSize = LE32(data + 8);
+  const uint32_t count = ReadLE32(data + 4), stringSize = ReadLE32(data + 8);
   const uint8_t* strings = data + 16 + size_t(count) * 24;
   const uint64_t dataStart = header;
   for (uint32_t i = 0; i < count; ++i) {
     const uint8_t* e = data + 16 + size_t(i) * 24;
-    const uint32_t nameOffset = LE32(e + 16);
+    const uint32_t nameOffset = ReadLE32(e + 16);
     if (nameOffset >= stringSize) {
       error = "bad PFS0 name offset";
       return false;
@@ -124,8 +125,8 @@ bool Pfs0Parse(const uint8_t* data, size_t size, std::vector<Pfs0Entry>& out, st
     Pfs0Entry entry;
     entry.name.assign(reinterpret_cast<const char*>(strings + nameOffset),
                       strnlen(reinterpret_cast<const char*>(strings + nameOffset), stringSize - nameOffset));
-    entry.offset = dataStart + LE64(e);
-    entry.size = LE64(e + 8);
+    entry.offset = dataStart + ReadLE64(e);
+    entry.size = ReadLE64(e + 8);
     out.push_back(std::move(entry));
   }
   return true;
@@ -137,14 +138,14 @@ bool NsoReadImage(const std::vector<uint8_t>& nso, uint32_t memOffset, size_t si
     error = "not an NSO";
     return false;
   }
-  const uint32_t flags = LE32(nso.data() + 0xC);
+  const uint32_t flags = ReadLE32(nso.data() + 0xC);
   for (int i = 0; i < 3; ++i) {
     const uint8_t* seg = nso.data() + 0x10 + i * 0x10;
-    const uint64_t fileOff = LE32(seg), memOff = LE32(seg + 4), segSize = LE32(seg + 8);
+    const uint64_t fileOff = ReadLE32(seg), memOff = ReadLE32(seg + 4), segSize = ReadLE32(seg + 8);
     if (memOffset < memOff || uint64_t(memOffset) + size > memOff + segSize) {
       continue;
     }
-    const uint64_t stored = (flags >> i & 1) ? LE32(nso.data() + 0x60 + i * 4) : segSize;
+    const uint64_t stored = (flags >> i & 1) ? ReadLE32(nso.data() + 0x60 + i * 4) : segSize;
     if (fileOff > nso.size() || stored > nso.size() - fileOff) {
       error = "NSO segment outside the file";
       return false;

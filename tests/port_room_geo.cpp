@@ -1,5 +1,6 @@
 #include "port_room_geo.h"
 #include "port_maya_spline.h"
+#include "port_test.h"
 
 #include <cmath>
 #include <cstdio>
@@ -8,14 +9,6 @@
 #include <vector>
 
 namespace {
-int sFailures = 0;
-
-void Check(bool condition, const char* what) {
-  if (!condition) {
-    std::fprintf(stderr, "FAIL: %s\n", what);
-    ++sFailures;
-  }
-}
 
 void Put32(std::vector<uint8_t>& out, uint32_t value) {
   for (int i = 0; i < 4; ++i) {
@@ -48,32 +41,32 @@ void TestRoundTrip() {
   std::vector<PortRoomGeo::Instance> out;
   std::string error;
   const std::vector<uint8_t> file = PortRoomGeo::Write(in);
-  Check(PortRoomGeo::Parse(file, out, error), "v3 file parses");
-  Check(out.size() == 3, "three instances");
+  CHECK_MSG(PortRoomGeo::Parse(file, out, error), "v3 file parses");
+  CHECK_MSG(out.size() == 3, "three instances");
   if (out.size() != 3) {
     return;
   }
-  Check(out[0].layer == PortRoomGeo::kEveryLayer && out[0].active && out[0].links.empty(), "plain instance");
-  Check(out[1].model == 0x22222222 && out[1].transform[3] == -2.5f, "model and transform");
-  Check(out[1].layer == 3 && !out[1].active, "layer and active");
-  Check(out[0].platform == 0 && out[1].platform == 0x041a0044 && out[1].platformStart[0] == -142.f &&
-            out[1].platformStart[1] == 0.f && out[1].platformStart[2] == 3.25f,
-        "platform");
-  Check(out[1].links.size() == 2, "two links");
+  CHECK_MSG(out[0].layer == PortRoomGeo::kEveryLayer && out[0].active && out[0].links.empty(), "plain instance");
+  CHECK_MSG(out[1].model == 0x22222222 && out[1].transform[3] == -2.5f, "model and transform");
+  CHECK_MSG(out[1].layer == 3 && !out[1].active, "layer and active");
+  CHECK_MSG(out[0].platform == 0 && out[1].platform == 0x041a0044 && out[1].platformStart[0] == -142.f &&
+                out[1].platformStart[1] == 0.f && out[1].platformStart[2] == 3.25f,
+            "platform");
+  CHECK_MSG(out[1].links.size() == 2, "two links");
   if (out[1].links.size() == 2) {
-    Check(out[1].links[0].sender == 0x0c1a0042 && out[1].links[0].state == 9 &&
-              out[1].links[0].action == PortRoomGeo::kShow && out[1].links[0].delay == 0.f,
-          "first link");
-    Check(out[1].links[1].action == PortRoomGeo::kToggle && std::fabs(out[1].links[1].delay - 5.52f) < 0.006f,
-          "second link, with its delay");
+    CHECK_MSG(out[1].links[0].sender == 0x0c1a0042 && out[1].links[0].state == 9 &&
+                  out[1].links[0].action == PortRoomGeo::kShow && out[1].links[0].delay == 0.f,
+              "first link");
+    CHECK_MSG(out[1].links[1].action == PortRoomGeo::kToggle && std::fabs(out[1].links[1].delay - 5.52f) < 0.006f,
+              "second link, with its delay");
   }
-  Check(out[2].model == 0x33333333, "instance after links");
+  CHECK_MSG(out[2].model == 0x33333333, "instance after links");
 
   for (size_t cut = 12; cut < file.size(); ++cut) {
     const std::vector<uint8_t> part(file.begin(), file.begin() + cut);
     if (PortRoomGeo::Parse(part, out, error)) {
       std::fprintf(stderr, "FAIL: truncated at %zu parses\n", cut);
-      ++sFailures;
+      port_test::CountFailure();
     }
   }
 }
@@ -91,12 +84,12 @@ void TestVersion1() {
   }
   std::vector<PortRoomGeo::Instance> out;
   std::string error;
-  Check(PortRoomGeo::Parse(file, out, error), "v1 file parses");
-  Check(out.size() == 2 && out[1].model == 0xabc00001, "v1 instances");
-  Check(out.size() == 2 && out[1].active && out[1].layer == PortRoomGeo::kEveryLayer, "v1 defaults");
+  CHECK_MSG(PortRoomGeo::Parse(file, out, error), "v1 file parses");
+  CHECK_MSG(out.size() == 2 && out[1].model == 0xabc00001, "v1 instances");
+  CHECK_MSG(out.size() == 2 && out[1].active && out[1].layer == PortRoomGeo::kEveryLayer, "v1 defaults");
 
   file[4] = 6;
-  Check(!PortRoomGeo::Parse(file, out, error), "unknown version rejected");
+  CHECK_MSG(!PortRoomGeo::Parse(file, out, error), "unknown version rejected");
 }
 
 // A scaling joint's clip keeps its stretch through the file and rejects a truncated one.
@@ -110,11 +103,11 @@ void TestAnimStretch() {
   std::vector<PortRoomGeo::Instance> out;
   std::string error;
   const std::vector<uint8_t> file = PortRoomGeo::Write(in);
-  Check(PortRoomGeo::Parse(file, out, error) && out.size() == 1 && out[0].anim.size() == 1 &&
-            out[0].anim[0].stretch == in[0].anim[0].stretch && out[0].anim[0].keys == in[0].anim[0].keys,
-        "stretch round trip");
+  CHECK_MSG(PortRoomGeo::Parse(file, out, error) && out.size() == 1 && out[0].anim.size() == 1 &&
+                out[0].anim[0].stretch == in[0].anim[0].stretch && out[0].anim[0].keys == in[0].anim[0].keys,
+            "stretch round trip");
   std::vector<uint8_t> cut(file.begin(), file.end() - 4);
-  Check(!PortRoomGeo::Parse(cut, out, error), "truncated stretch rejected");
+  CHECK_MSG(!PortRoomGeo::Parse(cut, out, error), "truncated stretch rejected");
 }
 
 // The animation section, alone and after the script and glow sections.
@@ -134,27 +127,27 @@ void TestAnim() {
     in[0].glow[1] = 1.f;
     in[2].group = extras != 0 ? 4 : PortRoomGeo::kNoGroup;
     const std::vector<uint8_t> file = PortRoomGeo::Write(in);
-    Check(PortRoomGeo::Parse(file, out, error, &back), "anim file parses");
-    Check(out.size() == 3 && out[0].anim.empty() && out[2].anim.empty() && out[1].anim.size() == 1 &&
-              out[1].anim[0].fps == 30.f && out[1].anim[0].loop && !out[1].animOnShow &&
-              out[1].anim[0].keys == in[1].anim[0].keys,
-          "anim");
-    Check(out.size() == 3 && out[0].glows == in[0].glows && out[2].group == in[2].group, "sections before the anim");
+    CHECK_MSG(PortRoomGeo::Parse(file, out, error, &back), "anim file parses");
+    CHECK_MSG(out.size() == 3 && out[0].anim.empty() && out[2].anim.empty() && out[1].anim.size() == 1 &&
+                  out[1].anim[0].fps == 30.f && out[1].anim[0].loop && !out[1].animOnShow &&
+                  out[1].anim[0].keys == in[1].anim[0].keys,
+              "anim");
+    CHECK_MSG(out.size() == 3 && out[0].glows == in[0].glows && out[2].group == in[2].group, "sections before the anim");
 
     const size_t plain = file.size() - 8 - 8 - 12 - 3 * 28;
     for (size_t cut = plain + 1; cut < file.size(); ++cut) {
       const std::vector<uint8_t> part(file.begin(), file.begin() + cut);
       if (PortRoomGeo::Parse(part, out, error, &back)) {
         std::fprintf(stderr, "FAIL: anim truncated at %zu parses\n", cut);
-        ++sFailures;
+        port_test::CountFailure();
       }
     }
     std::vector<uint8_t> bad = file;
     bad[plain + 8] = 3; // no such instance
-    Check(!PortRoomGeo::Parse(bad, out, error, &back), "anim of a missing instance rejected");
+    CHECK_MSG(!PortRoomGeo::Parse(bad, out, error, &back), "anim of a missing instance rejected");
     bad = file;
     bad[4] = 4;
-    Check(!PortRoomGeo::Parse(bad, out, error, &back), "anim in a version 4 file rejected");
+    CHECK_MSG(!PortRoomGeo::Parse(bad, out, error, &back), "anim in a version 4 file rejected");
 
     PortRoomGeo::Instance extra = in[1];
     std::vector<PortRoomGeo::Instance> two = in;
@@ -163,12 +156,12 @@ void TestAnim() {
     // The second entry's index (entries of 8 + 12 + 84 bytes after the 8 byte head) becomes 1.
     const size_t secondAt = dup.size() - (8 + 12 + 3 * 28);
     dup[secondAt] = 1;
-    Check(!PortRoomGeo::Parse(dup, out, error, &back), "duplicate anim instance rejected");
+    CHECK_MSG(!PortRoomGeo::Parse(dup, out, error, &back), "duplicate anim instance rejected");
 
     auto mutated = [&](const char* what, auto change) {
       std::vector<PortRoomGeo::Instance> t = in;
       change(t[1]);
-      Check(!PortRoomGeo::Parse(PortRoomGeo::Write(t), out, error, &back), what);
+      CHECK_MSG(!PortRoomGeo::Parse(PortRoomGeo::Write(t), out, error, &back), what);
     };
     mutated("one frame rejected", [](PortRoomGeo::Instance& i) { i.anim[0].keys.resize(7); });
     mutated("zero fps rejected", [](PortRoomGeo::Instance& i) { i.anim[0].fps = 0.f; });
@@ -194,34 +187,34 @@ void TestClips() {
   std::vector<PortRoomGeo::Instance> out;
   std::string error;
   const std::vector<uint8_t> file = PortRoomGeo::Write(in);
-  Check(file.size() > 8 && file[4] == 12, "version 12 written");
-  Check(PortRoomGeo::Parse(file, out, error), "clips file parses");
-  Check(out.size() == 2 && out[0].anim.empty() && !out[0].animOnShow && out[1].animOnShow &&
-            out[1].anim.size() == 2 && out[1].anim[0].fps == 24.f && !out[1].anim[0].loop &&
-            out[1].anim[0].keys == in[1].anim[0].keys && out[1].anim[1].fps == 12.f && out[1].anim[1].loop &&
-            out[1].anim[1].keys == in[1].anim[1].keys,
-        "clips round trip");
+  CHECK_MSG(file.size() > 8 && file[4] == 12, "version 12 written");
+  CHECK_MSG(PortRoomGeo::Parse(file, out, error), "clips file parses");
+  CHECK_MSG(out.size() == 2 && out[0].anim.empty() && !out[0].animOnShow && out[1].animOnShow &&
+                out[1].anim.size() == 2 && out[1].anim[0].fps == 24.f && !out[1].anim[0].loop &&
+                out[1].anim[0].keys == in[1].anim[0].keys && out[1].anim[1].fps == 12.f && out[1].anim[1].loop &&
+                out[1].anim[1].keys == in[1].anim[1].keys,
+            "clips round trip");
 
   // The ANIM entry starts after the 8 byte head, 8 + (12 + 84) + (12 + 56) bytes from the end.
   const size_t entry = 8 + 12 + 3 * 28 + 12 + 2 * 28;
   const size_t at = file.size() - entry;
   std::vector<uint8_t> bad = file;
   bad[at + 4] = 2; // unknown flag
-  Check(!PortRoomGeo::Parse(bad, out, error), "unknown anim flag rejected");
+  CHECK_MSG(!PortRoomGeo::Parse(bad, out, error), "unknown anim flag rejected");
   bad = file;
   bad[at + 5] = 0;
-  Check(!PortRoomGeo::Parse(bad, out, error), "zero clips rejected");
+  CHECK_MSG(!PortRoomGeo::Parse(bad, out, error), "zero clips rejected");
   bad = file;
   bad[at + 5] = 3; // a third clip that is not there
-  Check(!PortRoomGeo::Parse(bad, out, error), "missing clip rejected");
+  CHECK_MSG(!PortRoomGeo::Parse(bad, out, error), "missing clip rejected");
   bad = file;
   bad[at + 8 + 8] = 2; // loop flag
-  Check(!PortRoomGeo::Parse(bad, out, error), "bad loop flag rejected");
+  CHECK_MSG(!PortRoomGeo::Parse(bad, out, error), "bad loop flag rejected");
   for (size_t cut = at - 8 + 1; cut < file.size(); ++cut) {
     const std::vector<uint8_t> part(file.begin(), file.begin() + cut);
     if (PortRoomGeo::Parse(part, out, error)) {
       std::fprintf(stderr, "FAIL: clips truncated at %zu parses\n", cut);
-      ++sFailures;
+      port_test::CountFailure();
     }
   }
 
@@ -242,10 +235,10 @@ void TestClips() {
       std::memcpy(&bits, &key, 4);
       Put32(old, bits);
     }
-    Check(PortRoomGeo::Parse(old, out, error), "old anim entry parses");
-    Check(out.size() == 2 && out[1].anim.size() == 1 && out[1].anim[0].fps == 30.f && out[1].anim[0].loop &&
-              !out[1].animOnShow && out[1].anim[0].keys.size() == 14 && out[1].anim[0].keys[13] == 1.f,
-          "old anim entry is one looping clip");
+    CHECK_MSG(PortRoomGeo::Parse(old, out, error), "old anim entry parses");
+    CHECK_MSG(out.size() == 2 && out[1].anim.size() == 1 && out[1].anim[0].fps == 30.f && out[1].anim[0].loop &&
+                  !out[1].animOnShow && out[1].anim[0].keys.size() == 14 && out[1].anim[0].keys[13] == 1.f,
+              "old anim entry is one looping clip");
   }
 }
 
@@ -260,26 +253,26 @@ void TestHide() {
   PortRoomGeo::Script back;
   std::string error;
   const std::vector<uint8_t> file = PortRoomGeo::Write(in, &script);
-  Check(PortRoomGeo::Parse(file, out, error, &back) && out.size() == 1 && out[0].sky && back.hidden == script.hidden,
-        "hidden objects round-trip");
-  Check(PortRoomGeo::Write(in).size() == file.size() - 24, "no hidden section without hidden objects");
+  CHECK_MSG(PortRoomGeo::Parse(file, out, error, &back) && out.size() == 1 && out[0].sky && back.hidden == script.hidden,
+            "hidden objects round-trip");
+  CHECK_MSG(PortRoomGeo::Write(in).size() == file.size() - 24, "no hidden section without hidden objects");
   for (size_t cut = file.size() - 23; cut < file.size(); ++cut) {
     const std::vector<uint8_t> part(file.begin(), file.begin() + cut);
     if (PortRoomGeo::Parse(part, out, error, &back)) {
       std::fprintf(stderr, "FAIL: hidden objects truncated at %zu parse\n", cut);
-      ++sFailures;
+      port_test::CountFailure();
     }
   }
   std::vector<uint8_t> bad = file;
   bad[file.size() - 20] = 0; // count 0
   bad.resize(file.size() - 16);
-  Check(!PortRoomGeo::Parse(bad, out, error, &back), "empty hidden section rejected");
+  CHECK_MSG(!PortRoomGeo::Parse(bad, out, error, &back), "empty hidden section rejected");
   bad = file;
   bad[file.size() - 4] = 1; // instance 1 of 1
-  Check(!PortRoomGeo::Parse(bad, out, error, &back), "hidden object of a missing instance rejected");
+  CHECK_MSG(!PortRoomGeo::Parse(bad, out, error, &back), "hidden object of a missing instance rejected");
   bad = file;
   bad[4] = 8;
-  Check(!PortRoomGeo::Parse(bad, out, error, &back), "hidden section in a version 8 file rejected");
+  CHECK_MSG(!PortRoomGeo::Parse(bad, out, error, &back), "hidden section in a version 8 file rejected");
 }
 
 // The lightmap lookup section, after the hide section.
@@ -292,34 +285,34 @@ void TestLightmap() {
   in[1].lightmap[1] = 0.5f;
   in[1].lightmap[2] = 0.125f;
   const std::vector<uint8_t> file = PortRoomGeo::Write(in);
-  Check(file.size() == plain + 8 + 24, "lightmap: section written only with a scale");
+  CHECK_MSG(file.size() == plain + 8 + 24, "lightmap: section written only with a scale");
   std::vector<PortRoomGeo::Instance> out;
   std::string error;
-  Check(PortRoomGeo::Parse(file, out, error) && out.size() == 2 && out[0].lightmap[2] == 0.f &&
-            out[1].lightmap[0] == 0.25f && out[1].lightmap[1] == 0.5f && out[1].lightmap[2] == 0.125f,
-        "lightmap: round trip");
+  CHECK_MSG(PortRoomGeo::Parse(file, out, error) && out.size() == 2 && out[0].lightmap[2] == 0.f &&
+                out[1].lightmap[0] == 0.25f && out[1].lightmap[1] == 0.5f && out[1].lightmap[2] == 0.125f,
+            "lightmap: round trip");
   for (size_t cut = plain + 1; cut < file.size(); ++cut) {
     const std::vector<uint8_t> part(file.begin(), file.begin() + cut);
     if (PortRoomGeo::Parse(part, out, error)) {
       std::fprintf(stderr, "FAIL: lightmap truncated at %zu parses\n", cut);
-      ++sFailures;
+      port_test::CountFailure();
     }
   }
   std::vector<uint8_t> bad = file;
   bad[4] = 9;
-  Check(!PortRoomGeo::Parse(bad, out, error), "lightmap: section in a version 9 file rejected");
+  CHECK_MSG(!PortRoomGeo::Parse(bad, out, error), "lightmap: section in a version 9 file rejected");
 
   // A scale of 0 with an offset is a one-texel lookup (Remastered's props), kept on its own.
   in[1].lightmap[2] = 0.f;
   const std::vector<uint8_t> texel = PortRoomGeo::Write(in);
-  Check(texel.size() == plain + 8 + 24 && PortRoomGeo::Parse(texel, out, error) && out.size() == 2 &&
-            out[1].lightmap[0] == 0.25f && out[1].lightmap[1] == 0.5f && out[1].lightmap[2] == 0.f &&
-            PortRoomGeo::HasLightmapLookup(out[1].lightmap) && !PortRoomGeo::HasLightmapLookup(out[0].lightmap),
-        "lightmap: one-texel lookup round trip");
+  CHECK_MSG(texel.size() == plain + 8 + 24 && PortRoomGeo::Parse(texel, out, error) && out.size() == 2 &&
+                out[1].lightmap[0] == 0.25f && out[1].lightmap[1] == 0.5f && out[1].lightmap[2] == 0.f &&
+                PortRoomGeo::HasLightmapLookup(out[1].lightmap) && !PortRoomGeo::HasLightmapLookup(out[0].lightmap),
+            "lightmap: one-texel lookup round trip");
   const float negative[3] = {0.25f, 0.5f, -1.f};
   const float nan[3] = {0.25f, std::nanf(""), 0.125f};
-  Check(!PortRoomGeo::HasLightmapLookup(negative) && !PortRoomGeo::HasLightmapLookup(nan),
-        "lightmap: negative or non-finite lookups rejected");
+  CHECK_MSG(!PortRoomGeo::HasLightmapLookup(negative) && !PortRoomGeo::HasLightmapLookup(nan),
+            "lightmap: negative or non-finite lookups rejected");
 }
 
 // The glow section, alone and after the script section.
@@ -339,11 +332,11 @@ void TestSky() {
   PortRoomGeo::Script back;
   std::string error;
   const std::vector<uint8_t> file = PortRoomGeo::Write(in);
-  Check(PortRoomGeo::Parse(file, out, error, &back), "sky file parses");
-  Check(out.size() == 2 && !out[0].sky && out[1].sky && out[0].anim.size() == 1 && out[0].anim[0].keys == in[0].anim[0].keys, "sky");
-  Check(out.size() == 2 && out[1].skyRadiance[0] == 0.5f && out[1].skyRadiance[1] == 2.f &&
-            out[1].skyRadiance[2] == 0.f,
-        "sky radiance");
+  CHECK_MSG(PortRoomGeo::Parse(file, out, error, &back), "sky file parses");
+  CHECK_MSG(out.size() == 2 && !out[0].sky && out[1].sky && out[0].anim.size() == 1 && out[0].anim[0].keys == in[0].anim[0].keys, "sky");
+  CHECK_MSG(out.size() == 2 && out[1].skyRadiance[0] == 0.5f && out[1].skyRadiance[1] == 2.f &&
+                out[1].skyRadiance[2] == 0.f,
+            "sky radiance");
   // Version 6: the index alone, and no radiance.
   // Its animation entry is the version 5 one: no flags or loop, a single clip.
   const size_t animAt = file.size() - 24 - 84; // the sky section is 8 + 16 bytes, the animation's 8 + 76
@@ -353,38 +346,38 @@ void TestSky() {
   old.insert(old.end(), file.begin() + animAt + 28, file.begin() + animAt + 84);
   old.insert(old.end(), file.end() - 24, file.end() - 12);
   old[4] = 6;
-  Check(PortRoomGeo::Parse(old, out, error, &back) && out.size() == 2 && out[1].sky &&
-            out[1].skyRadiance[0] == 0.f && out[1].skyRadiance[1] == 0.f,
-        "version 6 sky parses");
+  CHECK_MSG(PortRoomGeo::Parse(old, out, error, &back) && out.size() == 2 && out[1].sky &&
+                out[1].skyRadiance[0] == 0.f && out[1].skyRadiance[1] == 0.f,
+            "version 6 sky parses");
   // A negative or non-finite radiance reads as not known.
   std::vector<uint8_t> odd = file;
   const float nan = std::nanf("");
   const float negative = -1.f;
   std::memcpy(odd.data() + file.size() - 12, &negative, 4);
   std::memcpy(odd.data() + file.size() - 8, &nan, 4);
-  Check(PortRoomGeo::Parse(odd, out, error, &back) && out.size() == 2 && out[1].skyRadiance[0] == 0.f &&
-            out[1].skyRadiance[1] == 0.f,
-        "odd sky radiance reads as 0");
+  CHECK_MSG(PortRoomGeo::Parse(odd, out, error, &back) && out.size() == 2 && out[1].skyRadiance[0] == 0.f &&
+                out[1].skyRadiance[1] == 0.f,
+            "odd sky radiance reads as 0");
   for (size_t cut = file.size() - 23; cut < file.size(); ++cut) {
     const std::vector<uint8_t> part(file.begin(), file.begin() + cut);
     if (PortRoomGeo::Parse(part, out, error, &back)) {
       std::fprintf(stderr, "FAIL: sky truncated at %zu parses\n", cut);
-      ++sFailures;
+      port_test::CountFailure();
     }
   }
   std::vector<uint8_t> bad = file;
   bad[file.size() - 16] = 2; // no such instance
-  Check(!PortRoomGeo::Parse(bad, out, error, &back), "sky of a missing instance rejected");
+  CHECK_MSG(!PortRoomGeo::Parse(bad, out, error, &back), "sky of a missing instance rejected");
   bad = file;
   bad[4] = 5;
-  Check(!PortRoomGeo::Parse(bad, out, error, &back), "sky in a version 5 file rejected");
+  CHECK_MSG(!PortRoomGeo::Parse(bad, out, error, &back), "sky in a version 5 file rejected");
   bad = file;
   bad[file.size() - 20] = 2; // count 2
   Put32(bad, 1);
   for (int i = 0; i < 3; ++i) {
     Put32(bad, 0);
   }
-  Check(!PortRoomGeo::Parse(bad, out, error, &back), "duplicate sky instance rejected");
+  CHECK_MSG(!PortRoomGeo::Parse(bad, out, error, &back), "duplicate sky instance rejected");
 }
 
 void TestGlow() {
@@ -402,25 +395,25 @@ void TestGlow() {
   for (int grouped = 0; grouped < 2; ++grouped) {
     in[2].group = grouped != 0 ? 4 : PortRoomGeo::kNoGroup;
     const std::vector<uint8_t> file = PortRoomGeo::Write(in);
-    Check(PortRoomGeo::Parse(file, out, error, &back), "glow file parses");
-    Check(out.size() == 3 && !out[0].glows && !out[2].glows && out[1].glows && out[1].glow[0] == 0.f &&
-              out[1].glow[1] == 2.f && out[1].glow[2] == 1.326f,
-          "glow");
-    Check(out.size() == 3 && out[2].group == in[2].group, "groups before the glow");
+    CHECK_MSG(PortRoomGeo::Parse(file, out, error, &back), "glow file parses");
+    CHECK_MSG(out.size() == 3 && !out[0].glows && !out[2].glows && out[1].glows && out[1].glow[0] == 0.f &&
+                  out[1].glow[1] == 2.f && out[1].glow[2] == 1.326f,
+              "glow");
+    CHECK_MSG(out.size() == 3 && out[2].group == in[2].group, "groups before the glow");
     const size_t plain = file.size() - 8 - 16;
     for (size_t cut = plain + 1; cut < file.size(); ++cut) {
       const std::vector<uint8_t> part(file.begin(), file.begin() + cut);
       if (PortRoomGeo::Parse(part, out, error, &back)) {
         std::fprintf(stderr, "FAIL: glow truncated at %zu parses\n", cut);
-        ++sFailures;
+        port_test::CountFailure();
       }
     }
     std::vector<uint8_t> bad = file;
     bad[plain + 8] = 3; // no such instance
-    Check(!PortRoomGeo::Parse(bad, out, error, &back), "glow of a missing instance rejected");
+    CHECK_MSG(!PortRoomGeo::Parse(bad, out, error, &back), "glow of a missing instance rejected");
     bad = file;
     bad[4] = 3;
-    Check(!PortRoomGeo::Parse(bad, out, error, &back), "glow in a version 3 file rejected");
+    CHECK_MSG(!PortRoomGeo::Parse(bad, out, error, &back), "glow in a version 3 file rejected");
   }
 }
 
@@ -447,10 +440,10 @@ void TestVersion2() {
   }
   std::vector<PortRoomGeo::Instance> out;
   std::string error;
-  Check(PortRoomGeo::Parse(file, out, error), "v2 file parses");
-  Check(out.size() == 2 && out[1].model == 0xabc00001 && out[1].layer == 1 && !out[1].active, "v2 instances");
-  Check(out.size() == 2 && out[1].links.size() == 1 && out[1].links[0].sender == 0x00100021, "v2 links");
-  Check(out.size() == 2 && out[1].platform == 0, "v2 has no platform");
+  CHECK_MSG(PortRoomGeo::Parse(file, out, error), "v2 file parses");
+  CHECK_MSG(out.size() == 2 && out[1].model == 0xabc00001 && out[1].layer == 1 && !out[1].active, "v2 instances");
+  CHECK_MSG(out.size() == 2 && out[1].links.size() == 1 && out[1].links[0].sender == 0x00100021, "v2 links");
+  CHECK_MSG(out.size() == 2 && out[1].platform == 0, "v2 has no platform");
 }
 // The script section: nodes, edges and each instance's group.
 void TestScript() {
@@ -480,41 +473,41 @@ void TestScript() {
   std::vector<PortRoomGeo::Instance> out;
   PortRoomGeo::Script back;
   std::string error;
-  Check(PortRoomGeo::Parse(file, out, error, &back), "script file parses");
-  Check(out.size() == 2 && out[0].group == PortRoomGeo::kNoGroup && out[1].group == 7, "groups");
-  Check(back.nodes.size() == 2 && back.edges.size() == 3, "script sizes");
+  CHECK_MSG(PortRoomGeo::Parse(file, out, error, &back), "script file parses");
+  CHECK_MSG(out.size() == 2 && out[0].group == PortRoomGeo::kNoGroup && out[1].group == 7, "groups");
+  CHECK_MSG(back.nodes.size() == 2 && back.edges.size() == 3, "script sizes");
   if (back.nodes.size() == 2 && back.edges.size() == 3) {
-    Check(back.nodes[0].kind == PortRoomGeo::kCameraVolume && back.nodes[0].centre[0] == 10.f &&
-              back.nodes[0].half[1] == 2.5f && back.nodes[0].axes[0] == 0.f && back.nodes[0].axes[1] == 1.f &&
-              back.nodes[0].active,
-          "volume node");
-    Check(back.nodes[1].kind == PortRoomGeo::kCounter && back.nodes[1].max == 50 && !back.nodes[1].active,
-          "counter node");
-    Check(!back.edges[1].retail && back.edges[1].event == 1 && back.edges[1].action == PortRoomGeo::kGroupHide &&
-              back.edges[1].from == 1 && back.edges[1].to == 7,
-          "group edge");
-    Check(back.edges[2].retail && back.edges[2].event == 9 && back.edges[2].from == 0x0c1a0042, "retail edge");
+    CHECK_MSG(back.nodes[0].kind == PortRoomGeo::kCameraVolume && back.nodes[0].centre[0] == 10.f &&
+                  back.nodes[0].half[1] == 2.5f && back.nodes[0].axes[0] == 0.f && back.nodes[0].axes[1] == 1.f &&
+                  back.nodes[0].active,
+              "volume node");
+    CHECK_MSG(back.nodes[1].kind == PortRoomGeo::kCounter && back.nodes[1].max == 50 && !back.nodes[1].active,
+              "counter node");
+    CHECK_MSG(!back.edges[1].retail && back.edges[1].event == 1 && back.edges[1].action == PortRoomGeo::kGroupHide &&
+                  back.edges[1].from == 1 && back.edges[1].to == 7,
+              "group edge");
+    CHECK_MSG(back.edges[2].retail && back.edges[2].event == 9 && back.edges[2].from == 0x0c1a0042, "retail edge");
   }
 
   // Without groups or a script the section is left out.
   in[1].group = PortRoomGeo::kNoGroup;
-  Check(PortRoomGeo::Write(in).size() + 12 + 2 * 68 + 3 * 12 + 2 * 4 == PortRoomGeo::Write(in, &back).size(),
-        "no empty section");
+  CHECK_MSG(PortRoomGeo::Write(in).size() + 12 + 2 * 68 + 3 * 12 + 2 * 4 == PortRoomGeo::Write(in, &back).size(),
+            "no empty section");
 
   for (size_t cut = 13; cut < file.size(); ++cut) {
     const std::vector<uint8_t> part(file.begin(), file.begin() + cut);
     if (PortRoomGeo::Parse(part, out, error, &back) && cut != PortRoomGeo::Write(in).size()) {
       std::fprintf(stderr, "FAIL: script truncated at %zu parses\n", cut);
-      ++sFailures;
+      port_test::CountFailure();
     }
   }
 
   std::vector<uint8_t> bad = file;
   bad[bad.size() - 8 - 3 * 12 + 4] = 9; // the first edge's from: no such node
-  Check(!PortRoomGeo::Parse(bad, out, error, &back), "edge from a missing node rejected");
+  CHECK_MSG(!PortRoomGeo::Parse(bad, out, error, &back), "edge from a missing node rejected");
   bad = PortRoomGeo::Write(in);
   bad.push_back(1);
-  Check(!PortRoomGeo::Parse(bad, out, error, &back), "trailing bytes rejected");
+  CHECK_MSG(!PortRoomGeo::Parse(bad, out, error, &back), "trailing bytes rejected");
 }
 
 void TestLods() {
@@ -524,27 +517,27 @@ void TestLods() {
   in[1].model = 0x22222222;
   in[1].levels = {{2500.f, 0x22222223}};
   const std::vector<uint8_t> file = PortRoomGeo::WriteLods(in);
-  Check(file.size() == 12 + 2 * 8 + 3 * 8, "lods size");
+  CHECK_MSG(file.size() == 12 + 2 * 8 + 3 * 8, "lods size");
   std::vector<PortRoomGeo::Lods> out;
   std::string error;
-  Check(PortRoomGeo::ParseLods(file, out, error), "lods parse");
-  Check(out.size() == 2 && out[0].model == 0x11111111 && out[0].levels.size() == 2 &&
-            out[0].levels[1].distanceSq == 400.f && out[0].levels[1].model == 0x11111113,
-        "first model's levels");
-  Check(out.size() == 2 && out[1].levels.size() == 1 && out[1].levels[0].model == 0x22222223, "second model");
+  CHECK_MSG(PortRoomGeo::ParseLods(file, out, error), "lods parse");
+  CHECK_MSG(out.size() == 2 && out[0].model == 0x11111111 && out[0].levels.size() == 2 &&
+                out[0].levels[1].distanceSq == 400.f && out[0].levels[1].model == 0x11111113,
+            "first model's levels");
+  CHECK_MSG(out.size() == 2 && out[1].levels.size() == 1 && out[1].levels[0].model == 0x22222223, "second model");
   for (size_t cut = 0; cut < file.size(); ++cut) {
     const std::vector<uint8_t> part(file.begin(), file.begin() + cut);
     if (PortRoomGeo::ParseLods(part, out, error)) {
       std::fprintf(stderr, "FAIL: lods truncated at %zu parses\n", cut);
-      ++sFailures;
+      port_test::CountFailure();
     }
   }
   std::vector<PortRoomGeo::Lods> bad = in;
   std::swap(bad[0].levels[0], bad[0].levels[1]);
-  Check(!PortRoomGeo::ParseLods(PortRoomGeo::WriteLods(bad), out, error), "out-of-order distances rejected");
+  CHECK_MSG(!PortRoomGeo::ParseLods(PortRoomGeo::WriteLods(bad), out, error), "out-of-order distances rejected");
   bad = in;
   bad[1].levels.clear();
-  Check(!PortRoomGeo::ParseLods(PortRoomGeo::WriteLods(bad), out, error), "model without levels rejected");
+  CHECK_MSG(!PortRoomGeo::ParseLods(PortRoomGeo::WriteLods(bad), out, error), "model without levels rejected");
 }
 void PutFloat(std::vector<uint8_t>& out, float value) {
   uint32_t u;
@@ -577,7 +570,7 @@ void TestSpline() {
   const std::vector<uint8_t> bytes = WaterfallSpline();
   PortMayaSpline spline;
   size_t used = 0;
-  Check(spline.Load(bytes.data(), bytes.size(), &used) && used == bytes.size(), "spline loads");
+  CHECK_MSG(spline.Load(bytes.data(), bytes.size(), &used) && used == bytes.size(), "spline loads");
   const struct {
     float t, v;
   } expected[] = {{0.f, -2.f}, {1.f, -0.8312f}, {2.f, -0.13f}, {12.f, -0.13f}, {14.25f, -0.8312f}, {16.5f, -2.f}, {20.f, -2.f}};
@@ -586,7 +579,7 @@ void TestSpline() {
     if (std::fabs(v - e.v) > 0.005f) {
       std::fprintf(stderr, "t=%g: %g, expected %g\n", e.t, v, e.v);
     }
-    Check(std::fabs(v - e.v) <= 0.005f, "spline value");
+    CHECK_MSG(std::fabs(v - e.v) <= 0.005f, "spline value");
   }
 }
 
@@ -608,45 +601,45 @@ void TestDrivers() {
 
   std::vector<PortRoomGeo::Instance> out;
   std::string error;
-  Check(PortRoomGeo::Parse(PortRoomGeo::Write(in), out, error), "driver file parses");
-  Check(out.size() == 3 && out[0].drivers.empty() && out[2].drivers.empty() && out[1].drivers.size() == 1,
-        "one driven instance");
+  CHECK_MSG(PortRoomGeo::Parse(PortRoomGeo::Write(in), out, error), "driver file parses");
+  CHECK_MSG(out.size() == 3 && out[0].drivers.empty() && out[2].drivers.empty() && out[1].drivers.size() == 1,
+            "one driven instance");
   if (out.size() == 3 && out[1].drivers.size() == 1) {
     const PortRoomGeo::Instance::Driver& r = out[1].drivers[0];
-    Check(r.slot == 3 && r.sender == d.sender && r.state == 9 && r.delay == 1.25f && r.spline == d.spline,
-          "driver fields");
-    Check(!out[1].active && out[1].model == 0x22222222, "driven instance fields");
+    CHECK_MSG(r.slot == 3 && r.sender == d.sender && r.state == 9 && r.delay == 1.25f && r.spline == d.spline,
+              "driver fields");
+    CHECK_MSG(!out[1].active && out[1].model == 0x22222222, "driven instance fields");
   }
 
   in[1].drivers.clear();
   const std::vector<uint8_t> without = PortRoomGeo::Write(in);
-  Check(PortRoomGeo::Parse(without, out, error) && out.size() == 3 && out[1].drivers.empty(), "no drivers");
+  CHECK_MSG(PortRoomGeo::Parse(without, out, error) && out.size() == 3 && out[1].drivers.empty(), "no drivers");
   std::vector<uint8_t> with = PortRoomGeo::Write({in[0], driven});
-  Check(with.size() > PortRoomGeo::Write({in[0], in[1]}).size(), "the section is only written for drivers");
+  CHECK_MSG(with.size() > PortRoomGeo::Write({in[0], in[1]}).size(), "the section is only written for drivers");
 
   // A delay past the 16 bit field is clamped on write, not wrapped.
   in[1].drivers.push_back(d);
   in[1].drivers[0].delay = 1000.f;
-  Check(PortRoomGeo::Parse(PortRoomGeo::Write(in), out, error) && out[1].drivers.size() == 1 &&
-            std::fabs(out[1].drivers[0].delay - PortRoomGeo::kMaxDriverDelay) < 0.01f,
-        "an over-long delay clamps");
+  CHECK_MSG(PortRoomGeo::Parse(PortRoomGeo::Write(in), out, error) && out[1].drivers.size() == 1 &&
+                std::fabs(out[1].drivers[0].delay - PortRoomGeo::kMaxDriverDelay) < 0.01f,
+            "an over-long delay clamps");
   in[1].drivers.clear();
 
   // A shown driven instance with no start (a save state reset the scripts) starts now; a started
   // one keeps its start; a hidden one waits.
-  Check(PortRoomGeo::DriverStartAt(true, 1e300, 42.0) == 42.0, "shown without a start fades from now");
-  Check(PortRoomGeo::DriverStartAt(true, 40.0, 42.0) == 40.0, "a started driver keeps its start");
-  Check(PortRoomGeo::DriverStartAt(false, 1e300, 42.0) == 1e300, "a hidden one waits");
+  CHECK_MSG(PortRoomGeo::DriverStartAt(true, 1e300, 42.0) == 42.0, "shown without a start fades from now");
+  CHECK_MSG(PortRoomGeo::DriverStartAt(true, 40.0, 42.0) == 40.0, "a started driver keeps its start");
+  CHECK_MSG(PortRoomGeo::DriverStartAt(false, 1e300, 42.0) == 1e300, "a hidden one waits");
 
   // A version 10 file (the version word 10, no WDRV) still loads.
   std::vector<uint8_t> old = without;
   old[4] = 10;
-  Check(PortRoomGeo::Parse(old, out, error) && out.size() == 3 && out[1].drivers.empty(), "version 10 loads");
+  CHECK_MSG(PortRoomGeo::Parse(old, out, error) && out.size() == 3 && out[1].drivers.empty(), "version 10 loads");
 
   // A damaged section is refused.
   std::vector<uint8_t> bad = PortRoomGeo::Write({driven});
   bad.resize(bad.size() - 3);
-  Check(!PortRoomGeo::Parse(bad, out, error), "truncated driver refused");
+  CHECK_MSG(!PortRoomGeo::Parse(bad, out, error), "truncated driver refused");
 }
 } // namespace
 
@@ -666,9 +659,9 @@ int main() {
   TestSpline();
   TestDrivers();
   uint32_t id = 0;
-  Check(PortRoomGeo::ParseFileName("1a2B3c4D.ROOMGEO", id) && id == 0x1A2B3C4D, "file name");
-  if (sFailures == 0) {
+  CHECK_MSG(PortRoomGeo::ParseFileName("1a2B3c4D.ROOMGEO", id) && id == 0x1A2B3C4D, "file name");
+  if (port_test::Failures() == 0) {
     std::printf("port_room_geo_tests: ok\n");
   }
-  return sFailures == 0 ? 0 : 1;
+  return PORT_TEST_RESULT();
 }

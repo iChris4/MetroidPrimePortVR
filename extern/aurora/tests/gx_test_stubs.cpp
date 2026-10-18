@@ -167,23 +167,40 @@ gfx::BindGroupRef build_multiview_bind_group(const ShaderInfo&) noexcept { retur
 ShaderInfo build_shader_info(const ShaderConfig& config) noexcept {
   ShaderInfo info{};
   info.sampledTextures[0] = testing::sampledTexture;
+  info.usesHdrTone = config.sceneHdr && !config.pbr;
   return info;
 }
 bool per_pixel_lighting() noexcept { return false; }
 bool blocking_pipelines() noexcept { return false; }
-gfx::Range build_uniform(const ShaderInfo& info) noexcept { return {.size = 1}; }
+uint32_t g_testUniformBuildCount = 0;
+bool g_testUniformCompatSrcAlphaAdditive = false;
+gfx::Range build_uniform(const ShaderInfo& info) noexcept {
+  ++g_testUniformBuildCount;
+  g_testUniformCompatSrcAlphaAdditive = info.usesHdrTone && g_gxState.blendMode == GX_BM_BLEND &&
+                                        g_gxState.blendFacSrc == GX_BL_SRCALPHA && g_gxState.blendFacDst == GX_BL_ONE;
+  return {.offset = g_testUniformBuildCount, .size = 1};
+}
+
+static void write_test_uniform_snapshot(const ShaderInfo& info, ByteBuffer& snapshot) {
+  snapshot.clear();
+  snapshot.append(g_gxState.lineWidth);
+  if (info.usesHdrTone) {
+    const bool compat = g_gxState.blendMode == GX_BM_BLEND &&
+                        g_gxState.blendFacSrc == GX_BL_SRCALPHA && g_gxState.blendFacDst == GX_BL_ONE;
+    snapshot.append(compat);
+  }
+}
 gfx::Range build_uniform(const ShaderInfo& info, std::array<uint32_t, 2>& stereoUniformOffsets,
                          ByteBuffer* snapshot) noexcept {
   stereoUniformOffsets = {UINT32_MAX, UINT32_MAX};
-  if (snapshot != nullptr) {
-    snapshot->clear();
-    snapshot->append(g_gxState.lineWidth);
-  }
-  return {.size = 1};
+  if (snapshot != nullptr) write_test_uniform_snapshot(info, *snapshot);
+  return build_uniform(info);
 }
-bool uniform_matches(const ShaderInfo&, const ByteBuffer& snapshot) noexcept {
-  return snapshot.size() == sizeof(g_gxState.lineWidth) &&
-         std::memcmp(snapshot.data(), &g_gxState.lineWidth, snapshot.size()) == 0;
+bool uniform_matches(const ShaderInfo& info, const ByteBuffer& snapshot) noexcept {
+  ByteBuffer current;
+  write_test_uniform_snapshot(info, current);
+  return snapshot.size() == current.size() &&
+         std::memcmp(snapshot.data(), current.data(), current.size()) == 0;
 }
 void resolve_sampled_textures(const ShaderInfo& info) noexcept {}
 std::array<gfx::BindGroupRef, 2> build_stereo_bind_groups(const ShaderInfo& info) noexcept { return {}; }

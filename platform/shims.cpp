@@ -3,6 +3,7 @@
 // now and must be implemented for real gameplay (see TODO notes).
 
 #include <dolphin/card.h>
+#include "port_log.h"
 #include <dolphin/gba.h>
 #include <dolphin/gx.h>
 #include <dolphin/gx/GXShims.h>
@@ -15,10 +16,7 @@
 // Aurora declares OSReport/OSVReport weak but does not define them for
 // TARGET_PC. ELF tolerates an unresolved weak symbol; COFF does not, so the
 // port supplies them here.
-extern "C" void OSVReport(const char* msg, va_list args) {
-    vfprintf(stderr, msg, args);
-    fflush(stderr);
-}
+extern "C" void OSVReport(const char* msg, va_list args) { PortLog::WriteV(msg, args); }
 
 extern "C" void OSReport(const char* msg, ...) {
     va_list args;

@@ -1,4 +1,5 @@
 #include "port_input_engine.h"
+#include "port_test.h"
 
 #include <cmath>
 #include <cstdio>
@@ -8,18 +9,6 @@
 using namespace PortInput;
 
 namespace {
-int sLine = 0;
-void Check(bool condition) {
-  if (!condition) {
-    std::fprintf(stderr, "input engine regression failed at line %d\n", sLine);
-    std::abort();
-  }
-}
-#define CHECK(cond)                                                                                \
-  do {                                                                                             \
-    sLine = __LINE__;                                                                              \
-    Check(cond);                                                                                   \
-  } while (0)
 
 bool Near(float a, float b) { return std::fabs(a - b) < 1e-4f; }
 
@@ -69,13 +58,13 @@ int main() {
     Rig r;
     r.profile.bindings = {Bind(Action::PadA, {Btn(kA)})};
     r.Start();
-    CHECK(!r.Step().Held(Action::PadA));
+    REQUIRE(!r.Step().Held(Action::PadA));
     r.Set(kA, true);
     const Output& o = r.Step();
-    CHECK(o.Held(Action::PadA) && o.Pressed(Action::PadA) && Near(o.Value(Action::PadA), 1.f));
-    CHECK(r.Step().Held(Action::PadA) && !r.runtime.Last().Pressed(Action::PadA));
+    REQUIRE(o.Held(Action::PadA) && o.Pressed(Action::PadA) && Near(o.Value(Action::PadA), 1.f));
+    REQUIRE(r.Step().Held(Action::PadA) && !r.runtime.Last().Pressed(Action::PadA));
     r.Set(kA, false);
-    CHECK(!r.Step().Held(Action::PadA) && r.runtime.Last().Released(Action::PadA));
+    REQUIRE(!r.Step().Held(Action::PadA) && r.runtime.Last().Released(Action::PadA));
   }
 
   // Sticks pass through below the press threshold, one half per action.
@@ -86,10 +75,10 @@ int main() {
     r.Start();
     r.raw.padAxes[kLeftX] = 0.2f;
     const Output& o = r.Step();
-    CHECK(Near(o.Value(Action::MainRight), 0.2f) && Near(o.Value(Action::MainLeft), 0.f));
-    CHECK(Near(o.Axis(Action::MainLeft, Action::MainRight), 0.2f));
+    REQUIRE(Near(o.Value(Action::MainRight), 0.2f) && Near(o.Value(Action::MainLeft), 0.f));
+    REQUIRE(Near(o.Axis(Action::MainLeft, Action::MainRight), 0.2f));
     r.raw.padAxes[kLeftX] = -0.7f;
-    CHECK(Near(r.Step().Axis(Action::MainLeft, Action::MainRight), -0.7f));
+    REQUIRE(Near(r.Step().Axis(Action::MainLeft, Action::MainRight), -0.7f));
   }
 
   // Ordered chord LB + A: wins over A, takes LB from its own binding, and keeps
@@ -102,40 +91,40 @@ int main() {
                           Bind(Action::PadB, {Btn(kB)})};
     r.Start();
     r.Set(kLB, true);
-    CHECK(!r.Step().Held(Action::SpringBall)); // waits the chord window
-    CHECK(!r.Step(16).Held(Action::SpringBall));
-    CHECK(r.Step(24).Held(Action::SpringBall)); // 40 ms after the press: fires
+    REQUIRE(!r.Step().Held(Action::SpringBall)); // waits the chord window
+    REQUIRE(!r.Step(16).Held(Action::SpringBall));
+    REQUIRE(r.Step(24).Held(Action::SpringBall)); // 40 ms after the press: fires
     r.Set(kA, true);
     const Output& o = r.Step();
-    CHECK(o.Held(Action::VisorScan) && !o.Held(Action::PadA) && !o.Held(Action::SpringBall));
+    REQUIRE(o.Held(Action::VisorScan) && !o.Held(Action::PadA) && !o.Held(Action::SpringBall));
     r.Set(kA, false);
-    CHECK(!r.Step().Held(Action::VisorScan) && !r.runtime.Last().Held(Action::SpringBall));
+    REQUIRE(!r.Step().Held(Action::VisorScan) && !r.runtime.Last().Held(Action::SpringBall));
     r.Set(kB, true);
-    CHECK(r.Step().Held(Action::VisorThermal) && !r.runtime.Last().Held(Action::PadB));
+    REQUIRE(r.Step().Held(Action::VisorThermal) && !r.runtime.Last().Held(Action::PadB));
     r.Set(kB, false);
     r.Set(kLB, false);
     r.Step();
     // A alone still works; LB pressed and A inside the window: LB never fires.
     r.Set(kA, true);
-    CHECK(r.Step().Held(Action::PadA));
+    REQUIRE(r.Step().Held(Action::PadA));
     r.Set(kA, false);
     r.Step();
     r.Set(kLB, true);
-    CHECK(!r.Step().Held(Action::SpringBall));
+    REQUIRE(!r.Step().Held(Action::SpringBall));
     r.Set(kA, true);
-    CHECK(r.Step().Held(Action::VisorScan));
+    REQUIRE(r.Step().Held(Action::VisorScan));
     for (int i = 0; i < 5; ++i) {
-      CHECK(!r.Step().Held(Action::SpringBall) && r.runtime.Last().Held(Action::VisorScan));
+      REQUIRE(!r.Step().Held(Action::SpringBall) && r.runtime.Last().Held(Action::VisorScan));
     }
     r.Set(kA, false);
     r.Set(kLB, false);
     r.Step();
     // LB tapped inside the window fires for one poll on release.
     r.Set(kLB, true);
-    CHECK(!r.Step().Held(Action::SpringBall));
+    REQUIRE(!r.Step().Held(Action::SpringBall));
     r.Set(kLB, false);
-    CHECK(r.Step().Pressed(Action::SpringBall));
-    CHECK(r.Step().Released(Action::SpringBall));
+    REQUIRE(r.Step().Pressed(Action::SpringBall));
+    REQUIRE(r.Step().Released(Action::SpringBall));
   }
 
   // The default beam chords: shift + D-pad up picks the beam and leaves the visor
@@ -145,15 +134,15 @@ int main() {
     r.profile.bindings = {Bind(Action::VisorCombat, {Btn(kDUp)}), Bind(Action::BeamPower, {Btn(kLB), Btn(kDUp)})};
     r.Start();
     r.Set(kDUp, true);
-    CHECK(r.Step().Pressed(Action::VisorCombat) && !r.runtime.Last().Held(Action::BeamPower)); // no lag
+    REQUIRE(r.Step().Pressed(Action::VisorCombat) && !r.runtime.Last().Held(Action::BeamPower)); // no lag
     r.Set(kDUp, false);
     r.Step();
     r.Set(kLB, true);
     r.Step();
     r.Set(kDUp, true);
     const Output& o = r.Step();
-    CHECK(o.Pressed(Action::BeamPower) && !o.Held(Action::VisorCombat));
-    CHECK(!r.Step(60).Held(Action::VisorCombat));
+    REQUIRE(o.Pressed(Action::BeamPower) && !o.Held(Action::VisorCombat));
+    REQUIRE(!r.Step(60).Held(Action::VisorCombat));
   }
 
   // Any-order chord X + Y: within the window it wins over both; outside it the
@@ -168,19 +157,19 @@ int main() {
     r.Step();
     r.Set(kX, true);
     const Output& o = r.Step();
-    CHECK(o.Held(Action::PadZ) && !o.Held(Action::PadX) && !o.Held(Action::PadY));
+    REQUIRE(o.Held(Action::PadZ) && !o.Held(Action::PadX) && !o.Held(Action::PadY));
     for (int i = 0; i < 4; ++i) {
-      CHECK(r.Step().Held(Action::PadZ) && !r.runtime.Last().Held(Action::PadY));
+      REQUIRE(r.Step().Held(Action::PadZ) && !r.runtime.Last().Held(Action::PadY));
     }
     r.Set(kX, false);
     r.Set(kY, false);
     r.Step();
     r.Set(kX, true);
     r.Step();
-    CHECK(r.Step(100).Held(Action::PadX));
+    REQUIRE(r.Step(100).Held(Action::PadX));
     r.Set(kY, true);
-    CHECK(!r.Step().Held(Action::PadZ));
-    CHECK(r.Step(48).Held(Action::PadY) && !r.runtime.Last().Held(Action::PadZ));
+    REQUIRE(!r.Step().Held(Action::PadZ));
+    REQUIRE(r.Step(48).Held(Action::PadY) && !r.runtime.Last().Held(Action::PadZ));
   }
 
   // Triggers: tap, hold, double tap, toggle.
@@ -192,29 +181,29 @@ int main() {
                           Bind(Action::SpringBall, {Btn(kA)}, Trigger::Toggle)};
     r.Start();
     r.Set(kB, true);
-    CHECK(!r.Step().Held(Action::PadB));
+    REQUIRE(!r.Step().Held(Action::PadB));
     r.Set(kB, false);
-    CHECK(r.Step(100).Pressed(Action::PadB)); // short press: tap
-    CHECK(!r.Step().Held(Action::PadB));
+    REQUIRE(r.Step(100).Pressed(Action::PadB)); // short press: tap
+    REQUIRE(!r.Step().Held(Action::PadB));
     r.Set(kB, true);
-    CHECK(r.Step(50).Held(Action::PadY)); // second press soon after a tap
-    CHECK(!r.runtime.Last().Held(Action::PadX));
-    CHECK(r.Step(300).Held(Action::PadX)); // held 300 ms
+    REQUIRE(r.Step(50).Held(Action::PadY)); // second press soon after a tap
+    REQUIRE(!r.runtime.Last().Held(Action::PadX));
+    REQUIRE(r.Step(300).Held(Action::PadX)); // held 300 ms
     r.Set(kB, false);
-    CHECK(!r.Step().Held(Action::PadB)); // long press: no tap
+    REQUIRE(!r.Step().Held(Action::PadB)); // long press: no tap
     r.Set(kB, true);
-    CHECK(!r.Step(50).Held(Action::PadY)); // the last press wasn't a tap
+    REQUIRE(!r.Step(50).Held(Action::PadY)); // the last press wasn't a tap
     r.Set(kB, false);
     r.Step();
 
     r.Set(kA, true);
-    CHECK(r.Step().Pressed(Action::SpringBall));
+    REQUIRE(r.Step().Pressed(Action::SpringBall));
     r.Set(kA, false);
-    CHECK(r.Step().Held(Action::SpringBall));
+    REQUIRE(r.Step().Held(Action::SpringBall));
     r.Set(kA, true);
-    CHECK(r.Step().Released(Action::SpringBall));
+    REQUIRE(r.Step().Released(Action::SpringBall));
     r.Set(kA, false);
-    CHECK(!r.Step().Held(Action::SpringBall));
+    REQUIRE(!r.Step().Held(Action::SpringBall));
   }
 
   // A chord taking a toggle's press undoes the flip.
@@ -225,12 +214,12 @@ int main() {
                           Bind(Action::VisorScan, {Btn(kLB), Btn(kA)})};
     r.Start();
     r.Set(kLB, true);
-    CHECK(r.Step().Held(Action::SpringBall));
+    REQUIRE(r.Step().Held(Action::SpringBall));
     r.Set(kA, true);
-    CHECK(r.Step().Held(Action::VisorScan) && !r.runtime.Last().Held(Action::SpringBall));
+    REQUIRE(r.Step().Held(Action::VisorScan) && !r.runtime.Last().Held(Action::SpringBall));
     r.Set(kA, false);
     r.Set(kLB, false);
-    CHECK(!r.Step().Held(Action::SpringBall));
+    REQUIRE(!r.Step().Held(Action::SpringBall));
   }
 
   // Turbo: 10 Hz = 50 ms on, 50 ms off from the first press.
@@ -241,10 +230,10 @@ int main() {
     r.profile.bindings = {b};
     r.Start();
     r.Set(kA, true);
-    CHECK(r.Step().Held(Action::PadA));    // 0 ms
-    CHECK(r.Step(48).Held(Action::PadA));  // 48
-    CHECK(!r.Step(16).Held(Action::PadA)); // 64
-    CHECK(r.Step(48).Pressed(Action::PadA)); // 112
+    REQUIRE(r.Step().Held(Action::PadA));    // 0 ms
+    REQUIRE(r.Step(48).Held(Action::PadA));  // 48
+    REQUIRE(!r.Step(16).Held(Action::PadA)); // 64
+    REQUIRE(r.Step(48).Pressed(Action::PadA)); // 112
   }
 
   // Context switch: the A that changed context doesn't act in the new one, a
@@ -257,14 +246,14 @@ int main() {
     r.Start();
     r.Set(kA, true);
     r.raw.padAxes[kLeftX] = 0.8f;
-    CHECK(r.Step().Held(Action::PadA) && !r.runtime.Last().Held(Action::PadB));
+    REQUIRE(r.Step().Held(Action::PadA) && !r.runtime.Last().Held(Action::PadB));
     r.contexts = kCtxMap;
     const Output& o = r.Step();
-    CHECK(!o.Held(Action::PadA) && !o.Held(Action::PadB) && Near(o.Value(Action::MainRight), 0.8f));
+    REQUIRE(!o.Held(Action::PadA) && !o.Held(Action::PadB) && Near(o.Value(Action::MainRight), 0.8f));
     r.Set(kA, false);
     r.Step();
     r.Set(kA, true);
-    CHECK(r.Step().Held(Action::PadB) && !r.runtime.Last().Held(Action::PadA));
+    REQUIRE(r.Step().Held(Action::PadB) && !r.runtime.Last().Held(Action::PadA));
   }
 
   // A quiet context (the scan text's Menu, issue #103) comes and goes without
@@ -279,16 +268,16 @@ int main() {
     r.contexts = kCtxGameplay | kCtxScan;
     r.Start();
     r.Set(kA, true);
-    CHECK(r.Step().Held(Action::PadL));
+    REQUIRE(r.Step().Held(Action::PadL));
     r.contexts |= kCtxMenu;
     r.quiet = kCtxMenu;
-    CHECK(r.Step().Held(Action::PadL) && r.runtime.Last().Held(Action::MenuL));
+    REQUIRE(r.Step().Held(Action::PadL) && r.runtime.Last().Held(Action::MenuL));
     r.contexts &= ~kCtxMenu;
-    CHECK(r.Step().Held(Action::PadL) && !r.runtime.Last().Held(Action::MenuL));
+    REQUIRE(r.Step().Held(Action::PadL) && !r.runtime.Last().Held(Action::MenuL));
     // Not quiet: the switch consumes the held input.
     r.quiet = 0;
     r.contexts |= kCtxMenu;
-    CHECK(!r.Step().Held(Action::PadL) && !r.runtime.Last().Held(Action::MenuL));
+    REQUIRE(!r.Step().Held(Action::PadL) && !r.runtime.Last().Held(Action::MenuL));
   }
 
   // Layers: holding RB switches A to its layer binding in the same poll;
@@ -302,13 +291,13 @@ int main() {
     r.Set(kRB, true);
     r.Set(kA, true);
     const Output& o = r.Step();
-    CHECK(o.Held(Action::VisorXray) && !o.Held(Action::PadA) && (r.runtime.ActiveContexts() & kCtxLayer1));
+    REQUIRE(o.Held(Action::VisorXray) && !o.Held(Action::PadA) && (r.runtime.ActiveContexts() & kCtxLayer1));
     r.Set(kRB, false);
-    CHECK(!r.Step().Held(Action::PadA) && !r.runtime.Last().Held(Action::VisorXray));
+    REQUIRE(!r.Step().Held(Action::PadA) && !r.runtime.Last().Held(Action::VisorXray));
     r.Set(kA, false);
     r.Step();
     r.Set(kA, true);
-    CHECK(r.Step().Held(Action::PadA));
+    REQUIRE(r.Step().Held(Action::PadA));
   }
 
   // Delta actions sum over bindings.
@@ -320,7 +309,7 @@ int main() {
     r.Start();
     r.raw.mouseDelta[0] = 3.f;
     r.raw.padAxes[kRightX] = -0.5f;
-    CHECK(Near(r.Step().Value(Action::LookX), -2.f));
+    REQUIRE(Near(r.Step().Value(Action::LookX), -2.f));
   }
 
   // Reset: inputs held through it stay dead until released.
@@ -330,19 +319,19 @@ int main() {
     r.Start();
     r.Set(kA, true);
     r.Set(kB, true);
-    CHECK(r.Step().Held(Action::PadA) && r.runtime.Last().Held(Action::SpringBall));
+    REQUIRE(r.Step().Held(Action::PadA) && r.runtime.Last().Held(Action::SpringBall));
     r.runtime.Reset();
-    CHECK(!r.Step().Held(Action::PadA) && !r.runtime.Last().Held(Action::SpringBall));
+    REQUIRE(!r.Step().Held(Action::PadA) && !r.runtime.Last().Held(Action::SpringBall));
     r.Set(kA, false);
     r.Step();
     r.Set(kA, true);
-    CHECK(r.Step().Held(Action::PadA));
+    REQUIRE(r.Step().Held(Action::PadA));
   }
 
   // Action keys round-trip.
-  CHECK(ActionFromKey("visor_scan") == Action::VisorScan);
-  CHECK(ActionFromKey("nope") == Action::None);
-  CHECK(Info(Action::LookX).kind == ActionKind::Delta);
+  REQUIRE(ActionFromKey("visor_scan") == Action::VisorScan);
+  REQUIRE(ActionFromKey("nope") == Action::None);
+  REQUIRE(Info(Action::LookX).kind == ActionKind::Delta);
 
   std::puts("port_input_engine: all checks passed");
   return 0;

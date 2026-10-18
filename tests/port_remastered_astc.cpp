@@ -15,19 +15,11 @@
 #include <vector>
 
 #include "astcenc.h"
+#include "port_test.h"
 
 using namespace PortRemastered;
 
 namespace {
-
-int sFailures = 0;
-
-void Check(bool condition, const char* what) {
-  if (!condition) {
-    std::fprintf(stderr, "FAIL: %s\n", what);
-    ++sFailures;
-  }
-}
 
 uint32_t Le32(const std::vector<uint8_t>& d, size_t at) {
   return uint32_t(d[at]) | uint32_t(d[at + 1]) << 8 | uint32_t(d[at + 2]) << 16 | uint32_t(d[at + 3]) << 24;
@@ -139,15 +131,15 @@ int main() {
       const Image img = Make(sz[0], sz[1], kind);
       const std::vector<uint8_t> dds = EncodeDds(img, DdsFormat::ASTC4x4, kind == 3);
       char what[128];
-      Check(dds.size() > 148 && std::memcmp(dds.data(), "DDS ", 4) == 0, "dds magic");
+      CHECK_MSG(dds.size() > 148 && std::memcmp(dds.data(), "DDS ", 4) == 0, "dds magic");
       std::snprintf(what, sizeof(what), "%s %dx%d: DXGI format 134", kinds[kind], sz[0], sz[1]);
-      Check(dds.size() > 132 && Le32(dds, 128) == 134, what);
+      CHECK_MSG(dds.size() > 132 && Le32(dds, 128) == 134, what);
       int levels = 1;
       for (int s = std::max(sz[0], sz[1]); s > 1; s >>= 1) {
         ++levels;
       }
       std::snprintf(what, sizeof(what), "%s %dx%d: %d mips", kinds[kind], sz[0], sz[1], levels);
-      Check(Le32(dds, 28) == uint32_t(levels), what);
+      CHECK_MSG(Le32(dds, 28) == uint32_t(levels), what);
       size_t expect = 148;
       for (int w = sz[0], h = sz[1];; w = std::max(1, w / 2), h = std::max(1, h / 2)) {
         expect += size_t(std::max(w, 4) / 4) * size_t(std::max(h, 4) / 4) * 16;
@@ -156,15 +148,15 @@ int main() {
         }
       }
       std::snprintf(what, sizeof(what), "%s %dx%d: size %zu is %zu", kinds[kind], sz[0], sz[1], dds.size(), expect);
-      Check(dds.size() == expect, what);
+      CHECK_MSG(dds.size() == expect, what);
       const std::vector<uint8_t> back = Decode(dds, sz[0], sz[1]);
-      Check(!back.empty(), "decode");
+      CHECK_MSG(!back.empty(), "decode");
       if (!back.empty()) {
         const double psnr = Psnr(img, back, false);
         std::printf("%-8s %2dx%-2d  %.1f dB\n", kinds[kind], sz[0], sz[1], psnr);
         std::snprintf(what, sizeof(what), "%s %dx%d: PSNR %.1f under %.0f", kinds[kind], sz[0], sz[1], psnr,
                       bounds[kind]);
-        Check(psnr > bounds[kind], what);
+        CHECK_MSG(psnr > bounds[kind], what);
       }
     }
   }
@@ -173,28 +165,28 @@ int main() {
   const Image gradient = Make(32, 32, 0);
   const std::vector<uint8_t> nrm = EncodeDds(gradient, DdsFormat::ASTC4x4Normal);
   const std::vector<uint8_t> back = Decode(nrm, 32, 32);
-  Check(!back.empty() && Psnr(gradient, back, true) > 35.0, "normal map RG PSNR");
+  CHECK_MSG(!back.empty() && Psnr(gradient, back, true) > 35.0, "normal map RG PSNR");
   bool zb = !back.empty();
   for (size_t i = 0; zb && i < 32 * 32; ++i) {
     zb = back[i * 4 + 2] <= 1 && back[i * 4 + 3] >= 254;
   }
-  Check(zb, "normal map blue 0 and alpha 255");
+  CHECK_MSG(zb, "normal map blue 0 and alpha 255");
 
   // Format choice: BC with no GPU, ASTC when only ASTC is there, the env wins.
   UnsetEnv("MP_REMASTERED_TEXTURE_FORMAT");
-  Check(ColourDdsFormat() == DdsFormat::BC7 && NormalDdsFormat() == DdsFormat::BC5, "default is BC");
+  CHECK_MSG(ColourDdsFormat() == DdsFormat::BC7 && NormalDdsFormat() == DdsFormat::BC5, "default is BC");
   SetGpuTextureSupport(false, true);
-  Check(ColourDdsFormat() == DdsFormat::ASTC4x4 && NormalDdsFormat() == DdsFormat::ASTC4x4Normal, "ASTC-only GPU");
+  CHECK_MSG(ColourDdsFormat() == DdsFormat::ASTC4x4 && NormalDdsFormat() == DdsFormat::ASTC4x4Normal, "ASTC-only GPU");
   SetGpuTextureSupport(true, true);
-  Check(ColourDdsFormat() == DdsFormat::BC7, "BC wins when both");
+  CHECK_MSG(ColourDdsFormat() == DdsFormat::BC7, "BC wins when both");
   SetEnv("MP_REMASTERED_TEXTURE_FORMAT", "astc");
-  Check(ColourDdsFormat() == DdsFormat::ASTC4x4, "env astc");
+  CHECK_MSG(ColourDdsFormat() == DdsFormat::ASTC4x4, "env astc");
   SetEnv("MP_REMASTERED_TEXTURE_FORMAT", "bc");
   SetGpuTextureSupport(false, true);
-  Check(ColourDdsFormat() == DdsFormat::BC7, "env bc");
+  CHECK_MSG(ColourDdsFormat() == DdsFormat::BC7, "env bc");
 
-  if (sFailures == 0) {
+  if (port_test::Failures() == 0) {
     std::printf("port_remastered_astc_tests: ok\n");
   }
-  return sFailures == 0 ? 0 : 1;
+  return PORT_TEST_RESULT();
 }

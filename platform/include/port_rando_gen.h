@@ -32,11 +32,14 @@ struct Settings {
   std::vector< std::string > trickAllow;
   std::vector< std::string > trickDeny;
   bool flaahgraPowerBombs = false;
+  int etankCapacity = 100;         // 10..200, energy per tank; the suit holds one less
   bool backwardsLowerMines = false;
   int removeXray = 0;              // 0 none, 1 most, 2 all but Omega Pirate
   int removeThermal = 0;           // 0 none, 1 most, 2 all
   bool removeHiveMecha = false;
   bool springBall = true;
+  bool shuffleUnlimitedMissiles = false;    // Unlimited Missiles is an item in the pool
+  bool shuffleUnlimitedPowerBombs = false;  // Unlimited Power Bombs is an item in the pool
   int startingRoom = 0;            // 0 normal, 1 safe, 2 buckle up (a random room and loadout)
   bool randomizeStartingBeam = false;
   int blastShieldRandomization = 0; // 0 none, 1 replace existing, 2 mix it up

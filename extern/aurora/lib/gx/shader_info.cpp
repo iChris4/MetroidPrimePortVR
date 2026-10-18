@@ -356,9 +356,9 @@ ShaderInfo build_shader_info(const ShaderConfig& config) noexcept {
     // modulation (diffuse, incandescence, coverage)
     info.uniformSize += sizeof(Mat3x4<float>) + sizeof(Vec4<float>) * (27 + GX::MaxLights * 4 + 8 + 4 + 1 + 3);
   } else if (config.sceneHdr) {
-    // The tone curve the TEV result goes back through into the HDR scene (PBR reads pbr_tone).
+    // The TEV inverse tone curve and actual-blend compatibility flag (PBR reads pbr_tone).
     info.usesHdrTone = true;
-    info.uniformSize += sizeof(Vec4<float>) * 3;
+    info.uniformSize += sizeof(Vec4<float>) * 4; // three tone rows, then hdr_tev_blend
   }
   if (config.hudSample >= 2) {
     info.usesHudDyin = true;
@@ -538,6 +538,9 @@ static void fill_uniform(ByteBuffer& buf, const ShaderInfo& info) noexcept {
     for (const auto& v : g_gxState.pbrTone) {
       buf.append(v);
     }
+    const bool compatSrcAlphaAdditive = g_gxState.blendMode == GX_BM_BLEND && g_gxState.blendFacSrc == GX_BL_SRCALPHA &&
+                                        g_gxState.blendFacDst == GX_BL_ONE;
+    buf.append(Vec4<float>{compatSrcAlphaAdditive ? 1.f : 0.f, 0.f, 0.f, 0.f});
   }
   if (info.usesHudDyin) {
     buf.append(g_gxState.hudDyin);

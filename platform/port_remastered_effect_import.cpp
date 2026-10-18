@@ -1,4 +1,6 @@
 #include "port_env.h"
+#include "port_strings.h"
+#include "port_hash.h"
 #include "port_remastered_effect_import.h"
 
 #include "port_remastered_effect_convert.h"
@@ -49,18 +51,10 @@ EffectGuid Swap(const EffectGuid& id) {
 }
 
 uint32_t Hash(const EffectGuid& id, uint32_t salt) {
-  uint32_t hash = 0x811C9DC5u ^ salt;  // FNV-1a
-  for (uint8_t byte : id) {
-    hash = (hash ^ byte) * 0x01000193u;
-  }
-  return hash;
+  return port::Fnv1a32(id.data(), id.size(), port::kFnv32Basis ^ salt);
 }
 
-std::string Hex(uint32_t id) {
-  char text[16];
-  std::snprintf(text, sizeof(text), "%08X", id);
-  return text;
-}
+using port::Hex8;
 
 int RoundUp4(int side) { return std::max(8, (side + 3) / 4 * 4); }
 
@@ -903,12 +897,12 @@ public:
   bool WriteTexture(uint32_t id, const Image& image, MapKind kind = MapKind::Colour) {
     const int edge = std::max(image.width, image.height);
     if (edge <= kStubSide) {
-      return m_io.write(Hex(id) + ".TXTR", EncodeTxtrRgba8(image));
+      return m_io.write(Hex8(id) + ".TXTR", EncodeTxtrRgba8(image));
     }
     const Image stub = Resize(image, std::max(8, RoundUp4(image.width * kStubSide / edge)),
                               std::max(8, RoundUp4(image.height * kStubSide / edge)), kind);
-    return m_io.write(Hex(id) + ".dds", EncodeDds(image, ColourDdsFormat(), false, kind)) &&
-           m_io.write(Hex(id) + ".TXTR", EncodeTxtrRgba8(stub));
+    return m_io.write(Hex8(id) + ".dds", EncodeDds(image, ColourDdsFormat(), false, kind)) &&
+           m_io.write(Hex8(id) + ".TXTR", EncodeTxtrRgba8(stub));
   }
 
   // `vfx`: the texture is sampled by a VFX material, whose shader reads it raw. Remastered's
@@ -1357,7 +1351,7 @@ public:
         const auto child = swoosh.children.find(part.id);
         if (child == swoosh.children.end() || child->second.type != part.type ||
             !SplitRetailEffect(part.type, part.part.data(), part.part.size(), check, error) ||
-            !m_io.write(Hex(child->second.id) + "." + EffectFourCCString(part.type), part.part)) {
+            !m_io.write(Hex8(child->second.id) + "." + EffectFourCCString(part.type), part.part)) {
           error = "SSWH embedded child " + EffectGuidString(part.id) + " was not written";
           return false;
         }
@@ -1369,8 +1363,8 @@ public:
         AddKind(row, part.type);
       }
       if (swoosh.parts.empty() ||
-          !m_io.write(Hex(swoosh.id) + ".SWHC", swoosh.parts[0].part)) {
-        error = "SSWH SWHC " + Hex(swoosh.id) + " could not be written";
+          !m_io.write(Hex8(swoosh.id) + ".SWHC", swoosh.parts[0].part)) {
+        error = "SSWH SWHC " + Hex8(swoosh.id) + " could not be written";
         return false;
       }
       ++m_result.parts;
@@ -1423,7 +1417,7 @@ public:
     const bool swoosh = stored == kSwsh;
     const bool electric = stored == EffectFourCC("ELSM") || stored == EffectFourCC("ELC2");
     const uint32_t rootType = swoosh ? EffectFourCC("SWHC") : electric ? EffectFourCC("ELSC") : kPart;
-    const std::string name = Hex(retail) + "." + EffectFourCCString(rootType);
+    const std::string name = Hex8(retail) + "." + EffectFourCCString(rootType);
     std::vector<uint8_t> data;
     std::string error;
     EffectNode effect;
@@ -1508,7 +1502,7 @@ public:
       const auto child = children.find(parts[i].id);
       if (child == children.end() || child->second.type != parts[i].type ||
           !SplitRetailEffect(parts[i].type, parts[i].part.data(), parts[i].part.size(), check, error) ||
-          !m_io.write(Hex(child->second.id) + "." + EffectFourCCString(parts[i].type), parts[i].part)) {
+          !m_io.write(Hex8(child->second.id) + "." + EffectFourCCString(parts[i].type), parts[i].part)) {
         // The root would name a missing child: leave the disc's PART in place.
         ++m_result.failed;
         Log(name + ": child " + EffectGuidString(parts[i].id) + " not written");

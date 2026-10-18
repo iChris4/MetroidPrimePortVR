@@ -1,36 +1,35 @@
 #include "port_timing.h"
+#include "port_test.h"
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <limits>
-
-static void Check(bool condition) { if (!condition) std::abort(); }
 
 int main() {
   PortTiming::FixedStepClock clock;
   unsigned steps = 0;
   for (unsigned frame = 0; frame < 6000; ++frame) {
     steps += clock.Advance(1.0 / 60.0 + (frame % 2 ? 0.000005 : -0.000005));
-    Check(clock.Interpolation() >= 0.f && clock.Interpolation() <= 1.f);
+    REQUIRE(clock.Interpolation() >= 0.f && clock.Interpolation() <= 1.f);
   }
   // The previous remainder-reset heuristic produced only 4500 steps here.
-  Check(steps >= 5999 && steps <= 6000);
+  REQUIRE(steps >= 5999 && steps <= 6000);
   PortTiming::FixedStepClock capped;
   for (unsigned frame = 0; frame < 6000; ++frame)
-    Check(capped.Advance(1.0 / 60.0 + (frame % 2 ? 0.000005 : -0.000005), false, true) == 1);
+    REQUIRE(capped.Advance(1.0 / 60.0 + (frame % 2 ? 0.000005 : -0.000005), false, true) == 1);
   // Borrowing near a deadline must be repaid even if the cap is then disabled.
   PortTiming::FixedStepClock debt;
-  Check(debt.Advance(PortTiming::FixedStepClock::kPeriod - 0.0001, false, true) == 1);
-  Check(debt.Advance(0.0001) == 0);
-  Check(debt.Interpolation() < 0.00001f);
+  REQUIRE(debt.Advance(PortTiming::FixedStepClock::kPeriod - 0.0001, false, true) == 1);
+  REQUIRE(debt.Advance(0.0001) == 0);
+  REQUIRE(debt.Interpolation() < 0.00001f);
   PortTiming::FixedStepClock half;
-  Check(half.Advance(PortTiming::FixedStepClock::kPeriod * 0.5) == 0);
-  Check(std::fabs(half.Interpolation() - 0.5f) < 0.00001f);
-  Check(half.Advance(PortTiming::FixedStepClock::kPeriod * 0.5) == 1);
-  Check(half.Advance(2.0) == 15); // bounded stall catch-up
-  Check(half.Advance(0.0) == 0);
-  Check(half.Advance(-1.0) == 0);
-  Check(half.Advance(std::numeric_limits<double>::quiet_NaN()) == 0);
-  Check(half.Advance(0.0, true) == 1);
+  REQUIRE(half.Advance(PortTiming::FixedStepClock::kPeriod * 0.5) == 0);
+  REQUIRE(std::fabs(half.Interpolation() - 0.5f) < 0.00001f);
+  REQUIRE(half.Advance(PortTiming::FixedStepClock::kPeriod * 0.5) == 1);
+  REQUIRE(half.Advance(2.0) == 15); // bounded stall catch-up
+  REQUIRE(half.Advance(0.0) == 0);
+  REQUIRE(half.Advance(-1.0) == 0);
+  REQUIRE(half.Advance(std::numeric_limits<double>::quiet_NaN()) == 0);
+  REQUIRE(half.Advance(0.0, true) == 1);
   std::puts("fixed-step jitter, carry and stall regressions passed");
 }

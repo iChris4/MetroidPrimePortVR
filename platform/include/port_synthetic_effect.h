@@ -8,16 +8,18 @@
 
 #include <cstdint>
 
+#include "port_hash.h"
+
 namespace PortRemastered {
 
 constexpr uint32_t kSyntheticEffectBase = 0xFE000000u;
 
 // FNV-1a of the lower-case name, folded into the reserved range.
 constexpr uint32_t SyntheticEffectId(const char* name) {
-  uint32_t hash = 2166136261u;
+  uint32_t hash = port::kFnv32Basis;
   for (; *name != '\0'; ++name) {
     const char c = (*name >= 'A' && *name <= 'Z') ? char(*name - 'A' + 'a') : *name;
-    hash = (hash ^ uint8_t(c)) * 16777619u;
+    hash = port::Fnv1a32Step(hash, uint8_t(c));
   }
   return kSyntheticEffectBase | (hash & 0x00FFFFFFu);
 }

@@ -766,7 +766,7 @@ struct ShaderInfo {
   bool usesShadow : 1 = false;    // ShaderConfig::shadow: the shadow uniforms and vs_shadow
   bool shadowReceive : 1 = false; // shadow_receives: group 2 uses the shadow layout
   bool actorDecal : 1 = false;    // actor_decal: group 2 uses the shadow layout with the actor maps
-  bool usesHdrTone : 1 = false;   // ShaderConfig::sceneHdr without pbr: the hdr_tone uniform (GXState::pbrTone)
+  bool usesHdrTone : 1 = false;   // sceneHdr without pbr: hdr_tone (pbrTone) and hdr_tev_blend
 };
 // As texture_layout(const ShaderConfig&), from the info built of that config.
 inline TextureLayout texture_layout(const ShaderInfo& info) noexcept {

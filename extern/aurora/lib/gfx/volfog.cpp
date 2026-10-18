@@ -637,10 +637,12 @@ void encode(const EncoderTaskContext& ctx, const wgpu::CommandEncoder& cmd, cons
   if (hdr && !hdr_capture_valid(capture, hdrSamples)) {
     return;
   }
+  // The targets this frame was recorded against (a resize may have made newer ones since).
+  const auto efb = webgpu::efb_targets();
   const auto& source = hdr ? (hdrSamples > 1 ? capture.resolved : capture.color) : webgpu::present_source();
-  const auto& target = hdr ? capture.color : webgpu::g_frameBuffer;
-  const auto& resolveTarget = hdr ? capture.resolved : webgpu::g_frameBufferResolved;
-  const auto& depth = hdr ? capture.depth : webgpu::g_depthBuffer;
+  const auto& target = hdr ? capture.color : efb.color;
+  const auto& resolveTarget = hdr ? capture.resolved : efb.resolved;
+  const auto& depth = hdr ? capture.depth : efb.depth;
   const uint32_t samples =
       hdr ? hdrSamples : (webgpu::g_graphicsConfig.msaaSamples > 1 ? webgpu::g_graphicsConfig.msaaSamples : 1);
   const auto format = hdr ? webgpu::SceneHdrFormat : webgpu::g_graphicsConfig.surfaceConfiguration.format;

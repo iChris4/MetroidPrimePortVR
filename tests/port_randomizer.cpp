@@ -1,6 +1,7 @@
 #include "port_randomizer.h"
 
 #include "MetroidPrime/Player/CPlayerState.hpp"
+#include "port_test.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -24,8 +25,6 @@
 
 namespace {
 
-bool sPassed = true;
-
 // A Windows fast-fail kills the process before anything buffered is written, so
 // every phase marker is flushed as it is reached. Without them a crash reports
 // as a bare exit code with no clue which phase it happened in.
@@ -34,16 +33,146 @@ void Phase(const char* message) {
   std::fflush(stderr);
 }
 
-void Check(bool condition, const char* message) {
-  if (!condition) {
-    std::fprintf(stderr, "[randomizer-tests] FAILED: %s\n", message);
-    std::fflush(stderr);
-    sPassed = false;
-  }
-}
-
 bool Contains(const std::string& text, const std::string& value) {
   return text.find(value) != std::string::npos;
+}
+
+// The seed file grammar, through ParseSeedFile: what is accepted, what each
+// accepted file holds, and what is refused.
+bool ParsesSeed(const std::string& text, PortRandomizer::SeedFile& out) {
+  size_t offset = 0;
+  std::string reason;
+  return PortRandomizer::ParseSeedFile(text, out, offset, reason);
+}
+
+bool RefusesSeed(const std::string& text, std::string* reasonOut = nullptr) {
+  PortRandomizer::SeedFile out;
+  size_t offset = 0;
+  std::string reason;
+  const bool ok = PortRandomizer::ParseSeedFile(text, out, offset, reason);
+  if (reasonOut != nullptr)
+    *reasonOut = reason;
+  return !ok && !reason.empty() &&
+         (offset <= text.size() || offset == PortRandomizer::kSeedNoOffset);
+}
+
+void SeedParserTests() {
+  using PortRandomizer::SeedFile;
+  Phase("seed parser");
+  {
+    SeedFile seed;
+    CHECK_MSG(ParsesSeed(R"( {"seed":"abc","locations":{"0xab-1":{"item":"Missiles","amount":5,"capacity":-5},)"
+                     R"("k2":{"item":"MorphBall"}},"models":{"Missiles":{"model":"0x1234ABCD","character":2,)"
+                     R"("animation":0},"MorphBall":{"acs":"beef"}},"extra":{"x":true,"y":-1,"z":"s","w":{}}} )",
+                     seed),
+          "full seed parses");
+    CHECK_MSG(seed.name == "abc", "seed name");
+    CHECK_MSG(seed.placements.size() == 2, "two placements");
+    const auto missiles = seed.placements.find("0XAB-1");
+    CHECK_MSG(missiles != seed.placements.end(), "location keys are upper-cased");
+    if (missiles != seed.placements.end()) {
+      CHECK_MSG(missiles->second.itemType == CPlayerState::kIT_Missiles, "placement item");
+      CHECK_MSG(missiles->second.hasAmount && missiles->second.amount == 5, "placement amount");
+      CHECK_MSG(missiles->second.hasCapacity && missiles->second.capacity == -5, "placement capacity");
+    }
+    const auto ball = seed.placements.find("K2");
+    CHECK_MSG(ball != seed.placements.end() && ball->second.itemType == CPlayerState::kIT_MorphBall &&
+                  !ball->second.hasAmount && !ball->second.hasCapacity,
+              "placement without amount or capacity");
+    const auto model = seed.models.find(CPlayerState::kIT_Missiles);
+    CHECK_MSG(model != seed.models.end() && model->second.model == 0x1234ABCDu &&
+                  model->second.acs == 0 && model->second.character == 2 && model->second.animation == 0,
+              "model entry");
+    const auto acs = seed.models.find(CPlayerState::kIT_MorphBall);
+    CHECK_MSG(acs != seed.models.end() && acs->second.acs == 0xBEEFu && acs->second.model == 0,
+              "acs-only model entry");
+  }
+  {
+    SeedFile seed;
+    CHECK_MSG(ParsesSeed("{}", seed) && seed.name.empty() && seed.placements.empty() && seed.models.empty(),
+              "empty seed parses");
+    CHECK_MSG(ParsesSeed("\t{ }\r\n", seed), "whitespace around the object");
+    CHECK_MSG(ParsesSeed(R"({"seed":"café 😀"})", seed) &&
+              seed.name == "caf\xc3\xa9 \xf0\x9f\x98\x80",
+          "unicode escapes become UTF-8");
+    CHECK_MSG(ParsesSeed(R"({"locations":{"a":{"item":"Missiles"},"A":{"item":"IceBeam"}}})", seed) &&
+              seed.placements.size() == 1 && seed.placements["A"].itemType == CPlayerState::kIT_IceBeam,
+          "a repeated location keeps the last one");
+    CHECK_MSG(ParsesSeed(R"({"locations":{"a":{"item":"Missiles","item":"WaveBeam"}}})", seed) &&
+              seed.placements["A"].itemType == CPlayerState::kIT_WaveBeam,
+          "a repeated field keeps the last one");
+    CHECK_MSG(ParsesSeed(R"({"locations":{"a":{"item":"Missiles","amount":-9999,"capacity":9999}}})", seed) &&
+              seed.placements["A"].amount == -9999 && seed.placements["A"].capacity == 9999,
+          "amount and capacity bounds are inclusive");
+    std::string nested = "{\"x\":";
+    for (int i = 0; i < 20; ++i)
+      nested += "{\"x\":";
+    nested += "1";
+    for (int i = 0; i < 21; ++i)
+      nested += "}";
+    CHECK_MSG(ParsesSeed(nested, seed), "moderate nesting in an unknown key");
+  }
+  std::string reason;
+  CHECK_MSG(RefusesSeed(""), "empty text");
+  CHECK_MSG(RefusesSeed("[]"), "top level array");
+  CHECK_MSG(RefusesSeed("\"seed\""), "top level string");
+  CHECK_MSG(RefusesSeed("{} x"), "trailing data");
+  CHECK_MSG(RefusesSeed("{\"seed\":\"a\",}"), "trailing comma");
+  CHECK_MSG(RefusesSeed("{/* c */}"), "comment");
+  CHECK_MSG(RefusesSeed("{\"seed\":1}"), "seed name not a string");
+  CHECK_MSG(RefusesSeed("{\"locations\":[]}"), "locations not an object");
+  CHECK_MSG(RefusesSeed("{\"seed\":\"a\x01\"}"), "control character in a string");
+  CHECK_MSG(RefusesSeed(R"({"seed":"\q"})"), "invalid escape");
+  CHECK_MSG(RefusesSeed(R"({"seed":"\udc00"})"), "lone low surrogate");
+  CHECK_MSG(RefusesSeed(R"({"seed":"\ud800"})"), "lone high surrogate");
+  CHECK_MSG(RefusesSeed(R"({"seed":"abc)"), "unterminated string");
+  CHECK_MSG(RefusesSeed(R"({"locations":{"a":{}}})", &reason) && Contains(reason, "item"),
+        "placement without an item");
+  CHECK_MSG(RefusesSeed(R"({"locations":{"a":{"item":"Banana"}}})", &reason) && Contains(reason, "item"),
+        "unknown item name");
+  CHECK_MSG(RefusesSeed(R"({"locations":{"a":{"item":7}}})"), "item not a string");
+  CHECK_MSG(RefusesSeed(R"({"locations":{"a":{"item":"Missiles","amount":10000}}})", &reason) &&
+            Contains(reason, "9999"),
+        "amount above the bound");
+  CHECK_MSG(RefusesSeed(R"({"locations":{"a":{"item":"Missiles","capacity":-10000}}})"),
+        "capacity below the bound");
+  CHECK_MSG(RefusesSeed(R"({"locations":{"a":{"item":"Missiles","amount":1.5}}})"), "fractional amount");
+  CHECK_MSG(RefusesSeed(R"({"locations":{"a":{"item":"Missiles","amount":"5"}}})"), "amount as a string");
+  CHECK_MSG(RefusesSeed(R"({"locations":{"a":{"item":"Missiles","amount":05}}})"), "leading zero");
+  CHECK_MSG(RefusesSeed(R"({"models":{"Missiles":{"character":1}}})", &reason) && Contains(reason, "model"),
+        "model entry without a model or acs");
+  CHECK_MSG(RefusesSeed(R"({"models":{"Banana":{"model":"1"}}})"), "unknown item name in models");
+  CHECK_MSG(RefusesSeed(R"({"models":{"Missiles":{"model":"0x"}}})"), "empty hex asset");
+  CHECK_MSG(RefusesSeed(R"({"models":{"Missiles":{"model":"123456789"}}})"), "nine hex digits");
+  CHECK_MSG(RefusesSeed(R"({"models":{"Missiles":{"model":"xyz"}}})"), "non-hex asset");
+  CHECK_MSG(RefusesSeed(R"({"models":{"Missiles":{"model":"1","character":-1}}})"), "negative character");
+  CHECK_MSG(RefusesSeed(R"({"models":{"Missiles":{"model":"1","animation":99999999999}}})"),
+        "animation out of range");
+  std::string deep = "{\"x\":";
+  for (int i = 0; i < 300; ++i)
+    deep += "{\"x\":";
+  deep += "1";
+  for (int i = 0; i < 301; ++i)
+    deep += "}";
+  CHECK_MSG(RefusesSeed(deep), "nesting limit");
+
+  // Since the move onto PortJson: unknown keys may hold any JSON value, and a
+  // problem in a well-formed file names where it is rather than a byte offset.
+  {
+    SeedFile seed;
+    CHECK_MSG(ParsesSeed(R"({"note":null,"tags":["a",1,{}],"locations":{"a":{"item":"Missiles","x":[null]}}})",
+                     seed) &&
+              seed.placements.size() == 1,
+          "arrays and null in unknown keys");
+    size_t offset = 0;
+    std::string why;
+    CHECK_MSG(!PortRandomizer::ParseSeedFile(R"({"locations":{"Chozo-1":{"item":"Banana"}}})", seed, offset,
+                                         why) &&
+              offset == PortRandomizer::kSeedNoOffset && Contains(why, "Chozo-1") && Contains(why, "Banana"),
+          "an invalid seed names the location and the item");
+    CHECK_MSG(!PortRandomizer::ParseSeedFile("{} x", seed, offset, why) && offset == 3,
+              "malformed JSON reports the byte offset");
+  }
 }
 
 // These tests set environment variables, which Windows spells differently and
@@ -219,6 +348,8 @@ int main(int argc, char** argv) try {
     return 3;
   }
 
+  SeedParserTests();
+
   struct ExpectedItem {
     const char* name;
     int value;
@@ -266,20 +397,20 @@ int main(int argc, char** argv) try {
       {"Spirit", CPlayerState::kIT_Spirit},
       {"Newborn", CPlayerState::kIT_Newborn},
   };
-  Check(CPlayerState::kIT_Max == 41, "retail item enum max drifted");
+  CHECK_MSG(CPlayerState::kIT_Max == 41, "retail item enum max drifted");
   for (int i = 0; i < CPlayerState::kIT_Max; ++i) {
-    Check(ItemFromName(ItemName(i)) == i, "item name/type round-trip failed");
-    Check(items[i].value == i, "retail item enum order drifted");
-    Check(ItemFromName(items[i].name) == items[i].value, "retail item mapping drifted");
-    Check(std::string(ItemName(items[i].value)) == items[i].name,
-          "retail item display name drifted");
+    CHECK_MSG(ItemFromName(ItemName(i)) == i, "item name/type round-trip failed");
+    CHECK_MSG(items[i].value == i, "retail item enum order drifted");
+    CHECK_MSG(ItemFromName(items[i].name) == items[i].value, "retail item mapping drifted");
+    CHECK_MSG(std::string(ItemName(items[i].value)) == items[i].name,
+              "retail item display name drifted");
   }
-  Check(ItemFromName("mIsSiLeS") == CPlayerState::kIT_Missiles,
-        "item-name lookup should be case-insensitive");
-  Check(ItemFromName("Missiles ") == -1 && ItemFromName("not an item") == -1,
-        "item-name lookup should require an exact match");
-  Check(ItemName(-1) == std::string("Unknown") && ItemName(41) == std::string("Unknown"),
-        "out-of-range item should be Unknown");
+  CHECK_MSG(ItemFromName("mIsSiLeS") == CPlayerState::kIT_Missiles,
+            "item-name lookup should be case-insensitive");
+  CHECK_MSG(ItemFromName("Missiles ") == -1 && ItemFromName("not an item") == -1,
+            "item-name lookup should require an exact match");
+  CHECK_MSG(ItemName(-1) == std::string("Unknown") && ItemName(41) == std::string("Unknown"),
+            "out-of-range item should be Unknown");
 
   Phase("item table checked");
   const std::filesystem::path testDir = std::filesystem::temp_directory_path() /
@@ -309,9 +440,9 @@ int main(int argc, char** argv) try {
     out << R"({"seed":"bad-model","locations":{},"models":{"Missiles":{"acs":"0"}}})";
   }
   Phase("seed files written");
-  Check(SetEnv("MP_USER_PATH", testDir.string().c_str()), "set MP_USER_PATH");
-  Check(SetEnv("MP_RANDO_SEED", validSeed.string().c_str()), "set valid MP_RANDO_SEED");
-  Check(UnsetEnv("MP_RANDO_DUMP"), "unset MP_RANDO_DUMP");
+  CHECK_MSG(SetEnv("MP_USER_PATH", testDir.string().c_str()), "set MP_USER_PATH");
+  CHECK_MSG(SetEnv("MP_RANDO_SEED", validSeed.string().c_str()), "set valid MP_RANDO_SEED");
+  CHECK_MSG(UnsetEnv("MP_RANDO_DUMP"), "unset MP_RANDO_DUMP");
 
   // Each of these needs a process that has not already loaded a seed, so the
   // test re-runs itself rather than exposing a production reload API. The exit
@@ -325,12 +456,12 @@ int main(int argc, char** argv) try {
     return code;
   };
   Phase("running sub-cases");
-  Check(runCase("malformed") == 0,
-        "malformed seed must disable randomizer without partial application");
-  Check(runCase("no-seed") == 0,
-        "without seed/dump, hooks must leave pickups untouched and not log checks");
+  CHECK_MSG(runCase("malformed") == 0,
+            "malformed seed must disable randomizer without partial application");
+  CHECK_MSG(runCase("no-seed") == 0,
+            "without seed/dump, hooks must leave pickups untouched and not log checks");
   const int dumpResult = runCase("dump");
-  Check(dumpResult == 0, "dump mode must log the location and not apply a placement");
+  CHECK_MSG(dumpResult == 0, "dump mode must log the location and not apply a placement");
   if (dumpResult == 0) {
     // The child appends to this log and has only just exited. Windows can still
     // be holding the file open, so the read retries and the removal is best
@@ -366,63 +497,63 @@ int main(int argc, char** argv) try {
       }
       Phase(("dump log held: \"" + shown + "\"").c_str());
     }
-    Check(Contains(dumpText, expectedLine), "dump line should carry the pickup model");
+    CHECK_MSG(Contains(dumpText, expectedLine), "dump line should carry the pickup model");
     std::error_code removeError;
     std::filesystem::remove(testDir / "randomizer_locations.log", removeError);
   }
-  Check(runCase("bad-model") == 0,
-        "a model entry without a model or acs asset must disable the seed");
+  CHECK_MSG(runCase("bad-model") == 0,
+            "a model entry without a model or acs asset must disable the seed");
 
   Phase("sub-cases done; checking the loaded seed");
   EnsureLoaded();
-  Check(Enabled(), "valid seed with placements should enable randomizer");
-  Check(std::string(SeedName()) == "test-seed", "seed name should load");
-  Check(!DumpEnabled(), "dump mode should default off");
+  CHECK_MSG(Enabled(), "valid seed with placements should enable randomizer");
+  CHECK_MSG(std::string(SeedName()) == "test-seed", "seed name should load");
+  CHECK_MSG(!DumpEnabled(), "dump mode should default off");
   char formatted[32];
   FormatLocationKey(1, 2, 3, formatted, sizeof(formatted));
-  Check(std::string(formatted) == "00000001:00000002:00000003", "location key format mismatch");
+  CHECK_MSG(std::string(formatted) == "00000001:00000002:00000003", "location key format mismatch");
 
   int item = CPlayerState::kIT_Missiles;
   int capacity = 2;
   int amount = 3;
-  Check(ApplyPickup(1, 2, 3, item, capacity, amount), "known placement should apply");
-  Check(item == CPlayerState::kIT_EnergyTanks && capacity == 6 && amount == 4,
-        "placement should rewrite item, capacity, and amount");
+  CHECK_MSG(ApplyPickup(1, 2, 3, item, capacity, amount), "known placement should apply");
+  CHECK_MSG(item == CPlayerState::kIT_EnergyTanks && capacity == 6 && amount == 4,
+            "placement should rewrite item, capacity, and amount");
 
   item = CPlayerState::kIT_Missiles;
   capacity = 7;
   amount = 8;
-  Check(!ApplyPickup(9, 9, 9, item, capacity, amount), "unknown location should not apply");
-  Check(item == CPlayerState::kIT_Missiles && capacity == 7 && amount == 8,
-        "unknown location should leave pickup fields untouched");
+  CHECK_MSG(!ApplyPickup(9, 9, 9, item, capacity, amount), "unknown location should not apply");
+  CHECK_MSG(item == CPlayerState::kIT_Missiles && capacity == 7 && amount == 8,
+            "unknown location should leave pickup fields untouched");
 
   item = CPlayerState::kIT_Missiles;
   capacity = 7;
   amount = 8;
-  Check(ApplyPickup(1, 2, 4, item, capacity, amount), "optional-field placement should apply");
-  Check(item == CPlayerState::kIT_PowerBombs && capacity == 7 && amount == 8,
-        "omitted capacity and amount must remain untouched");
+  CHECK_MSG(ApplyPickup(1, 2, 4, item, capacity, amount), "optional-field placement should apply");
+  CHECK_MSG(item == CPlayerState::kIT_PowerBombs && capacity == 7 && amount == 8,
+            "omitted capacity and amount must remain untouched");
 
   PickupModel pickupModel;
-  Check(ModelForItem(CPlayerState::kIT_EnergyTanks, pickupModel) &&
-            pickupModel.model == 0x0000ABCD && pickupModel.acs == 0 &&
-            pickupModel.character == 0 && pickupModel.animation == 0,
-        "seed model should load, accepting a 0x prefix");
-  Check(ModelForItem(CPlayerState::kIT_PowerBombs, pickupModel) &&
-            pickupModel.model == 0x00000010 && pickupModel.acs == 0x00000020 &&
-            pickupModel.character == 3 && pickupModel.animation == 7,
-        "seed model should carry an animated model's acs/character/animation");
-  Check(!ModelForItem(CPlayerState::kIT_Missiles, pickupModel),
-        "an item the seed has no model for should report none");
+  CHECK_MSG(ModelForItem(CPlayerState::kIT_EnergyTanks, pickupModel) &&
+                pickupModel.model == 0x0000ABCD && pickupModel.acs == 0 &&
+                pickupModel.character == 0 && pickupModel.animation == 0,
+            "seed model should load, accepting a 0x prefix");
+  CHECK_MSG(ModelForItem(CPlayerState::kIT_PowerBombs, pickupModel) &&
+                pickupModel.model == 0x00000010 && pickupModel.acs == 0x00000020 &&
+                pickupModel.character == 3 && pickupModel.animation == 7,
+            "seed model should carry an animated model's acs/character/animation");
+  CHECK_MSG(!ModelForItem(CPlayerState::kIT_Missiles, pickupModel),
+            "an item the seed has no model for should report none");
 
-  Check(CheckCount() == 0, "check count starts at zero");
+  CHECK_MSG(CheckCount() == 0, "check count starts at zero");
   RecordCheck(1, 2, 3, item);
-  Check(CheckCount() == 1, "recorded check increments count");
-  Check(Contains(StatusText(), "rando: test-seed, 1 checks"), "overlay status should report seed/count");
+  CHECK_MSG(CheckCount() == 1, "recorded check increments count");
+  CHECK_MSG(Contains(StatusText(), "rando: test-seed, 1 checks"), "overlay status should report seed/count");
   std::ifstream checks(testDir / "randomizer_checks.log");
   const std::string checkLog((std::istreambuf_iterator<char>(checks)), std::istreambuf_iterator<char>());
-  Check(Contains(checkLog, "CHECK 00000001:00000002:00000003 PowerBombs\n"),
-        "collected check should be logged");
+  CHECK_MSG(Contains(checkLog, "CHECK 00000001:00000002:00000003 PowerBombs\n"),
+            "collected check should be logged");
 
   Phase("cleaning up");
   // Best effort: a just-exited child can still hold a file on Windows, and a
@@ -436,10 +567,10 @@ int main(int argc, char** argv) try {
   UnsetEnv("MP_USER_PATH");
   UnsetEnv("MP_RANDO_SEED");
   UnsetEnv("MP_RANDO_DUMP");
-  if (!sPassed)
-    return 1;
-  std::puts("[randomizer-tests] passed");
-  return 0;
+  if (port_test::Failures() == 0) {
+    std::puts("[randomizer-tests] passed");
+  }
+  return PORT_TEST_RESULT();
 } catch (const std::exception& error) {
   std::fprintf(stderr, "[randomizer-tests] threw: %s\n", error.what());
   return 2;

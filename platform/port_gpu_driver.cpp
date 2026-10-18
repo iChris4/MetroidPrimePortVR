@@ -1,4 +1,6 @@
 #include "port_gpu_driver.h"
+#include "port_strings.h"
+#include "port_bytes.h"
 
 // PrimedGun: keyed on the build, not the platform. CMakeLists.txt defines
 // MP_CUSTOM_GPU_DRIVERS for upstream's arm64 phone build only, where adrenotools is
@@ -80,9 +82,7 @@ bool ReadMeta(const std::string& text, Driver& out, std::string& error) {
 
 std::string ReadFile(const fs::path& path) {
   std::ifstream in(path, std::ios::binary);
-  std::ostringstream text;
-  text << in.rdbuf();
-  return text.str();
+  return port::ReadAllText(in);
 }
 
 // Qualcomm driver packages name their library like the phone's own Vulkan driver
@@ -163,8 +163,8 @@ bool ReadDriver(const fs::path& dir, Driver& out) {
          fs::is_regular_file(dir / LocalLibrary(out.library), ec);
 }
 
-uint16_t Le16(const uint8_t* p) { return uint16_t(p[0] | p[1] << 8); }
-uint32_t Le32(const uint8_t* p) { return uint32_t(p[0]) | uint32_t(p[1]) << 8 | uint32_t(p[2]) << 16 | uint32_t(p[3]) << 24; }
+using port::ReadLE16;
+using port::ReadLE32;
 
 struct ZipEntry {
   std::string name;
@@ -184,7 +184,7 @@ bool ListZip(const std::vector< uint8_t >& zip, std::vector< ZipEntry >& entries
   size_t eocd = SIZE_MAX;
   const size_t stop = zip.size() > 22 + 0xFFFF ? zip.size() - 22 - 0xFFFF : 0;
   for (size_t i = zip.size() - 22 + 1; i-- > stop;) {
-    if (Le32(&zip[i]) == 0x06054b50) {
+    if (ReadLE32(&zip[i]) == 0x06054b50) {
       eocd = i;
       break;
     }
@@ -192,21 +192,21 @@ bool ListZip(const std::vector< uint8_t >& zip, std::vector< ZipEntry >& entries
   if (eocd == SIZE_MAX) {
     return false;
   }
-  const uint16_t count = Le16(&zip[eocd + 10]);
-  size_t at = Le32(&zip[eocd + 16]);
+  const uint16_t count = ReadLE16(&zip[eocd + 10]);
+  size_t at = ReadLE32(&zip[eocd + 16]);
   for (uint16_t i = 0; i < count; ++i) {
-    if (at + 46 > zip.size() || Le32(&zip[at]) != 0x02014b50) {
+    if (at + 46 > zip.size() || ReadLE32(&zip[at]) != 0x02014b50) {
       return false;
     }
     ZipEntry e;
-    e.flags = Le16(&zip[at + 8]);
-    e.method = Le16(&zip[at + 10]);
-    e.crc = Le32(&zip[at + 16]);
-    e.compressedSize = Le32(&zip[at + 20]);
-    e.size = Le32(&zip[at + 24]);
-    const uint16_t nameLen = Le16(&zip[at + 28]);
-    const size_t skip = 46u + nameLen + Le16(&zip[at + 30]) + Le16(&zip[at + 32]);
-    e.localOffset = Le32(&zip[at + 42]);
+    e.flags = ReadLE16(&zip[at + 8]);
+    e.method = ReadLE16(&zip[at + 10]);
+    e.crc = ReadLE32(&zip[at + 16]);
+    e.compressedSize = ReadLE32(&zip[at + 20]);
+    e.size = ReadLE32(&zip[at + 24]);
+    const uint16_t nameLen = ReadLE16(&zip[at + 28]);
+    const size_t skip = 46u + nameLen + ReadLE16(&zip[at + 30]) + ReadLE16(&zip[at + 32]);
+    e.localOffset = ReadLE32(&zip[at + 42]);
     if (at + skip > zip.size()) {
       return false;
     }
@@ -230,10 +230,10 @@ bool ExtractZip(const std::vector< uint8_t >& zip, const ZipEntry& e, std::vecto
 bool InflateZip(const std::vector< uint8_t >& zip, const ZipEntry& e, std::vector< uint8_t >& out) {
   const size_t local = e.localOffset;
   if ((e.flags & 1) != 0 || e.size > kMaxZipBytes || local + 30 > zip.size() ||
-      Le32(&zip[local]) != 0x04034b50) {
+      ReadLE32(&zip[local]) != 0x04034b50) {
     return false;
   }
-  const size_t data = local + 30 + Le16(&zip[local + 26]) + Le16(&zip[local + 28]);
+  const size_t data = local + 30 + ReadLE16(&zip[local + 26]) + ReadLE16(&zip[local + 28]);
   if (data + e.compressedSize > zip.size()) {
     return false;
   }

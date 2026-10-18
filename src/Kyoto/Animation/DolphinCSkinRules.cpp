@@ -1,4 +1,5 @@
 #include "Kyoto/Animation/CSkinRules.hpp"
+#include "port_env.h"
 #include "Kyoto/Animation/CCharLayoutInfo.hpp"
 #include "Kyoto/Animation/CPoseAsTransforms.hpp"
 #include "Kyoto/Graphics/CModel.hpp"
@@ -306,10 +307,7 @@ private:
 
 int ThreadThreshold() {
   // MP_SKIN_THREAD_MIN=<points>: models at least this big are split across threads.
-  static const int threshold = [] {
-    const char* value = getenv("MP_SKIN_THREAD_MIN");
-    return value != nullptr ? atoi(value) : 20000;
-  }();
+  static const int threshold = port::EnvInt("MP_SKIN_THREAD_MIN", 20000);
   return threshold;
 }
 } // namespace

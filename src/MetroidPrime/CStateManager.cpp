@@ -69,6 +69,7 @@
 #include "MetroidPrime/ScriptObjects/CScriptEffect.hpp"
 #include "MetroidPrime/ScriptObjects/CScriptMazeNode.hpp"
 #include "MetroidPrime/ScriptObjects/CScriptPlayerActor.hpp"
+#include "MetroidPrime/ScriptObjects/CScriptPlatform.hpp"
 #include "MetroidPrime/ScriptObjects/CScriptRoomAcoustics.hpp"
 #include "MetroidPrime/ScriptObjects/CSnakeWeedSwarm.hpp"
 #include "MetroidPrime/ScriptObjects/CScriptSpawnPoint.hpp"
@@ -1305,6 +1306,11 @@ void CStateManager::MovePlatforms(float dt) {
     if (CPlatformAndDoorList::IsPlatform(actor) && actor != nullptr && actor->GetActive() &&
         actor->GetMass() != 0.f) {
       CGameCollision::Move(*this, *actor, dt, 0);
+#ifdef TARGET_PC
+      if (CScriptPlatform* const platform = TCastToPtr< CScriptPlatform >(actor)) {
+        platform->PortNoteStepEnd(PortSimTick());
+      }
+#endif
     }
   }
 }
@@ -1439,6 +1445,9 @@ void CStateManager::Think(float dt) {
 }
 
 void CStateManager::PreThinkObjects(float dt) {
+#ifdef TARGET_PC
+  ++xPortSimTick;
+#endif
   const float deathTime = x84c_player->GetDeathTime();
   if (deathTime > 0.f) {
     x84c_player->DoPreThink(dt, *this);
@@ -1643,6 +1652,11 @@ void CStateManager::Update(float dt) {
     if (x904_gameState != kGS_SoftPaused) {
       CGameCollision::Move(*this, *x84c_player, dt, nullptr);
     }
+#ifdef TARGET_PC
+    // Platform riders (issue #117): a retail rider carry the player's mover did not consume
+    // is applied now, then the Remastered rider controller decays (PostSimulation).
+    x84c_player->PortEndMovementTick(xPortSimTick);
+#endif
 
     UpdateSortedLists();
 
@@ -2891,8 +2905,8 @@ static bool PortSetupShadow(const CTransform4f& view, const CGameArea* area, CSc
   float color[3] = {0.f, 0.f, 0.f};
   float distance = 0.f;
   if (sOn && enabled && PortDebug::SunShadows()) {
-    static const char* sDirEnv = getenv("MP_SHADOW_DIR");
-    static const char* sColorEnv = getenv("MP_SHADOW_COLOR");
+    static const char* sDirEnv = port::EnvString("MP_SHADOW_DIR");
+    static const char* sColorEnv = port::EnvString("MP_SHADOW_COLOR");
     float envDir[3];
     if (sDirEnv != nullptr && sscanf(sDirEnv, "%f,%f,%f", &envDir[0], &envDir[1], &envDir[2]) == 3) {
       dir[0] = envDir[0], dir[1] = envDir[1], dir[2] = envDir[2];
@@ -3048,9 +3062,14 @@ static void PortDrawVolumetricFog(const CStateManager& mgr, const CTransform4f& 
 
 void CStateManager::PortCaptureProbeFace() const {
   if (CCubeMaterial::sPortPBRProbeMode < 0) {
-    const char* const env = getenv("MP_PBR_PROBE");
-    CCubeMaterial::sPortPBRProbeMode =
-        env == nullptr ? 1 : env[0] == '0' ? 0 : env[0] == 'm' ? 2 : env[0] == 'w' ? 3 : 1;
+    // off/on/mirror/window or 0-3, as docs/SETTINGS.md lists them.
+    const char* const env = port::EnvString("MP_PBR_PROBE");
+    const std::string_view value = env == nullptr ? "1" : env;
+    const char c = value.empty() ? '1' : value[0];
+    CCubeMaterial::sPortPBRProbeMode = c == '0' || value == "off"            ? 0
+                                       : c == '2' || c == 'm'                  ? 2
+                                       : c == '3' || c == 'w'                  ? 3
+                                                                               : 1;
   }
   const bool enabled = CCubeMaterial::sPortPBRProbeMode != 0;
   // The room environments of the areas in memory (port_room_env.h).
@@ -3415,14 +3434,8 @@ void CStateManager::DrawWorld() const {
   // the frustum rejects still casts, as a base model only (no particles, blob shadow or sorted
   // draw). Player, collision-only view and the room-geometry exclusions as for the visible draw;
   // renderFirst actors drew already.
-  static const bool sShadowOffscreen = [] {
-    const char* env = getenv("MP_SHADOW_OFFSCREEN_ACTORS");
-    return env == nullptr || atoi(env) != 0;
-  }();
-  static const bool sShadowCheck = [] {
-    const char* env = getenv("MP_SHADOW_ACTOR_CHECK");
-    return env != nullptr && atoi(env) != 0;
-  }();
+  static const bool sShadowOffscreen = port::EnvFlag("MP_SHADOW_OFFSCREEN_ACTORS", true);
+  static const bool sShadowCheck = port::EnvFlag("MP_SHADOW_ACTOR_CHECK");
   uint portShadowEligible = 0;
   uint portShadowDrawn = 0;
   const auto portShadowOffscreen = [&](const CActor& actor, int areaIdx) {
@@ -3570,7 +3583,7 @@ void CStateManager::DrawWorld() const {
             static_cast< uint >(CGraphics::GetFrameCounter()), portShadowEligible,
             portShadowDrawn);
   }
-  static const bool sVisorMeshLog = getenv("MP_VISORMESH_LOG") != nullptr;
+  static const bool sVisorMeshLog = port::EnvFlag("MP_VISORMESH_LOG");
   if (sVisorMeshLog && !portZoomed && CGraphics::GetFrameCounter() % 60 == 0) {
     unsigned visorSkipped = 0, shadowSkipped = 0;
     CCubeModel::PortTakeVisorSkipCounts(visorSkipped, shadowSkipped);

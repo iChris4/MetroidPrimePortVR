@@ -129,12 +129,16 @@ elseif (_aurora_nod_provider STREQUAL "package")
     endif ()
     set(AURORA_NOD_PACKAGE_URL
       "https://github.com/encounter/nod/releases/download/${AURORA_NOD_VERSION}/libnod-${_nod_platform}.tar.gz")
+    aurora_url_hash(_nod_url_hash nod "${AURORA_NOD_VERSION}_${_nod_platform}" "${AURORA_NOD_PACKAGE_SHA256}")
+  else ()
+    aurora_url_hash(_nod_url_hash nod "custom" "${AURORA_NOD_PACKAGE_SHA256}")
   endif ()
   message(STATUS "aurora: Fetching prebuilt nod package (provider=package, linkage=${AURORA_NOD_LINKAGE})")
 
   include(FetchContent)
   FetchContent_Declare(nod_prebuilt
     URL "${AURORA_NOD_PACKAGE_URL}"
+    ${_nod_url_hash}
     DOWNLOAD_EXTRACT_TIMESTAMP FALSE
     EXCLUDE_FROM_ALL
   )

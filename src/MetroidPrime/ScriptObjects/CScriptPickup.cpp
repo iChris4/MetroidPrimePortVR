@@ -271,6 +271,14 @@ void CScriptPickup::Touch(CActor& act, CStateManager& mgr) {
     if (!apOwned) {
       mgr.PlayerState()->InitializePowerUp(itemType, x260_capacity);
       mgr.PlayerState()->IncrPickUp(itemType, x25c_amount);
+      if (mgr.GetWorld() != nullptr) {
+        PortRandomizer::LogPickupGrant(
+            static_cast< uint32_t >(mgr.GetWorld()->IGetWorldAssetId()),
+            static_cast< uint32_t >(mgr.GetWorld()->IGetAreaAlways(GetAreaId())->IGetAreaAssetId()),
+            static_cast< uint32_t >(GetEditorId().Value()), static_cast< int >(itemType), x260_capacity,
+            x25c_amount, mgr.GetPlayerState()->GetItemAmount(itemType),
+            mgr.GetPlayerState()->GetItemCapacity(itemType));
+      }
     }
     mgr.DeleteObjectRequest(GetUniqueId());
     SendScriptMsgs(kSS_Arrived, mgr, kSM_None);

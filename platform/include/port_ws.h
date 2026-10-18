@@ -156,8 +156,6 @@ public:
   // waits indefinitely; a close frame returns false with IsOpen() false.
   bool ReceiveText(std::string& message, int timeoutMs);
 
-  // Wait for up to timeoutMs for the socket to become readable; -1 timeout.
-  bool WaitReadable(int timeoutMs);
 
   // Last error text, never null.
   const char* Error() const { return mError.c_str(); }

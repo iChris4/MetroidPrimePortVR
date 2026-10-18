@@ -10,6 +10,8 @@
 #include <cstring>
 #include <vector>
 
+#include "port_bytes.h"
+
 class PortMayaSpline {
 public:
   // `d` is the raw spline: u32 keys, per key f32 t, f32 v, u8 in, u8 out (+8 bytes per FIXED
@@ -19,7 +21,7 @@ public:
     if (len < 4) {
       return false;
     }
-    const size_t n = Get32(d);
+    const size_t n = port::ReadLE32(d);
     size_t o = 4;
     if (n > 4096) {
       return false;
@@ -29,8 +31,8 @@ public:
         return false;
       }
       Knot k;
-      k.t = GetFloat(d + o);
-      k.v = GetFloat(d + o + 4);
+      k.t = port::ReadLEFloat(d + o);
+      k.v = port::ReadLEFloat(d + o + 4);
       k.in = d[o + 8];
       k.out = d[o + 9];
       o += 10;
@@ -43,8 +45,8 @@ public:
             return false;
           }
           float* tan = side == 0 ? k.itan : k.otan;
-          tan[0] = GetFloat(d + o);
-          tan[1] = GetFloat(d + o + 4);
+          tan[0] = port::ReadLEFloat(d + o);
+          tan[1] = port::ReadLEFloat(d + o + 4);
           o += 8;
         }
       }
@@ -53,8 +55,8 @@ public:
     if (o + 11 > len) {
       return false;
     }
-    m_min = GetFloat(d + o);
-    m_max = GetFloat(d + o + 4);
+    m_min = port::ReadLEFloat(d + o);
+    m_max = port::ReadLEFloat(d + o + 4);
     m_pre = d[o + 8];
     m_post = d[o + 9];
     m_clamp = int8_t(d[o + 10]);
@@ -81,13 +83,6 @@ public:
   float Eval(float t) const { return Clamp(Unclamped(t)); }
 
 private:
-  static uint32_t Get32(const uint8_t* p) { return uint32_t(p[0]) | uint32_t(p[1]) << 8 | uint32_t(p[2]) << 16 | uint32_t(p[3]) << 24; }
-  static float GetFloat(const uint8_t* p) {
-    const uint32_t u = Get32(p);
-    float f;
-    std::memcpy(&f, &u, 4);
-    return f;
-  }
   enum { kLinear, kFlat, kSpline, kStep, kClamped, kFixed };
   enum { kConst, kLin, kCycle, kCycleRel, kOsc };
   static constexpr float kEps = 1.7453e-7f, kVertX = 1e-4f, kVertY = 572.957f, kSlopeCap = 5729578.f;

@@ -78,6 +78,13 @@ modules:
       - install -Dm644 ../extern/aurora/LICENSE /app/share/licenses/metroid-prime-port/aurora.txt
       - install -Dm644 ../extern/musyx/LICENSE /app/share/licenses/metroid-prime-port/musyx.txt
       - install -Dm644 ../extern/astcenc/LICENSE.txt /app/share/licenses/metroid-prime-port/astcenc.txt
+
+      - install -Dm644 ../extern/GamepadMotionHelpers/LICENSE /app/share/licenses/metroid-prime-port/gamepadmotionhelpers.txt
+      # Dawn and nod come as prebuilt archives with no licence file, and the
+      # generated data tables' licences live in other repositories, so their
+      # texts are kept in the tree.
+      - install -Dm644 -t /app/share/licenses/metroid-prime-port ../packaging/licenses/*.txt
+      - install -Dm644 ../freetype/docs/FTL.TXT /app/share/licenses/metroid-prime-port/freetype-FTL.txt
       # The fetched dependencies were unpacked by this manifest into their own
       # directories at the source root, so that is where their notices are. The
       # previous loop looked in _deps/*-src, which is where FetchContent would

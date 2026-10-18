@@ -794,6 +794,8 @@ void CGraphics::SetClearColor(const CColor& color) {
   GXSetCopyClear(mClearColor.GetGXColor(), mClearDepthValue);
 }
 
+void CGraphics::PortResendCopyClear() { GXSetCopyClear(mClearColor.GetGXColor(), mClearDepthValue); }
+
 void CGraphics::ClearBackAndDepthBuffers() {
   GXInvalidateTexAll();
   if (mRenderModeObj.field_rendering) {

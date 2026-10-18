@@ -1,4 +1,5 @@
 #include "port_savestate.h"
+#include "port_log.h"
 
 #include "Kyoto/Math/CTransform4f.hpp"
 #include "MetroidPrime/CGameArea.hpp"
@@ -82,6 +83,20 @@ struct PortRoomState {
     p.x25c_currentSpeed = speed;
     p.x260_moveDelay = delay;
   }
+  // Puts a platform at its saved pose and carries its slaves with it, by the path
+  // its own Think moves them (slaves keep only their offset from the room load, so
+  // a bare SetTransform leaves the flame jets of a piston where the room loaded
+  // them). A slave with a saved pose of its own gets it after this.
+  static void RestorePlatformPose(CStateManager& mgr, CScriptPlatform& p, const CTransform4f& xf) {
+    const CVector3f delta = xf.GetTranslation() - p.GetTranslation();
+    p.SetTransform(xf);
+    CScriptPlatform::TMovedList moved;
+    moved.push_back(p.GetUniqueId().Value());
+    p.DragSlaves(mgr, moved, delta);
+    // A delta PreThink worked out from the pose before this one would move the
+    // slaves again on the next Think.
+    p.x270_dragDelta = CVector3f::Zero();
+  }
 };
 
 namespace PortSaveState {
@@ -141,6 +156,21 @@ bool AreaReady(const CWorld& world, int area) {
   return a.IsLoaded() && a.IsValidated();
 }
 
+// The room script data a loaded area runs now: the patched copy when a
+// cutscene-skip patch swapped one in, or null/0 when there is nothing to read.
+void LoadedScriptData(const CWorld& world, int area, const uint8_t*& data, size_t& size) {
+  const CGameArea& a = world.GetAreaAlways(TAreaId(area));
+  const int n = a.GetScriptingSize();
+  const char* bytes = a.GetScriptingData();
+  if (n <= 0 || bytes == nullptr) {
+    data = nullptr;
+    size = 0;
+    return;
+  }
+  data = reinterpret_cast< const uint8_t* >(bytes);
+  size = static_cast< size_t >(n);
+}
+
 // The object's editor id when it is a scripted object of a captured-or-
 // applied area (dynamic objects have none), else kNoEditorId.
 uint32_t ScriptId(const CEntity& ent) {
@@ -197,9 +227,16 @@ void CaptureObject(CStateManager& mgr, CEntity& ent, RoomObject& obj) {
     obj.blocks.push_back({kTagCounter, w.bytes});
   }
   if (CScriptDoor* door = TCastToPtr< CScriptDoor >(&ent)) {
-    BlockWriter w;
-    w.U8(door->IsOpen() ? 1 : 0);
-    obj.blocks.push_back({kTagDoor, w.bytes});
+    DoorSaveState state;
+    state.open = door->IsOpen();
+    // A door that reports open has no close in flight, so its pending bits stay
+    // clear ("open with a close in flight" is not a payload this build writes).
+    if (!state.open) {
+      state.pendingClose = door->PortClosingPending();
+      state.refusedClosePending = door->PortRefusedClosePending();
+    }
+    state.doClose = door->PortDoClosePending();
+    obj.blocks.push_back({kTagDoor, EncodeDoorSaveState(state)});
   }
   if (CScriptPlatform* platform = TCastToPtr< CScriptPlatform >(&ent)) {
     BlockWriter w;
@@ -257,11 +294,23 @@ void ApplyObject(CStateManager& mgr, CEntity& ent, const RoomObject& obj) {
   }
   if (CScriptDoor* door = TCastToPtr< CScriptDoor >(&ent)) {
     if (const RoomBlock* b = FindBlock(obj, kTagDoor)) {
-      BlockReader r(b->data);
-      const bool open = r.U8() != 0;
-      // No script message: Open and Close fire the door's connections again.
-      if (r.ok && open != door->IsOpen())
-        door->PortRestoreOpen(open);
+      DoorSaveState want;
+      // No script message here: a door that still owes Closed sends it from Think's
+      // own branch for the kind of close it was in (once the rest of the saved room
+      // state has been applied). A payload this build did not write is ignored.
+      if (DecodeDoorSaveState(b->data, want)) {
+        CScriptDoor::PortDoorFlags flags;
+        flags.open = want.open;
+        flags.normalClosePending = want.pendingClose;
+        flags.refusedClosePending = want.refusedClosePending;
+        flags.doClose = want.doClose;
+        // Applied even when the door already reads closed: that is what restores
+        // the message an interrupted close still owes, and the block on opening
+        // again a close in flight carries.
+        if (flags.normalClosePending || flags.refusedClosePending || flags.doClose ||
+            flags.open != door->IsOpen())
+          door->PortRestoreDoorState(flags);
+      }
     }
   }
   if (CScriptPlatform* platform = TCastToPtr< CScriptPlatform >(&ent)) {
@@ -272,6 +321,47 @@ void ApplyObject(CStateManager& mgr, CEntity& ent, const RoomObject& obj) {
   }
 }
 
+// The saved platform poses of the areas applied now, each carrying its slaves,
+// parents ahead of the platforms they carry. ApplyObject then sets the same pose
+// again (a no-op) and the absolute pose of any saved slave.
+void RestorePlatforms(CStateManager& mgr, const RoomState& room, const std::set< int >& now) {
+  struct Saved {
+    CScriptPlatform* platform;
+    CTransform4f xf;
+  };
+  std::vector< Saved > saved;
+  for (const RoomObject& obj : room.objects) {
+    if (now.count(TEditorId(obj.editorId).AreaNum()) == 0)
+      continue;
+    const RoomBlock* b = FindBlock(obj, kTagTransform);
+    if (b == nullptr)
+      continue;
+    CEntity* ent = mgr.ObjectById(mgr.GetIdForScript(TEditorId(obj.editorId)));
+    CScriptPlatform* platform = ent != nullptr ? TCastToPtr< CScriptPlatform >(ent) : nullptr;
+    if (platform == nullptr || platform->IsInGraveyard())
+      continue;
+    BlockReader r(b->data);
+    Saved s = {platform, CTransform4f::Identity()};
+    if (GetTransform(r, s.xf))
+      saved.push_back(s);
+  }
+  std::vector< std::vector< size_t > > parents(saved.size());
+  for (size_t child = 0; child < saved.size(); ++child) {
+    for (size_t parent = 0; parent < saved.size(); ++parent) {
+      if (parent != child && saved[parent].platform->IsSlave(saved[child].platform->GetUniqueId()))
+        parents[child].push_back(parent);
+    }
+  }
+  std::vector< size_t > order;
+  if (!PlatformRestoreOrder(parents, order)) {
+    // Each platform still gets its saved pose from ApplyObject, without its slaves.
+    PortLog::Write("[savestate] platforms carry each other in a cycle; their slaves stay as loaded\n");
+    return;
+  }
+  for (size_t i : order)
+    PortRoomState::RestorePlatformPose(mgr, *saved[i].platform, saved[i].xf);
+}
+
 } // namespace
 
 void CaptureRoomState(CStateManager& mgr, RoomState& out) {
@@ -279,11 +369,18 @@ void CaptureRoomState(CStateManager& mgr, RoomState& out) {
   const CWorld* world = mgr.GetWorld();
   if (world == nullptr)
     return;
+  // This writer records one fingerprint per captured area; an area whose
+  // scripting data is not readable stays without one.
+  out.fingerprintsRecorded = true;
   std::set< int > areas;
   for (int i = 0; i < world->GetNumAreas(); ++i) {
     if (AreaReady(*world, i)) {
       areas.insert(i);
       out.areas.push_back(i);
+      const uint8_t* data = nullptr;
+      size_t size = 0;
+      LoadedScriptData(*world, i, data, size);
+      out.fingerprints.push_back(MakeAreaFingerprint(i, data, size));
     }
   }
   ForEachObject(mgr, [&](CEntity& ent) {
@@ -307,10 +404,27 @@ int ApplyRoomState(CStateManager& mgr, const RoomState& room, std::vector< int32
   for (int32_t area : room.areas) {
     if (std::find(done.begin(), done.end(), area) != done.end())
       continue;
-    if (AreaReady(*world, area))
-      now.insert(area);
-    else
+    if (!AreaReady(*world, area)) {
       ++waiting;
+      continue;
+    }
+    // A rebuilt area may have loaded a different room script than the snapshot
+    // was taken from (a mod reload swaps the patched script under the load).
+    // Its saved editor ids and states then describe other objects, so nothing
+    // is applied to or deleted from that area. It still counts as handled: the
+    // data will not change, so there is nothing to wait for.
+    const uint8_t* data = nullptr;
+    size_t size = 0;
+    LoadedScriptData(*world, area, data, size);
+    const RoomAreaRestore decision = DecideAreaRestore(room, area, data, size);
+    if (decision != RoomAreaRestore::kRestore) {
+      PortLog::Write("[savestate] area %d: %s; its room state is left as loaded\n",
+                     static_cast< int >(area), RoomAreaRestoreReason(decision));
+      ++stats.skipped;
+      done.push_back(area);
+      continue;
+    }
+    now.insert(area);
   }
   if (now.empty())
     return waiting;
@@ -328,6 +442,7 @@ int ApplyRoomState(CStateManager& mgr, const RoomState& room, std::vector< int32
     mgr.DeleteObjectRequest(uid);
     ++stats.removed;
   }
+  RestorePlatforms(mgr, room, now);
   for (const RoomObject& obj : room.objects) {
     if (now.count(TEditorId(obj.editorId).AreaNum()) == 0)
       continue;

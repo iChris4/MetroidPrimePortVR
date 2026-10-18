@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
-"""Check platform/port_settings_index.inc against the F1 overlay sources.
+"""Check platform/port_settings_index.inc and docs/SETTINGS.md against the F1 overlay sources.
 
 Usage: check_settings_index.py <repo root>
 
 Checks, each problem printed on its own line:
   (a) every row parses, its page is a kDebugPages name and its sub-tab is a
-      SubTab("page", "sub") pair in debug_ui.cpp ("" when the page has none);
-  (b) every row's label appears as a string literal in platform/**/*.cpp
-      ("label" or "label##...");
-  (c) every ImGui widget in debug_ui.cpp whose label is a literal with visible
-      text (before "##") is a label in the index or listed in EXCLUDED.
+      SubTab("page", "sub") pair in the overlay's sources ("" when the page
+      has none);
+  (b) every row's label appears as a string literal in platform/**/*.cpp or
+      the overlay's internal header ("label" or "label##...");
+  (c) every ImGui widget in the overlay's sources (platform/debug_ui.cpp and
+      platform/debug_ui/*.cpp) whose label is a literal with visible
+      text (before "##") is a label in the index or listed in EXCLUDED;
+  (d) every port_settings.ini key in kSettingKeys (platform/debug_ui/settings.cpp)
+      is documented in docs/SETTINGS.md, written there as `key` or `key=...`.
 
 Duplicate (page, sub-tab, label) groups are reported as notes; they are legal
 when the same widget is drawn on two paths, so they do not fail the check.
@@ -20,7 +24,7 @@ import pathlib
 import re
 import sys
 
-# Widgets in debug_ui.cpp that check (c) skips: they are not F1 settings.
+# Widgets in the overlay that check (c) skips: they are not F1 settings.
 EXCLUDED = {
     # Photo mode's floating panel (DrawPhotoUI), not an F1 page.
     "FOV": "photo mode panel, not an F1 page",
@@ -30,12 +34,26 @@ EXCLUDED = {
 
 INDEX = pathlib.Path("platform/port_settings_index.inc")
 DEBUG_UI = pathlib.Path("platform/debug_ui.cpp")
+# The overlay's other translation units.
+DEBUG_UI_PARTS = pathlib.Path("platform/debug_ui")
+SETTINGS_SRC = DEBUG_UI_PARTS / "settings.cpp"
+SETTINGS_DOC = pathlib.Path("docs/SETTINGS.md")
+
+
+def debug_ui_sources(root):
+    """debug_ui.cpp and its parts, as (path, text)."""
+    files = [(DEBUG_UI, (root / DEBUG_UI).read_text(encoding="utf-8"))]
+    for part in sorted((root / DEBUG_UI_PARTS).glob("*.cpp")):
+        files.append((part.relative_to(root), part.read_text(encoding="utf-8")))
+    return files
 
 STR = r'"((?:[^"\\]|\\.)*)"'
 ROW_RE = re.compile(r"^\{\s*" + STR + r"\s*,\s*" + STR + r"\s*,\s*" + STR + r"\s*,\s*" + STR
                     + r"\s*,\s*" + STR + r"\s*\},?\s*$")
 PAGE_RE = re.compile(r'\{\s*"([^"]+)"\s*,\s*Draw\w+\s*\}')
 SUBTAB_RE = re.compile(r'SubTab\(\s*"([^"]+)"\s*,\s*"([^"]+)"\s*\)')
+# A row of kSettingKeys starts at four spaces; the lambdas inside it are indented further.
+KEY_RE = re.compile(r'^    \{"([a-z0-9_]+)",|^    BoolKey< &\w+ >\("([a-z0-9_]+)"\)', re.M)
 WIDGET_RE = re.compile(
     r'ImGui::(Checkbox|SliderInt|SliderFloat\w*|DragInt\w*|DragFloat\w*|Combo|BeginCombo'
     r'|RadioButton|InputText\w*|ColorEdit\w*)\(\s*' + STR)
@@ -45,6 +63,15 @@ def visible(label):
     return label.split("##", 1)[0]
 
 
+def setting_keys(text):
+    """The keys of kSettingKeys, in table order: rows {"key", ...} and BoolKey< &var >("key")."""
+    start = text.find("const SettingKey kSettingKeys[] = {")
+    if start < 0:
+        return []
+    table = text[start:text.find("\n};\n", start)]
+    return [plain or flag for plain, flag in KEY_RE.findall(table)]
+
+
 def main(argv):
     if len(argv) != 2:
         print("usage: check_settings_index.py <repo root>", file=sys.stderr)
@@ -52,7 +79,8 @@ def main(argv):
     root = pathlib.Path(argv[1])
     problems = []
 
-    debug_src = (root / DEBUG_UI).read_text(encoding="utf-8")
+    debug_files = debug_ui_sources(root)
+    debug_src = "\n".join(text for _path, text in debug_files)
     pages = set(PAGE_RE.findall(debug_src))
     subtabs = {}
     for page, sub in SUBTAB_RE.findall(debug_src):
@@ -79,21 +107,32 @@ def main(argv):
         if not label:
             problems.append(f"{INDEX}:{lineno}: empty label")
 
-    sources = "\n".join(
-        p.read_text(encoding="utf-8", errors="replace")
-        for p in sorted((root / "platform").rglob("*.cpp")))
+    sources = "\n".join(p.read_text(encoding="utf-8", errors="replace")
+                        for p in sorted((root / "platform").rglob("*.cpp"))
+                        + sorted((root / DEBUG_UI_PARTS).glob("*.h")))
     for lineno, _page, _sub, _section, label, _keywords in rows:
         if f'"{label}"' not in sources and f'"{label}##' not in sources:
-            problems.append(f"{INDEX}:{lineno}: label '{label}' is not a string literal in platform/**/*.cpp")
+            problems.append(f"{INDEX}:{lineno}: label '{label}' is not a string literal in platform/**/*.cpp "
+                            f"or {DEBUG_UI_PARTS}/*.h")
 
     index_labels = {row[4] for row in rows}
-    for m in WIDGET_RE.finditer(debug_src):
-        label = visible(m.group(2))
-        if not label or label in index_labels or label in EXCLUDED:
-            continue
-        line = debug_src.count("\n", 0, m.start()) + 1
-        problems.append(f"{DEBUG_UI}:{line}: ImGui::{m.group(1)} '{label}' is not in {INDEX} "
-                        "and not in EXCLUDED")
+    for path, text in debug_files:
+        for m in WIDGET_RE.finditer(text):
+            label = visible(m.group(2))
+            if not label or label in index_labels or label in EXCLUDED:
+                continue
+            line = text.count("\n", 0, m.start()) + 1
+            problems.append(f"{path}:{line}: ImGui::{m.group(1)} '{label}' is not in {INDEX} "
+                            "and not in EXCLUDED")
+
+    keys = setting_keys((root / SETTINGS_SRC).read_text(encoding="utf-8"))
+    if not keys:
+        problems.append(f"{SETTINGS_SRC}: no kSettingKeys rows found")
+    doc = (root / SETTINGS_DOC).read_text(encoding="utf-8")
+    for key in keys:
+        if not re.search("`" + re.escape(key) + "[`=]", doc):
+            problems.append(f"{SETTINGS_SRC}: settings key '{key}' is not documented in {SETTINGS_DOC} "
+                            f"(as `{key}` or `{key}=...`)")
 
     groups = {}
     for lineno, page, sub, _section, label, _keywords in rows:
@@ -108,7 +147,7 @@ def main(argv):
     if problems:
         print(f"FAIL: {len(problems)} problem(s) in {len(rows)} rows")
         return 1
-    print(f"OK: {len(rows)} rows, {len(EXCLUDED)} excluded labels")
+    print(f"OK: {len(rows)} rows, {len(EXCLUDED)} excluded labels, {len(keys)} documented settings keys")
     return 0
 
 

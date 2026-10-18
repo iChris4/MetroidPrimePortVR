@@ -1,4 +1,5 @@
 #include "MetroidPrime/ScriptObjects/CScriptDoor.hpp"
+#include "port_env.h"
 
 #include "Collision/CMaterialList.hpp"
 #include "Kyoto/Math/CFrustumPlanes.hpp"
@@ -49,7 +50,7 @@ void PortPrintDoorWait(TUniqueId door, const char* what, const SPortDoorWait& wa
 }
 
 bool PortLogDoors() {
-  static const bool enabled = std::getenv("MP_LOG_DOORS") != nullptr;
+  static const bool enabled = port::EnvFlag("MP_LOG_DOORS");
   return enabled;
 }
 
@@ -338,13 +339,20 @@ void CScriptDoor::OpenDoor(TUniqueId uid, CStateManager& mgr) {
 }
 
 #ifdef TARGET_PC
-void CScriptDoor::PortRestoreOpen(bool open) {
-  mIsOpen = open;
-  mWasOpen = open;
+void CScriptDoor::PortRestoreDoorState(const PortDoorFlags& state) {
+  mIsOpen = state.open;
+  // A close that was in flight is put back the way a live one leaves it: the door
+  // reads closed and Think still owes the message its own branch sends - the
+  // animation-end branch for a normal close, the mClosing branch for a refused
+  // opening. A refused close does not set mWasOpen (it never opened, and the
+  // animation-end branch would then send a second, fuller Closed). mAnimTime is
+  // left alone: Think advances it only while the door is not open and the branch
+  // that finishes the close resets it, so the animation replays from its start.
+  mWasOpen = state.open || state.normalClosePending;
+  mClosing = state.refusedClosePending;
+  mDoClose = state.doClose;
   mConditionsMet = false;
-  mClosing = false;
-  mDoClose = false;
-  SetDoorAnimation(open ? kDAT_Open : kDAT_Close);
+  SetDoorAnimation(state.open ? kDAT_Open : kDAT_Close);
 }
 #endif
 

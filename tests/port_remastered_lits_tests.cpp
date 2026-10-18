@@ -6,6 +6,7 @@
 
 #include "port_pbr_record.h"
 #include "port_remastered_convert.h"
+#include "port_test.h"
 
 #include <bit>
 #include <cmath>
@@ -18,15 +19,6 @@
 using namespace PortRemastered;
 
 namespace {
-
-int sFailures = 0;
-
-void Check(bool condition, const char* what) {
-  if (!condition) {
-    std::fprintf(stderr, "FAIL: %s\n", what);
-    ++sFailures;
-  }
-}
 
 constexpr uint32_t FourCC(char a, char b, char c, char d) {
   return (uint32_t(uint8_t(a)) << 24) | (uint32_t(uint8_t(b)) << 16) | (uint32_t(uint8_t(c)) << 8) | uint8_t(d);
@@ -67,14 +59,14 @@ void TestReader() {
   uint32_t wrap = 0;
   {
     const std::vector<uint8_t> r = Record(19, true, true, "PBR6", 0.4f, 0.f);
-    Check(r.size() == 92, "a PBR6 record is 92 bytes");
-    Check(PortPbrRecord::Read(r.data() + r.size(), r.size(), v, &wrap, s) == 19, "PBR6 holds 19 floats");
-    Check(v[0] == 1.f && v[18] == 19.f, "PBR6 floats are read before the wrap word");
-    Check(wrap == 0x11223344, "PBR6 wrap word");
-    Check(s[0] == 0.4f && s[1] == 0.f, "PBR6 diffuse and F0 factors");
+    CHECK_MSG(r.size() == 92, "a PBR6 record is 92 bytes");
+    CHECK_MSG(PortPbrRecord::Read(r.data() + r.size(), r.size(), v, &wrap, s) == 19, "PBR6 holds 19 floats");
+    CHECK_MSG(v[0] == 1.f && v[18] == 19.f, "PBR6 floats are read before the wrap word");
+    CHECK_MSG(wrap == 0x11223344, "PBR6 wrap word");
+    CHECK_MSG(s[0] == 0.4f && s[1] == 0.f, "PBR6 diffuse and F0 factors");
     uint32_t cube = 7;
-    Check(PortPbrRecord::Read(r.data() + r.size(), r.size(), v, &wrap, s, &cube) == 19 && cube == 0,
-          "PBR6 has no cube");
+    CHECK_MSG(PortPbrRecord::Read(r.data() + r.size(), r.size(), v, &wrap, s, &cube) == 19 && cube == 0,
+              "PBR6 has no cube");
   }
   {  // 'PBR7': 'PBR6' with the cube's id before the tag.
     std::vector<uint8_t> r = Record(19, true, true, "PBR6", 0.4f, 0.5f);
@@ -82,9 +74,9 @@ void TestReader() {
     PutBe(r, 0xCAFEF00D);
     r.insert(r.end(), {'P', 'B', 'R', '7'});
     uint32_t cube = 0;
-    Check(PortPbrRecord::Read(r.data() + r.size(), r.size(), v, &wrap, s, &cube) == 19, "PBR7 holds 19 floats");
-    Check(v[18] == 19.f && wrap == 0x11223344 && s[0] == 0.4f && s[1] == 0.5f, "PBR7 reads as PBR6 before the cube");
-    Check(cube == 0xCAFEF00D, "PBR7 cube id");
+    CHECK_MSG(PortPbrRecord::Read(r.data() + r.size(), r.size(), v, &wrap, s, &cube) == 19, "PBR7 holds 19 floats");
+    CHECK_MSG(v[18] == 19.f && wrap == 0x11223344 && s[0] == 0.4f && s[1] == 0.5f, "PBR7 reads as PBR6 before the cube");
+    CHECK_MSG(cube == 0xCAFEF00D, "PBR7 cube id");
   }
   {  // 'PBR8': 32 shield floats and the tag after any record; the rest reads as before.
     std::vector<uint8_t> r = Record(19, true, true, "PBR6", 0.4f, 0.5f);
@@ -94,28 +86,28 @@ void TestReader() {
     r.insert(r.end(), {'P', 'B', 'R', '8'});
     float shield[32] = {};
     uint32_t cube = 0;
-    Check(PortPbrRecord::Read(r.data() + r.size(), r.size(), v, &wrap, s, &cube, shield) == 19, "PBR8 holds 19 floats");
-    Check(v[18] == 19.f && wrap == 0x11223344 && s[0] == 0.4f && s[1] == 0.5f, "PBR8 reads the record before it");
-    Check(shield[0] == 100.f && shield[31] == 131.f, "PBR8 shield floats");
+    CHECK_MSG(PortPbrRecord::Read(r.data() + r.size(), r.size(), v, &wrap, s, &cube, shield) == 19, "PBR8 holds 19 floats");
+    CHECK_MSG(v[18] == 19.f && wrap == 0x11223344 && s[0] == 0.4f && s[1] == 0.5f, "PBR8 reads the record before it");
+    CHECK_MSG(shield[0] == 100.f && shield[31] == 131.f, "PBR8 shield floats");
     // Kind 15 (PickUp) keeps CCH0..3 in rows 0-3, the view-to-world rows in 4-5 and DIFC in row 7.
-    Check(shield[12] == 112.f && shield[16] == 116.f && shield[23] == 123.f && shield[28] == 128.f,
-          "PBR8 pickup rows (CCH3, world x/y, DIFC)");
+    CHECK_MSG(shield[12] == 112.f && shield[16] == 116.f && shield[23] == 123.f && shield[28] == 128.f,
+              "PBR8 pickup rows (CCH3, world x/y, DIFC)");
     // Kinds 16 and 17 (the holograms) keep ICNC + ICMC and the cube gain in row 6, DIFC in row 7;
     // kind 18 keeps CCH0..3 in rows 0-3, world x/y in 4-5, ICMC in row 6 and DIFC in row 7.
-    Check(shield[24] == 124.f && shield[26] == 126.f && shield[27] == 127.f && shield[28] == 128.f && shield[31] == 131.f,
-          "PBR8 hologram rows (ICNC+ICMC, cube gain, DIFC)");
-    Check(shield[8] == 108.f && shield[15] == 115.f && shield[16] == 116.f,
-          "PBR8 hologram CCH0..3 rows");
+    CHECK_MSG(shield[24] == 124.f && shield[26] == 126.f && shield[27] == 127.f && shield[28] == 128.f && shield[31] == 131.f,
+              "PBR8 hologram rows (ICNC+ICMC, cube gain, DIFC)");
+    CHECK_MSG(shield[8] == 108.f && shield[15] == 115.f && shield[16] == 116.f,
+              "PBR8 hologram CCH0..3 rows");
     // Kind 19 (98F0556D, the lit sphere-map fx) keeps ICNC + ICMC in row 6 and DIFC in row 7, as the
     // holograms do; its REFS and REFV are maps 4 and 5, so the trailer carries nothing else.
-    Check(shield[24] == 124.f && shield[25] == 125.f && shield[28] == 128.f && shield[30] == 130.f,
-          "PBR8 gun-fx rows (ICNC+ICMC, DIFC)");
-    Check(PortPbrRecord::Read(r.data() + r.size(), r.size(), v, &wrap, s) == 19, "PBR8 reads without a shield out");
+    CHECK_MSG(shield[24] == 124.f && shield[25] == 125.f && shield[28] == 128.f && shield[30] == 130.f,
+              "PBR8 gun-fx rows (ICNC+ICMC, DIFC)");
+    CHECK_MSG(PortPbrRecord::Read(r.data() + r.size(), r.size(), v, &wrap, s) == 19, "PBR8 reads without a shield out");
     const std::vector<uint8_t> plain = Record(19, true, true, "PBR6", 0.4f, 0.5f);
     shield[5] = 9.f;
-    Check(PortPbrRecord::Read(plain.data() + plain.size(), plain.size(), v, &wrap, s, nullptr, shield) == 19 &&
-              shield[5] == 0.f,
-          "a record with no PBR8 clears the shield floats");
+    CHECK_MSG(PortPbrRecord::Read(plain.data() + plain.size(), plain.size(), v, &wrap, s, nullptr, shield) == 19 &&
+                  shield[5] == 0.f,
+              "a record with no PBR8 clears the shield floats");
   }
   {  // 'LMUV': slot word and tag after everything; the record before it reads as before.
     std::vector<uint8_t> r = Record(19, true, true, "PBR6", 0.4f, 0.5f);
@@ -123,19 +115,19 @@ void TestReader() {
       PutBe(r, std::bit_cast<uint32_t>(100.f + float(i)));
     }
     r.insert(r.end(), {'P', 'B', 'R', '8'});
-    Check(PortPbrRecord::LightmapSlot(r.data() + r.size(), r.size()) == -1, "no LMUV gives no slot");
+    CHECK_MSG(PortPbrRecord::LightmapSlot(r.data() + r.size(), r.size()) == -1, "no LMUV gives no slot");
     PutBe(r, 5);
     r.insert(r.end(), {'L', 'M', 'U', 'V'});
     float shield[32] = {};
     uint32_t cube = 7;
-    Check(PortPbrRecord::Read(r.data() + r.size(), r.size(), v, &wrap, s, &cube, shield) == 19, "LMUV holds 19 floats");
-    Check(v[18] == 19.f && wrap == 0x11223344 && s[0] == 0.4f && s[1] == 0.5f && cube == 0, "LMUV reads the record before it");
-    Check(shield[0] == 100.f && shield[31] == 131.f, "LMUV keeps the PBR8 shield floats");
-    Check(PortPbrRecord::LightmapSlot(r.data() + r.size(), r.size()) == 5, "LMUV slot");
+    CHECK_MSG(PortPbrRecord::Read(r.data() + r.size(), r.size(), v, &wrap, s, &cube, shield) == 19, "LMUV holds 19 floats");
+    CHECK_MSG(v[18] == 19.f && wrap == 0x11223344 && s[0] == 0.4f && s[1] == 0.5f && cube == 0, "LMUV reads the record before it");
+    CHECK_MSG(shield[0] == 100.f && shield[31] == 131.f, "LMUV keeps the PBR8 shield floats");
+    CHECK_MSG(PortPbrRecord::LightmapSlot(r.data() + r.size(), r.size()) == 5, "LMUV slot");
     std::vector<uint8_t> bad = Record(19, true, true, "PBR6");
     PutBe(bad, 9);
     bad.insert(bad.end(), {'L', 'M', 'U', 'V'});
-    Check(PortPbrRecord::LightmapSlot(bad.data() + bad.size(), bad.size()) == -1, "LMUV slot past 7 is none");
+    CHECK_MSG(PortPbrRecord::LightmapSlot(bad.data() + bad.size(), bad.size()) == -1, "LMUV slot past 7 is none");
   }
   struct Old {
     int floats;
@@ -149,30 +141,30 @@ void TestReader() {
     std::vector<uint8_t> m(40, 0xAA);
     m.insert(m.end(), r.begin(), r.end());
     s[0] = s[1] = 7.f;
-    Check(PortPbrRecord::Read(m.data() + m.size(), m.size(), v, &wrap, s) == o.floats, o.tag);
-    Check(v[o.floats - 1] == float(o.floats), "the last float of an older record is unmoved");
-    Check(s[0] == 1.f && s[1] == 1.f, "an older record has neutral light factors");
-    Check(wrap == (o.wrap ? 0x11223344u : 0x55555555u), "an older record's wrap is unchanged");
+    CHECK_MSG(PortPbrRecord::Read(m.data() + m.size(), m.size(), v, &wrap, s) == o.floats, o.tag);
+    CHECK_MSG(v[o.floats - 1] == float(o.floats), "the last float of an older record is unmoved");
+    CHECK_MSG(s[0] == 1.f && s[1] == 1.f, "an older record has neutral light factors");
+    CHECK_MSG(wrap == (o.wrap ? 0x11223344u : 0x55555555u), "an older record's wrap is unchanged");
   }
   {
     const std::vector<uint8_t> none(40, 0x55);
     s[0] = s[1] = 7.f;
-    Check(PortPbrRecord::Read(none.data() + none.size(), none.size(), v, &wrap, s) == 0, "no record");
-    Check(s[0] == 1.f && s[1] == 1.f && v[0] == 1.f && v[3] == 0.f, "no record is neutral");
+    CHECK_MSG(PortPbrRecord::Read(none.data() + none.size(), none.size(), v, &wrap, s) == 0, "no record");
+    CHECK_MSG(s[0] == 1.f && s[1] == 1.f && v[0] == 1.f && v[3] == 0.f, "no record is neutral");
   }
   {  // A TEV material's wrap word alone.
     std::vector<uint8_t> m(40, 0xAA);
     const uint8_t word[] = {0x11, 0x22, 0x33, 0x44, 'W', 'R', 'A', 'P'};
     m.insert(m.end(), word, word + 8);
     s[0] = s[1] = 7.f;
-    Check(PortPbrRecord::Read(m.data() + m.size(), m.size(), v, &wrap, s) == 0, "WRAP holds no floats");
-    Check(wrap == 0x11223344u && v[0] == 1.f && s[0] == 1.f, "WRAP word, the rest neutral");
+    CHECK_MSG(PortPbrRecord::Read(m.data() + m.size(), m.size(), v, &wrap, s) == 0, "WRAP holds no floats");
+    CHECK_MSG(wrap == 0x11223344u && v[0] == 1.f && s[0] == 1.f, "WRAP word, the rest neutral");
   }
   {  // A tag the material is too short to hold is not read.
     const std::vector<uint8_t> r = Record(0, false, false, "PBR6");
     s[0] = s[1] = 7.f;
-    Check(PortPbrRecord::Read(r.data() + r.size(), r.size(), v, &wrap, s) == 0 && s[0] == 1.f,
-          "a PBR6 tag with no room for the record is ignored");
+    CHECK_MSG(PortPbrRecord::Read(r.data() + r.size(), r.size(), v, &wrap, s) == 0 && s[0] == 1.f,
+              "a PBR6 tag with no room for the record is ignored");
   }
 }
 
@@ -260,7 +252,7 @@ bool Convert(const Model& model, std::vector<uint8_t>& cmdl, std::vector<Materia
   std::string error;
   if (!converter.Convert(model, opt, error)) {
     std::fprintf(stderr, "FAIL: the conversion failed: %s\n", error.c_str());
-    ++sFailures;
+    port_test::CountFailure();
     return false;
   }
   return true;
@@ -325,48 +317,48 @@ Result Run(const ModelMaterial& material, bool twoSided) {
     return {};
   }
   Result r = Read(cmdl);
-  Check(r.ok, "the converted CMDL is readable");
+  CHECK_MSG(r.ok, "the converted CMDL is readable");
   return r;
 }
 
 void TestConverter() {
   {  // No LITS: the older back copy, one material, no factors.
     const Result r = Run(Material(0, false), true);
-    Check(r.materials == 1 && r.scales.empty(), "no LITS: one material, no PBR6");
-    Check(r.turned > 0 && r.towardFront > 0, "no LITS: the back copy's normals are turned round");
+    CHECK_MSG(r.materials == 1 && r.scales.empty(), "no LITS: one material, no PBR6");
+    CHECK_MSG(r.turned > 0 && r.towardFront > 0, "no LITS: the back copy's normals are turned round");
   }
   {  // -1: the same as no LITS (the flipped normal is what the older copy has).
     const Result r = Run(Material(-1.0, true), true);
-    Check(r.materials == 1 && r.scales.empty(), "LITS -1: one material, no PBR6");
-    Check(r.turned > 0, "LITS -1: the older back copy's turned normals");
+    CHECK_MSG(r.materials == 1 && r.scales.empty(), "LITS -1: one material, no PBR6");
+    CHECK_MSG(r.turned > 0, "LITS -1: the older back copy's turned normals");
   }
   {  // 0 and a negative other than -1 are not implemented: the older copy, unchanged.
     for (const double lits : {0.0, -0.5}) {
       const Result r = Run(Material(lits, true), true);
-      Check(r.materials == 1 && r.scales.empty() && r.turned > 0, "LITS 0 or another negative keeps the older copy");
+      CHECK_MSG(r.materials == 1 && r.scales.empty() && r.turned > 0, "LITS 0 or another negative keeps the older copy");
     }
   }
   {  // A positive LITS: a back primitive and material of its own, diffuse |LITS| and F0 zero;
      // its vertices keep the older copy's turned normals (the shader turns them back).
     const Result r = Run(Material(0.4, true), true);
-    Check(r.materials == 2, "LITS 0.4: the back copy is its own material");
-    Check(r.turned > 0 && r.towardFront > 0, "LITS 0.4: the back copy has the turned normals, as legacy");
-    Check(r.scales.size() == 1, "LITS 0.4: one PBR6 record, the back's");
+    CHECK_MSG(r.materials == 2, "LITS 0.4: the back copy is its own material");
+    CHECK_MSG(r.turned > 0 && r.towardFront > 0, "LITS 0.4: the back copy has the turned normals, as legacy");
+    CHECK_MSG(r.scales.size() == 1, "LITS 0.4: one PBR6 record, the back's");
     if (r.scales.size() == 1) {
-      Check(std::fabs(r.scales[0].first - 0.4f) < 1e-6f && r.scales[0].second == 0.f,
-            "LITS 0.4: diffuse 0.4, F0 factor 0");
+      CHECK_MSG(std::fabs(r.scales[0].first - 0.4f) < 1e-6f && r.scales[0].second == 0.f,
+                "LITS 0.4: diffuse 0.4, F0 factor 0");
     }
   }
   {  // 1 is a positive LITS too: diffuse 1, F0 0 on the back.
     const Result r = Run(Material(1.0, true), true);
-    Check(r.materials == 2 && r.scales.size() == 1 && r.turned > 0, "LITS 1: a split with a PBR6 record");
+    CHECK_MSG(r.materials == 2 && r.scales.size() == 1 && r.turned > 0, "LITS 1: a split with a PBR6 record");
     if (!r.scales.empty()) {
-      Check(r.scales[0].first == 1.f && r.scales[0].second == 0.f, "LITS 1: factors 1 and 0");
+      CHECK_MSG(r.scales[0].first == 1.f && r.scales[0].second == 0.f, "LITS 1: factors 1 and 0");
     }
   }
   {  // One-sided meshes have no back copy, whatever LITS says.
     const Result r = Run(Material(0.4, true), false);
-    Check(r.materials == 1 && r.scales.empty() && r.turned == 0, "a one-sided mesh ignores LITS");
+    CHECK_MSG(r.materials == 1 && r.scales.empty() && r.turned == 0, "a one-sided mesh ignores LITS");
   }
 }
 
@@ -386,10 +378,10 @@ void TestHoloKind() {
   for (size_t o = 0; o + 4 <= cmdl.size(); ++o) {
     trailer = trailer || std::memcmp(&cmdl[o], "PBR8", 4) == 0;
   }
-  Check(trailer, "a holo shader keeps kind 16 (PBR8 trailer) through the converter");
+  CHECK_MSG(trailer, "a holo shader keeps kind 16 (PBR8 trailer) through the converter");
 }
 
-// The converter's shader ids, as port_remastered_convert.cpp reads them.
+// The converter's shader ids, as port_remastered_convert_material.cpp reads them.
 void SetShader(ModelMaterial& material, uint32_t shader) {
   material.shaderId[0] = uint8_t(shader >> 24);
   material.shaderId[1] = uint8_t(shader >> 16);
@@ -509,15 +501,15 @@ void CheckTrailerRows(const float row[32], const float rgb[3], float w, const fl
     zero = zero && row[i] == 0.f;
   }
   std::snprintf(msg, sizeof(msg), "%s: the rows before 6 are zero", what);
-  Check(zero, msg);
+  CHECK_MSG(zero, msg);
   if (rgb != nullptr) {
     std::snprintf(msg, sizeof(msg), "%s: row 6 rgb", what);
-    Check(Near(row[24], rgb[0]) && Near(row[25], rgb[1]) && Near(row[26], rgb[2]), msg);
+    CHECK_MSG(Near(row[24], rgb[0]) && Near(row[25], rgb[1]) && Near(row[26], rgb[2]), msg);
   }
   std::snprintf(msg, sizeof(msg), "%s: row 6 w", what);
-  Check(Near(row[27], w), msg);
+  CHECK_MSG(Near(row[27], w), msg);
   std::snprintf(msg, sizeof(msg), "%s: row 7 DIFC", what);
-  Check(Near(row[28], difc[0]) && Near(row[29], difc[1]) && Near(row[30], difc[2]) && Near(row[31], difc[3]), msg);
+  CHECK_MSG(Near(row[28], difc[0]) && Near(row[29], difc[1]) && Near(row[30], difc[2]) && Near(row[31], difc[3]), msg);
 }
 
 // Kind 17 (6344950D): the holo plus the material's own REFL cube. Row 6 is ICNC + ICMC
@@ -531,22 +523,22 @@ void TestHoloReflKind() {
   material.data.push_back(TexParam(FourCC('R', 'E', 'F', 'L'), 0x44));
   std::vector<MaterialDecision> decisions;
   const std::vector<uint8_t> cmdl = ConvertDecisions(material, decisions);
-  Check(!cmdl.empty(), "kind 17 converts");
+  CHECK_MSG(!cmdl.empty(), "kind 17 converts");
   if (cmdl.empty()) {
     return;
   }
-  Check(decisions.size() == 1, "kind 17: one output material");
+  CHECK_MSG(decisions.size() == 1, "kind 17: one output material");
   if (!decisions.empty()) {
-    Check(decisions[0].kind == 17, "kind 17: the decision keeps kind 17 (not demoted)");
-    Check(decisions[0].path == "pbr", "kind 17: the PBR path");
-    Check(decisions[0].tag == "PBR8", "kind 17: a PBR8 trailer");
-    Check(decisions[0].cube == "-", "kind 17: no cube without a cube reader");
+    CHECK_MSG(decisions[0].kind == 17, "kind 17: the decision keeps kind 17 (not demoted)");
+    CHECK_MSG(decisions[0].path == "pbr", "kind 17: the PBR path");
+    CHECK_MSG(decisions[0].tag == "PBR8", "kind 17: a PBR8 trailer");
+    CHECK_MSG(decisions[0].cube == "-", "kind 17: no cube without a cube reader");
   }
   size_t start = 0, size = 0;
-  Check(FirstBlob(cmdl, start, size), "kind 17: the material blob is readable");
+  CHECK_MSG(FirstBlob(cmdl, start, size), "kind 17: the material blob is readable");
   const ShieldTrailer t = BlobShield(cmdl, start, size);
-  Check(t.has && t.record == "PBR4", "kind 17: a PBR4 record with a PBR8 trailer");
-  Check(t.hasKind && t.kind == 17.f, "kind 17: the record's kind float");
+  CHECK_MSG(t.has && t.record == "PBR4", "kind 17: a PBR4 record with a PBR8 trailer");
+  CHECK_MSG(t.hasKind && t.kind == 17.f, "kind 17: the record's kind float");
   const float rgb[3] = {9.f, 18.f, 36.f}, difc[4] = {0.5f, 0.25f, 0.125f, 0.75f};
   CheckTrailerRows(t.row, rgb, 1.f, difc, "kind 17");
   {  // Without REFL the incandescence stays but the cube gain is 0.
@@ -556,10 +548,10 @@ void TestHoloReflKind() {
     const std::vector<uint8_t> bareCmdl = ConvertDecisions(bare, bareDecisions);
     size_t bstart = 0, bsize = 0;
     const bool readable = !bareCmdl.empty() && FirstBlob(bareCmdl, bstart, bsize);
-    Check(readable, "kind 17 without REFL converts");
+    CHECK_MSG(readable, "kind 17 without REFL converts");
     if (readable) {
       const ShieldTrailer b = BlobShield(bareCmdl, bstart, bsize);
-      Check(b.has && b.hasKind && b.kind == 17.f, "kind 17 without REFL: still kind 17");
+      CHECK_MSG(b.has && b.hasKind && b.kind == 17.f, "kind 17 without REFL: still kind 17");
       CheckTrailerRows(b.row, rgb, 0.f, difc, "kind 17 without REFL");
     }
   }
@@ -568,12 +560,12 @@ void TestHoloReflKind() {
     const std::vector<uint8_t> cubeCmdl = ConvertDecisions(material, cubeDecisions, false, true);
     size_t cstart = 0, csize = 0;
     const bool readable = !cubeCmdl.empty() && FirstBlob(cubeCmdl, cstart, csize);
-    Check(readable, "kind 17 with a cube reader converts");
+    CHECK_MSG(readable, "kind 17 with a cube reader converts");
     if (readable) {
       const ShieldTrailer c = BlobShield(cubeCmdl, cstart, csize);
-      Check(c.has && c.record == "PBR7" && c.hasKind && c.kind == 17.f,
-            "kind 17 with a cube reader: REFL read, PBR7 record, kind 17");
-      Check(!cubeDecisions.empty() && cubeDecisions[0].cube != "-", "kind 17 with a cube reader: a cube id");
+      CHECK_MSG(c.has && c.record == "PBR7" && c.hasKind && c.kind == 17.f,
+                "kind 17 with a cube reader: REFL read, PBR7 record, kind 17");
+      CHECK_MSG(!cubeDecisions.empty() && cubeDecisions[0].cube != "-", "kind 17 with a cube reader: a cube id");
     }
   }
 }
@@ -593,29 +585,29 @@ void TestHologramKind() {
   material.data.push_back(ColorParam(FourCC('D', 'I', 'F', 'C'), 0.5f, 0.25f, 0.125f, 0.75f));
   std::vector<MaterialDecision> decisions;
   const std::vector<uint8_t> cmdl = ConvertDecisions(material, decisions, true);
-  Check(!cmdl.empty(), "kind 18 converts");
+  CHECK_MSG(!cmdl.empty(), "kind 18 converts");
   if (cmdl.empty()) {
     return;
   }
   if (!decisions.empty()) {
-    Check(decisions[0].kind == 18, "kind 18: the decision keeps kind 18 (not demoted)");
-    Check(decisions[0].path == "pbr", "kind 18: the PBR path");
+    CHECK_MSG(decisions[0].kind == 18, "kind 18: the decision keeps kind 18 (not demoted)");
+    CHECK_MSG(decisions[0].path == "pbr", "kind 18: the PBR path");
   }
   size_t start = 0, size = 0;
-  Check(FirstBlob(cmdl, start, size), "kind 18: the material blob is readable");
+  CHECK_MSG(FirstBlob(cmdl, start, size), "kind 18: the material blob is readable");
   const ShieldTrailer t = BlobShield(cmdl, start, size);
-  Check(t.has && t.record == "PBR4" && t.hasKind && t.kind == 18.f, "kind 18: a PBR4 record with kind 18");
+  CHECK_MSG(t.has && t.record == "PBR4" && t.hasKind && t.kind == 18.f, "kind 18: a PBR4 record with kind 18");
   bool cch = true;
   for (int r = 0; r < 4; ++r) {
     for (int i = 0; i < 4; ++i) {
       cch = cch && Near(t.row[r * 4 + i], float(r * 4 + i + 1));
     }
   }
-  Check(cch, "kind 18: rows 0-3 are CCH0..CCH3");
+  CHECK_MSG(cch, "kind 18: rows 0-3 are CCH0..CCH3");
   const float rgb[3] = {7.f, 8.f, 9.f}, difc[4] = {0.5f, 0.25f, 0.125f, 0.75f};
   // Rows 0-3 are the CCHs above; rows 4-5 (run-time world x/y) stay zero.
   CheckTrailerRows(t.row, rgb, 0.f, difc, "kind 18", 16, 24);
-  Check((BlobVtx(cmdl, start) & 0x30u) == 0x30u, "kind 18: the vertex colour is read (colour bits)");
+  CHECK_MSG((BlobVtx(cmdl, start) & 0x30u) == 0x30u, "kind 18: the vertex colour is read (colour bits)");
   {  // Without CCH0..3 it is no kind: the standard record, no trailer, a fallback note.
     ModelMaterial bare = Material(0, false);
     SetShader(bare, 0x4CA0017C);
@@ -624,14 +616,14 @@ void TestHologramKind() {
     const std::vector<uint8_t> bareCmdl = ConvertDecisions(bare, bareDecisions);
     size_t bstart = 0, bsize = 0;
     const bool readable = !bareCmdl.empty() && FirstBlob(bareCmdl, bstart, bsize);
-    Check(readable, "kind 18 without CCH0..3 converts");
+    CHECK_MSG(readable, "kind 18 without CCH0..3 converts");
     if (readable) {
-      Check(!BlobShield(bareCmdl, bstart, bsize).has, "kind 18 without CCH0..3: no PBR8 trailer");
-      Check(BlobTag(bareCmdl, bstart, bsize) == "PBR2", "kind 18 without CCH0..3: the standard record (PBR2: no REFL, mode bit 256)");
+      CHECK_MSG(!BlobShield(bareCmdl, bstart, bsize).has, "kind 18 without CCH0..3: no PBR8 trailer");
+      CHECK_MSG(BlobTag(bareCmdl, bstart, bsize) == "PBR2", "kind 18 without CCH0..3: the standard record (PBR2: no REFL, mode bit 256)");
     }
-    Check(!bareDecisions.empty() && bareDecisions[0].kind == 0, "kind 18 without CCH0..3: kind 0");
-    Check(!bareDecisions.empty() && bareDecisions[0].kindReason.find("fallback: hologram") != std::string::npos,
-          "kind 18 without CCH0..3: the hologram fallback note");
+    CHECK_MSG(!bareDecisions.empty() && bareDecisions[0].kind == 0, "kind 18 without CCH0..3: kind 0");
+    CHECK_MSG(!bareDecisions.empty() && bareDecisions[0].kindReason.find("fallback: hologram") != std::string::npos,
+              "kind 18 without CCH0..3: the hologram fallback note");
   }
   {  // The colour bits come from vcolor: kind 16 on the same coloured model has none, and
     // kind 18 with no vertex colours has none either (there is nothing to read).
@@ -640,18 +632,18 @@ void TestHologramKind() {
     std::vector<MaterialDecision> holoDecisions;
     const std::vector<uint8_t> holoCmdl = ConvertDecisions(holo, holoDecisions, true);
     size_t hstart = 0, hsize = 0;
-    Check(!holoCmdl.empty() && FirstBlob(holoCmdl, hstart, hsize), "kind 16 on a coloured model converts");
+    CHECK_MSG(!holoCmdl.empty() && FirstBlob(holoCmdl, hstart, hsize), "kind 16 on a coloured model converts");
     if (!holoCmdl.empty() && hsize != 0) {
-      Check((BlobVtx(holoCmdl, hstart) & 0x30u) == 0u, "kind 16: no colour bits without vcolor");
+      CHECK_MSG((BlobVtx(holoCmdl, hstart) & 0x30u) == 0u, "kind 16: no colour bits without vcolor");
     }
     std::vector<MaterialDecision> plainDecisions;
     const std::vector<uint8_t> plainCmdl = ConvertDecisions(material, plainDecisions, false);
     size_t pstart = 0, psize = 0;
-    Check(!plainCmdl.empty() && FirstBlob(plainCmdl, pstart, psize), "kind 18 with no colours converts");
+    CHECK_MSG(!plainCmdl.empty() && FirstBlob(plainCmdl, pstart, psize), "kind 18 with no colours converts");
     if (!plainCmdl.empty() && psize != 0) {
       const ShieldTrailer p = BlobShield(plainCmdl, pstart, psize);
-      Check(p.has && p.hasKind && p.kind == 18.f, "kind 18 with no colours: still kind 18");
-      Check((BlobVtx(plainCmdl, pstart) & 0x30u) == 0u, "kind 18 with no colours: no colour bits");
+      CHECK_MSG(p.has && p.hasKind && p.kind == 18.f, "kind 18 with no colours: still kind 18");
+      CHECK_MSG((BlobVtx(plainCmdl, pstart) & 0x30u) == 0u, "kind 18 with no colours: no colour bits");
     }
   }
 }
@@ -669,19 +661,19 @@ void TestGunFxKind() {
   material.data.push_back(ColorParam(FourCC('I', 'C', 'M', 'C'), 4.f, 8.f, 16.f, 0.f));
   std::vector<MaterialDecision> decisions;
   const std::vector<uint8_t> cmdl = ConvertDecisions(material, decisions);
-  Check(!cmdl.empty(), "kind 19 converts");
+  CHECK_MSG(!cmdl.empty(), "kind 19 converts");
   if (cmdl.empty()) {
     return;
   }
   if (!decisions.empty()) {
-    Check(decisions[0].kind == 19, "kind 19: the decision keeps kind 19");
-    Check(decisions[0].path == "pbr", "kind 19: the PBR path");
+    CHECK_MSG(decisions[0].kind == 19, "kind 19: the decision keeps kind 19");
+    CHECK_MSG(decisions[0].path == "pbr", "kind 19: the PBR path");
   }
   size_t start = 0, size = 0;
-  Check(FirstBlob(cmdl, start, size), "kind 19: the material blob is readable");
-  Check(BlobNmaps(cmdl, start) == 7, "kind 19: all seven maps, the second layer bound");
+  CHECK_MSG(FirstBlob(cmdl, start, size), "kind 19: the material blob is readable");
+  CHECK_MSG(BlobNmaps(cmdl, start) == 7, "kind 19: all seven maps, the second layer bound");
   const ShieldTrailer t = BlobShield(cmdl, start, size);
-  Check(t.has && t.record == "PBR4" && t.hasKind && t.kind == 19.f, "kind 19: a PBR4 record with kind 19");
+  CHECK_MSG(t.has && t.record == "PBR4" && t.hasKind && t.kind == 19.f, "kind 19: a PBR4 record with kind 19");
   const float rgb[3] = {5.f, 9.f, 18.f}, difc[4] = {0.5f, 0.25f, 0.125f, 0.75f};
   CheckTrailerRows(t.row, rgb, 1.f, difc, "kind 19");
   {  // Without REFV the second layer's MR is missing and it is no kind: the plain
@@ -692,12 +684,12 @@ void TestGunFxKind() {
     const std::vector<uint8_t> bareCmdl = ConvertDecisions(bare, bareDecisions);
     size_t bstart = 0, bsize = 0;
     const bool readable = !bareCmdl.empty() && FirstBlob(bareCmdl, bstart, bsize);
-    Check(readable, "kind 19 without REFV converts");
+    CHECK_MSG(readable, "kind 19 without REFV converts");
     if (readable) {
-      Check(!BlobShield(bareCmdl, bstart, bsize).has, "kind 19 without REFV: no PBR8 trailer");
-      Check(BlobTag(bareCmdl, bstart, bsize) == "PBR2", "kind 19 without REFV: the standard record (PBR2: no REFL, mode bit 256)");
+      CHECK_MSG(!BlobShield(bareCmdl, bstart, bsize).has, "kind 19 without REFV: no PBR8 trailer");
+      CHECK_MSG(BlobTag(bareCmdl, bstart, bsize) == "PBR2", "kind 19 without REFV: the standard record (PBR2: no REFL, mode bit 256)");
     }
-    Check(!bareDecisions.empty() && bareDecisions[0].kind == 0, "kind 19 without REFV: kind 0");
+    CHECK_MSG(!bareDecisions.empty() && bareDecisions[0].kind == 0, "kind 19 without REFV: kind 0");
   }
 }
 
@@ -709,19 +701,19 @@ void TestLambertFx() {
   SetShader(material, 0x4BC890C1);
   std::vector<MaterialDecision> decisions;
   const std::vector<uint8_t> cmdl = ConvertDecisions(material, decisions);
-  Check(!cmdl.empty(), "lambert-fx converts");
+  CHECK_MSG(!cmdl.empty(), "lambert-fx converts");
   if (cmdl.empty()) {
     return;
   }
   if (!decisions.empty()) {
-    Check(decisions[0].kind == 0, "lambert-fx: kind 0");
-    Check(decisions[0].path == "pbr", "lambert-fx: the PBR path, not the retail-fx TEV fallback");
-    Check(decisions[0].role == "lambert-fx", "lambert-fx: the shader role");
+    CHECK_MSG(decisions[0].kind == 0, "lambert-fx: kind 0");
+    CHECK_MSG(decisions[0].path == "pbr", "lambert-fx: the PBR path, not the retail-fx TEV fallback");
+    CHECK_MSG(decisions[0].role == "lambert-fx", "lambert-fx: the shader role");
   }
   size_t start = 0, size = 0;
-  Check(FirstBlob(cmdl, start, size), "lambert-fx: the material blob is readable");
-  Check(!BlobShield(cmdl, start, size).has, "lambert-fx: no PBR8 trailer");
-  Check(BlobTag(cmdl, start, size) == "PBR2", "lambert-fx: the standard record (PBR2: no REFL, mode bit 256)");
+  CHECK_MSG(FirstBlob(cmdl, start, size), "lambert-fx: the material blob is readable");
+  CHECK_MSG(!BlobShield(cmdl, start, size).has, "lambert-fx: no PBR8 trailer");
+  CHECK_MSG(BlobTag(cmdl, start, size) == "PBR2", "lambert-fx: the standard record (PBR2: no REFL, mode bit 256)");
   {  // Blended-flagged, over retail's blended surface: opaque blend words (dst 0, src 1).
     ModelMaterial blended = material;
     blended.unk1 = 0x1;
@@ -729,11 +721,11 @@ void TestLambertFx() {
     const std::vector<uint8_t> blendedCmdl = ConvertDecisions(blended, blendedDecisions);
     size_t bstart = 0, bsize = 0;
     const bool readable = !blendedCmdl.empty() && FirstBlob(blendedCmdl, bstart, bsize);
-    Check(readable, "blended lambert-fx converts");
+    CHECK_MSG(readable, "blended lambert-fx converts");
     if (readable) {
       uint16_t dst = 9, src = 9;
       BlobBlend(blendedCmdl, bstart, dst, src);
-      Check(dst == 0 && src == 1, "blended lambert-fx: opaque blend words");
+      CHECK_MSG(dst == 0 && src == 1, "blended lambert-fx: opaque blend words");
     }
     ModelMaterial other = Material(0, false);
     SetShader(other, 0x12345678);
@@ -741,11 +733,11 @@ void TestLambertFx() {
     std::vector<MaterialDecision> otherDecisions;
     const std::vector<uint8_t> otherCmdl = ConvertDecisions(other, otherDecisions);
     size_t ostart = 0, osize = 0;
-    Check(!otherCmdl.empty() && FirstBlob(otherCmdl, ostart, osize), "a blended unknown shader converts");
+    CHECK_MSG(!otherCmdl.empty() && FirstBlob(otherCmdl, ostart, osize), "a blended unknown shader converts");
     if (!otherCmdl.empty() && osize != 0) {
       uint16_t dst = 9, src = 9;
       BlobBlend(otherCmdl, ostart, dst, src);
-      Check(dst == 5 && src == 4, "a blended unknown shader: retail's blend words");
+      CHECK_MSG(dst == 5 && src == 4, "a blended unknown shader: retail's blend words");
     }
   }
 }
@@ -788,9 +780,9 @@ void TestFrame() {
     Frame(dp1, dq2, const_cast<double*>(a1), const_cast<double*>(c2), -n, tb, bb);  // stored: turned round
     Frame(dp1, dq2, const_cast<double*>(a1), const_cast<double*>(c2), n, tr, br);   // the restored normal
     auto same = [](V3 a, V3 c) { return std::fabs(a.x - c.x) + std::fabs(a.y - c.y) + std::fabs(a.z - c.z) < 1e-9; };
-    Check(same(tb, tf) && same(bb, bf), "a back copy's frame on the stored normal is the front's T and B");
-    Check(same(tr, -tf) && same(br, -bf), "the restored normal in the frame would mirror T and B (why it is not used)");
-    Check(Dot(tf, n) < 1e-9 && Dot(tb, n) < 1e-9, "T is in the surface's plane");
+    CHECK_MSG(same(tb, tf) && same(bb, bf), "a back copy's frame on the stored normal is the front's T and B");
+    CHECK_MSG(same(tr, -tf) && same(br, -bf), "the restored normal in the frame would mirror T and B (why it is not used)");
+    CHECK_MSG(Dot(tf, n) < 1e-9 && Dot(tb, n) < 1e-9, "T is in the surface's plane");
   }
 }
 
@@ -805,8 +797,8 @@ int main() {
   TestGunFxKind();
   TestLambertFx();
   TestFrame();
-  if (sFailures == 0) {
+  if (port_test::Failures() == 0) {
     std::printf("port_remastered_lits_tests: ok\n");
   }
-  return sFailures == 0 ? 0 : 1;
+  return PORT_TEST_RESULT();
 }

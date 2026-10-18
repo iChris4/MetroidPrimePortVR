@@ -21,6 +21,9 @@ namespace PortPointer {
 // The pointer_menus setting (saved by debug_ui.cpp; set through PortDebug::SetPointerMenus).
 bool Enabled();
 void SetEnabled(bool enabled);
+// The map_swap_fingers setting: touch pans with one finger and rotates with two.
+bool MapSwapFingers();
+void SetMapSwapFingers(bool swap);
 
 // One SDL event from the main loop. Synthesized touch mice are ignored (the
 // fingers arrive on their own); keys and pad buttons only mark that the
@@ -81,12 +84,11 @@ void RecordPoints(const CGuiWidget* widget, const CTransform4f& model, const flo
 bool Project(const CTransform4f& model, const CVector3f& point, float& gx, float& gy);
 // The last-drawn widget of frame under the GUI point (EFB pixels), or null.
 const CGuiWidget* Pick(const CGuiFrame* frame, float gx, float gy);
-// The same at the pointer position; false when there is none.
-const CGuiWidget* PickAtPointer(const CGuiFrame* frame);
-// Pick's widget is ancestor or under it.
-bool IsUnder(const CGuiWidget* hit, const CGuiWidget* ancestor);
 // Screen bounds drawn last frame for widget (and its children).
 bool Bounds(const CGuiWidget* widget, bool children, PortPointerMath::Rect& out);
+// The bounds of the last thing widget itself drew (a text pane's glyphs, drawn
+// after its pane), or false when it drew none.
+bool LastBounds(const CGuiWidget* widget, PortPointerMath::Rect& out);
 
 // Console diagnostics: the hit list's state and the rects under a point.
 std::string Describe(float gx, float gy);

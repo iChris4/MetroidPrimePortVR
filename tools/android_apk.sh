@@ -10,12 +10,21 @@ if [ ! -d "$sdk" ]; then
     echo "error: Android SDK not found; set ANDROID_SDK_ROOT" >&2
     exit 1
 fi
+# The NDK app/build.gradle pins (ndkVersion) first: ANDROID_NDK_HOME set here
+# becomes Gradle's ndkPath, which overrides ndkVersion.
+pinned_ndk=$(sed -n 's/^[[:space:]]*ndkVersion[[:space:]]*"\([^"]*\)".*/\1/p' "$root_dir/android/app/build.gradle")
+if [ -z "$ndk" ] && [ -n "$pinned_ndk" ] && [ -f "$sdk/ndk/$pinned_ndk/source.properties" ]; then
+    ndk="$sdk/ndk/$pinned_ndk"
+fi
 if [ -z "$ndk" ]; then
     for candidate in "$sdk"/ndk/* "$home"/android-ndk-cache/android-ndk-*; do
         if [ -f "$candidate/source.properties" ]; then
             ndk=$candidate
         fi
     done
+    if [ -n "$ndk" ]; then
+        echo "note: NDK $pinned_ndk (app/build.gradle) is not installed; using $ndk" >&2
+    fi
 fi
 if [ -z "$ndk" ] || [ ! -f "$ndk/source.properties" ]; then
     echo "error: Android NDK not found; set ANDROID_NDK_HOME" >&2
@@ -49,7 +58,12 @@ if [ -x "$repo_cargo/bin/cargo" ]; then
     export CARGO_HOME RUSTUP_HOME PATH
 fi
 
-ndk_bin="$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin"
+# The NDK names its host directory darwin-x86_64 on Apple Silicon as well.
+case "$(uname -s)" in
+    Darwin) ndk_host=darwin-x86_64 ;;
+    *) ndk_host=linux-x86_64 ;;
+esac
+ndk_bin="$ndk/toolchains/llvm/prebuilt/$ndk_host/bin"
 CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$ndk_bin/aarch64-linux-android28-clang"
 CC_aarch64_linux_android=$CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER
 CXX_aarch64_linux_android="$ndk_bin/aarch64-linux-android28-clang++"
@@ -62,9 +76,15 @@ escape_property() {
     printf '%s' "$1" | sed 's/\\/\\\\/g; s/:/\\:/g; s/ /\\ /g'
 }
 
+# Only sdk.dir is ours; anything else in local.properties is kept.
+properties="$root_dir/android/local.properties"
 {
     printf 'sdk.dir=%s\n' "$(escape_property "$sdk")"
-} > "$root_dir/android/local.properties"
+    if [ -f "$properties" ]; then
+        grep -v '^sdk\.dir=' "$properties" || true
+    fi
+} > "$properties.tmp"
+mv "$properties.tmp" "$properties"
 
 # A release is normally signed with this project's own key, configured in
 # android/keystore.properties (see tools/make_android_keystore.sh). When there

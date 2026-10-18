@@ -47,8 +47,9 @@ public:
   bool Open(const std::string& path);
   void Close();
   // The bytes read, fewer than `size` at the end of the file. Safe from any
-  // number of threads at once: a descriptor is read with pread, and the stream
-  // (Windows) takes a lock around its seek and read.
+  // number of threads at once: a descriptor is read with pread, a Windows handle
+  // with overlapped reads at an offset, and the stream (the fallback when
+  // neither opens) takes a lock around its seek and read.
   size_t ReadSome(uint64_t offset, void* out, size_t size);
   // False unless all of `size` bytes were read.
   bool ReadAt(uint64_t offset, void* out, size_t size);
@@ -57,6 +58,7 @@ private:
   std::mutex m_streamMutex;
   std::ifstream m_stream;
   int m_fd = -1;
+  void* m_handle = nullptr; // Windows: a HANDLE opened for overlapped reads
 };
 
 class Nsp {

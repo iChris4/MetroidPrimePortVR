@@ -16,6 +16,7 @@
 
 #include <dolphin/ai.h>
 #include "port_env.h"
+#include "port_log.h"
 
 namespace {
 constexpr uint32_t kSampleRate = 32000;
@@ -61,7 +62,7 @@ void EnsureStream() {
   if (!sAudioInitialized) {
     sAudioInitialized = SDL_InitSubSystem(SDL_INIT_AUDIO);
     if (!sAudioInitialized) {
-      std::fprintf(stderr, "AI audio initialization failed: %s\n", SDL_GetError());
+      PortLog::Write("AI audio initialization failed: %s\n", SDL_GetError());
       sOutputEnabled = false;
       return;
     }
@@ -69,7 +70,7 @@ void EnsureStream() {
   SDL_AudioSpec spec{SDL_AUDIO_S16, 2, kSampleRate};
   sStream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, nullptr, nullptr);
   if (sStream == nullptr) {
-    std::fprintf(stderr, "AI audio device unavailable: %s\n", SDL_GetError());
+    PortLog::Write("AI audio device unavailable: %s\n", SDL_GetError());
     sOutputEnabled = false;
   } else if (sPlaying) {
     SDL_ResumeAudioStreamDevice(sStream);

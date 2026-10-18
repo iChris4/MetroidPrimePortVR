@@ -1,4 +1,5 @@
 #include "port_log_file.h"
+#include "port_env.h"
 
 #include "port_log_redact.h"
 #include "port_paths.h"
@@ -63,7 +64,7 @@ PortLogRedact::Rules MakeRules() {
     rules.Add(part.c_str(), ":\\Users\\<user>", true);
   }
 #else
-  const char* home = std::getenv("HOME");
+  const char* home = port::HomeFolder();
   rules.Add(home, "~", false);
   if (home != nullptr) {
     if (char* real = realpath(home, nullptr)) {

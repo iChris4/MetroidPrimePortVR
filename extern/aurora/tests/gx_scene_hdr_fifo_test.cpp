@@ -6,6 +6,7 @@
 
 #include "gfx/bloom.hpp"
 #include "gfx/recording.hpp"
+#include "gx/pipeline.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -22,9 +23,12 @@ extern uint32_t g_testSceneHdrSwitches;
 extern bool g_testSceneHdrRefuse;
 extern bool g_testSceneHdrOffscreen;
 extern uint32_t g_testDrawCount;
+extern aurora::gx::DrawData g_testLastDraw;
 } // namespace aurora::gfx
 namespace aurora::gx {
 extern uint32_t g_testPopulateCount;
+extern uint32_t g_testUniformBuildCount;
+extern bool g_testUniformCompatSrcAlphaAdditive;
 } // namespace aurora::gx
 namespace aurora::gfx::bloom::testing {
 extern bool task;
@@ -350,6 +354,51 @@ TEST_F(GXSceneHdrFifoTest, PipelineConfigFollowsThePassMode) {
   EXPECT_EQ(g_testPopulateCount, base + 4);
   draw();
   EXPECT_EQ(g_testPopulateCount, base + 4);
+  aurora::gx::fifo::end_frame();
+  aurora::gx::fifo::shutdown();
+}
+
+// Only cmode0 changes between otherwise identical draws. The FIFO target stubs GPU/packing;
+// scene_hdr_writer_test independently verifies the real packer's flag and row layout.
+TEST_F(GXSceneHdrFifoTest, BlendOnlyTransitionsRefreshTheHdrUniform) {
+  using namespace aurora::gx;
+  aurora::gx::fifo::init();
+  aurora::gx::fifo::begin_frame();
+  aurora::gfx::g_testSceneHdr = true;
+  GXClearVtxDesc();
+  GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
+  GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_U8, 0);
+  const auto draw = [] {
+    const u32 before = aurora::gfx::g_testDrawCount;
+    GXBegin(GX_TRIANGLES, GX_VTXFMT0, 3);
+    GXPosition3u8(0, 1, 2);
+    GXPosition3u8(3, 4, 5);
+    GXPosition3u8(6, 7, 8);
+    GXEnd();
+    aurora::gx::fifo::drain();
+    EXPECT_EQ(aurora::gfx::g_testDrawCount, before + 1);
+    EXPECT_EQ(aurora::gfx::g_testLastDraw.uniformRange.offset, g_testUniformBuildCount);
+  };
+  struct Blend {
+    GXBlendMode mode;
+    GXBlendFactor src, dst;
+    bool compat;
+  };
+  for (const auto b :
+       {Blend{GX_BM_NONE, GX_BL_ONE, GX_BL_ZERO, false}, Blend{GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_ONE, true},
+        Blend{GX_BM_BLEND, GX_BL_ONE, GX_BL_ONE, false}, Blend{GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_ONE, true},
+        Blend{GX_BM_SUBTRACT, GX_BL_SRCALPHA, GX_BL_ONE, false}, Blend{GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_ONE, true},
+        Blend{GX_BM_LOGIC, GX_BL_SRCALPHA, GX_BL_ONE, false}, Blend{GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_ONE, true},
+        Blend{GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_INVSRCALPHA, false}}) {
+    const u32 before = g_testUniformBuildCount;
+    GXSetBlendMode(b.mode, b.src, b.dst, GX_LO_COPY);
+    draw();
+    EXPECT_EQ(g_testUniformBuildCount, before + 1);
+    EXPECT_EQ(g_testUniformCompatSrcAlphaAdditive, b.compat);
+    draw();
+    EXPECT_EQ(g_testUniformBuildCount, before + 1) << "unchanged draws reuse their uniform";
+    EXPECT_EQ(g_testUniformCompatSrcAlphaAdditive, b.compat);
+  }
   aurora::gx::fifo::end_frame();
   aurora::gx::fifo::shutdown();
 }

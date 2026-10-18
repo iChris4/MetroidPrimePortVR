@@ -940,8 +940,10 @@ void encode(const EncoderTaskContext& ctx, const wgpu::CommandEncoder& cmd, cons
   }
   Params& params = recorded.params;
   const bool hdr = recorded.domain == Domain::Hdr;
+  // The targets this frame was recorded against (a resize may have made newer ones since).
+  const auto efb = webgpu::efb_targets();
   const auto& source = webgpu::present_source();
-  const auto& target = webgpu::g_frameBuffer;
+  const auto& target = efb.color;
   const uint32_t samples = webgpu::g_graphicsConfig.msaaSamples > 1 ? webgpu::g_graphicsConfig.msaaSamples : 1;
   const auto format = webgpu::g_graphicsConfig.surfaceConfiguration.format;
   if (hdr && !hdr_source_valid(recorded, samples)) {
@@ -1066,7 +1068,7 @@ void encode(const EncoderTaskContext& ctx, const wgpu::CommandEncoder& cmd, cons
     return;
   }
   draw(cmd, "Bloom composite", g_state.composite, slot++, frameView, levels[0].view, target.view, false,
-       samples > 1 ? webgpu::g_frameBufferResolved.view : wgpu::TextureView{}, lutA, lutB);
+       samples > 1 ? efb.resolved.view : wgpu::TextureView{}, lutA, lutB);
 }
 
 // A slot for a post in this frame; false (warned) past MaxPostsPerFrame. Under g_recordMutex.

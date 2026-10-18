@@ -53,6 +53,20 @@ inline float EnvFloat(const char* name, float fallback) {
   return end != value && *end == '\0' ? parsed : fallback;
 }
 
+// The user's home folder, or nullptr when the environment does not name one:
+// HOME, else USERPROFILE (Windows, where HOME is usually unset). An empty
+// value counts as unset. Read by hand rather than through SDL, which would
+// create its folders.
+inline const char* HomeFolder() {
+  for (const char* name : {"HOME", "USERPROFILE"}) {
+    const char* value = std::getenv(name);
+    if (value != nullptr && value[0] != '\0') {
+      return value;
+    }
+  }
+  return nullptr;
+}
+
 } // namespace port
 
 #endif

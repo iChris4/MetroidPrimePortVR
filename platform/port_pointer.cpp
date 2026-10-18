@@ -13,6 +13,7 @@ namespace PortPointer {
 namespace {
 
 bool sEnabled = true;
+bool sMapSwapFingers = false;
 Recognizer sGestures;
 SDL_WindowID sWindowId = 0;
 double sScreenActiveTime = -1.0;
@@ -103,6 +104,8 @@ bool SynthesizedMouse(SDL_MouseID which) { return which == SDL_TOUCH_MOUSEID || 
 } // namespace
 
 bool Enabled() { return sEnabled; }
+bool MapSwapFingers() { return sMapSwapFingers; }
+void SetMapSwapFingers(bool swap) { sMapSwapFingers = swap; }
 void SetEnabled(bool enabled) {
   if (sEnabled != enabled) {
     sGestures.Reset();
@@ -430,28 +433,15 @@ const CGuiWidget* Pick(const CGuiFrame* frame, float gx, float gy) {
   return static_cast< const CGuiWidget* >(static_cast< const CGuiObject* >(e->chain[0]));
 }
 
-const CGuiWidget* PickAtPointer(const CGuiFrame* frame) {
-  float gx = 0.f, gy = 0.f;
-  if (!PortPointer::Position(gx, gy)) {
-    return nullptr;
-  }
-  return Pick(frame, gx, gy);
-}
-
-bool IsUnder(const CGuiWidget* hit, const CGuiWidget* ancestor) {
-  if (hit == nullptr || ancestor == nullptr) {
-    return false;
-  }
-  for (const CGuiObject* o = hit; o != nullptr; o = o->GetParent()) {
-    if (o == ancestor) {
-      return true;
-    }
-  }
-  return false;
-}
-
 bool Bounds(const CGuiWidget* widget, bool children, PortPointerMath::Rect& out) {
   return sHits.Bounds(CGraphics::GetFrameCounter(), Key(widget), children, out);
+}
+
+bool LastBounds(const CGuiWidget* widget, PortPointerMath::Rect& out) {
+  if (widget == nullptr) {
+    return false;
+  }
+  return sHits.LastBounds(CGraphics::GetFrameCounter(), Key(widget), out);
 }
 
 std::string Describe(float gx, float gy) {

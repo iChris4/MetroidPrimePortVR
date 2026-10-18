@@ -422,8 +422,10 @@ void encode(const EncoderTaskContext& ctx, const wgpu::CommandEncoder& cmd, cons
   std::memcpy(&slot, payload, sizeof(slot));
   slot %= g_recorded.size();
   const Params& params = g_recorded[slot];
+  // The targets this frame was recorded against (a resize may have made newer ones since).
+  const auto efb = webgpu::efb_targets();
   const auto& source = webgpu::present_source();
-  const auto& target = webgpu::g_frameBuffer;
+  const auto& target = efb.color;
   const uint32_t samples = webgpu::g_graphicsConfig.msaaSamples > 1 ? webgpu::g_graphicsConfig.msaaSamples : 1;
   const auto format = webgpu::g_graphicsConfig.surfaceConfiguration.format;
   const uint32_t width = source.size.width;
@@ -490,7 +492,7 @@ void encode(const EncoderTaskContext& ctx, const wgpu::CommandEncoder& cmd, cons
   const auto drawFrame = [&](const char* label, const wgpu::RenderPipeline& pipeline, const wgpu::BindGroup& group) {
     const wgpu::RenderPassColorAttachment attachment{
         .view = target.view,
-        .resolveTarget = samples > 1 ? webgpu::g_frameBufferResolved.view : wgpu::TextureView{},
+        .resolveTarget = samples > 1 ? efb.resolved.view : wgpu::TextureView{},
         .loadOp = wgpu::LoadOp::Clear,
         .storeOp = wgpu::StoreOp::Store,
         .clearValue = {0.0, 0.0, 0.0, 0.0},

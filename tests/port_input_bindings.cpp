@@ -1,4 +1,5 @@
 #include "port_input_bindings.h"
+#include "port_test.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -8,18 +9,6 @@
 using namespace PortInput;
 
 namespace {
-int sLine = 0;
-void Check(bool condition) {
-  if (!condition) {
-    std::fprintf(stderr, "input bindings regression failed at line %d\n", sLine);
-    std::abort();
-  }
-}
-#define CHECK(cond)                                                                                \
-  do {                                                                                             \
-    sLine = __LINE__;                                                                              \
-    Check(cond);                                                                                   \
-  } while (0)
 
 Input In(Device d, uint16_t code, int8_t dir = 0, uint8_t threshold = 50) { return {d, dir, threshold, code}; }
 
@@ -58,78 +47,78 @@ void TestInputText() {
           continue;
         bool directed = device == Device::MouseWheel || device == Device::MouseMotion ||
                         device == Device::PadAxis || device == Device::TouchAxis || device == Device::Gyro;
-        CHECK(RoundTrips(In(device, code, directed ? dir : 0)));
-        CHECK(RoundTrips(In(device, code, directed ? dir : 0, 75)));
+        REQUIRE(RoundTrips(In(device, code, directed ? dir : 0)));
+        REQUIRE(RoundTrips(In(device, code, directed ? dir : 0, 75)));
       }
   for (uint16_t code = 0; code < kMouseButtonCount; ++code)
-    CHECK(RoundTrips(In(Device::MouseButton, code)));
+    REQUIRE(RoundTrips(In(Device::MouseButton, code)));
   for (uint16_t code = 0; code < kPadButtonCount; ++code)
-    CHECK(RoundTrips(In(Device::PadButton, code)));
+    REQUIRE(RoundTrips(In(Device::PadButton, code)));
   for (uint16_t code = 0; code < kPadAxisCount; ++code)
-    CHECK(RoundTrips(In(Device::PadAxis, code, -1)));
-  CHECK(RoundTrips(In(Device::Key, kKeyCount - 1)));
-  CHECK(RoundTrips(In(Device::Touch, kTouchCount - 1)));
+    REQUIRE(RoundTrips(In(Device::PadAxis, code, -1)));
+  REQUIRE(RoundTrips(In(Device::Key, kKeyCount - 1)));
+  REQUIRE(RoundTrips(In(Device::Touch, kTouchCount - 1)));
 
-  CHECK(InputToText(In(Device::PadButton, 9)) == "pad:leftshoulder");
-  CHECK(InputToText(In(Device::PadButton, 16)) == "pad:paddle1");
-  CHECK(InputToText(In(Device::PadButton, 30)) == "pad:30");
-  CHECK(InputToText(In(Device::PadAxis, 5, 1)) == "axis:righttrigger+");
-  CHECK(InputToText(In(Device::PadAxis, 2)) == "axis:rightx");
-  CHECK(InputToText(In(Device::MouseButton, 8)) == "mouse:left");
-  CHECK(InputToText(In(Device::MouseButton, 2)) == "mouse:aim:right");
-  CHECK(InputToText(In(Device::MouseButton, 17)) == "mouse:menu:middle");
-  CHECK(InputToText(In(Device::MouseButton, 28)) == "mouse:held:x2");
-  CHECK(InputToText(In(Device::MouseWheel, 0, 1)) == "wheel:up");
-  CHECK(InputToText(In(Device::MouseWheel, 1, -1)) == "wheel:left");
-  CHECK(InputToText(In(Device::MouseMotion, 1)) == "motion:y");
-  CHECK(InputToText(In(Device::Gyro, 1, -1)) == "gyro:yaw-");
-  CHECK(InputToText(In(Device::TouchAxis, 3, 1, 20)) == "touchaxis:3+@20");
-  CHECK(InputToText(In(Device::Key, 44)) == "key:44");
+  REQUIRE(InputToText(In(Device::PadButton, 9)) == "pad:leftshoulder");
+  REQUIRE(InputToText(In(Device::PadButton, 16)) == "pad:paddle1");
+  REQUIRE(InputToText(In(Device::PadButton, 30)) == "pad:30");
+  REQUIRE(InputToText(In(Device::PadAxis, 5, 1)) == "axis:righttrigger+");
+  REQUIRE(InputToText(In(Device::PadAxis, 2)) == "axis:rightx");
+  REQUIRE(InputToText(In(Device::MouseButton, 8)) == "mouse:left");
+  REQUIRE(InputToText(In(Device::MouseButton, 2)) == "mouse:aim:right");
+  REQUIRE(InputToText(In(Device::MouseButton, 17)) == "mouse:menu:middle");
+  REQUIRE(InputToText(In(Device::MouseButton, 28)) == "mouse:held:x2");
+  REQUIRE(InputToText(In(Device::MouseWheel, 0, 1)) == "wheel:up");
+  REQUIRE(InputToText(In(Device::MouseWheel, 1, -1)) == "wheel:left");
+  REQUIRE(InputToText(In(Device::MouseMotion, 1)) == "motion:y");
+  REQUIRE(InputToText(In(Device::Gyro, 1, -1)) == "gyro:yaw-");
+  REQUIRE(InputToText(In(Device::TouchAxis, 3, 1, 20)) == "touchaxis:3+@20");
+  REQUIRE(InputToText(In(Device::Key, 44)) == "key:44");
 
   Input in;
-  CHECK(InputFromText("axis:lefttrigger+@30", in) && in == In(Device::PadAxis, 4, 1, 30));
-  CHECK(InputFromText(" pad:a ", in) && in == In(Device::PadButton, 0));
-  CHECK(!InputFromText("pad:a@101", in));
-  CHECK(!InputFromText("pad:nope", in));
-  CHECK(!InputFromText("pad:32", in));
-  CHECK(!InputFromText("touch:64", in));
-  CHECK(!InputFromText("key:space", in)); // no key names installed
-  CHECK(!InputFromText("bogus:1", in));
-  CHECK(!InputFromText("pad:", in));
-  CHECK(!InputFromText("gyro:3", in));
+  REQUIRE(InputFromText("axis:lefttrigger+@30", in) && in == In(Device::PadAxis, 4, 1, 30));
+  REQUIRE(InputFromText(" pad:a ", in) && in == In(Device::PadButton, 0));
+  REQUIRE(!InputFromText("pad:a@101", in));
+  REQUIRE(!InputFromText("pad:nope", in));
+  REQUIRE(!InputFromText("pad:32", in));
+  REQUIRE(!InputFromText("touch:64", in));
+  REQUIRE(!InputFromText("key:space", in)); // no key names installed
+  REQUIRE(!InputFromText("bogus:1", in));
+  REQUIRE(!InputFromText("pad:", in));
+  REQUIRE(!InputFromText("gyro:3", in));
 
   SetKeyNames(FakeKeyName, FakeKeyParse);
-  CHECK(InputToText(In(Device::Key, 44)) == "key:space");
-  CHECK(InputToText(In(Device::Key, 45)) == "key:45");
-  CHECK(InputFromText("key:space", in) && in == In(Device::Key, 44));
-  CHECK(InputFromText("key:45", in) && in == In(Device::Key, 45));
-  CHECK(!InputFromText("key:enter", in));
-  CHECK(InputFromText("key:1", in) && in == In(Device::Key, 30)); // the name wins
-  CHECK(InputFromText("key:@", in) && in == In(Device::Key, 31));
-  CHECK(InputFromText("key:@@20", in) && in == In(Device::Key, 31, 0, 20));
-  CHECK(RoundTrips(In(Device::Key, 31)) && RoundTrips(In(Device::Key, 30, 0, 75)));
+  REQUIRE(InputToText(In(Device::Key, 44)) == "key:space");
+  REQUIRE(InputToText(In(Device::Key, 45)) == "key:45");
+  REQUIRE(InputFromText("key:space", in) && in == In(Device::Key, 44));
+  REQUIRE(InputFromText("key:45", in) && in == In(Device::Key, 45));
+  REQUIRE(!InputFromText("key:enter", in));
+  REQUIRE(InputFromText("key:1", in) && in == In(Device::Key, 30)); // the name wins
+  REQUIRE(InputFromText("key:@", in) && in == In(Device::Key, 31));
+  REQUIRE(InputFromText("key:@@20", in) && in == In(Device::Key, 31, 0, 20));
+  REQUIRE(RoundTrips(In(Device::Key, 31)) && RoundTrips(In(Device::Key, 30, 0, 75)));
   SetKeyNames(nullptr, nullptr);
 
-  CHECK(InputToText(In(Device::Touch, 3)) == "touch:a");
-  CHECK(InputToText(In(Device::Touch, 28)) == "touch:tturbo");
-  CHECK(InputToText(In(Device::Touch, 32)) == "touch:beam_shift");
-  CHECK(InputToText(In(Device::Touch, 40)) == "touch:40");
-  CHECK(InputFromText("touch:missile", in) && in == In(Device::Touch, 20));
-  CHECK(InputFromText("touch:map_tap", in) && in == In(Device::Touch, 34));
-  CHECK(InputFromText("touch:5", in) && in == In(Device::Touch, 5));
-  CHECK(!InputFromText("touch:nope", in));
+  REQUIRE(InputToText(In(Device::Touch, 3)) == "touch:a");
+  REQUIRE(InputToText(In(Device::Touch, 28)) == "touch:tturbo");
+  REQUIRE(InputToText(In(Device::Touch, 32)) == "touch:beam_shift");
+  REQUIRE(InputToText(In(Device::Touch, 40)) == "touch:40");
+  REQUIRE(InputFromText("touch:missile", in) && in == In(Device::Touch, 20));
+  REQUIRE(InputFromText("touch:map_tap", in) && in == In(Device::Touch, 34));
+  REQUIRE(InputFromText("touch:5", in) && in == In(Device::Touch, 5));
+  REQUIRE(!InputFromText("touch:nope", in));
   for (uint16_t code = 0; code < kTouchCount; ++code)
-    CHECK(RoundTrips(In(Device::Touch, code)));
+    REQUIRE(RoundTrips(In(Device::Touch, code)));
 }
 
 void TestContexts() {
-  CHECK(ContextsToText(kCtxAll) == "all");
-  CHECK(ContextsToText(kCtxGameplay | kCtxMap) == "gameplay,map");
-  CHECK(ContextsToText(kCtxLayer2) == "layer2");
+  REQUIRE(ContextsToText(kCtxAll) == "all");
+  REQUIRE(ContextsToText(kCtxGameplay | kCtxMap) == "gameplay,map");
+  REQUIRE(ContextsToText(kCtxLayer2) == "layer2");
   uint16_t c = 0;
-  CHECK(ContextFromText("morphball", c) && c == kCtxMorphBall);
-  CHECK(ContextFromText("all", c) && c == kCtxAll);
-  CHECK(!ContextFromText("nowhere", c));
+  REQUIRE(ContextFromText("morphball", c) && c == kCtxMorphBall);
+  REQUIRE(ContextFromText("all", c) && c == kCtxAll);
+  REQUIRE(!ContextFromText("nowhere", c));
 }
 
 void TestRoundTrip() {
@@ -179,14 +168,14 @@ void TestRoundTrip() {
   std::string text = SerializeUserBindings(in);
   UserBindings back;
   std::string error;
-  CHECK(ParseUserBindings(text, back, &error));
-  CHECK(back == in);
-  CHECK(SerializeUserBindings(back) == text);
+  REQUIRE(ParseUserBindings(text, back, &error));
+  REQUIRE(back == in);
+  REQUIRE(SerializeUserBindings(back) == text);
   // Defaults are left out.
-  CHECK(text.find("tap_ms = 200") == std::string::npos);
-  CHECK(text.find("contexts = [\"all\"]") == std::string::npos);
-  CHECK(text.find("contexts = [\"gameplay\", \"morphball\"]") != std::string::npos);
-  CHECK(text.find("scale = 3.0") != std::string::npos);
+  REQUIRE(text.find("tap_ms = 200") == std::string::npos);
+  REQUIRE(text.find("contexts = [\"all\"]") == std::string::npos);
+  REQUIRE(text.find("contexts = [\"gameplay\", \"morphball\"]") != std::string::npos);
+  REQUIRE(text.find("scale = 3.0") != std::string::npos);
 
   // Hand-written forms: comments, trailing comma, integer scale, "all".
   const char* hand = "# mine\n"
@@ -199,41 +188,41 @@ void TestRoundTrip() {
                      "inputs = [\"pad:a\", ]\n"
                      "scale = 2\n"
                      "contexts = [\"all\"]\n";
-  CHECK(ParseUserBindings(hand, back, &error));
-  CHECK(back.profiles.size() == 1 && back.profiles[0].bindings.size() == 1);
-  CHECK(back.profiles[0].match.empty());
-  CHECK(back.profiles[0].bindings[0].scale == 2.f);
-  CHECK(back.profiles[0].bindings[0].contexts == kCtxAll);
-  CHECK(ParseUserBindings("", back) && back.profiles.empty());
-  CHECK(ParseUserBindings("\xEF\xBB\xBF[[profile]]\nname = \"bom\"\n", back, &error));
-  CHECK(back.profiles.size() == 1 && back.profiles[0].name == "bom");
+  REQUIRE(ParseUserBindings(hand, back, &error));
+  REQUIRE(back.profiles.size() == 1 && back.profiles[0].bindings.size() == 1);
+  REQUIRE(back.profiles[0].match.empty());
+  REQUIRE(back.profiles[0].bindings[0].scale == 2.f);
+  REQUIRE(back.profiles[0].bindings[0].contexts == kCtxAll);
+  REQUIRE(ParseUserBindings("", back) && back.profiles.empty());
+  REQUIRE(ParseUserBindings("\xEF\xBB\xBF[[profile]]\nname = \"bom\"\n", back, &error));
+  REQUIRE(back.profiles.size() == 1 && back.profiles[0].name == "bom");
 }
 
 void TestErrors() {
-  CHECK(ErrorLine("[[profile]]\nname = \"a\"\n[[profile.bind]]\naction = \"jump\"\ninputs = [\"pad:a\"]\n") == 4);
-  CHECK(ErrorLine("[[profile]]\ncolour = \"red\"\n") == 2);
-  CHECK(ErrorLine("[[profile]]\n[[profile.bind]]\naction = \"pad_a\"\ninputs = [\"pad:zz\"]\n") == 4);
-  CHECK(ErrorLine("\n[[profile.bind]]\naction = \"pad_a\"\n") == 2);
-  CHECK(ErrorLine("[[profile]]\n[[profile.bind]]\naction = \"pad_a\"\n"
-                  "inputs = [\"pad:a\", \"pad:b\", \"pad:x\", \"pad:y\", \"pad:back\"]\n") == 4);
-  CHECK(ErrorLine("[[profile]]\n[[profile.bind]]\naction = \"pad_a\"\ninputs = []\n") == 4);
-  CHECK(ErrorLine("[[profile]]\n\n[[profile.bind]]\naction = \"pad_a\"\n") == 3);  // no inputs
-  CHECK(ErrorLine("[[profile]]\nchord_window_ms = 70000\n") == 2);
-  CHECK(ErrorLine("[[profile]]\nreplace = 1\n") == 2);
-  CHECK(ErrorLine("[[profile]]\nname = \"open\n") == 2);
-  CHECK(ErrorLine("[[profile]]\nunbind = [\"pad_a@mouse\"]\n") == 2);
-  CHECK(ErrorLine("name = \"x\"\n") == 1);
-  CHECK(ErrorLine("[controls]\n") == 1);
+  REQUIRE(ErrorLine("[[profile]]\nname = \"a\"\n[[profile.bind]]\naction = \"jump\"\ninputs = [\"pad:a\"]\n") == 4);
+  REQUIRE(ErrorLine("[[profile]]\ncolour = \"red\"\n") == 2);
+  REQUIRE(ErrorLine("[[profile]]\n[[profile.bind]]\naction = \"pad_a\"\ninputs = [\"pad:zz\"]\n") == 4);
+  REQUIRE(ErrorLine("\n[[profile.bind]]\naction = \"pad_a\"\n") == 2);
+  REQUIRE(ErrorLine("[[profile]]\n[[profile.bind]]\naction = \"pad_a\"\n"
+                    "inputs = [\"pad:a\", \"pad:b\", \"pad:x\", \"pad:y\", \"pad:back\"]\n") == 4);
+  REQUIRE(ErrorLine("[[profile]]\n[[profile.bind]]\naction = \"pad_a\"\ninputs = []\n") == 4);
+  REQUIRE(ErrorLine("[[profile]]\n\n[[profile.bind]]\naction = \"pad_a\"\n") == 3);  // no inputs
+  REQUIRE(ErrorLine("[[profile]]\nchord_window_ms = 70000\n") == 2);
+  REQUIRE(ErrorLine("[[profile]]\nreplace = 1\n") == 2);
+  REQUIRE(ErrorLine("[[profile]]\nname = \"open\n") == 2);
+  REQUIRE(ErrorLine("[[profile]]\nunbind = [\"pad_a@mouse\"]\n") == 2);
+  REQUIRE(ErrorLine("name = \"x\"\n") == 1);
+  REQUIRE(ErrorLine("[controls]\n") == 1);
   const char* bind = "[[profile]]\n[[profile.bind]]\naction = \"pad_a\"\ninputs = [\"pad:a\"]\n";
-  CHECK(ErrorLine((std::string(bind) + "scale = inf\n").c_str()) == 5);
-  CHECK(ErrorLine((std::string(bind) + "scale = nan\n").c_str()) == 5);
-  CHECK(ErrorLine((std::string(bind) + "scale = 1e300\n").c_str()) == 5);
-  CHECK(ErrorLine((std::string(bind) + "scale = 101.0\n").c_str()) == 5);
+  REQUIRE(ErrorLine((std::string(bind) + "scale = inf\n").c_str()) == 5);
+  REQUIRE(ErrorLine((std::string(bind) + "scale = nan\n").c_str()) == 5);
+  REQUIRE(ErrorLine((std::string(bind) + "scale = 1e300\n").c_str()) == 5);
+  REQUIRE(ErrorLine((std::string(bind) + "scale = 101.0\n").c_str()) == 5);
 
   UserBindings out;
   out.profiles.emplace_back();
-  CHECK(!ParseUserBindings("[[profile]]\nbad\n", out));
-  CHECK(out.profiles.size() == 1); // left unchanged
+  REQUIRE(!ParseUserBindings("[[profile]]\nbad\n", out));
+  REQUIRE(out.profiles.size() == 1); // left unchanged
 }
 
 void TestSelect() {
@@ -251,15 +240,15 @@ void TestSelect() {
   add("type2", "type:ps5");
 
   Selection s = Select(b, "0300abcd", "ps5");
-  CHECK(s.base && s.base->name == "base");
-  CHECK(s.pad && s.pad->name == "guid");
+  REQUIRE(s.base && s.base->name == "base");
+  REQUIRE(s.pad && s.pad->name == "guid");
   s = Select(b, "ffff", "Ps5");
-  CHECK(s.pad && s.pad->name == "type");
+  REQUIRE(s.pad && s.pad->name == "type");
   s = Select(b, "", "");
-  CHECK(s.base && s.base->name == "base" && !s.pad);
+  REQUIRE(s.base && s.base->name == "base" && !s.pad);
   s = Select(b, "", "xbox360");
-  CHECK(!s.pad);
-  CHECK(!Select({}, "a", "b").base);
+  REQUIRE(!s.pad);
+  REQUIRE(!Select({}, "a", "b").base);
 }
 
 void TestOverlay() {
@@ -279,20 +268,20 @@ void TestOverlay() {
 
   Profile p = base;
   Overlay(p, user);
-  CHECK(p.chordWindowMs == 40);
-  CHECK(p.bindings.size() == 5);
-  CHECK(p.bindings[0] == base.bindings[0]); // keyboard Fire kept
-  CHECK(p.bindings[1] == base.bindings[3]); // touch Z kept
-  CHECK(p.bindings[2] == base.bindings[4]); // pad B kept
-  CHECK(p.bindings[3] == user.bindings[0]);
-  CHECK(p.bindings[4] == user.bindings[1]);
+  REQUIRE(p.chordWindowMs == 40);
+  REQUIRE(p.bindings.size() == 5);
+  REQUIRE(p.bindings[0] == base.bindings[0]); // keyboard Fire kept
+  REQUIRE(p.bindings[1] == base.bindings[3]); // touch Z kept
+  REQUIRE(p.bindings[2] == base.bindings[4]); // pad B kept
+  REQUIRE(p.bindings[3] == user.bindings[0]);
+  REQUIRE(p.bindings[4] == user.bindings[1]);
 
   user.replace = true;
   user.chordWindowMs = 90;
   p = base;
   Overlay(p, user);
-  CHECK(p.chordWindowMs == 90);
-  CHECK(p.bindings == user.bindings);
+  REQUIRE(p.chordWindowMs == 90);
+  REQUIRE(p.bindings == user.bindings);
 }
 
 void TestFamilyEditing() {
@@ -303,47 +292,47 @@ void TestFamilyEditing() {
   inherited.bindings.push_back(Bind(Action::PadB, {In(Device::PadButton, 1)}));
 
   UserProfile user;
-  CHECK(BindingFamily(inherited.bindings[2]) == Family::Pad);
-  CHECK(!Overridden(user, Action::PadA, Family::Keyboard));
+  REQUIRE(BindingFamily(inherited.bindings[2]) == Family::Pad);
+  REQUIRE(!Overridden(user, Action::PadA, Family::Keyboard));
 
   // Editing one of two inherited keys keeps the other, and the pad binding alone.
   Materialize(user, Action::PadA, Family::Keyboard, inherited);
-  CHECK(user.bindings.size() == 2);
-  CHECK(Overridden(user, Action::PadA, Family::Keyboard));
-  CHECK(!Overridden(user, Action::PadA, Family::Pad));
+  REQUIRE(user.bindings.size() == 2);
+  REQUIRE(Overridden(user, Action::PadA, Family::Keyboard));
+  REQUIRE(!Overridden(user, Action::PadA, Family::Pad));
   Materialize(user, Action::PadA, Family::Keyboard, inherited); // already overridden: no copy
-  CHECK(user.bindings.size() == 2);
+  REQUIRE(user.bindings.size() == 2);
   Profile p = inherited;
   Overlay(p, user);
-  CHECK(p.bindings.size() == 4);
-  CHECK(InFamily(p.bindings, Action::PadA, Family::Pad).size() == 1);
+  REQUIRE(p.bindings.size() == 4);
+  REQUIRE(InFamily(p.bindings, Action::PadA, Family::Pad).size() == 1);
 
   // Removing the last one unbinds the family.
   RemoveUserBinding(user, 0);
-  CHECK(user.unbind.empty());
+  REQUIRE(user.unbind.empty());
   RemoveUserBinding(user, 0);
-  CHECK(user.bindings.empty());
-  CHECK(user.unbind.size() == 1 && user.unbind[0] == (Unbind{Action::PadA, Family::Keyboard}));
+  REQUIRE(user.bindings.empty());
+  REQUIRE(user.unbind.size() == 1 && user.unbind[0] == (Unbind{Action::PadA, Family::Keyboard}));
   p = inherited;
   Overlay(p, user);
-  CHECK(InFamily(p.bindings, Action::PadA, Family::Keyboard).empty());
-  CHECK(InFamily(p.bindings, Action::PadA, Family::Pad).size() == 1);
+  REQUIRE(InFamily(p.bindings, Action::PadA, Family::Keyboard).empty());
+  REQUIRE(InFamily(p.bindings, Action::PadA, Family::Pad).size() == 1);
 
   // A new binding supersedes the unbind.
   AddUserBinding(user, Bind(Action::PadA, {In(Device::Key, 9)}));
-  CHECK(user.unbind.empty() && user.bindings.size() == 1);
+  REQUIRE(user.unbind.empty() && user.bindings.size() == 1);
 
   // Revert and ClearFamily.
   AddUserBinding(user, Bind(Action::PadB, {In(Device::PadButton, 2)}));
   Revert(user, Action::PadA, Family::Keyboard);
-  CHECK(!Overridden(user, Action::PadA, Family::Keyboard));
-  CHECK(Overridden(user, Action::PadB, Family::Pad));
+  REQUIRE(!Overridden(user, Action::PadA, Family::Keyboard));
+  REQUIRE(Overridden(user, Action::PadB, Family::Pad));
   user.unbind.push_back({Action::PadZ, Family::Keyboard});
   ClearFamily(user, Family::Pad);
-  CHECK(user.bindings.empty());
-  CHECK(user.unbind.size() == 1);
+  REQUIRE(user.bindings.empty());
+  REQUIRE(user.unbind.size() == 1);
   ClearFamily(user, Family::Keyboard);
-  CHECK(user.unbind.empty());
+  REQUIRE(user.unbind.empty());
 }
 void TestDuplicateBindings() {
   const Binding key = Bind(Action::PadA, {In(Device::Key, 44)});
@@ -352,7 +341,7 @@ void TestDuplicateBindings() {
   UserProfile user;
   Materialize(user, key.action, Family::Keyboard, inherited);
   for (int i = 0; i < 5; ++i) AddUserBinding(user, key);
-  CHECK(user.bindings.size() == 1);
+  REQUIRE(user.bindings.size() == 1);
 
   Binding other = key;
   other.action = Action::PadB;
@@ -360,24 +349,24 @@ void TestDuplicateBindings() {
   other = key;
   other.trigger = Trigger::Tap;
   AddUserBinding(user, other);
-  CHECK(user.bindings.size() == 3);
+  REQUIRE(user.bindings.size() == 3);
 
   // Editing another key to the existing key coalesces the duplicate.
   AddUserBinding(user, Bind(Action::PadA, {In(Device::Key, 45)}));
   RemoveUserBinding(user, 3);
   AddUserBinding(user, key);
-  CHECK(user.bindings.size() == 3);
-  CHECK(user.unbind.empty());
+  REQUIRE(user.bindings.size() == 3);
+  REQUIRE(user.unbind.empty());
 
   other = key;
   other.contexts = kCtxMorphBall;
   AddUserBinding(user, other);
   AddUserBinding(user, other);
-  CHECK(user.bindings.size() == 4);
+  REQUIRE(user.bindings.size() == 4);
 
   UserProfile controllerProfile;
   AddUserBinding(controllerProfile, key);
-  CHECK(controllerProfile.bindings.size() == 1);
+  REQUIRE(controllerProfile.bindings.size() == 1);
 }
 } // namespace
 

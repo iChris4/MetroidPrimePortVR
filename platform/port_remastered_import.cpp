@@ -1,109 +1,11 @@
-#include "port_env.h"
-#include "port_remastered_import.h"
-
-#include <algorithm>
-#include <array>
-#include <atomic>
-#include <cctype>
-#include <cmath>
-#include <chrono>
-#include <condition_variable>
-#include <cstdio>
-#include <cstdlib>
-#include <cstring>
-#include <deque>
-#include <exception>
-#include <filesystem>
-#include <fstream>
-#include <functional>
-#include <future>
-#include <list>
-#include <map>
-#include <tuple>
-#include <memory>
-#include <mutex>
-#include <set>
-#include <sstream>
-#include <thread>
-#include <unordered_map>
-#include <unordered_set>
-#include <utility>
-
-#include <aurora/dvd.h>
-#include <aurora/gfx.h>
-
-#include "port_build_info.h"
-#include "port_disc.h"
-#include "port_gallery.h"
-#include "port_synthetic_effect.h"
-#include "port_map_icons.h"
-#include "port_model_variant.h"
-#include "port_mods.h"
-#include "port_remastered_cmdl.h"
-#include "port_remastered_convert.h"
-#include "port_remastered_effect_import.h"
-#include "port_remastered_font.h"
-#include "port_remastered_image.h"
-#include "port_remastered_hud.h"
-#include "port_remastered_map.h"
-#include "port_remastered_movie.h"
-#include "port_remastered_nsp.h"
-#include "port_remastered_pak.h"
-#include "port_remastered_report.h"
-#include "port_remastered_room.h"
-#include "port_remastered_table.h"
-#include "port_remastered_text.h"
-#include "port_remastered_txtr.h"
-#include "port_room_geo.h"
-#include "port_ws.h"
-
-#if defined(_WIN32)
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <windows.h>
-#else
-#include <sys/resource.h>
-#if !defined(__APPLE__)
-#include <sys/syscall.h>
-#endif
-#include <unistd.h>
-#endif
+#include "port_remastered_import_internal.h"
 
 namespace PortRemastered {
-namespace {
+namespace ImportDetail {
 
-namespace fs = std::filesystem;
-
-constexpr uint32_t kCMDL = 0x434D444C;
-constexpr uint32_t kSMDL = 0x534D444C;
-constexpr uint32_t kWMDL = 0x574D444C;  // a liquid's surface
-constexpr uint32_t kCSKR = 0x43534B52;
-constexpr uint32_t kANCS = 0x414E4353;
-constexpr uint32_t kTXTR = 0x54585452;
-constexpr uint32_t kMLVL = 0x4D4C564C;
-constexpr uint32_t kMREA = 0x4D524541;
-constexpr uint32_t kSTRG = 0x53545247;
-constexpr uint32_t kMSBT = 0x4D534254;
-constexpr uint32_t kFONT = 0x464F4E54;
-constexpr uint32_t kGUIF = 0x47554946;
-constexpr uint32_t kLDTA = 0x4C445441;
-constexpr uint32_t kCMAP = 0x434D4150;
-constexpr uint32_t kMAPA = 0x4D415041;
-constexpr uint32_t kMAPW = 0x4D415057;
-constexpr uint32_t kFRME = 0x46524D45;
-constexpr uint32_t kFMV0 = 0x464D5630;
-constexpr uint32_t kGENP = 0x47454E50;  // a particle effect
-constexpr uint32_t kSWSH = 0x53575348;  // a standalone swoosh effect
-constexpr uint32_t kCRSM = 0x4352534D;  // a projectile collision response
-constexpr uint32_t kELSM = 0x454C534D;  // a standalone electric effect (retail ELSC)
-constexpr uint32_t kELC2 = 0x454C4332;  // the same, in the newer form
-constexpr uint32_t kMATI = 0x4D415449;  // a material instance
-constexpr uint32_t kWPSM = 0x5750534D;  // a projectile weapon (Remastered's WPSC)
-constexpr uint32_t kWPSC = 0x57505343;  // the disc's projectile weapon
-constexpr uint32_t kCRSC = 0x43525343;  // the disc's projectile collision response
-constexpr uint32_t kPART = 0x50415254;  // a disc particle effect
-
-constexpr const char* kStagingName = ".remastered-models.importing";
+// The import's own folders, staged in the root port_remastered_storage.h works out.
+constexpr const char* kStagingName = PortRemasteredStorage::kStagingName;
+constexpr const char* kTrashPrefix = PortRemasteredStorage::kTrashPrefix;
 // Written last, so a staging folder without it is an import that was cut short.
 constexpr const char* kMarkerName = "import-complete";
 constexpr const char* kRoomFolder = "roomenv";
@@ -164,14 +66,29 @@ std::vector<std::pair<int, float>> CoarserLevels(const Model& model) {
   return out;
 }
 
+// What the panel leaves out (SetImportParts). Read by the import thread, set
+// only while no import runs.
+std::mutex sPartsMutex;
+ImportParts sParts;
+
+ImportParts Parts() {
+  std::lock_guard<std::mutex> lock(sPartsMutex);
+  return sParts;
+}
+
 // The rooms whose geometry is imported, from MP_REMASTERED_GEOMETRY: "all", or
-// room names (any part of one) separated by commas, or "none". Without it, all.
-bool WantsGeometry(const std::string& room) {
-  const char* env = std::getenv("MP_REMASTERED_GEOMETRY");
-  if (env == nullptr || env[0] == '\0') {
-    return true;
+// room names (any part of one) separated by commas, or "none". Without it, all;
+// "none" when the panel leaves the geometry out.
+std::string GeometryChoice() {
+  if (!Parts().geometry) {
+    return "none";
   }
-  const std::string list = env;
+  const char* env = port::EnvString("MP_REMASTERED_GEOMETRY");
+  return env == nullptr || env[0] == '\0' ? std::string("all") : std::string(env);
+}
+
+bool WantsGeometry(const std::string& room) {
+  const std::string list = GeometryChoice();
   if (list == "none") {
     return false;
   }
@@ -205,9 +122,38 @@ std::atomic<bool> sCancel{false};
 
 fs::path PathFromString(const std::string& text) { return fs::path(std::u8string(text.begin(), text.end())); }
 
+std::string PathString(const fs::path& path) {
+  const std::u8string text = path.u8string();
+  return std::string(text.begin(), text.end());
+}
+
 void SetMessage(const std::string& message) {
   std::lock_guard<std::mutex> lock(sStateMutex);
   sState.message = message;
+}
+
+// The steps of a full import in the order it makes them, for the panel's progress bar: reading
+// the image, then the stages (beginStage's names).
+const char* const kSteps[] = {"disc", "models", "effects", "rooms", "roommodels",
+                              "text", "font",   "hud",     "movies", "gallery"};
+
+void SetStep(const std::string& name) {
+  std::lock_guard<std::mutex> lock(sStateMutex);
+  for (size_t i = 0; i < std::size(kSteps); ++i) {
+    if (name == kSteps[i]) {
+      sState.step = int(i + 1);
+      sState.steps = int(std::size(kSteps));
+      sState.stepDone = 0;
+      sState.stepTotal = 0;
+      return;
+    }
+  }
+}
+
+void SetStepProgress(size_t done, size_t total) {
+  std::lock_guard<std::mutex> lock(sStateMutex);
+  sState.stepDone = int(done);
+  sState.stepTotal = int(total);
 }
 
 // The lines of the stage being made, kept in the manifest so that a re-import that reuses the
@@ -236,28 +182,34 @@ void Finish(bool ok, const std::string& message) {
 
 // MP_REMASTERED_TEXT=0 leaves the disc's wording alone.
 bool WantsText() {
-  return port::EnvFlag("MP_REMASTERED_TEXT", true);
+  return Parts().text && port::EnvFlag("MP_REMASTERED_TEXT", true);
 }
 
 // MP_REMASTERED_HUD=0 leaves the disc's HUD alone.
 bool WantsHud() {
-  return port::EnvFlag("MP_REMASTERED_HUD", true);
+  return Parts().hud && port::EnvFlag("MP_REMASTERED_HUD", true);
 }
 
 // MP_REMASTERED_GALLERY=0 leaves the Extras gallery out.
 bool WantsGallery() {
-  return port::EnvFlag("MP_REMASTERED_GALLERY", true);
+  return Parts().gallery && port::EnvFlag("MP_REMASTERED_GALLERY", true);
 }
 
 // MP_REMASTERED_MOVIES=0 leaves the disc's movies alone; a size and rate
 // ("1280x720@30") is what they are written as.
+// Set to an off value (port_env.h's: 0, false, off, no); unset or empty keeps them.
+bool MoviesTurnedOff() {
+  const char* env = port::EnvString("MP_REMASTERED_MOVIES");
+  return env != nullptr && env[0] != '\0' && !port::EnvFlag("MP_REMASTERED_MOVIES");
+}
+
 bool WantsMovies(MovieFormat& format) {
-  const char* env = std::getenv("MP_REMASTERED_MOVIES");
+  if (!Parts().movies || MoviesTurnedOff()) {
+    return false;
+  }
+  const char* env = port::EnvString("MP_REMASTERED_MOVIES");
   if (env == nullptr || env[0] == '\0' || std::strcmp(env, "1") == 0) {
     return true;
-  }
-  if (std::strcmp(env, "0") == 0) {
-    return false;
   }
   if (!ParseMovieFormat(env, format)) {
     AddLine(std::string("MP_REMASTERED_MOVIES: \"") + env + "\" is not a size and rate like 1280x720@30");
@@ -287,13 +239,7 @@ using Manifest = std::map<std::string, StageRecord>;
 constexpr const char* kManifestName = ".import-manifest";
 constexpr const char* kManifestHeader = "remastered import manifest 1";
 
-uint64_t Hash64(const std::string& text) {
-  uint64_t hash = 0xCBF29CE484222325ull;  // FNV-1a
-  for (const char c : text) {
-    hash = (hash ^ uint8_t(c)) * 0x100000001B3ull;
-  }
-  return hash;
-}
+uint64_t Hash64(const std::string& text) { return port::Fnv1a64(text); }
 
 std::string Hex64(uint64_t value) {
   char text[24];
@@ -576,647 +522,99 @@ bool WriteReplacing(const fs::path& path, const std::vector<uint8_t>& data) {
   return !ec;
 }
 
-// --- The retail disc ----------------------------------------------------------
-
-// The CMDL, CSKR, TXTR, MLVL, MREA, STRG, FRME, MAPA and MAPW resources of the unmodded disc, and every id on it.
-class Retail {
-public:
-  ~Retail() {
-    for (auto& [entry, handle] : m_handles) {
-      aurora_dvd_base_close(handle);
-    }
-  }
-
-  bool Index(std::string& error) {
-    const int32_t baseCount = aurora_dvd_base_entry_count();
-    for (const auto& [entry, path] : PortMods::DiscPaks()) {
-      if (entry < 0 || entry >= baseCount) {
-        continue;  // a PAK only a mod brings
-      }
-      void* handle = aurora_dvd_base_open(entry);
-      if (handle == nullptr) {
-        continue;
-      }
-      m_handles[entry] = handle;
-      std::vector<uint8_t> header;
-      PortMods::PakTable table;
-      size_t needed = 0x10000;
-      bool parsed = false;
-      while (needed <= (64u << 20)) {
-        header.resize(needed);
-        const size_t got = ReadAt(handle, 0, header.data(), header.size());
-        if (PortMods::ParsePakTable(header.data(), got, table, needed)) {
-          parsed = true;
-          break;
-        }
-        if (got < header.size() || needed <= header.size()) {
-          break;
-        }
-      }
-      if (!parsed) {
-        continue;
-      }
-      // The named resources (a pak's first section): the projectile weapons' names pair them
-      // with Remastered's WPSMs. Kept out of m_resources, which the fingerprint covers.
-      if (header.size() >= 12) {
-        const auto be32 = [&header](size_t at) {
-          return uint32_t(header[at]) << 24 | uint32_t(header[at + 1]) << 16 | uint32_t(header[at + 2]) << 8 |
-                 uint32_t(header[at + 3]);
-        };
-        size_t at = 12;
-        for (uint32_t n = be32(8); n > 0 && at + 12 <= header.size(); --n) {
-          const uint32_t length = be32(at + 8);
-          if (at + 12 + length > header.size()) {
-            break;
-          }
-          if (be32(at) == kWPSC) {
-            std::string name(reinterpret_cast<const char*>(header.data() + at + 12), length);
-            std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return char(std::tolower(c)); });
-            if (!m_wpscNames.emplace(name, be32(at + 4)).second) {
-              m_ambiguousWpscNames.insert(std::move(name));
-            }
-          }
-          at += 12 + length;
-        }
-      }
-      for (const PortMods::PakResource& res : table.resources) {
-        m_ids.insert(res.id);
-        ++m_resourceCounts[Key(res.type, res.id)];
-        if (res.type == kWPSC) {
-          m_wpsc.emplace(Key(res.type, res.id), Where{entry, res.offset, res.size, res.compressed != 0});
-        }
-        if (res.type == kCMDL || res.type == kCSKR || res.type == kANCS || res.type == kTXTR || res.type == kMLVL ||
-            res.type == kMREA || res.type == kSTRG || res.type == kFRME || res.type == kMAPA || res.type == kMAPW ||
-            res.type == kCRSC) {
-          m_resources.emplace(Key(res.type, res.id), Where{entry, res.offset, res.size, res.compressed != 0});
-        }
-      }
-    }
-    if (m_resources.empty()) {
-      error = "no models found on the disc";
-      return false;
-    }
-    return true;
-  }
-
-  bool HasId(uint32_t id) const { return m_ids.count(id) != 0; }
-
-  bool HasUniqueResource(uint32_t type, uint32_t id) const {
-    const auto found = m_resourceCounts.find(Key(type, id));
-    return found != m_resourceCounts.end() && found->second == 1;
-  }
-
-  // The ids of every resource of `type` it reads, in no particular order.
-  std::vector<uint32_t> Ids(uint32_t type) const {
-    std::vector<uint32_t> ids;
-    for (const auto& [key, where] : m_resources) {
-      if (uint32_t(key >> 32) == type) {
-        ids.push_back(uint32_t(key));
-      }
-    }
-    return ids;
-  }
-
-  // Which disc this is, as far as the import reads it: every resource's place and size, in
-  // any order, and the ids of the rest.
-  uint64_t Fingerprint() const {
-    uint64_t sum = m_resources.size() * 0x9E3779B97F4A7C15ull + m_ids.size();
-    for (const auto& [key, where] : m_resources) {
-      const std::string text = std::to_string(key) + " " + std::to_string(where.entry) + " " +
-                               std::to_string(where.offset) + " " + std::to_string(where.size) +
-                               (where.compressed ? " z" : "");
-      sum += Hash64(text);
-    }
-    for (const uint32_t id : m_ids) {
-      sum ^= Hash64(std::to_string(id)) * 3;
-    }
-    return sum;
-  }
-
-  // The id of the disc's projectile weapon (WPSC) of this name.
-  bool WpscId(const std::string& name, uint32_t& id) const {
-    if (m_ambiguousWpscNames.count(name) != 0) {
-      return false;
-    }
-    const auto found = m_wpscNames.find(name);
-    if (found == m_wpscNames.end()) {
-      return false;
-    }
-    id = found->second;
-    return true;
-  }
-
-  bool Read(uint32_t type, uint32_t id, std::vector<uint8_t>& out) {
-    auto found = m_resources.find(Key(type, id));
-    if (found == m_resources.end()) {
-      found = m_wpsc.find(Key(type, id));
-      if (found == m_wpsc.end()) {
-        return false;
-      }
-    }
-    const Where& where = found->second;
-    if (!where.compressed) {
-      std::vector<uint8_t> raw(where.size);
-      {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        if (ReadAt(m_handles[where.entry], where.offset, raw.data(), raw.size()) != raw.size()) {
-          return false;
-        }
-      }
-      out = std::move(raw);
-      return true;
-    }
-    // Read straight into the string the inflater takes, so the blob is not copied into one.
-    std::string raw(where.size, '\0');
-    {
-      std::lock_guard<std::mutex> lock(m_mutex);
-      if (ReadAt(m_handles[where.entry], where.offset, reinterpret_cast<uint8_t*>(raw.data()), raw.size()) !=
-          raw.size()) {
-        return false;
-      }
-    }
-    // A big-endian length, then a zlib stream: two header bytes, the DEFLATE
-    // data, and a checksum the decoder never reaches.
-    if (raw.size() < 6) {
-      return false;
-    }
-    const auto byte = [&raw](size_t i) { return size_t(static_cast<uint8_t>(raw[i])); };
-    const size_t length = byte(0) << 24 | byte(1) << 16 | byte(2) << 8 | byte(3);
-    raw.erase(0, 6);
-    PortWs::Inflater inflater;
-    inflater.SetKeepWindow(false);
-    std::string inflated;
-    if (!inflater.InflateMessage(raw, inflated, length) || inflated.size() != length) {
-      return false;
-    }
-    out.assign(inflated.begin(), inflated.end());
-    return true;
-  }
-
-private:
-  struct Where {
-    int32_t entry;
-    uint32_t offset;
-    uint32_t size;
-    bool compressed;
-  };
-
-  static uint64_t Key(uint32_t type, uint32_t id) { return uint64_t(type) << 32 | id; }
-
-  static size_t ReadAt(void* handle, uint64_t offset, uint8_t* out, size_t size) {
-    if (aurora_dvd_base_seek(handle, int64_t(offset), 0) != int64_t(offset)) {
-      return 0;
-    }
-    size_t done = 0;
-    while (done < size) {
-      const int64_t got = aurora_dvd_base_read(handle, out + done, size - done);
-      if (got <= 0) {
-        break;
-      }
-      done += size_t(got);
-    }
-    return done;
-  }
-
-  std::mutex m_mutex;
-  std::map<int32_t, void*> m_handles;
-  std::unordered_map<uint64_t, Where> m_resources;
-  std::unordered_set<uint32_t> m_ids;
-  std::unordered_map<uint64_t, Where> m_wpsc;                 // the projectile weapons, read on demand
-  std::unordered_map<std::string, uint32_t> m_wpscNames;      // WPSC id by name
-  std::unordered_set<std::string> m_ambiguousWpscNames;
-  std::unordered_map<uint64_t, size_t> m_resourceCounts;      // typed ids, including PART/CRSC
-};
-
-// --- The Remastered image ------------------------------------------------------
-
-// Every model and texture in the image's paks, by id.
-class Remastered {
-public:
-  bool Open(const std::string& nspPath, const std::string& keysPath, std::string& error) {
-    if (!m_nsp.Open(nspPath, keysPath, error)) {
-      return false;
-    }
-    std::vector<const RomfsFile*> files;
-    for (const RomfsFile& file : m_nsp.Files()) {
-      if (file.path.size() > 4 && file.path.compare(file.path.size() - 4, 4, ".pak") == 0) {
-        files.push_back(&file);
-      }
-    }
-    for (size_t i = 0; i < files.size(); ++i) {
-      if (sCancel) {
-        error = "cancelled";
-        return false;
-      }
-      SetMessage("Reading the paks (" + std::to_string(i + 1) + "/" + std::to_string(files.size()) + ")");
-      const RomfsFile* file = files[i];
-      auto pak = std::make_unique<Pak>();
-      std::string pakError;
-      // Nsp::Read is safe from the workers side by side.
-      const ReadFn read = [this, file](uint64_t offset, void* out, size_t size) {
-        std::string ignored;
-        return m_nsp.Read(*file, offset, out, size, ignored);
-      };
-      if (!pak->Open(read, file->size, pakError)) {
-        AddLine(file->path + ": " + pakError);
-        continue;
-      }
-      const std::vector<PakAsset>& assets = pak->Assets();
-      for (size_t a = 0; a < assets.size(); ++a) {
-        const uint32_t type = assets[a].type;
-        if (type == kCMDL || type == kSMDL || type == kWMDL) {
-          m_models.emplace(assets[a].id, Where{m_paks.size(), a});
-          for (const std::string& name : assets[a].names) {
-            m_modelNames.emplace(FrameKey(name), Where{m_paks.size(), a});
-          }
-        } else if (type == kTXTR) {
-          m_textures.emplace(assets[a].id, Where{m_paks.size(), a});
-          for (const std::string& name : assets[a].names) {
-            m_textureNames.emplace(FrameKey(name), Where{m_paks.size(), a});
-          }
-        } else if (type == kMSBT) {
-          m_texts.emplace(assets[a].id, Where{m_paks.size(), a});
-        } else if (type == kFONT) {
-          m_fonts.emplace(assets[a].id, Where{m_paks.size(), a});
-        } else if (type == kFMV0) {
-          m_movies.emplace(IdToString(assets[a].id), Where{m_paks.size(), a});
-        } else if (type == kGENP) {
-          if (!m_effects.emplace(assets[a].id, Where{m_paks.size(), a}).second) {
-            m_effectDuplicates.insert(assets[a].id);
-          }
-          for (const std::string& name : assets[a].names) {
-            m_effectNames.emplace(FrameKey(name), assets[a].id);
-            m_effectIdNames.emplace(assets[a].id, FrameKey(name));
-          }
-        } else if (type == kSWSH) {
-          m_swooshes.emplace(assets[a].id, Where{m_paks.size(), a});
-          for (const std::string& name : assets[a].names) {
-            m_effectNames.emplace(FrameKey(name), assets[a].id);
-            m_effectIdNames.emplace(assets[a].id, FrameKey(name));
-          }
-        } else if (type == kELSM || type == kELC2) {
-          m_electrics.emplace(assets[a].id, Where{m_paks.size(), a});
-          m_electricTypes.emplace(assets[a].id, type);
-          for (const std::string& name : assets[a].names) {
-            m_effectNames.emplace(FrameKey(name), assets[a].id);
-          }
-        } else if (type == kWPSM) {
-          for (const std::string& name : assets[a].names) {
-            const std::string key = FrameKey(name);
-            const auto [found, inserted] = m_projectiles.emplace(key, Where{m_paks.size(), a});
-            if (!inserted && (found->second.pak != m_paks.size() || found->second.asset != a)) {
-              m_ambiguousProjectiles.insert(key);
-            }
-          }
-        } else if (type == kCRSM) {
-          if (!m_collisions.emplace(assets[a].id, Where{m_paks.size(), a}).second) {
-            m_collisionDuplicates.insert(assets[a].id);
-          }
-        } else if (type == kMATI) {
-          m_materials.emplace(assets[a].id, Where{m_paks.size(), a});
-        } else if (type == kGUIF) {
-          for (const std::string& name : assets[a].names) {
-            m_frames.emplace(FrameKey(name), Where{m_paks.size(), a});
-          }
-        } else if (type == kCMAP) {
-          for (const std::string& name : assets[a].names) {
-            m_maps.emplace(FrameKey(name), Where{m_paks.size(), a});
-          }
-        } else if (type == kLDTA) {
-          for (const std::string& name : assets[a].names) {
-            m_tweaks.emplace(FrameKey(name), Where{m_paks.size(), a});
-          }
-        }
-      }
-      m_paks.push_back(std::move(pak));
-      m_paths.push_back(file->path);
-    }
-    if (m_models.empty() && m_movies.empty()) {
-      error = "no models in this image; is it Metroid Prime Remastered?";
-      return false;
-    }
-    return true;
-  }
-
-  bool ReadModel(const ModelUuid& id, std::vector<uint8_t>& out, std::string& error) const {
-    return Read(m_models, id, out, error);
-  }
-  bool ReadTexture(const ModelUuid& id, std::vector<uint8_t>& out, std::string& error) const {
-    return Read(m_textures, id, out, error);
-  }
-
-  // The FONT assets, in id order. There are several, with different sets of characters.
-  std::vector<ModelUuid> Fonts() const {
-    std::vector<ModelUuid> ids;
-    for (const auto& [id, where] : m_fonts) {
-      ids.push_back(id);
-    }
-    std::sort(ids.begin(), ids.end());
-    return ids;
-  }
-  bool ReadFont(const ModelUuid& id, std::vector<uint8_t>& out, std::string& error) const {
-    return Read(m_fonts, id, out, error);
-  }
-
-  // A GUI frame by its asset name ("FRME_CombatHud"), whatever folder and case the pak has it under.
-  bool ReadFrame(const std::string& name, std::vector<uint8_t>& out, std::string& error) const {
-    const auto found = m_frames.find(FrameKey(name));
-    if (found == m_frames.end()) {
-      error = "not in the image";
-      return false;
-    }
-    const Pak& pak = *m_paks[found->second.pak];
-    return pak.ReadAsset(pak.Assets()[found->second.asset], out, error);
-  }
-
-  // A tweak file by its asset name ("TweakGuiColorsMP1"), as ReadFrame finds a frame.
-  bool ReadTweak(const std::string& name, std::vector<uint8_t>& out, std::string& error) const {
-    const auto found = m_tweaks.find(FrameKey(name));
-    if (found == m_tweaks.end()) {
-      error = "not in the image";
-      return false;
-    }
-    const Pak& pak = *m_paks[found->second.pak];
-    return pak.ReadAsset(pak.Assets()[found->second.asset], out, error);
-  }
-
-  // A texture by its asset name ("TXTR_IconS"), as ReadFrame finds a frame.
-  bool ReadTextureNamed(const std::string& name, std::vector<uint8_t>& out, std::string& error) const {
-    const auto found = m_textureNames.find(FrameKey(name));
-    if (found == m_textureNames.end()) {
-      error = "not in the image";
-      return false;
-    }
-    const Pak& pak = *m_paks[found->second.pak];
-    return pak.ReadAsset(pak.Assets()[found->second.asset], out, error);
-  }
-
-  // The Extras gallery's pictures, in the pak's order: the textures of UI_FrontEnd at least 1000 texels high (the
-  // concept art; the menu backdrops are 1600x900). `visit` gets each one's position and its TXTR file, and says
-  // whether to go on.
-  template <class Visit>
-  void ForEachGalleryTexture(Visit&& visit) const {
-    size_t position = 0;
-    for (size_t i = 0; i < m_paks.size(); ++i) {
-      const std::string& path = m_paths[i];
-      if (path.substr(path.rfind('/') + 1) != "UI_FrontEnd.pak") {
-        continue;
-      }
-      const Pak& pak = *m_paks[i];
-      for (const PakAsset& asset : pak.Assets()) {
-        std::vector<uint8_t> raw;
-        std::string error;
-        TxtrImage info;
-        if (asset.type != kTXTR || !pak.ReadAsset(asset, raw, error) ||
-            !ReadTxtrInfo(raw.data(), raw.size(), info, error) || info.height < 1000) {
-          continue;
-        }
-        if (!visit(position++, raw)) {
-          return;
-        }
-      }
-    }
-  }
-
-  // A model by its asset name ("CMDL_MapCompass"), as ReadFrame finds a frame.
-  bool ReadModelNamed(const std::string& name, std::vector<uint8_t>& out, std::string& error) const {
-    const auto found = m_modelNames.find(FrameKey(name));
-    if (found == m_modelNames.end()) {
-      error = "not in the image";
-      return false;
-    }
-    const Pak& pak = *m_paks[found->second.pak];
-    return pak.ReadAsset(pak.Assets()[found->second.asset], out, error);
-  }
-
-  // A world's map by its asset name ("CMAP_IceLevel"), as ReadFrame finds a frame.
-  bool ReadMap(const std::string& name, std::vector<uint8_t>& out, std::string& error) const {
-    const auto found = m_maps.find(FrameKey(name));
-    if (found == m_maps.end()) {
-      error = "not in the image";
-      return false;
-    }
-    const Pak& pak = *m_paks[found->second.pak];
-    return pak.ReadAsset(pak.Assets()[found->second.asset], out, error);
-  }
-
-  // A movie by its id as IdToString prints it.
-  bool ReadMovie(const std::string& id, std::vector<uint8_t>& out, std::string& error) const {
-    const auto found = m_movies.find(id);
-    if (found == m_movies.end()) {
-      error = "not in the image";
-      return false;
-    }
-    const Pak& pak = *m_paks[found->second.pak];
-    return pak.ReadAsset(pak.Assets()[found->second.asset], out, error);
-  }
-
-  // Every text asset, each once however many paks carry it.
-  std::vector<ModelUuid> Texts() const {
-    std::vector<ModelUuid> ids;
-    for (const auto& [id, where] : m_texts) {
-      ids.push_back(id);
-    }
-    return ids;
-  }
-  bool ReadText(const ModelUuid& id, std::vector<uint8_t>& out, std::string& error) const {
-    return Read(m_texts, id, out, error);
-  }
-
-  // The particle effects (GENP) and what they read: material instances and textures.
-  std::vector<ModelUuid> Effects() const {
-    std::vector<ModelUuid> ids;
-    for (const auto& [id, where] : m_effects) {
-      ids.push_back(id);
-    }
-    for (const auto& [id, where] : m_electrics) {
-      ids.push_back(id);
-    }
-    for (const auto& [id, where] : m_swooshes) {
-      ids.push_back(id);
-    }
-    std::sort(ids.begin(), ids.end());
-    return ids;
-  }
-  // The projectile weapons (WPSM) by lower-case name, and a GENP/SWSH by its name.
-  std::vector<std::string> ProjectileNames() const {
-    std::vector<std::string> names;
-    for (const auto& [name, where] : m_projectiles) {
-      names.push_back(name);
-    }
-    std::sort(names.begin(), names.end());
-    return names;
-  }
-  bool ReadProjectile(const std::string& name, std::vector<uint8_t>& out, std::string& error) const {
-    if (m_ambiguousProjectiles.count(name) != 0) {
-      error = "ambiguous asset name";
-      return false;
-    }
-    const auto found = m_projectiles.find(name);
-    if (found == m_projectiles.end()) {
-      error = "not in the image";
-      return false;
-    }
-    const Pak& pak = *m_paks[found->second.pak];
-    return pak.ReadAsset(pak.Assets()[found->second.asset], out, error);
-  }
-  bool HasUniqueCollision(const ModelUuid& id) const {
-    return m_collisions.count(id) != 0 && m_collisionDuplicates.count(id) == 0;
-  }
-  bool ReadCollision(const ModelUuid& id, std::vector<uint8_t>& out, std::string& error) const {
-    if (!HasUniqueCollision(id)) {
-      error = "missing or ambiguous collision response";
-      return false;
-    }
-    return Read(m_collisions, id, out, error);
-  }
-  bool HasUniqueEffect(const ModelUuid& id) const {
-    return m_effects.count(id) != 0 && m_effectDuplicates.count(id) == 0;
-  }
-  // A GENP/SWSH's (lower-case) name; the first when it has several.
-  bool EffectName(const ModelUuid& id, std::string& name) const {
-    const auto found = m_effectIdNames.find(id);
-    if (found == m_effectIdNames.end()) {
-      return false;
-    }
-    name = found->second;
-    return true;
-  }
-  bool EffectByName(const std::string& name, ModelUuid& id) const {
-    const auto found = m_effectNames.find(name);
-    if (found == m_effectNames.end()) {
-      return false;
-    }
-    id = found->second;
-    return true;
-  }
-  bool ReadEffectAsset(uint32_t type, const ModelUuid& id, std::vector<uint8_t>& out, std::string& error) const {
-    return Read(type == kGENP   ? m_effects
-                : type == kSWSH ? m_swooshes
-                : type == kELSM || type == kELC2 ? m_electrics
-                : type == kMATI ? m_materials
-                                : m_textures,
-                id, out, error);
-  }
-  uint32_t EffectAssetType(const ModelUuid& id) const {
-    return m_textures.count(id) != 0    ? kTXTR
-           : m_materials.count(id) != 0 ? kMATI
-           : m_effects.count(id) != 0   ? kGENP
-           : m_swooshes.count(id) != 0  ? kSWSH
-           : m_electrics.count(id) != 0 ? m_electricTypes.at(id)
-           : m_models.count(id) != 0    ? kCMDL
-                                        : 0;
-  }
-
-  // The paks of one world directory ("Intro_Master") as the room writer takes
-  // them, and every pak of the image for the assets rooms share.
-  void World(const std::string& dir, RoomPak& master, std::vector<RoomPak>& rooms) const {
-    const std::string folder = "/!" + dir + "/";
-    for (size_t i = 0; i < m_paks.size(); ++i) {
-      const std::string& path = m_paths[i];
-      const size_t at = path.find(folder);
-      if (at == std::string::npos) {
-        continue;
-      }
-      const std::string name = path.substr(at + folder.size(), path.size() - at - folder.size() - 4);
-      if (name == "!" + dir) {
-        master = RoomPak{dir, m_paks[i].get()};
-      } else if (name.find('/') == std::string::npos) {
-        rooms.push_back(RoomPak{name, m_paks[i].get()});
-      }
-    }
-  }
-  // The environment BRDF table out of the executable. Never throws.
-  bool ExtractBrdf(std::vector<uint8_t>& out, std::string& error) const {
-    try {
-      return ExtractBrdfLut(m_nsp, out, error);
-    } catch (const std::exception& e) {
-      error = e.what();
-      return false;
-    }
-  }
-
-  // The thermal visor's noise texture out of the executable. Never throws.
-  bool ExtractThermalNoiseBytes(std::vector<uint8_t>& out, std::string& error) const {
-    try {
-      return ExtractThermalNoise(m_nsp, out, error);
-    } catch (const std::exception& e) {
-      error = e.what();
-      return false;
-    }
-  }
-
-  std::vector<RoomPak> AllPaks() const {
-    std::vector<RoomPak> all;
-    for (size_t i = 0; i < m_paks.size(); ++i) {
-      all.push_back(RoomPak{m_paths[i], m_paks[i].get()});
-    }
-    return all;
-  }
-
-private:
-  struct Where {
-    size_t pak;
-    size_t asset;
-  };
-  using Index = std::unordered_map<std::array<uint8_t, 16>, Where, PakIdHash>;
-
-  static std::string FrameKey(const std::string& name) {
-    const size_t slash = name.find_last_of("/\\");
-    std::string key = name.substr(slash == std::string::npos ? 0 : slash + 1);
-    key = key.substr(0, key.find('.'));
-    for (char& c : key) {
-      c = char(std::tolower(static_cast<unsigned char>(c)));
-    }
-    return key;
-  }
-
-  bool Read(const Index& index, const ModelUuid& id, std::vector<uint8_t>& out, std::string& error) const {
-    const auto found = index.find(id);
-    if (found == index.end()) {
-      error = "not in the image";
-      return false;
-    }
-    const Pak& pak = *m_paks[found->second.pak];
-    return pak.ReadAsset(pak.Assets()[found->second.asset], out, error);
-  }
-
-  Nsp m_nsp;
-  std::vector<std::unique_ptr<Pak>> m_paks;
-  std::vector<std::string> m_paths;  // of m_paks, in the image
-  Index m_models;
-  Index m_textures;
-  Index m_texts;
-  Index m_fonts;
-  Index m_effects;
-  std::unordered_set<ModelUuid, PakIdHash> m_effectDuplicates;
-  Index m_swooshes;  // standalone SWSH effects
-  Index m_electrics;  // standalone ELSM and ELC2 effects
-  std::unordered_map<ModelUuid, uint32_t, PakIdHash> m_electricTypes;
-  Index m_materials;
-  Index m_collisions;
-  std::unordered_set<ModelUuid, PakIdHash> m_collisionDuplicates;
-  std::unordered_map<std::string, Where> m_projectiles;  // WPSM, by FrameKey
-  std::unordered_set<std::string> m_ambiguousProjectiles;
-  std::map<ModelUuid, std::string> m_effectIdNames;  // the first name of a GENP and SWSH
-  std::unordered_map<std::string, ModelUuid> m_effectNames;  // the named GENP and SWSH, by FrameKey
-  std::unordered_map<std::string, Where> m_frames;  // GUIF, by FrameKey
-  std::unordered_map<std::string, Where> m_tweaks;  // LDTA, by FrameKey
-  std::unordered_map<std::string, Where> m_textureNames;  // the named TXTR, by FrameKey
-  std::unordered_map<std::string, Where> m_modelNames;    // the named CMDL, by FrameKey
-  std::unordered_map<std::string, Where> m_maps;  // CMAP, by FrameKey
-  std::unordered_map<std::string, Where> m_movies;  // FMV0, by IdToString
-};
-
 // --- The import ------------------------------------------------------------------
 
 fs::path StagingFolder() {
+  const std::string root = ImportRootFolder();
+  return root.empty() ? fs::path() : PathFromString(root) / kStagingName;
+}
+
+#if defined(__ANDROID__)
+// The app's own storage, where Android keeps the built-in import (SDL's answer is the folder the
+// APK's private files live in).
+std::string InternalStoragePath() {
+  const char* storage = SDL_GetAndroidInternalStoragePath();
+  return storage != nullptr ? storage : std::string();
+}
+#endif
+
+// The shared mods folder's own import from before Android moved the import into the app, or from a
+// first private import that has none: read-only, and empty when the mods folder is the root itself,
+// where the import already is that folder's.
+std::string LegacySharedImport() {
+  const std::string root = ImportRootFolder();
   const std::string mods = PortMods::Folder();
-  return mods.empty() ? fs::path() : PathFromString(mods) / kStagingName;
+  if (root.empty() || mods.empty() ||
+      PortRemasteredStorage::WithSeparator(mods) == root) {
+    return {};
+  }
+  std::error_code ec;
+  const fs::path legacy = PathFromString(mods) / kImportModName;
+  return fs::is_directory(legacy, ec) ? PathString(legacy) : std::string();
 }
 
 // Where a finished import that is not yet in place waits while the next one reuses it.
-fs::path HeldFolder(const fs::path& staging) { return staging.parent_path() / (std::string(kStagingName) + ".held"); }
+fs::path HeldFolder(const fs::path& staging) {
+  return staging.parent_path() / PortRemasteredStorage::kHeldName;
+}
+
+// Folders on their way out (kTrashPrefix): an old import can be most of a gigabyte,
+// too much to delete while the game waits on a mods reload. Renamed to a hidden name
+// (the mod loader skips it) at once and deleted on a thread; one a quit interrupted
+// is picked up by the next sweep.
+std::mutex sTrashMutex;
+bool sTrashSweeping = false;
+bool sTrashAgain = false;
+
+void SweepTrash(const fs::path& mods) {
+  {
+    std::lock_guard<std::mutex> lock(sTrashMutex);
+    if (sTrashSweeping) {
+      sTrashAgain = true;
+      return;
+    }
+    sTrashSweeping = true;
+  }
+  std::thread([mods] {
+    for (;;) {
+      std::error_code ec;
+      std::vector<fs::path> trash;
+      for (fs::directory_iterator it(mods, ec), end; !ec && it != end; it.increment(ec)) {
+        if (it->path().filename().string().rfind(kTrashPrefix, 0) == 0) {
+          trash.push_back(it->path());
+        }
+      }
+      for (const fs::path& dir : trash) {
+        fs::remove_all(dir, ec);
+      }
+      std::lock_guard<std::mutex> lock(sTrashMutex);
+      if (!sTrashAgain) {
+        sTrashSweeping = false;
+        return;
+      }
+      sTrashAgain = false;
+    }
+  }).detach();
+}
+
+// Takes `dir` out of the way now and deletes it later. Deletes it here only when
+// it cannot be renamed.
+void Discard(const fs::path& dir) {
+  std::error_code ec;
+  if (!fs::exists(dir, ec)) {
+    return;
+  }
+  static std::atomic<unsigned> sCount{0};
+  const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+  const fs::path trash =
+      dir.parent_path() / (kTrashPrefix + std::to_string(stamp) + "-" + std::to_string(sCount++));
+  fs::rename(dir, trash, ec);
+  if (ec) {
+    fs::remove_all(dir, ec);
+    return;
+  }
+  SweepTrash(dir.parent_path());
+}
 
 ConvertOptions OptionsFor(const TableEntry& entry) {
   ConvertOptions options;
@@ -1269,6 +667,7 @@ int ImportMovies(const Remastered& remastered, const fs::path& folder, const Mov
   for (size_t i = 0; i < movies.size() && !sCancel; ++i) {
     const Movie& movie = movies[i];
     SetMessage("Converting the movies (" + std::to_string(i + 1) + "/" + std::to_string(movies.size()) + ")");
+    SetStepProgress(i, movies.size());
     std::vector<uint8_t> raw;
     std::string error;
     size_t offset = 0;
@@ -1424,7 +823,7 @@ int ImportGallery(const Remastered& remastered, const fs::path& target, int thre
   fs::remove_all(target, ec);
   fs::rename(folder, target, ec);
   if (ec) {
-    std::fprintf(stderr, "gallery: cannot move the new folder into place: %s\n", ec.message().c_str());
+    PortLog::Write("gallery: cannot move the new folder into place: %s\n", ec.message().c_str());
     fs::remove_all(folder, ec);
     return 0;
   }
@@ -1491,11 +890,7 @@ EffectGuid ToStored(EffectGuid id) {
   return id;
 }
 
-std::string HexId(uint32_t id) {
-  char text[16];
-  std::snprintf(text, sizeof(text), "%08X", id);
-  return text;
-}
+using port::Hex8;
 
 // A retail effect id that two projectiles reference gives each its own Remastered effect: the
 // first claimant (in WPSM name, then field order) keeps the disc's id, any other with a different
@@ -1541,8 +936,7 @@ std::vector<EffectPairing> ProjectilePairings(const Remastered& remastered, Reta
       uint32_t discId = 0;
       for (size_t i = 0; i + 12 <= weapon.size(); ++i) {
         if (std::memcmp(weapon.data() + i, field.tag, 4) == 0 && std::memcmp(weapon.data() + i + 4, "CNST", 4) == 0) {
-          discId = uint32_t(weapon[i + 8]) << 24 | uint32_t(weapon[i + 9]) << 16 | uint32_t(weapon[i + 10]) << 8 |
-                   uint32_t(weapon[i + 11]);
+          discId = port::GetBE32(weapon, i + 8);
           break;
         }
       }
@@ -1584,19 +978,17 @@ std::vector<EffectPairing> ProjectilePairings(const Remastered& remastered, Reta
         }
         const uint32_t synthetic = SyntheticEffectId(effectName.c_str());
         if (retail.HasId(synthetic)) {
-          lines.push_back("WPSM " + who + ": " + HexId(discId) + " is shared with " + claim->second.who +
+          lines.push_back("WPSM " + who + ": " + Hex8(discId) + " is shared with " + claim->second.who +
                           ", no synthetic id for " + EffectGuidString(ToStored(guid)));
           continue;
         }
-        lines.push_back("WPSM " + who + ": " + HexId(discId) + " is shared with " + claim->second.who + ", so " +
-                        HexId(synthetic) + " (" + effectName + ")");
+        lines.push_back("WPSM " + who + ": " + Hex8(discId) + " is shared with " + claim->second.who + ", so " +
+                        Hex8(synthetic) + " (" + effectName + ")");
         target = synthetic;
-        remaps.push_back({wpsc, uint32_t(uint8_t(field.tag[0])) << 24 | uint32_t(uint8_t(field.tag[1])) << 16 |
-                                    uint32_t(uint8_t(field.tag[2])) << 8 | uint8_t(field.tag[3]),
-                          discId, synthetic});
+        remaps.push_back({wpsc, port::FourCC(field.tag), discId, synthetic});
       }
       pairings.push_back({guid, target, "wpsm " + who});
-      lines.push_back("WPSM " + who + ": " + EffectGuidString(ToStored(guid)) + " -> " + HexId(target));
+      lines.push_back("WPSM " + who + ": " + EffectGuidString(ToStored(guid)) + " -> " + Hex8(target));
     }
   }
   // Effects the disc's PARTs/SWHCs name the same (SamGunFx.pak), that no WPSC reaches.
@@ -1618,7 +1010,7 @@ std::vector<EffectPairing> ProjectilePairings(const Remastered& remastered, Reta
     ModelUuid id;
     if (named.retail != 0 && retail.HasId(named.retail) && remastered.EffectByName(named.name, id)) {
       pairings.push_back({id, named.retail, std::string("name ") + named.name});
-      lines.push_back(std::string("name ") + named.name + ": " + EffectGuidString(ToStored(id)) + " -> " + HexId(named.retail));
+      lines.push_back(std::string("name ") + named.name + ": " + EffectGuidString(ToStored(id)) + " -> " + Hex8(named.retail));
     }
   }
   // Effects the disc has no PART for are imported under an id from their name.
@@ -1627,7 +1019,7 @@ std::vector<EffectPairing> ProjectilePairings(const Remastered& remastered, Reta
     const uint32_t synthetic = SyntheticEffectId(name);
     if (!retail.HasId(synthetic) && remastered.EffectByName(name, id)) {
       pairings.push_back({id, synthetic, std::string("synthetic ") + name});
-      lines.push_back(std::string("synthetic ") + name + ": " + EffectGuidString(ToStored(id)) + " -> " + HexId(synthetic));
+      lines.push_back(std::string("synthetic ") + name + ": " + EffectGuidString(ToStored(id)) + " -> " + Hex8(synthetic));
     }
   }
 
@@ -1684,13 +1076,13 @@ std::vector<EffectPairing> ProjectilePairings(const Remastered& remastered, Reta
         } else if (have.id == candidate.genp || have.retail == candidate.retailPart) {
           conflict = true;
           lines.push_back("WPSM missile COLR/DEFS: conflict with " + have.method + " (" +
-                          EffectGuidString(ToStored(have.id)) + " -> " + HexId(have.retail) + "); no pair");
+                          EffectGuidString(ToStored(have.id)) + " -> " + Hex8(have.retail) + "); no pair");
         }
       }
       if (!conflict && !exact) {
         pairings.push_back({candidate.genp, candidate.retailPart, "wpsm missile COLR/DEFS default"});
         lines.push_back("WPSM missile COLR/DEFS default: " + EffectGuidString(ToStored(candidate.genp)) + " -> " +
-                        HexId(candidate.retailPart));
+                        Hex8(candidate.retailPart));
       }
     }
   }
@@ -1748,13 +1140,13 @@ std::vector<EffectPairing> ProjectilePairings(const Remastered& remastered, Reta
         } else if (ImportDetail::ConflictsWithPowerBallDefaultRolePair(candidate, have.id, have.retail)) {
           conflict = true;
           lines.push_back("WPSM powerball COLR/DEFS: conflict with " + have.method + " (" +
-                          EffectGuidString(ToStored(have.id)) + " -> " + HexId(have.retail) + "); no pair");
+                          EffectGuidString(ToStored(have.id)) + " -> " + Hex8(have.retail) + "); no pair");
         }
       }
       if (!conflict && !exact) {
         pairings.push_back({candidate.genp, candidate.retailPart, "wpsm powerball COLR/DEFS default"});
         lines.push_back("WPSM powerball COLR/DEFS default: " + EffectGuidString(ToStored(candidate.genp)) + " -> " +
-                        HexId(candidate.retailPart));
+                        Hex8(candidate.retailPart));
       }
     }
   }
@@ -1812,13 +1204,13 @@ std::vector<EffectPairing> ProjectilePairings(const Remastered& remastered, Reta
         } else if (ImportDetail::ConflictsWithPlasmaBeamDefaultRolePair(candidate, have.id, have.retail)) {
           conflict = true;
           lines.push_back("WPSM plasmabeam COLR/DEFS: conflict with " + have.method + " (" +
-                          EffectGuidString(ToStored(have.id)) + " -> " + HexId(have.retail) + "); no pair");
+                          EffectGuidString(ToStored(have.id)) + " -> " + Hex8(have.retail) + "); no pair");
         }
       }
       if (!conflict && !exact) {
         pairings.push_back({candidate.genp, candidate.retailPart, "wpsm plasmabeam COLR/DEFS default"});
         lines.push_back("WPSM plasmabeam COLR/DEFS default: " + EffectGuidString(ToStored(candidate.genp)) + " -> " +
-                        HexId(candidate.retailPart));
+                        Hex8(candidate.retailPart));
       }
     }
   }
@@ -1937,7 +1329,25 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
     fs::remove_all(held, ec);
   }
   const bool fromHeld = fs::exists(held / kMarkerName, ec);
-  const fs::path source = fromHeld ? held : staging.parent_path() / kImportModName;
+  fs::path source = fromHeld ? held : staging.parent_path() / kImportModName;
+  if (!fromHeld) {
+    // Which import the unchanged stages are reused from (port_remastered_storage.h): the installed
+    // one inside the root, else a legacy import in the shared mods folder - which is only read, as
+    // LinkFiles hard-links its files, or copies them where the file systems differ (the card and the
+    // app's storage do), so that folder is left exactly as it is. A full import into the app never
+    // moves or deletes it.
+    const std::string legacy = LegacySharedImport();
+    std::error_code installedEc;
+    std::error_code legacyEc;
+    const bool installedUsable = fs::is_regular_file(source / kManifestName, installedEc);
+    const bool legacyUsable =
+        !legacy.empty() && fs::is_regular_file(PathFromString(legacy) / kManifestName, legacyEc);
+    const std::string reused =
+        PortRemasteredStorage::ReuseFolder(PathString(source), installedUsable, legacy, legacyUsable);
+    if (!reused.empty()) {
+      source = PathFromString(reused);
+    }
+  }
   fs::remove_all(staging, ec);
   fs::create_directories(staging, ec);
   if (ec) {
@@ -1968,6 +1378,7 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
   const char* reuseEnv = port::EnvString("MP_REMASTERED_REUSE");
   const bool texturesOnly = reuseEnv != nullptr && std::strcmp(reuseEnv, "textures") == 0;
 
+  SetStep("disc");
   SetMessage("Opening the image");
   std::string error;
   Remastered remastered;
@@ -2046,6 +1457,7 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
   // only if the same ids were taken before it), so that ids stay unique.
   auto beginStage = [&](const std::string& name, const std::string& key, bool strict,
                         const std::string& requiredFile = std::string()) {
+    SetStep(name);
     StageRecord fresh;
     fresh.key = Hex64(Hash64(name + "|" + key + keyCommon));
     fresh.before = TakenHash(taken);
@@ -2158,7 +1570,7 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
     if (port::EnvFlag("MP_REMASTERED_JOINTS")) {
       io.log = [&](const std::string& line) {
         std::lock_guard<std::mutex> lock(reportMutex);
-        std::fprintf(stderr, "%s\n", line.c_str());
+        PortLog::Write("%s\n", line.c_str());
       };
     }
     io.texture = [&](const ModelUuid& id, Image& out, std::string& textureError) {
@@ -2330,7 +1742,6 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
     }
     return out;
   };
-  auto readU32 = [](const uint8_t* p) { return uint32_t(p[0]) << 24 | uint32_t(p[1]) << 16 | uint32_t(p[2]) << 8 | p[3]; };
   auto hex = [](uint32_t id) {
     char name[16];
     std::snprintf(name, sizeof(name), "%08X", id);
@@ -2367,9 +1778,9 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
     // The new models and skins of the looks: hashed, then moved past every id
     // the disc or this import has.
     auto fresh = [&](uint32_t seed) {
-      uint32_t id = 0x811C9DC5u;  // FNV-1a
+      uint32_t id = port::kFnv32Basis;
       for (int i = 0; i < 4; ++i) {
-        id = (id ^ ((seed >> (i * 8)) & 0xFFu)) * 0x01000193u;
+        id = port::Fnv1a32Step(id, uint8_t(seed >> (i * 8)));
       }
       while (id == 0 || id == 0xFFFFFFFFu || retail.HasId(id) || taken.count(id) != 0) {
         ++id;
@@ -2457,7 +1868,7 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
             const std::vector<uint8_t> pair = bytesOf({entry.retail, TableSkins(entry)[s]});
             for (auto it = std::search(data.begin(), data.end(), pair.begin(), pair.end()); data.end() - it >= 12;
                  it = std::search(it + 1, data.end(), pair.begin(), pair.end())) {
-              skeletons[{i, s}].insert(readU32(&*(it + 8)));
+              skeletons[{i, s}].insert(port::ReadBE32(&*(it + 8)));
               binds = true;
             }
           }
@@ -2528,6 +1939,8 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
         ++sState.failed;
       }
       sState.message = "Converting models (" + std::to_string(sState.done) + "/" + std::to_string(sState.total) + ")";
+      sState.stepDone = sState.done;
+      sState.stepTotal = sState.total;
     }
   };
   std::vector<std::thread> workers;
@@ -2596,7 +2009,7 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
   }
 
   // Remastered's particle effects in place of the disc's, when asked for.
-  if (WantsRemasteredEffects() &&
+  if (Parts().effects && WantsRemasteredEffects() &&
       !beginStage("effects", std::to_string(ImportStage::kEffects) + keyConverter, false, "reports/parts/effects.effects.tsv")) {
     SetMessage("Converting effects");
     EffectImportIO effectIO;
@@ -2688,7 +2101,7 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
     effectIO.log = [](const std::string& line) {
       static std::mutex logMutex;
       std::lock_guard<std::mutex> lock(logMutex);
-      std::printf("remastered import: %s\n", line.c_str());
+      PortLog::Write("remastered import: %s\n", line.c_str());
     };
     effectIO.report = [&](const EffectReportRow& row) {
       const std::string text = FormatEffectRow(row);
@@ -2712,7 +2125,7 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
       }
       effectTable.assign(table.begin(), table.end());
       for (const std::string& line : pairLines) {
-        std::printf("remastered import: projectile %s\n", line.c_str());
+        PortLog::Write("remastered import: projectile %s\n", line.c_str());
       }
       AddLine("effects: " + std::to_string(effectIO.pairings.size()) + " projectile effects paired");
     }
@@ -2737,12 +2150,9 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
   SetMessage("Writing the room environments");
   const fs::path roomFolder = staging / kRoomFolder;
   fs::create_directories(roomFolder, ec);
-  const char* geometryEnv = std::getenv("MP_REMASTERED_GEOMETRY");
   const bool roomsReused = beginStage("rooms",
                                       std::to_string(ImportStage::kRooms) + " geometry " +
-                                          (geometryEnv != nullptr && geometryEnv[0] != '\0'
-                                               ? std::string(geometryEnv)
-                                               : std::string("all")) +  // as the env says it
+                                          GeometryChoice() +  // as the env or the panel says it
                                           keyConverter,
                                       false);
   // Remastered's environment BRDF table, from the user's own executable. Nothing
@@ -2787,10 +2197,7 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
       id = known->second;
       return true;
     }
-    id = 0x811C9DC5u;  // FNV-1a
-    for (const uint8_t byte : uuid) {
-      id = (id ^ byte) * 0x01000193u;
-    }
+    id = port::Fnv1a32(uuid.data(), uuid.size());
     while (id == 0 || id == 0xFFFFFFFFu || retail.HasId(id) || taken.count(id) != 0) {
       ++id;
     }
@@ -2807,10 +2214,7 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
       id = known->second;
       return true;
     }
-    id = 0x811C9DC5u ^ uint32_t(joint + 1) * 0x85EBCA77u;
-    for (const uint8_t byte : uuid) {
-      id = (id ^ byte) * 0x01000193u;
-    }
+    id = port::Fnv1a32(uuid.data(), uuid.size(), port::kFnv32Basis ^ uint32_t(joint + 1) * 0x85EBCA77u);
     while (id == 0 || id == 0xFFFFFFFFu || retail.HasId(id) || taken.count(id) != 0) {
       ++id;
     }
@@ -2834,10 +2238,7 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
       id = known->second;
       return true;
     }
-    id = 0x811C9DC5u ^ 0x9E3779B1u;
-    for (const char byte : key) {
-      id = (id ^ uint8_t(byte)) * 0x01000193u;
-    }
+    id = port::Fnv1a32(key, port::kFnv32Basis ^ 0x9E3779B1u);
     while (id == 0 || id == 0xFFFFFFFFu || retail.HasId(id) || taken.count(id) != 0) {
       ++id;
     }
@@ -2873,10 +2274,7 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
     if (!makeIO(0, geometryFolder).texture(uuid, image, textureError)) {
       AddLine("water texture: " + textureError);
     } else {
-      uint32_t id = 0x811C9DC5u ^ 0x57A7E5u;
-      for (const uint8_t byte : uuid) {
-        id = (id ^ byte) * 0x01000193u;
-      }
+      uint32_t id = port::Fnv1a32(uuid.data(), uuid.size(), port::kFnv32Basis ^ 0x57A7E5u);
       {
         std::lock_guard<std::mutex> takenLock(takenMutex);
         while (id == 0 || id == 0xFFFFFFFFu || retail.HasId(id) || taken.count(id) != 0) {
@@ -3024,7 +2422,7 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
       io.log = [](const std::string& line) {
         static std::mutex logMutex;
         std::lock_guard<std::mutex> lock(logMutex);
-        std::printf("remastered import: %s\n", line.c_str());
+        PortLog::Write("remastered import: %s\n", line.c_str());
       };
       int written = 0;
       std::string worldError;
@@ -3141,10 +2539,7 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
         continue;
       }
       for (int level = 1; level < PortRoomGeo::kLodLevels; ++level) {
-        uint32_t id = 0x811C9DC5u ^ uint32_t(level) * 0x9E3779B1u;
-        for (const uint8_t byte : g.uuid) {
-          id = (id ^ byte) * 0x01000193u;
-        }
+        uint32_t id = port::Fnv1a32(g.uuid.data(), g.uuid.size(), port::kFnv32Basis ^ uint32_t(level) * 0x9E3779B1u);
         while (id == 0 || id == 0xFFFFFFFFu || retail.HasId(id) || taken.count(id) != 0) {
           ++id;
         }
@@ -3233,7 +2628,9 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
           std::snprintf(name, sizeof(name), "%08X", geometry[i].id);
           AddLine(std::string("room model ") + name + ": " + modelError);
         }
-        SetMessage("Converting room models (" + std::to_string(++seen) + "/" + std::to_string(geometry.size()) + ")");
+        const size_t now = ++seen;
+        SetMessage("Converting room models (" + std::to_string(now) + "/" + std::to_string(geometry.size()) + ")");
+        SetStepProgress(now, geometry.size());
       }
     };
     workers.clear();
@@ -3572,7 +2969,7 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
     const fs::path partFolder = staging / "reports" / "parts";
     auto slurp = [](const fs::path& path) {
       std::ifstream in(path, std::ios::binary);
-      return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+      return port::ReadAllText(in);
     };
     std::vector<std::string> materialRows;
     std::vector<std::string> effectRows;
@@ -3613,8 +3010,8 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
       }
     }
     if (missing != 0) {
-      std::fprintf(stderr, "remastered import: %zu listed file(s) are missing from the staging folder (first: %s)\n",
-                   missing, first.c_str());
+      PortLog::Write("remastered import: %zu listed file(s) are missing from the staging folder (first: %s)\n",
+                     missing, first.c_str());
       fail("The import is incomplete (" + std::to_string(missing) + " files missing, first " + first +
            "); the installed models are kept.");
       return;
@@ -3656,7 +3053,7 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
     fs::remove_all(held, ec);
   }
   const int failed = int(count) - converted.load();
-  std::printf("remastered import: %s\n", textures.Summary().c_str());
+  PortLog::Write("remastered import: %s\n", textures.Summary().c_str());
   std::string message = std::to_string(converted.load()) + " models converted";
   if (failed != 0) {
     message += ", " + std::to_string(failed) + " failed";
@@ -3693,14 +3090,64 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
   Finish(true, message + (noFfmpeg ? ". Movies skipped: ffmpeg not found." : "."));
 }
 
-}  // namespace
+}  // namespace ImportDetail
+
+using namespace ImportDetail;
+
+std::string ImportRootFolder(std::string* error) {
+#if defined(__ANDROID__)
+  const PortRemasteredStorage::RootChoice choice =
+      PortRemasteredStorage::ResolveRoot(true, InternalStoragePath(), std::string());
+#else
+  const PortRemasteredStorage::RootChoice choice =
+      PortRemasteredStorage::ResolveRoot(false, std::string(), PortMods::Folder());
+#endif
+  if (choice.folder.empty()) {
+    if (error != nullptr) {
+      *error = choice.error.empty() ? "There is no mods folder to write to." : choice.error;
+    }
+    return {};
+  }
+  // The root has to exist before anything is staged in it; SDL's internal storage path does.
+  std::error_code ec;
+  fs::create_directories(PathFromString(choice.folder), ec);
+  ec.clear();
+  if (!fs::is_directory(PathFromString(choice.folder), ec)) {
+    if (error != nullptr) {
+      *error = "Cannot use the import folder " + choice.folder + (ec ? ": " + ec.message() : "");
+    }
+    return {};
+  }
+  return choice.folder;
+}
+
+bool UsesPrivateImportRoot() {
+#if defined(__ANDROID__)
+  return PortRemasteredStorage::ResolveRoot(true, InternalStoragePath(), std::string()).kind ==
+         PortRemasteredStorage::Root::kPrivateStorage;
+#else
+  return false;
+#endif
+}
+
+std::string InstalledModFolder() {
+  const std::string root = ImportRootFolder();
+  if (root.empty()) {
+    return {};
+  }
+  // On desktop the root is the mods folder, whose every folder the mod scan already reads.
+  const std::string mods = PortMods::Folder();
+  if (!mods.empty() && PortRemasteredStorage::WithSeparator(mods) == root) {
+    return {};
+  }
+  std::error_code ec;
+  const fs::path installed = PathFromString(root) / kImportModName;
+  return fs::is_directory(installed, ec) ? PathString(installed) : std::string();
+}
 
 std::string DefaultKeysPath() {
-  const char* home = std::getenv("HOME");
-  if (home == nullptr || home[0] == '\0') {
-    home = std::getenv("USERPROFILE");
-  }
-  if (home == nullptr || home[0] == '\0') {
+  const char* home = port::HomeFolder();
+  if (home == nullptr) {
     return {};
   }
   const fs::path path = PathFromString(home) / ".switch" / "prod.keys";
@@ -3722,18 +3169,33 @@ bool StartMovieImport(const std::string& nspPath, const std::string& keysPath) {
   if (sThread.joinable()) {
     sThread.join();
   }
-  // A finished import that has not been moved into place yet is the newer mod.
-  const fs::path staging = StagingFolder();
+  // A finished import that has not been moved into place yet is the newer mod; the movies go into
+  // the import's own folder (port_remastered_storage.h), never into a legacy one in the shared mods
+  // folder, so on Android a player who still has only that one is asked for a full import.
+  std::string rootError;
+  const std::string root = ImportRootFolder(&rootError);
+  const fs::path staging = root.empty() ? fs::path() : PathFromString(root) / kStagingName;
   std::error_code ec;
-  fs::path mod;
-  if (!staging.empty()) {
-    mod = fs::exists(staging / kMarkerName, ec) ? staging : staging.parent_path() / kImportModName;
+  const std::string legacy = LegacySharedImport();
+  bool legacyExists = false;
+  if (!legacy.empty()) {
+    legacyExists = fs::is_directory(PathFromString(legacy), ec);
   }
+  const bool privateRoot = UsesPrivateImportRoot();
+  PortRemasteredStorage::MovieTarget target;
+  if (!staging.empty()) {
+    target = PortRemasteredStorage::ChooseMovieTarget(
+        privateRoot, PathString(staging), fs::exists(staging / kMarkerName, ec),
+        PathString(staging.parent_path() / kImportModName),
+        fs::is_directory(staging.parent_path() / kImportModName, ec), legacy, legacyExists);
+  }
+  const fs::path mod = target.folder.empty() ? fs::path() : PathFromString(target.folder);
   std::lock_guard<std::mutex> lock(sStateMutex);
   sState = {};
-  if (mod.empty() || !fs::is_directory(mod, ec)) {
+  if (mod.empty()) {
     sState.finished = true;
-    sState.message = "Import the models first: the movies go into that mod.";
+    sState.message = staging.empty() ? (rootError.empty() ? "There is no mods folder to write to." : rootError)
+                                     : target.error;
     return false;
   }
   sCancel = false;
@@ -3753,13 +3215,44 @@ bool StartImport(const std::string& nspPath, const std::string& keysPath, int th
   if (sThread.joinable()) {
     sThread.join();
   }
-  const fs::path staging = StagingFolder();
+  // The root the import is made in (port_remastered_storage.h). On Android its absence is an error
+  // that names itself; the shared mods folder is not a fallback.
+  std::string rootError;
+  const std::string root = ImportRootFolder(&rootError);
+  const fs::path staging = root.empty() ? fs::path() : PathFromString(root) / kStagingName;
   std::lock_guard<std::mutex> lock(sStateMutex);
   sState = {};
   if (staging.empty()) {
     sState.finished = true;
-    sState.message = "There is no mods folder to write to.";
+    sState.message = rootError.empty() ? "There is no mods folder to write to." : rootError;
     return false;
+  }
+  // A first import writes everything (docs/MODS.md: about 1 GB, 6.5 GB with every
+  // room's geometry, plus 0.6 GB of movies); one with an import to reuse links
+  // most of its files instead, so only a first one is checked. Refused up front
+  // rather than failing at some write an hour in.
+  {
+    std::error_code ec;
+    const fs::path target = staging.parent_path() / kImportModName;
+    const fs::space_info space = fs::space(staging.parent_path(), ec);
+    if (!ec && !fs::exists(target, ec) && !fs::exists(HeldFolder(staging), ec)) {
+      const std::string geometry = GeometryChoice();
+      const bool allGeometry = geometry == "all";
+      double needGb = allGeometry ? 6.5 : geometry == "none" ? 1.0 : 2.0;
+      // Not WantsMovies: it reports a bad value through the lock held here.
+      needGb += !Parts().movies || MoviesTurnedOff() ? 0.0 : 0.6;
+      const double freeGb = double(space.available) / (1024.0 * 1024.0 * 1024.0);
+      if (freeGb < needGb) {
+        char text[256];
+        std::snprintf(text, sizeof text,
+                      "Not enough free disk space: the import needs about %.1f GB and the import folder's drive "
+                      "has %.1f GB free.%s",
+                      needGb, freeGb, allGeometry ? " Leaving the room geometry out needs less." : "");
+        sState.finished = true;
+        sState.message = text;
+        return false;
+      }
+    }
   }
   if (threads <= 0) {
     threads = DefaultThreads();
@@ -3772,7 +3265,7 @@ bool StartImport(const std::string& nspPath, const std::string& keysPath, int th
   bool bc = false, astc = false;
   aurora_get_texture_support(&bc, &astc);
   SetGpuTextureSupport(bc, astc);
-  std::fprintf(stderr, "remastered: writing %s textures\n", TextureFormatName());
+  PortLog::Write("remastered: writing %s textures\n", TextureFormatName());
   sCancel = false;
   sState.running = true;
   sState.message = "Starting";
@@ -3781,9 +3274,16 @@ bool StartImport(const std::string& nspPath, const std::string& keysPath, int th
 }
 
 
+void SetImportParts(const ImportParts& parts) {
+  std::lock_guard<std::mutex> lock(sPartsMutex);
+  sParts = parts;
+}
+
 ImportState ImportStatus() {
   std::lock_guard<std::mutex> lock(sStateMutex);
-  return sState;
+  ImportState state = sState;
+  state.cancelling = state.running && sCancel.load();
+  return state;
 }
 
 void CancelImport() { sCancel = true; }
@@ -3795,22 +3295,21 @@ void StopImport() {
   }
 }
 
-bool ApplyPendingImport() {
-  const fs::path staging = StagingFolder();
+namespace {
+
+bool MoveIntoPlace(const fs::path& staging) {
   std::error_code ec;
-  // A running import is still writing there.
-  if (staging.empty() || ImportStatus().running) {
-    return false;
-  }
+  // Whatever a quit left half deleted.
+  SweepTrash(staging.parent_path());
   const fs::path held = HeldFolder(staging);
   if (fs::exists(staging / kMarkerName, ec)) {
     // An older import the finished one was made from, left if the game quit just after it.
-    fs::remove_all(held, ec);
+    Discard(held);
   } else {
-    fs::remove_all(staging, ec);
+    Discard(staging);
     // A finished import held aside by one that never finished (the game quit during it).
     if (!fs::exists(held / kMarkerName, ec)) {
-      fs::remove_all(held, ec);
+      Discard(held);
       return false;
     }
     fs::rename(held, staging, ec);
@@ -3821,36 +3320,83 @@ bool ApplyPendingImport() {
   const fs::path target = staging.parent_path() / kImportModName;
   // The working mod is kept as a backup until the new one is in place. Hidden, so the mod loader
   // never picks it up as a second mod if a crash leaves it behind.
-  const fs::path backup = staging.parent_path() / (std::string(".") + kImportModName + ".old");
+  const fs::path backup = staging.parent_path() / PortRemasteredStorage::kBackupName;
   const bool hadTarget = fs::exists(target, ec);
   if (hadTarget) {
-    fs::remove_all(backup, ec);
+    Discard(backup);
     fs::rename(target, backup, ec);
     if (ec) {
-      std::fprintf(stderr, "metroid_prime_port: could not set aside %s: %s\n", target.string().c_str(),
-                   ec.message().c_str());
+      PortLog::Write("metroid_prime_port: could not set aside %s: %s\n", target.string().c_str(),
+                     ec.message().c_str());
       return false;
     }
   }
   fs::rename(staging, target, ec);
   if (ec) {
-    std::fprintf(stderr, "metroid_prime_port: could not move the imported mod to %s: %s\n",
-                 target.string().c_str(), ec.message().c_str());
+    PortLog::Write("metroid_prime_port: could not move the imported mod to %s: %s\n",
+                   target.string().c_str(), ec.message().c_str());
     if (hadTarget) {
       std::error_code restoreError;
       fs::rename(backup, target, restoreError);
       if (restoreError) {
-        std::fprintf(stderr, "metroid_prime_port: could not restore %s: %s\n", target.string().c_str(),
-                     restoreError.message().c_str());
+        PortLog::Write("metroid_prime_port: could not restore %s: %s\n", target.string().c_str(),
+                       restoreError.message().c_str());
       }
     }
     return false;
   }
   if (hadTarget) {
-    fs::remove_all(backup, ec);
+    Discard(backup);
   }
   fs::remove(target / kMarkerName, ec);
   return true;
+}
+
+} // namespace
+
+bool StartInstall() {
+  {
+    std::lock_guard<std::mutex> lock(sStateMutex);
+    if (sState.running) {
+      return false;
+    }
+  }
+  if (sThread.joinable()) {
+    sThread.join();
+  }
+  const fs::path staging = StagingFolder();
+  std::error_code ec;
+  if (staging.empty() || !fs::exists(staging / kMarkerName, ec)) {
+    return false;
+  }
+  std::lock_guard<std::mutex> lock(sStateMutex);
+  // The import's result is shown again once the mod is in place.
+  ImportState result = sState;
+  sCancel = false;
+  sState.running = true;
+  sState.installing = true;
+  sState.finished = false;
+  sState.done = sState.total = 0;
+  sState.step = sState.steps = sState.stepDone = sState.stepTotal = 0;
+  sState.message = "Moving the mod into place";
+  sThread = std::thread([staging, result]() mutable {
+    if (!MoveIntoPlace(staging)) {
+      // Left staged: the next mods reload or start tries again.
+      result.lines.push_back("The mod could not be moved into place yet; the next mods reload tries again.");
+    }
+    std::lock_guard<std::mutex> lock(sStateMutex);
+    sState = std::move(result);
+  });
+  return true;
+}
+
+bool ApplyPendingImport() {
+  const fs::path staging = StagingFolder();
+  // A running import is still writing there.
+  if (staging.empty() || ImportStatus().running) {
+    return false;
+  }
+  return MoveIntoPlace(staging);
 }
 
 int RunImportFromCommandLine(const std::string& nspPath, const std::string& keysPath, bool moviesOnly) {
@@ -3888,11 +3434,19 @@ int RunImportFromCommandLine(const std::string& nspPath, const std::string& keys
   if (moviesOnly) {
     return 0;
   }
-  if (!ApplyPendingImport()) {
-    std::fprintf(stderr, "could not move the mod into %s\n", PortMods::Folder().c_str());
+  // The root the files actually went into: the mods folder on desktop, the app's own storage on
+  // Android (port_remastered_storage.h).
+  std::string rootError;
+  const std::string root = ImportRootFolder(&rootError);
+  if (root.empty()) {
+    std::fprintf(stderr, "%s\n", rootError.c_str());
     return 1;
   }
-  std::printf("installed as %s/%s\n", PortMods::Folder().c_str(), kImportModName);
+  if (!ApplyPendingImport()) {
+    std::fprintf(stderr, "could not move the mod into %s\n", root.c_str());
+    return 1;
+  }
+  std::printf("installed as %s%s\n", root.c_str(), kImportModName);
   return 0;
 }
 

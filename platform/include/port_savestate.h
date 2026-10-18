@@ -49,10 +49,25 @@ struct RoomObject {
   bool active = false;
   std::vector< RoomBlock > blocks;
 };
+// One captured area's room script fingerprint: a hash of the scripting data the
+// area actually loaded (a skippable-cutscene patch may have swapped a patched
+// copy in). A restore uses it to tell whether a rebuilt area still runs the room
+// script the saved objects came from (issue #131).
+struct AreaFingerprint {
+  int32_t area = 0;
+  bool known = false;  // false: nothing was hashed (no readable data)
+  uint64_t hash = 0;
+};
 struct RoomState {
   std::vector< int32_t > areas;     // areas captured (loaded, scripts built)
   std::vector< uint32_t > present;  // editor ids that existed in those areas
   std::vector< RoomObject > objects;
+  // False for a state written before fingerprints existed (RMST version 1),
+  // which restores as it always did. When true there is one entry per captured
+  // area, in the same order, and an unknown entry means that area is never
+  // applied.
+  bool fingerprintsRecorded = false;
+  std::vector< AreaFingerprint > fingerprints;
   bool empty() const { return areas.empty(); }
 };
 // Little-endian field writer and reader for the block payloads.
@@ -76,6 +91,65 @@ struct BlockReader {
 // The block with `tag`, or nullptr.
 const RoomBlock* FindBlock(const RoomObject& object, uint32_t tag);
 
+// The kTagDoor block payload. Byte 0 is the door's mIsOpen and is what the old
+// format held alone, so a one-byte payload decodes exactly as it used to. Byte 1,
+// written by this build only, is a flag byte for the close paths the door can be
+// captured in the middle of: each one reports closed while Think still owes the
+// Closed message a live close would have sent, and the door's own branch sends it.
+// An open door owes neither close, so its pending bits are clear; doClose is
+// independent of them.
+struct DoorSaveState {
+  bool open = false;
+  // bit 0: !mIsOpen && mWasOpen - the close animation is running and Think's
+  // animation-end branch owes Closed with all of its connections (the dock
+  // decrement included).
+  bool pendingClose = false;
+  // bit 1: mClosing - a refused opening (the room behind was not ready) still owes
+  // Closed, but its branch skips the decrement connection.
+  bool refusedClosePending = false;
+  // bit 2: mDoClose - the close was asked for by another door, which also blocks
+  // this door from opening until the close finishes.
+  bool doClose = false;
+};
+// The flag bits of byte 1: anything else is a payload this build never wrote and
+// is refused.
+constexpr uint8_t kDoorSaveFlagsKnown = 0x7;
+// The two wire bytes, in the order above (for the save writer and the unit test).
+std::string EncodeDoorSaveState(const DoorSaveState& state);
+// False for a payload this build never writes - empty, longer than two bytes, an
+// open flag above 1, an unknown flag bit, open with a close in flight, or both
+// close paths at once, none of which the door's state machine can produce. `out`
+// is modified only for a payload that passes every check: a caller that keeps its
+// previous value keeps it exactly.
+bool DecodeDoorSaveState(const std::string& data, DoorSaveState& out);
+
+// Room script fingerprints (pure, port_savestate_format.cpp, so the unit test
+// runs the same code the runtime decides with). The 64-bit FNV-1a is a
+// compatibility token - "is this still the same room script?" - not a security
+// hash. 0 for a null or empty buffer: nothing is hashed that is not there.
+uint64_t FingerprintScriptData(const uint8_t* data, size_t size);
+AreaFingerprint MakeAreaFingerprint(int32_t area, const uint8_t* data, size_t size);
+
+// What to do with one saved area while a state is applied to the room loaded now.
+enum class RoomAreaRestore {
+  kRestore,        // the same room script, or a state with no fingerprints
+  kSkipChanged,    // another room script is loaded than the state was saved with
+  kSkipUnreadable, // no save-time fingerprint, or the loaded data cannot be read
+};
+// The decision the runtime makes per area, before it deletes or overwrites
+// anything: `data`/`size` is the scripting data the area runs now.
+RoomAreaRestore DecideAreaRestore(const RoomState& room, int32_t area, const uint8_t* data, size_t size);
+// One line for the log, e.g. "the room script changed".
+const char* RoomAreaRestoreReason(RoomAreaRestore decision);
+
+// The order the saved platforms of a room are put back in. A platform carries its
+// slaves (effects, props, other platforms) by the distance it moves, so each one is
+// restored after every platform that carries it: the parent drags the child, then
+// the child's own saved pose wins. parents[i] lists the indices that carry platform
+// i. False, with `order` empty, for a cycle, which no room script builds.
+bool PlatformRestoreOrder(const std::vector< std::vector< size_t > >& parents,
+                          std::vector< size_t >& order);
+
 // The fixed header ahead of the game-state blob. Pure, for the unit test.
 struct Header {
   uint32_t worldId = 0;
@@ -95,12 +169,16 @@ bool Decode(const std::string& data, Header& header, std::vector< uint8_t >& blo
 // Room state glue (port_savestate_room.cpp), game thread only. Capture reads
 // the loaded areas' script objects; Apply works through the saved areas that
 // are loaded and not in `done` yet, adds them to `done`, and returns how many
-// of the saved areas are still waiting. `applied`, `removed` and `unmatched`
-// accumulate over the calls.
+// of the saved areas are still waiting. An area whose loaded room script data
+// does not match the one the snapshot was taken from (its fingerprint) is added
+// to `done` without applying or deleting anything: its objects, editor ids and
+// script connections came from other data. `applied`, `removed`, `unmatched`
+// and `skipped` accumulate over the calls.
 struct RoomApplyStats {
   int applied = 0;
   int removed = 0;
   int unmatched = 0;
+  int skipped = 0;  // areas left alone: their loaded room script data differs
 };
 void CaptureRoomState(CStateManager& mgr, RoomState& out);
 int ApplyRoomState(CStateManager& mgr, const RoomState& room, std::vector< int32_t >& done,

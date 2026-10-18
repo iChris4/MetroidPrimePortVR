@@ -2,6 +2,7 @@
 // (port_remastered_image.h).
 
 #include "port_remastered_image.h"
+#include "port_env.h"
 #include "port_bytes.h"
 
 #include <algorithm>
@@ -1186,7 +1187,7 @@ std::atomic<int> sGpuFormat{0};  // 0 unknown, 1 BC, 2 ASTC
 void SetGpuTextureSupport(bool bc, bool astc) { sGpuFormat = bc ? 1 : astc ? 2 : 0; }
 
 TextureFormat WantedTextureFormat() {
-  if (const char* env = std::getenv("MP_REMASTERED_TEXTURE_FORMAT")) {
+  if (const char* env = port::EnvString("MP_REMASTERED_TEXTURE_FORMAT")) {
     if (std::strcmp(env, "astc") == 0) {
       return TextureFormat::ASTC;
     }

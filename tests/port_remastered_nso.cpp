@@ -1,20 +1,12 @@
 // LZ4 block decoding, PFS0 parsing and NSO segment reads on synthetic data.
 
 #include "port_remastered_nso.h"
+#include "port_test.h"
 
 #include <cstdio>
 #include <cstring>
 
 using namespace PortRemastered;
-
-static int sFailures = 0;
-#define CHECK(c) \
-  do { \
-    if (!(c)) { \
-      std::printf("FAIL line %d: %s\n", __LINE__, #c); \
-      ++sFailures; \
-    } \
-  } while (0)
 
 static void Put32(std::vector<uint8_t>& v, uint32_t x) {
   for (int i = 0; i < 4; ++i) {
@@ -130,8 +122,8 @@ int main() {
   TestLz4();
   TestPfs0();
   TestNso();
-  if (sFailures == 0) {
+  if (port_test::Failures() == 0) {
     std::printf("port_remastered_nso_tests: ok\n");
   }
-  return sFailures == 0 ? 0 : 1;
+  return PORT_TEST_RESULT();
 }

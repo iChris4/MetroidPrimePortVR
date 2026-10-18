@@ -1,4 +1,5 @@
 #include "MetroidPrime/CGameArea.hpp"
+#include "port_env.h"
 
 #include "MetroidPrime/CMemoryDrawEnum.hpp"
 
@@ -23,6 +24,7 @@
 
 #ifdef TARGET_PC
 #include "port_randomizer.h"
+#include "port_room_geo.h"
 #include "port_skip_cutscenes.h"
 
 #include <string.h>
@@ -35,7 +37,7 @@
 namespace {
 // MP_LOG_DOORS: when each area started streaming, and how long each load stage took.
 bool PortAreaLogEnabled() {
-  static const bool enabled = std::getenv("MP_LOG_DOORS") != nullptr;
+  static const bool enabled = port::EnvFlag("MP_LOG_DOORS");
   return enabled;
 }
 std::map< int, std::chrono::steady_clock::time_point > sPortAreaLoadStart;
@@ -674,6 +676,8 @@ void CGameArea::StartStreamIn(CStateManager& mgr) {
       std::fprintf(stderr, "MP area %d (MREA %08X) stream start\n", x4_selfIdx.Value(),
                    static_cast< uint >(x84_mrea));
     }
+    // The Remastered room geometry's file is read and parsed while the area streams in.
+    PortRoomGeo::Prefetch(static_cast< uint32_t >(x84_mrea));
 #endif
     VerifyTokenList(mgr);
     if (!xf0_26_tokensReady) {

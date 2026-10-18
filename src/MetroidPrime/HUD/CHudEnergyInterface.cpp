@@ -1,6 +1,8 @@
 #include "MetroidPrime/HUD/CHudEnergyInterface.hpp"
+#include "port_env.h"
 #include "MetroidPrime/HUD/CHudBossEnergyInterface.hpp"
 
+#include "MetroidPrime/Player/CGameState.hpp"
 #include "MetroidPrime/Player/CPlayerState.hpp"
 #include "MetroidPrime/Tweaks/CTweakGui.hpp"
 #include "MetroidPrime/Tweaks/CTweakGuiColors.hpp"
@@ -108,6 +110,25 @@ CHudEnergyInterface::CHudEnergyInterface(CGuiFrame& hud, float energy, int total
         x1c_27_energyLow ? rstl::wstring_l(gpStringTable->GetString(9)) : rstl::wstring_l(L"");
     x28_textpane_energywarning->TextSupport().SetText(text);
   }
+#ifdef TARGET_PC
+  mAlphaWidgetCount = 0;
+  if (CGuiWidget* group = hud.FindWidget(rstl::string_l(skEnergyGroupWidgetName))) {
+    mAlphaWidgets[mAlphaWidgetCount++] = group;
+  } else {
+    mAlphaWidgets[mAlphaWidgetCount++] = x20_textpane_energydigits;
+    mAlphaWidgets[mAlphaWidgetCount++] = x24_meter_energytanks;
+    mAlphaWidgets[mAlphaWidgetCount++] = x2c_energybart01_energybar;
+  }
+  mWarningFaded = false;
+  for (int i = 0; i < mAlphaWidgetCount; ++i) {
+    mAlphaColors[i] = mAlphaWidgets[i]->GetColor();
+    for (const CGuiObject* obj = x28_textpane_energywarning; obj; obj = obj->GetParent()) {
+      if (obj == mAlphaWidgets[i]) {
+        mWarningFaded = true;
+      }
+    }
+  }
+#endif
   const CColor& tankFilled = colors.xc_energyTankFilled;
   const CColor& tankEmpty = colors.x10_energyTankEmpty;
   for (int i = 0; i < 14; ++i) {
@@ -124,6 +145,18 @@ CHudEnergyInterface::CHudEnergyInterface(CGuiFrame& hud, float energy, int total
     }
   }
 }
+
+#ifdef TARGET_PC
+void CHudEnergyInterface::UpdateHudAlpha() {
+  const float alpha = gpGameState->GameOptions().GetEnergyHudAlpha(x0_hudType);
+  for (int i = 0; i < mAlphaWidgetCount; ++i) {
+    const CColor color = mAlphaColors[i].WithAlphaModulatedBy(alpha);
+    if (!(mAlphaWidgets[i]->GetColor() == color)) {
+      mAlphaWidgets[i]->SetColor(color);
+    }
+  }
+}
+#endif
 
 void CHudEnergyInterface::SetCurrEnergy(float energy, bool wrapped) {
   xc_tankEnergy = energy;
@@ -162,7 +195,14 @@ void CHudEnergyInterface::SetEnergyLow(bool low) {
 }
 
 void CHudEnergyInterface::Update(float dt, float energyLowPulse) {
-  if (std::getenv("MP_LOG_HUD") != nullptr && x2c_energybart01_energybar != nullptr) {
+#ifdef TARGET_PC
+  UpdateHudAlpha();
+  const float warningAlpha =
+      mWarningFaded ? 1.f : gpGameState->GameOptions().GetEnergyHudAlpha(x0_hudType);
+#else
+  const float warningAlpha = 1.f;
+#endif
+  if (port::EnvFlag("MP_LOG_HUD") && x2c_energybart01_energybar != nullptr) {
     static int sLastKey = -1;
     const bool visible = x2c_energybart01_energybar->GetIsVisible();
     const int alpha = x2c_energybart01_energybar->GetModifiedColor().GetAlphau8();
@@ -176,11 +216,11 @@ void CHudEnergyInterface::Update(float dt, float energyLowPulse) {
     if (x1c_27_energyLow) {
       x4_energyLowFader = rstl::min_val(1.f, x4_energyLowFader + 2.f * dt);
       x28_textpane_energywarning->SetColor(
-          CColor::White().WithAlphaOf(x4_energyLowFader * energyLowPulse));
+          CColor::White().WithAlphaOf(x4_energyLowFader * energyLowPulse * warningAlpha));
     } else {
       x4_energyLowFader = rstl::max_val(0.f, x4_energyLowFader - 2.f * dt);
       x28_textpane_energywarning->SetColor(
-          CColor::White().WithAlphaOf(x4_energyLowFader * energyLowPulse));
+          CColor::White().WithAlphaOf(x4_energyLowFader * energyLowPulse * warningAlpha));
     }
     if (x28_textpane_energywarning->GetModifiedColor().GetAlphau8()) {
       x28_textpane_energywarning->SetIsVisible(true);

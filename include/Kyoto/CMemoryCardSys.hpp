@@ -130,6 +130,14 @@ public:
   // back to the default card for "". Only safe while no card operation runs.
   // True when the card changed.
   static bool PortSwitchCard(const char* directory);
+  // Port: the mounted card's identity, for the map side files (port_map_side.h).
+  // The directory the card's channel actually resolves to (aurora_card_get_path:
+  // <base>/<region>/<Card A|B>, or the raw image), the game id and maker its
+  // files are created with (what CARDInit got, e.g. "GM8E01") and the CARD
+  // channel the save driver uses. "" and 0 before the card is set up.
+  static const char* PortCardResolvedDirectory();
+  static const char* PortCardIdMaker();
+  static int PortCardChannel();
 #endif
   static ECardResult GetSerialNo(EMemoryCardPort port, long long& serialOut);
   static ECardResult UnmountCard(EMemoryCardPort);

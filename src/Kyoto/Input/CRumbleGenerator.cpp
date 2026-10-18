@@ -1,5 +1,7 @@
 #include "Kyoto/Input/CRumbleGenerator.hpp"
 
+#include "port_prompts.h"
+
 const EMotorState CRumbleGenerator::kStopAll[4] = {
     kMS_StopHard,
     kMS_StopHard,
@@ -25,9 +27,13 @@ short CRumbleGenerator::Rumble(const SAdsrData& adsr, float gain, ERumblePriorit
 void CRumbleGenerator::Update(float dt) {
   if (!xf0_24_disabled) {
     bool updated = false;
+    // Port: the keyboard and mouse drive player 1 too, so a pad left plugged in
+    // would shake for them. The voices still run, so switching back to the pad
+    // mid-effect picks it up where it is.
+    const bool muted = PortPrompts::KeyboardActive();
     for (int i = 0; i < 4; ++i) {
       const float intensity = x0_voices[i].GetIntensity();
-      if (!x0_voices[i].Update(dt) || intensity <= 0.f) {
+      if (!x0_voices[i].Update(dt) || intensity <= 0.f || muted) {
         xc0_periodTime[i] = 0.f;
         xd0_onTime[i] = 0.f;
         if (xe0_commandArray[i] != kMS_Stop) {

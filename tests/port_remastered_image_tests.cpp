@@ -3,6 +3,7 @@
 // and the emissive scale is applied in linear light.
 
 #include "port_remastered_image.h"
+#include "port_test.h"
 
 #include <cmath>
 #include <cstdint>
@@ -13,15 +14,6 @@
 using namespace PortRemastered;
 
 namespace {
-
-int sFailures = 0;
-
-void Check(bool condition, const char* what) {
-  if (!condition) {
-    std::fprintf(stderr, "FAIL: %s\n", what);
-    ++sFailures;
-  }
-}
 
 // A one-texel checker of black and white, opaque.
 Image Checker(int size) {
@@ -73,11 +65,11 @@ int main() {
         maxR = std::max(maxR, r);
       }
     }
-    Check(minR >= 186 && maxR <= 190, "checker as colour halves to about 188");
+    CHECK_MSG(minR >= 186 && maxR <= 190, "checker as colour halves to about 188");
     const Image data = Resize(Checker(64), 32, 32, MapKind::Data);
     const int d = data.rgba[(16 * 32 + 16) * 4];
-    Check(d >= 125 && d <= 131, "checker as data halves to about 128");
-    Check(half.rgba[3] == 255, "alpha stays opaque");
+    CHECK_MSG(d >= 125 && d <= 131, "checker as data halves to about 128");
+    CHECK_MSG(half.rgba[3] == 255, "alpha stays opaque");
   }
 
   // Colour alpha stays linear: a 0/255 alpha checker means 128, not 188.
@@ -88,16 +80,16 @@ int main() {
     }
     const Image half = Resize(img, 32, 32, MapKind::Colour);
     const int a = half.rgba[(16 * 32 + 16) * 4 + 3];
-    Check(a >= 125 && a <= 131, "colour alpha is filtered as it is");
+    CHECK_MSG(a >= 125 && a <= 131, "colour alpha is filtered as it is");
   }
 
   // The mip chain of a colour map: the smallest level of the checker is 188.
   {
     const std::vector<uint8_t> txtr = EncodeTxtrRgba8(Checker(32), 8, MapKind::Colour);
     const int r = LastLevelRed(txtr, 32, 8);
-    Check(r >= 184 && r <= 192, "colour mip chain ends near 188");
+    CHECK_MSG(r >= 184 && r <= 192, "colour mip chain ends near 188");
     const int d = LastLevelRed(EncodeTxtrRgba8(Checker(32), 8, MapKind::Data), 32, 8);
-    Check(d >= 120 && d <= 136, "data mip chain ends near 128");
+    CHECK_MSG(d >= 120 && d <= 136, "data mip chain ends near 128");
   }
 
   // Normals: a field of tilts that cancel (+x and -x on alternate texels) averages
@@ -135,13 +127,13 @@ int main() {
         const float z = withZ ? half.rgba[i + 2] / 255.0f * 2.0f - 1.0f : std::sqrt(std::max(0.0f, 1.0f - x * x - y * y));
         worst = std::max(worst, std::abs(std::sqrt(x * x + y * y + z * z) - 1.0f));
         if (!withZ) {
-          Check(half.rgba[i + 2] == 0, "a two-channel normal keeps B at 0");
+          CHECK_MSG(half.rgba[i + 2] == 0, "a two-channel normal keeps B at 0");
         }
       }
-      Check(worst < 0.02f, withZ ? "normal mip is unit length" : "two-channel normal mip fits the unit circle");
+      CHECK_MSG(worst < 0.02f, withZ ? "normal mip is unit length" : "two-channel normal mip fits the unit circle");
       // The tilt in x cancels; y survives at full length because it was constant.
       const float cx = half.rgba[(8 * 16 + 8) * 4] / 255.0f * 2.0f - 1.0f;
-      Check(std::abs(cx) < 0.15f, "opposed tilts average out");
+      CHECK_MSG(std::abs(cx) < 0.15f, "opposed tilts average out");
     }
     // Without the renormalising, plain byte filtering of this map would give a
     // vector clearly shorter than 1.
@@ -149,7 +141,7 @@ int main() {
     const size_t at = (8 * 16 + 8) * 4;
     const float px = plain.rgba[at] / 255.0f * 2.0f - 1.0f, py = plain.rgba[at + 1] / 255.0f * 2.0f - 1.0f,
                 pz = plain.rgba[at + 2] / 255.0f * 2.0f - 1.0f;
-    Check(std::sqrt(px * px + py * py + pz * pz) < 0.97f, "byte filtering shortens normals (the case this fixes)");
+    CHECK_MSG(std::sqrt(px * px + py * py + pz * pz) < 0.97f, "byte filtering shortens normals (the case this fixes)");
   }
 
   // A flat normal map stays flat through every level of a BC5 chain.
@@ -162,17 +154,17 @@ int main() {
       n.rgba[i + 3] = 255;
     }
     const Image half = Resize(n, 8, 8, MapKind::Normal);
-    Check(half.rgba[0] == 128 && half.rgba[1] == 128 && half.rgba[2] == 0, "a flat normal stays flat");
+    CHECK_MSG(half.rgba[0] == 128 && half.rgba[1] == 128 && half.rgba[2] == 0, "a flat normal stays flat");
   }
 
   // Emissive scale: in linear light. 0.1 of mid grey (188 as sRGB is 0.5 linear)
   // is 0.05 linear, which is sRGB 63; scaling the bytes would give 19.
   {
     const int v = ScaleSrgbByte(188, 0.1);
-    Check(v >= 61 && v <= 65, "emissive scale in linear light");
-    Check(ScaleSrgbByte(0, 0.1) == 0, "black stays black");
-    Check(ScaleSrgbByte(255, 1.0) == 255 && ScaleSrgbByte(77, 1.0) == 77, "scale 1 is the identity");
-    Check(ScaleSrgbByte(255, 4.0) == 255, "scaling up clamps");
+    CHECK_MSG(v >= 61 && v <= 65, "emissive scale in linear light");
+    CHECK_MSG(ScaleSrgbByte(0, 0.1) == 0, "black stays black");
+    CHECK_MSG(ScaleSrgbByte(255, 1.0) == 255 && ScaleSrgbByte(77, 1.0) == 77, "scale 1 is the identity");
+    CHECK_MSG(ScaleSrgbByte(255, 4.0) == 255, "scaling up clamps");
   }
 
   // The sRGB round trip is exact for every byte.
@@ -181,11 +173,11 @@ int main() {
     for (int i = 0; i < 256; ++i) {
       exact = exact && ScaleSrgbByte(uint8_t(i), 1.0) == i;
     }
-    Check(exact, "sRGB byte round trip");
+    CHECK_MSG(exact, "sRGB byte round trip");
   }
 
-  if (sFailures == 0) {
+  if (port_test::Failures() == 0) {
     std::printf("port_remastered_image_tests: all passed\n");
   }
-  return sFailures == 0 ? 0 : 1;
+  return PORT_TEST_RESULT();
 }

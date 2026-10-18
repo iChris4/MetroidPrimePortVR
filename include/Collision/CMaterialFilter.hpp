@@ -25,6 +25,11 @@ public:
   CMaterialList& IncludeList() { return include; }
   const CMaterialList& GetExcludeList() const { return exclude; }
   CMaterialList& ExcludeList() { return exclude; }
+  // The mode itself: Remastered's collision filter stores it at +0x10 and its
+  // EFilterType values are the source's modes (0 none, 1 include, 2 exclude,
+  // 3 both), so a caller handing the filter to a translated-material gate needs
+  // this rather than inferring it from the lists.
+  EFilterType GetFilterType() const { return type; }
   static CMaterialFilter MakeInclude(const CMaterialList& include) {
     return CMaterialFilter(include, CMaterialList(), kFT_Include);
   }

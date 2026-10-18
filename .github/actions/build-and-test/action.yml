@@ -1,0 +1,53 @@
+name: Build and test
+description: >
+  Builds a configured port build directory, runs the port's CTest suite, the
+  TLS test once more for its log, and Aurora's GX FIFO regressions. The build
+  directory must have been configured with -DMP_BUILD_TESTS=ON and
+  -DAURORA_ENABLE_TESTS=ON.
+
+# PowerShell runs the steps on every runner: it is the shell the Windows
+# workflow always used (Git Bash there would put its own find, link and openssl
+# ahead of the runner's on PATH), and GitHub's Linux and macOS runners have it
+# too, so one step per command serves all three (the main build aside, below).
+# PowerShell finds foo.exe for ./foo, so the paths carry no suffix. The inputs are fixed strings from this
+# repository's workflows, spliced into the commands as is.
+inputs:
+  build-dir:
+    description: The configured build directory, relative to the workspace.
+    required: true
+  jobs:
+    description: The parallelism arguments for cmake --build, e.g. "-j" or "-j 4".
+    default: "-j"
+  build-args:
+    description: Extra arguments for the main build only, e.g. "-- -k 0".
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    # PowerShell would take a bare -- in build-args (macOS passes "-- -k 0")
+    # as its own end-of-parameters marker, so the main build runs in bash
+    # wherever bash is the native shell.
+    - name: Build
+      if: runner.os != 'Windows'
+      shell: bash
+      run: cmake --build ${{ inputs.build-dir }} ${{ inputs.jobs }} ${{ inputs.build-args }}
+    - name: Build
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: cmake --build ${{ inputs.build-dir }} ${{ inputs.jobs }} ${{ inputs.build-args }}
+    - name: Test
+      shell: pwsh
+      run: ctest --test-dir ${{ inputs.build-dir }} -L port --output-on-failure
+    # ctest only prints a test's output when it fails, so the wss:// evidence
+    # - the verified handshake and the rejections - would otherwise never
+    # appear in the log. Run it once more directly to record it.
+    - name: Show the TLS handshake result
+      shell: pwsh
+      run: ./${{ inputs.build-dir }}/port_ws_tests
+    - name: Build FIFO regressions
+      shell: pwsh
+      run: cmake --build ${{ inputs.build-dir }} --target gx_fifo_tests ${{ inputs.jobs }}
+    - name: Test FIFO regressions
+      shell: pwsh
+      run: ./${{ inputs.build-dir }}/extern/aurora/tests/gx_fifo_tests --gtest_brief=1

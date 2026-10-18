@@ -66,6 +66,9 @@ public:
     void Unlock();
     bool IsLoaded() const;
     CMapArea* MapArea() { return x4_area.GetT(); }
+#ifdef TARGET_PC
+    CAssetId PortAreaRes() const { return x0_areaRes; }
+#endif
     CMapArea* GetMapArea() const;
     CMapAreaData* NextMapAreaData() { return x14_next; }
     CMapAreaData* GetNextMapAreaData() const { return x14_next; }
@@ -126,6 +129,11 @@ public:
   explicit CMapWorld(CInputStream& in);
   ~CMapWorld();
   uint GetNumAreas() const { return x0_areas.size(); }
+#ifdef TARGET_PC
+  // Gives the loaded map areas their door icons again (PortBeamDoors: a doorway
+  // was unlocked since they were made).
+  void PortRefreshDoors();
+#endif
   CMapArea* GetMapArea(int aid) { return x0_areas[aid].MapArea(); }
   CMapArea* GetMapArea(int aid) const;
   bool IsMapAreaInBFSInfoVector(const CMapAreaData* area,

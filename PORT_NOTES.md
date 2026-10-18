@@ -1900,12 +1900,11 @@ recreation would need explicit close/detach/reset (not reachable today:
 
 ### Archipelago
 
-- The real world (`UltiNaruto/MetroidAPPrime`) answered 404 on 2026-09-27, so the
-  location join is verified only against `tools/ap-world-fixture/Locations.py`
-  (retail's 100 locations, synthetic AP ids from 50310000). Re-check that
-  repository; map the real table with `tools/make_ap_config.py --strict`.
-- `platform/port_json.*` is a general JSON parser while `platform/port_randomizer.cpp`
-  still has its own seed parser; folding it onto `PortJson` would leave one.
+- The real world is `UltiNaruto/MetroidAPrime` (the 404 on 2026-09-27 came from a
+  misspelled `MetroidAPPrime`; the repository is reachable). The location join is
+  still verified only against `tools/ap-world-fixture/Locations.py` (retail's 100
+  locations, synthetic AP ids from 50310000); map the real table with
+  `tools/make_ap_config.py --strict`.
 - `MP_AP_RESET_STATE=1` is the manual way to discard progress for a new game or an
   older save on the same slot and seed (the card exposes no save identity).
 - `MP_RANDO_DUMP` takes precedence over `MP_RANDO_SEED` and returns before placement,

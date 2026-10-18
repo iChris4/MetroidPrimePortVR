@@ -7,6 +7,7 @@
 #include <array>
 #include <cassert>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <span>
@@ -448,4 +449,25 @@ private:
   size_t mSize;
   size_t mPosition = 0;
 };
+// The port's on/off rule for its MP_* debug variables (port::EnvFlag in the port's
+// port_env.h, which Aurora does not include): unset gives the fallback, and empty, 0,
+// false, off or no (any case) mean off.
+inline bool env_flag(const char* name, bool fallback = false) {
+  const char* value = std::getenv(name);
+  if (value == nullptr) {
+    return fallback;
+  }
+  for (const char* off : {"", "0", "false", "off", "no"}) {
+    const char* a = value;
+    const char* b = off;
+    while (*a != '\0' && *b != '\0' && (*a | 0x20) == *b) {
+      ++a;
+      ++b;
+    }
+    if (*a == '\0' && *b == '\0') {
+      return false;
+    }
+  }
+  return true;
+}
 } // namespace aurora

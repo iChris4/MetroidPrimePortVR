@@ -12,6 +12,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <chrono>
 #include <vector>
 
 #include <aurora/aurora.h>
@@ -23,6 +24,7 @@
 #include "../gx/gx.hpp"
 #include "../gfx/frame.hpp"
 #include "../gfx/recording.hpp"
+#include "../gfx/resource_cache.hpp"
 #include "../gfx/render_worker.hpp"
 #include "../internal.hpp"
 #include "../window.hpp"
@@ -37,9 +39,6 @@
 namespace aurora::gx {
 void trim_copy_texture_cache() noexcept;
 } // namespace aurora::gx
-namespace aurora::gfx {
-void clear_offscreen_cache();
-} // namespace aurora::gfx
 
 namespace aurora::webgpu {
 static Module Log("aurora::gpu");
@@ -146,13 +145,17 @@ struct ResampleUniformBlock {
   uint32_t samplerMode = 0;
   float frameWidth = 0.f;
   float frameHeight = 0.f;
+  float sharpness = 0.f; // 0 = off; set only while the frame is stretched up to the window
 };
+// Set on the game thread, read by the render worker's present resample.
+std::atomic<float> g_presentSharpness{0.f};
 
 constexpr std::string_view resampleShaderSource = R"(
 struct Uniforms {
     sampler_mode: u32,
     frame_width: f32,
     frame_height: f32,
+    sharpness: f32,
 };
 
 struct VertexOutput {
@@ -232,11 +235,34 @@ fn sample_area(frag_position: vec4<f32>) -> vec4<f32> {
 
 // END AREA SAMPLER REGION
 
+// Contrast-adaptive sharpening in the manner of AMD's CAS, for a frame stretched up to the
+// window: a cross of source texels around the bilinear sample, weighted down where the
+// neighbourhood has little headroom, so edges sharpen without ringing and flat areas stay
+// flat. Unlike CAS proper it sharpens the stretched image rather than scaling and
+// sharpening the source pixels in one filter.
+fn sharpen(uv: vec2<f32>, color: vec4<f32>) -> vec4<f32> {
+    let texel = 1.0 / vec2<f32>(textureDimensions(t));
+    let n = textureSample(t, s, uv + vec2<f32>(0.0, -texel.y)).rgb;
+    let so = textureSample(t, s, uv + vec2<f32>(0.0, texel.y)).rgb;
+    let w = textureSample(t, s, uv + vec2<f32>(-texel.x, 0.0)).rgb;
+    let e = textureSample(t, s, uv + vec2<f32>(texel.x, 0.0)).rgb;
+    let c = color.rgb;
+    let mn = min(c, min(min(n, so), min(w, e)));
+    let mx = max(c, max(max(n, so), max(w, e)));
+    let amp = sqrt(clamp(min(mn, vec3<f32>(1.0) - mx) / max(mx, vec3<f32>(1.0e-5)), vec3<f32>(0.0), vec3<f32>(1.0)));
+    let weight = amp * mix(-0.125, -0.2, clamp(uniforms.sharpness, 0.0, 1.0));
+    let sharp = (c + (n + so + w + e) * weight) / (vec3<f32>(1.0) + 4.0 * weight);
+    return vec4<f32>(clamp(sharp, vec3<f32>(0.0), vec3<f32>(1.0)), color.a);
+}
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     var color = textureSample(t, s, in.uv);
     if (uniforms.sampler_mode == 1u) {
         color = sample_area(in.position);
+    }
+    if (uniforms.sharpness > 0.0) {
+        color = sharpen(in.uv, color);
     }
     return vec4(color.rgb, 1.0);
 }
@@ -507,8 +533,28 @@ void release_scene_hdr_target() noexcept {
   g_sceneHdrFailedSamples = 0;
 }
 
+// The render worker's view of the EFB targets (efb_targets): written only by items it runs, or
+// while it is not running.
+static EfbTargets g_workerTargets;
+
+EfbTargets efb_targets() noexcept {
+  if (gfx::render_worker::is_worker_thread()) {
+    return g_workerTargets;
+  }
+  return {g_frameBuffer, g_frameBufferResolved, g_depthBuffer};
+}
+
 const TextureWithSampler& present_source() noexcept {
+  if (gfx::render_worker::is_worker_thread()) {
+    return g_graphicsConfig.msaaSamples > 1 ? g_workerTargets.resolved : g_workerTargets.color;
+  }
   return g_graphicsConfig.msaaSamples > 1 ? g_frameBufferResolved : g_frameBuffer;
+}
+
+// Hands the main thread's targets to the worker, after the frames already queued to it.
+static void publish_worker_targets() {
+  gfx::render_worker::enqueue_work(
+      [targets = EfbTargets{g_frameBuffer, g_frameBufferResolved, g_depthBuffer}] { g_workerTargets = targets; });
 }
 
 void set_resampler(AuroraSampler sampler) noexcept {
@@ -524,6 +570,11 @@ void set_resampler(AuroraSampler sampler) noexcept {
 }
 
 AuroraSampler get_resampler() noexcept { return g_Resampler; }
+
+void set_present_sharpness(float sharpness) noexcept {
+  g_presentSharpness.store(std::isfinite(sharpness) ? std::clamp(sharpness, 0.f, 1.f) : 0.f,
+                           std::memory_order_relaxed);
+}
 
 Viewport calculate_present_viewport(uint32_t surface_width, uint32_t surface_height, uint32_t content_width,
                                     uint32_t content_height) noexcept {
@@ -848,10 +899,14 @@ const TextureWithSampler& resample_source(const wgpu::CommandEncoder& encoder, c
     g_resampledFrameBuffer = create_render_texture(width, height, false);
   }
 
+  // Only a frame stretched up to the window is sharpened: one drawn at or above its size
+  // (supersampled) already has the detail.
+  const bool upscaled = source.size.width < width || source.size.height < height;
   const ResampleUniformBlock uniform{
       .samplerMode = sampler_mode(g_Resampler),
       .frameWidth = static_cast<float>(width),
       .frameHeight = static_cast<float>(height),
+      .sharpness = upscaled ? g_presentSharpness.load(std::memory_order_relaxed) : 0.f,
   };
   AURORA_ASSERT(gfx::render_worker::is_worker_thread(), "Present resample queue write must run on the render worker");
   g_queue.WriteBuffer(g_ResampleUniformBuffer, 0, &uniform, sizeof(uniform));
@@ -1334,21 +1389,36 @@ static bool initialize_once(AuroraBackend auroraBackend, bool allowCpu) {
         // Upstream aurora bded88e9: https://github.com/TwilitRealm/dusklight/issues/2563
         "use_spirv_reconvergence_mode",
     };
-    // Extra toggles for driver debugging: MP_DAWN_ENABLE / MP_DAWN_DISABLE, comma-separated.
-    static std::deque<std::string> envToggles;
-    envToggles.clear();
-    for (const auto& [name, list] : {std::pair{"MP_DAWN_ENABLE", &enableToggles},
-                                     std::pair{"MP_DAWN_DISABLE", &disableToggles}}) {
-      const char* value = std::getenv(name);
+    // Extra toggles, comma-separated: the application's driver workarounds (AuroraConfig), then
+    // MP_DAWN_ENABLE / MP_DAWN_DISABLE for driver debugging. A later source wins: a toggle is taken
+    // out of the other list, so turning off one of the defaults above (skip_validation) works.
+    // The application's d3d11_* toggles only go to a D3D11 device; the variables pass as given.
+    static std::deque<std::string> extraToggles;
+    extraToggles.clear();
+    const auto addToggles = [&](const char* source, const char* value, bool enable, bool fromConfig) {
+      auto& list = enable ? enableToggles : disableToggles;
+      auto& other = enable ? disableToggles : enableToggles;
       for (std::string_view rest = value != nullptr ? value : ""; !rest.empty();) {
         const size_t comma = rest.find(',');
         if (comma != 0) {
-          list->push_back(envToggles.emplace_back(rest.substr(0, comma)).c_str());
-          Log.info("{}: {}", name, envToggles.back());
+          const std::string_view name = rest.substr(0, comma);
+          if (fromConfig && name.starts_with("d3d11_") && g_backendType != wgpu::BackendType::D3D11) {
+            Log.info("{}: {} (ignored: not Direct3D 11)", source, name);
+          } else {
+            std::erase_if(other, [name](const char* t) { return name == t; });
+            if (std::none_of(list.begin(), list.end(), [name](const char* t) { return name == t; })) {
+              list.push_back(extraToggles.emplace_back(name).c_str());
+            }
+            Log.info("{}: {}", source, name);
+          }
         }
         rest = comma == std::string_view::npos ? std::string_view{} : rest.substr(comma + 1);
       }
-    }
+    };
+    addToggles("driver workaround on", g_config.dawnEnableToggles, true, true);
+    addToggles("driver workaround off", g_config.dawnDisableToggles, false, true);
+    addToggles("MP_DAWN_ENABLE", std::getenv("MP_DAWN_ENABLE"), true, false);
+    addToggles("MP_DAWN_DISABLE", std::getenv("MP_DAWN_DISABLE"), false, false);
     // GL is only the fallback for drivers that draw wrong on Vulkan, so it runs without
     // Dawn's blob cache: cached program binaries crashed Mesa in glProgramBinary.
     wgpu::DawnTogglesDescriptor togglesDescriptor(wgpu::DawnTogglesDescriptor::Init{
@@ -1489,6 +1559,7 @@ void shutdown() {
   g_frameBufferResolved = {};
   release_scene_hdr_target();
   g_depthBuffer = {};
+  g_workerTargets = {}; // the worker is idle: synchronized above
   g_queue = {};
   g_surface = {};
   window::set_surface_held(false);
@@ -1506,8 +1577,16 @@ void release_surface() noexcept {
   }
 }
 
+// Where the last resize spent its time, for resize_swapchain's log line: dropping the caches
+// that hold the old size, and making the new targets.
+static double g_resizeCachesMs = 0.0;
+int g_resizeFramesToTime = 0;
+static double g_resizeTargetsMs = 0.0;
+
 static void resize_swapchain_internal(uint32_t width, uint32_t height, uint32_t nativeWidth, uint32_t nativeHeight,
                                       bool force) {
+  using clock = std::chrono::steady_clock;
+  g_resizeCachesMs = g_resizeTargetsMs = 0.0;
   if (!g_surface || !g_device || width == 0 || height == 0 || nativeHeight == 0 || nativeWidth == 0) {
     return;
   }
@@ -1518,10 +1597,21 @@ static void resize_swapchain_internal(uint32_t width, uint32_t height, uint32_t 
   if (!force && !sizeChanged) {
     return;
   }
+  const auto cachesStart = clock::now();
   if (sizeChanged) {
     gx::trim_copy_texture_cache();
-    gfx::clear_caches();
+    // A new EFB scale alone (dynamic resolution) keeps the cached bind groups, so the
+    // next frame does not rebuild them all; those the new frames do not use (the old
+    // size's) are dropped two frames on (see gfx::clear_offscreen_cache).
+    if (force || surfaceChanged) {
+      gfx::clear_caches();
+    } else {
+      gfx::clear_offscreen_cache();
+      gfx::detail::expire_unused_bind_groups_soon();
+    }
   }
+  g_resizeCachesMs = std::chrono::duration<double, std::milli>(clock::now() - cachesStart).count();
+  const auto targetsStart = clock::now();
   // A new EFB scale alone (dynamic resolution) keeps the swapchain as it is.
   if (force || surfaceChanged) {
     g_graphicsConfig.surfaceConfiguration.width = nativeWidth;
@@ -1537,6 +1627,8 @@ static void resize_swapchain_internal(uint32_t width, uint32_t height, uint32_t 
   release_scene_hdr_target();
   g_depthBuffer = create_depth_texture(width, height);
   g_CopyBindGroup = create_copy_bind_group(present_source());
+  publish_worker_targets();
+  g_resizeTargetsMs = std::chrono::duration<double, std::milli>(clock::now() - targetsStart).count();
 }
 
 bool refresh_surface(bool recreate) {
@@ -1572,8 +1664,35 @@ bool refresh_surface(bool recreate) {
 }
 
 void resize_swapchain(uint32_t width, uint32_t height, uint32_t nativeWidth, uint32_t nativeHeight, bool force) {
-  gfx::gpu_synchronize();
+  // Timed so the stutter of a resize (a dynamic resolution step) can be read from the log.
+  // The parts are timed apart: the wait for the render worker, the caches, the targets.
+  using clock = std::chrono::steady_clock;
+  const auto start = clock::now();
+  const bool efbChanged = g_frameBuffer.size.width != width || g_frameBuffer.size.height != height;
+  const bool surfaceChanged = g_graphicsConfig.surfaceConfiguration.width != nativeWidth ||
+                              g_graphicsConfig.surfaceConfiguration.height != nativeHeight;
+  // Only the EFB scale changed (dynamic resolution): the worker keeps encoding the frames it has
+  // against the old targets (efb_targets), which they and the queued work hold on to, and is
+  // handed the new ones after them, so there is nothing to wait for. Waiting cost a frame or two
+  // of GPU time on a busy GPU: the worker's queued frames block in Present. Anything else
+  // (the window, the surface, a forced rebuild, or a resize in the middle of a frame) waits.
+  // MP_RESIZE_WAIT=1 waits for every resize, as before, to rule this out when chasing a bug.
+  static const bool alwaysWait = [] {
+    const char* value = std::getenv("MP_RESIZE_WAIT");
+    return value != nullptr && value[0] == '1';
+  }();
+  const bool waits = force || surfaceChanged || !efbChanged || gfx::recording_active() || alwaysWait;
+  if (waits) {
+    gfx::gpu_synchronize();
+  }
+  const double waitMs = std::chrono::duration<double, std::milli>(clock::now() - start).count();
   resize_swapchain_internal(width, height, nativeWidth, nativeHeight, force);
+  if (efbChanged) {
+    const double ms = std::chrono::duration<double, std::milli>(clock::now() - start).count();
+    Log.info("EFB {}x{}: resized in {:.1f} ms (worker wait {}, caches {:.1f}, targets {:.1f})", width, height, ms,
+             waits ? fmt::format("{:.1f}", waitMs) : std::string("skipped"), g_resizeCachesMs, g_resizeTargetsMs);
+    g_resizeFramesToTime = 2;
+  }
 }
 
 void set_quality(uint32_t msaaSamples, uint16_t anisotropy) {

@@ -109,6 +109,9 @@ protected:
       GTEST_SKIP() << "no Dawn Null-backend device";
     }
     g_uncapturedErrors.clear();
+    // Each CTest case runs in a fresh process; no earlier test has initialized
+    // the resource limits used to align copy uniforms.
+    webgpu::g_device.GetLimits(&detail::resources().limits);
     // The policy gate under test; the Null adapter's own feature list is irrelevant to it.
     webgpu::g_hasCoreFeatures = true;
     webgpu::g_graphicsConfig.surfaceConfiguration.format = ColorFormat;

@@ -176,6 +176,24 @@ public:
     return out.Valid();
   }
 
+  // The last rect drawn for widget alone (its glyphs, for a text pane, which
+  // records its pane first and its text second). False if it drew none.
+  bool LastBounds(int frameCounter, const void* widget, Rect& out) const {
+    out = Rect{};
+    if (!Fresh(frameCounter)) {
+      return false;
+    }
+    const std::vector< Entry >& list = Current(frameCounter);
+    for (size_t i = list.size(); i-- > 0;) {
+      const Entry& e = list[i];
+      if (e.depth > 0 && e.chain[0] == widget && e.rect.Valid()) {
+        out = e.rect;
+        return true;
+      }
+    }
+    return false;
+  }
+
   static bool Under(const Entry& e, const void* ancestor) {
     for (int i = 0; i < e.depth; ++i) {
       if (e.chain[i] == ancestor) return true;

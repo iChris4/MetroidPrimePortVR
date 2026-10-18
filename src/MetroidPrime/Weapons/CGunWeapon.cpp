@@ -290,7 +290,13 @@ void CGunWeapon::UpdateMuzzleFx(const float dt, const CVector3f& scale, const CV
 void CGunWeapon::UpdateMuzzleFx(const float dt, const CVector3f& scale,
                                 const CTransform4f& locator, const bool emitting) {
   CElementGen& generator = *x1a4_muzzleGenerators[x208_muzzleEffectIdx];
-  NPortChargeFxDetail::SetLocalLocator(generator, locator);
+  // This overload serves both slots: the charge effect (the ball) and the normal muzzle
+  // flash, which shares the call site through `x832_25_chargeEffectVisible`. Only converted
+  // Power charges take the source-backed forward frame; other charge frames are preserved,
+  // and converted normal flashes keep the full sampled locator.
+  const bool chargeEffect = x208_muzzleEffectIdx == NPortChargeFxDetail::kMuzzleEffectChargeSlot;
+  NPortChargeFxDetail::SetLocalLocator(generator, locator, chargeEffect,
+                                     x200_beamId == CPlayerState::kBI_Power);
   generator.SetGlobalScale(scale);
   generator.SetParticleEmission(emitting);
   generator.Update(dt);

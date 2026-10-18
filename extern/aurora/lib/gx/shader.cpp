@@ -4349,10 +4349,23 @@ fn vf_apply_hdr(c: vec4f, fog: vec4f, w: f32) -> vec4f {
   }
   if (info.usesHdrTone) {
     uniBufAttrs += "\n    hdr_tone: array<vec4f, 3>,";
+    uniBufAttrs += "\n    hdr_tev_blend: vec4f, // x: compatSrcAlphaAdditive";
   }
   // The tone rows a display colour goes back through into the HDR scene.
   const std::string_view hdrTone = config.pbr ? "ubuf.pbr_tone[0], ubuf.pbr_tone[1], ubuf.pbr_tone[2]"
                                               : "ubuf.hdr_tone[0], ubuf.hdr_tone[1], ubuf.hdr_tone[2]";
+  // Only non-PBR HDR has hdr_tev_blend. In particular, a PBR/SDF fallback must not read it.
+  const auto hdrTevConvert = [&] {
+    const std::string original = fmt::format("prev = vec4f(hdr_exposed(prev.rgb, {}), prev.a);", hdrTone);
+    if (!info.usesHdrTone) {
+      return std::string("\n    // HDR scene\n    ") + original;
+    }
+    return fmt::format(
+        "\n    // HDR scene\n    if (ubuf.hdr_tev_blend.x > 0.5) {{\n"
+        "        prev = vec4f(hdr_tev_srcalpha_add(prev.rgb, prev.a, {}), prev.a);\n"
+        "    }} else {{\n        {}\n    }}",
+        hdrTone, original);
+  };
   if (info.usesHudDyin) {
     uniBufAttrs += "\n    hud_dyin: vec4f,";
   }
@@ -4470,7 +4483,7 @@ fn vf_apply_hdr(c: vec4f, fog: vec4f, w: f32) -> vec4f {
     // The HDR scene fogs in the light it holds: the TEV colour (its display fog mixed in above) goes
     // into the exposed domain first, then the fog applies to it there, with no curve either side.
     // A PBR draw fogs its own light (pbrVolFog), so only TEV colour reaches here.
-    fragmentFn += fmt::format("\n    // HDR scene\n    prev = vec4f(hdr_exposed(prev.rgb, {}), prev.a);", hdrTone);
+    fragmentFn += hdrTevConvert();
     hdrConverted = true;
     fragmentFn += fmt::format("\n    // Volumetric fog\n    prev = vf_apply_hdr(prev, {}, {});", volFogSample,
                               volFogWeight("clamp(prev.a, 0.0, 1.0)"));
@@ -4491,8 +4504,9 @@ fn vf_apply_hdr(c: vec4f, fog: vec4f, w: f32) -> vec4f {
   }
   if (config.sceneHdr && !pbrEmitted && !hdrConverted) {
     // Retail TEV (and SDF) colour is display sRGB: decoded and taken back through the room's tone
-    // curve, so the post-tone after the HDR scene draws it as before. Alpha as it is (blends linear).
-    fragmentFn += fmt::format("\n    // HDR scene\n    prev = vec4f(hdr_exposed(prev.rgb, {}), prev.a);", hdrTone);
+    // curve. SRCALPHA/ONE weights display RGB first; other blends keep the original inverse.
+    // Alpha is preserved in both branches; hardware blending still operates on exposed light.
+    fragmentFn += hdrTevConvert();
   }
   if (config.depthOnly != 0) {
     // Depth pre-pass: nothing is written but the depth, so the compiler can drop all the
@@ -4948,6 +4962,9 @@ fn fs_main(in: VertexOutput{9}) -> @location(0) vec4f {{{6}{5}
   }
   if (config.sceneHdr) {
     shaderSource += gfx::hdr::ToneWgsl;
+  }
+  if (info.usesHdrTone) {
+    shaderSource += gfx::hdr::TevBlendWgsl;
   }
   if (EnableDebugPrints) {
     Log.info("Generated shader (hash {:x}): {}", hash, shaderSource);

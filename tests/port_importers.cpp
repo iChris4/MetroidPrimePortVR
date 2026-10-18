@@ -1,4 +1,5 @@
 #include "port_importers.h"
+#include "port_test.h"
 
 #include <cstdio>
 #include <cstring>
@@ -6,14 +7,6 @@
 #include <vector>
 
 namespace {
-int sFailures = 0;
-
-void Check(bool condition, const char* what) {
-  if (!condition) {
-    std::fprintf(stderr, "FAIL: %s\n", what);
-    ++sFailures;
-  }
-}
 
 void Feed(const char* text, std::string& partial, std::vector<std::string>& lines) {
   PortImporters::SplitLines(text, std::strlen(text), partial, lines);
@@ -23,13 +16,13 @@ void TestLines() {
   std::string partial;
   std::vector<std::string> lines;
   Feed("one\ntw", partial, lines);
-  Check(lines.size() == 1 && lines[0] == "one" && partial == "tw", "a line split across reads waits for its end");
+  CHECK_MSG(lines.size() == 1 && lines[0] == "one" && partial == "tw", "a line split across reads waits for its end");
   Feed("o\r\nthree\n", partial, lines);
-  Check(lines.size() == 3 && lines[1] == "two" && lines[2] == "three" && partial.empty(), "CRLF ends one line");
+  CHECK_MSG(lines.size() == 3 && lines[1] == "two" && lines[2] == "three" && partial.empty(), "CRLF ends one line");
   Feed("10%\r20%\r30%", partial, lines);
-  Check(lines.size() == 3 && partial == "30%", "a carriage return rewrites the line");
+  CHECK_MSG(lines.size() == 3 && partial == "30%", "a carriage return rewrites the line");
   Feed("\n\n", partial, lines);
-  Check(lines.size() == 5 && lines[3] == "30%" && lines[4].empty(), "an empty line is kept");
+  CHECK_MSG(lines.size() == 5 && lines[3] == "30%" && lines[4].empty(), "an empty line is kept");
 }
 
 void TestCap() {
@@ -40,19 +33,17 @@ void TestCap() {
     text += std::to_string(i) + "\n";
   }
   PortImporters::SplitLines(text.data(), text.size(), partial, lines);
-  Check(lines.size() == PortImporters::kMaxLines, "the oldest lines are dropped");
-  Check(lines.front() == "50" && lines.back() == std::to_string(PortImporters::kMaxLines + 49),
-        "the newest lines are the ones kept");
+  CHECK_MSG(lines.size() == PortImporters::kMaxLines, "the oldest lines are dropped");
+  CHECK_MSG(lines.front() == "50" && lines.back() == std::to_string(PortImporters::kMaxLines + 49),
+            "the newest lines are the ones kept");
 }
 } // namespace
 
 int main() {
   TestLines();
   TestCap();
-  if (sFailures != 0) {
-    std::fprintf(stderr, "%d failure(s)\n", sFailures);
-    return 1;
+  if (port_test::Failures() == 0) {
+    std::puts("port_importers_tests: ok");
   }
-  std::puts("port_importers_tests: ok");
-  return 0;
+  return PORT_TEST_RESULT();
 }

@@ -2,6 +2,7 @@
 #define _CHUDENERGYINTERFACE
 
 #include "MetroidPrime/HUD/CHudInterface.hpp"
+#include "Kyoto/Graphics/CColor.hpp"
 #include "Kyoto/Math/CVector3f.hpp"
 #include "rstl/pair.hpp"
 #include "types.h"
@@ -46,6 +47,17 @@ private:
   CAuiMeter* x24_meter_energytanks;
   CGuiTextPane* x28_textpane_energywarning;
   CAuiEnergyBarT01* x2c_energybart01_energybar;
+#ifdef TARGET_PC
+  // Issue #144: the energy readout's own opacity, applied to these widgets over their authored
+  // colours: the energy group, or its pieces in a frame without one.
+  void UpdateHudAlpha();
+  CGuiWidget* mAlphaWidgets[3];
+  CColor mAlphaColors[3];
+  int mAlphaWidgetCount;
+  // The warning's own fader sets its colour each frame; it takes the opacity directly unless it
+  // is in one of mAlphaWidgets.
+  bool mWarningFaded;
+#endif
 };
 CHECK_SIZEOF(CHudEnergyInterface, 0x30)
 

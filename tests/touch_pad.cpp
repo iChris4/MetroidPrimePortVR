@@ -13,20 +13,12 @@
 // test. That is why it is here.
 
 #include "touch_pad.h"
+#include "port_test.h"
 
 #include <cstdio>
 #include <string>
 
 namespace {
-
-int gFailures = 0;
-
-void Check(bool condition, const char* message) {
-  if (!condition) {
-    std::printf("FAIL: %s\n", message);
-    ++gFailures;
-  }
-}
 
 const char* ButtonName(SDL_GamepadButton button) {
   switch (button) {
@@ -101,10 +93,10 @@ int main() {
     SDL_QuitSubSystem(SDL_INIT_JOYSTICK);
     return 1;
   }
-  Check(SDL_IsGamepad(pad.id), "the attached pad reports as a gamepad");
+  CHECK_MSG(SDL_IsGamepad(pad.id), "the attached pad reports as a gamepad");
 
   SDL_Gamepad* gamepad = SDL_OpenGamepad(pad.id);
-  Check(gamepad != nullptr, "the pad opens as a gamepad");
+  CHECK_MSG(gamepad != nullptr, "the pad opens as a gamepad");
   if (gamepad == nullptr) {
     PortTouchPad::Detach(pad);
     SDL_QuitSubSystem(SDL_INIT_JOYSTICK);
@@ -120,20 +112,20 @@ int main() {
     for (int logical = 0; logical < SDL_GAMEPAD_BUTTON_COUNT; ++logical) {
       const bool down = SDL_GetGamepadButton(gamepad, static_cast< SDL_GamepadButton >(logical));
       if (raw == logical) {
-        Check(down, "every raw button index must reach the same logical control");
+        CHECK_MSG(down, "every raw button index must reach the same logical control");
         if (!down)
           std::printf("      raw %d did not reach %s\n", raw, ButtonName(static_cast< SDL_GamepadButton >(logical)));
       } else if (down) {
         std::printf("FAIL: raw %d also brought up %s\n", raw, ButtonName(static_cast< SDL_GamepadButton >(logical)));
-        ++gFailures;
+        port_test::CountFailure();
       }
     }
     SDL_SetJoystickVirtualButton(pad.handle, raw, false);
     SDL_UpdateJoysticks();
   }
   for (int logical = 0; logical < SDL_GAMEPAD_BUTTON_COUNT; ++logical)
-    Check(!SDL_GetGamepadButton(gamepad, static_cast< SDL_GamepadButton >(logical)),
-          "every button reads clear once released");
+    CHECK_MSG(!SDL_GetGamepadButton(gamepad, static_cast< SDL_GamepadButton >(logical)),
+              "every button reads clear once released");
 
   // --- the axes, through the port's own conversion
   struct AxisCase {
@@ -167,19 +159,19 @@ int main() {
         const bool trigger = c.axis == SDL_GAMEPAD_AXIS_LEFT_TRIGGER ||
                              c.axis == SDL_GAMEPAD_AXIS_RIGHT_TRIGGER;
         const Sint16 want = c.expectedLeft < 0 && trigger ? 0 : c.expectedLeft;
-        Check(value == want, "a full negative deflection must reach the axis minimum");
+        CHECK_MSG(value == want, "a full negative deflection must reach the axis minimum");
         if (value != want)
           std::printf("      %s at full negative: got %d, want %d\n", AxisName(c.axis), value, want);
       } else if (value != 0) {
         std::printf("FAIL: moving %s also moved %s (%d)\n", AxisName(c.axis),
                     AxisName(static_cast< SDL_GamepadAxis >(logical)), value);
-        ++gFailures;
+        port_test::CountFailure();
       }
     }
     SDL_SetJoystickVirtualAxis(pad.handle, raw, PortTouchPad::AxisValue(c.right));
     SDL_UpdateJoysticks();
-    Check(SDL_GetGamepadAxis(gamepad, c.axis) == 32767,
-          "a full positive deflection must reach the axis maximum");
+    CHECK_MSG(SDL_GetGamepadAxis(gamepad, c.axis) == 32767,
+              "a full positive deflection must reach the axis maximum");
     RestAxes(pad.handle);
   }
 
@@ -191,43 +183,43 @@ int main() {
   SDL_SetJoystickVirtualAxis(pad.handle, static_cast< int >(SDL_GAMEPAD_AXIS_LEFTX),
                              PortTouchPad::AxisValue(0.5f));
   SDL_UpdateJoysticks();
-  Check(SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTX) == 16384,
-        "half deflection must be a real half, not zero");
+  CHECK_MSG(SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTX) == 16384,
+            "half deflection must be a real half, not zero");
   SDL_SetJoystickVirtualAxis(pad.handle, static_cast< int >(SDL_GAMEPAD_AXIS_LEFTX),
                              PortTouchPad::AxisValue(-0.5f));
   SDL_UpdateJoysticks();
-  Check(SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTX) == -16384,
-        "half deflection must be a real half in the negative direction too");
+  CHECK_MSG(SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTX) == -16384,
+            "half deflection must be a real half in the negative direction too");
   SDL_SetJoystickVirtualAxis(pad.handle, static_cast< int >(SDL_GAMEPAD_AXIS_LEFTX),
                              PortTouchPad::AxisValue(0.f));
   SDL_UpdateJoysticks();
-  Check(SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTX) == 0,
-        "a centred stick reads exactly zero, with no jitter floor");
+  CHECK_MSG(SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTX) == 0,
+            "a centred stick reads exactly zero, with no jitter floor");
 
   // --- out-of-range input is clamped, not wrapped
   RestAxes(pad.handle);
   SDL_SetJoystickVirtualAxis(pad.handle, static_cast< int >(SDL_GAMEPAD_AXIS_LEFTX),
                              PortTouchPad::AxisValue(4.f));
   SDL_UpdateJoysticks();
-  Check(SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTX) == 32767,
-        "an over-range deflection clamps to the maximum");
+  CHECK_MSG(SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTX) == 32767,
+            "an over-range deflection clamps to the maximum");
   SDL_SetJoystickVirtualAxis(pad.handle, static_cast< int >(SDL_GAMEPAD_AXIS_LEFTX),
                              PortTouchPad::AxisValue(-4.f));
   SDL_UpdateJoysticks();
-  Check(SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTX) == -32768,
-        "an under-range deflection clamps to the minimum");
+  CHECK_MSG(SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTX) == -32768,
+            "an under-range deflection clamps to the minimum");
 
   // --- detach must actually remove the device, or a second Attach would double up
   const int before = AttachedCount();
   PortTouchPad::Detach(pad);
-  Check(!pad.ok(), "a detached pad is cleared");
+  CHECK_MSG(!pad.ok(), "a detached pad is cleared");
   SDL_UpdateJoysticks();
-  Check(AttachedCount() == before - 1, "detaching removes the device");
+  CHECK_MSG(AttachedCount() == before - 1, "detaching removes the device");
 
   PortTouchPad::Pad second = PortTouchPad::Attach();
-  Check(second.ok(), "a pad can be attached again after detaching");
+  CHECK_MSG(second.ok(), "a pad can be attached again after detaching");
   SDL_UpdateJoysticks();
-  Check(AttachedCount() == before, "reattaching restores the device count");
+  CHECK_MSG(AttachedCount() == before, "reattaching restores the device count");
   PortTouchPad::Detach(second);
   // Detaching twice, or detaching a pad that never opened, must be harmless.
   PortTouchPad::Detach(second);
@@ -237,10 +229,8 @@ int main() {
   SDL_CloseGamepad(gamepad);
   SDL_QuitSubSystem(SDL_INIT_JOYSTICK);
 
-  if (gFailures != 0) {
-    std::printf("%d check(s) failed\n", gFailures);
-    return 1;
+  if (port_test::Failures() == 0) {
+    std::printf("touch pad: mapping, conversion and cleanup all behave\n");
   }
-  std::printf("touch pad: mapping, conversion and cleanup all behave\n");
-  return 0;
+  return PORT_TEST_RESULT();
 }

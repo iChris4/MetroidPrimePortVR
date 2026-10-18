@@ -8,16 +8,18 @@
 
 #include <cstdint>
 
+#include "port_hash.h"
+
 namespace PortModelVariant {
 
 // `key` picks the look: the suit (CPlayerState::EPlayerSuit) for Samus, the
 // weapon type for the beam troopers. The id of a variant that is
 // also a retail resource's is never written, so it cannot shadow one.
 inline uint32_t Id(uint32_t retail, int key) {
-  uint32_t h = 2166136261u;
+  uint32_t h = port::kFnv32Basis;
   const auto mix = [&h](uint32_t v) {
     for (int i = 0; i < 4; ++i) {
-      h = (h ^ ((v >> (8 * i)) & 0xFF)) * 16777619u;
+      h = port::Fnv1a32Step(h, uint8_t(v >> (8 * i)));
     }
   };
   mix(0x56415249u); // "VARI"

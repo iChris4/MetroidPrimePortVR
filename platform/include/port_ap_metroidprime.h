@@ -63,6 +63,11 @@ const Location* FindLocation(int64_t id);
 // The AP name of an item id (with the base), or null when the world has none.
 const char* ItemName(int64_t itemId);
 
+// The built-in id (with the base) of the item the AP world calls `name`. The
+// official world numbers its items from 41 differently than this table does,
+// so the session translates the server's ids by name; see Session::MergeDataPackage.
+bool CanonicalItemId(const std::string& name, int64_t& itemId);
+
 // Fills in the built-in item table, and the location table too when the
 // configuration left it out. A configuration with its own items keeps them and
 // gets neither. True when it filled the items, which `Config::builtin` records.

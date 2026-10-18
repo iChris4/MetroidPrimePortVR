@@ -592,7 +592,7 @@ static inline float fast_cosine(float x);
 
 bool CParticleSwoosh::PortVfxSwoosh() const {
   const CPortVfxData* vfx = x1c_desc->xPortVfx.get();
-  return vfx != nullptr && vfx->mat.version == 2 && x1b8_SIDE >= 2 && !x1c_desc->x44_29_WIRE;
+  return vfx != nullptr && (vfx->mat.version == 2 || vfx->mat.version == 3) && x1b8_SIDE >= 2 && !x1c_desc->x44_29_WIRE;
 }
 
 // RenderNSidedSpline's geometry through the swoosh's VFX material (VMAT). The base uv is
@@ -601,7 +601,7 @@ bool CParticleSwoosh::PortVfxSwoosh() const {
 // Remastered evaluates them per point.
 void CParticleSwoosh::PortRenderVfx() {
   const CPortVfxData& vfx = *x1c_desc->xPortVfx;
-  float vsmt[19] = {};
+  float vsmt[kPortVfxVsmtCount] = {};
   const uint vsmtMask = PortVfxEvalVsmt(vfx, x28_curFrame, vsmt);
   aurora::gfx::vfx::DrawDesc desc;
   if (!PortVfxBuildDesc(vfx, vsmt, vsmtMask, desc)) {

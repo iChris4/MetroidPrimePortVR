@@ -10,10 +10,12 @@
 #include "Kyoto/Audio/CAudioSys.hpp"
 #include "Kyoto/SObjectTag.hpp"
 #include "MetroidPrime/TGameTypes.hpp"
+#include "MetroidPrime/HUD/CHudInterface.hpp"
 
 class CInputStream;
 class CMemoryStreamOut;
 class CFinalInput;
+class CStateManager;
 
 enum EGameOption {
   kGO_VisorOpacity,
@@ -72,6 +74,15 @@ public:
   CAudioSys::ESurroundModes GetSurroundMode() const { return static_cast<CAudioSys::ESurroundModes>(x44_soundMode); }
   const float GetHudAlpha() const;
   int GetHUDAlpha() const { return x60_hudAlpha; }
+#ifdef TARGET_PC
+  // Visor Opacity for one HUD type (issue #144): the X-Ray, Thermal and Scan HUDs can have their
+  // own (PortDebug::HudOpacity), the Combat and Ball HUDs use the option.
+  float GetHudAlpha(EHudType type) const;
+  // The HUD type in use: the active visor's, Combat outside first person.
+  float GetActiveHudAlpha(const CStateManager& mgr) const;
+  // The energy readout on a HUD of this type: opaque as in the game unless set otherwise.
+  float GetEnergyHudAlpha(EHudType type) const;
+#endif
   const float GetHelmetAlpha() const;
   void SetHelmetAlpha(const int);
   void SetHUDLag(const bool);

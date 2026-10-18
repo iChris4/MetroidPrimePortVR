@@ -1,6 +1,10 @@
 #include "port_json.h"
+#include "port_json_writer.h"
+#include "port_strings.h"
 
+#include <cassert>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <limits>
 #include <utility>
@@ -452,3 +456,160 @@ const char* TypeName(Value::Type type) {
 }
 
 } // namespace PortJson
+
+namespace port {
+
+void JsonWriter::BeforeValue() {
+  if (mAfterKey) {
+    mAfterKey = false;
+    return;
+  }
+  assert((mLevels.empty() || !mLevels.back().object) && "a value in an object needs a Key first");
+  if (!mLevels.empty()) {
+    if (!mLevels.back().empty)
+      mOut.push_back(',');
+    mLevels.back().empty = false;
+  }
+}
+
+void JsonWriter::Open(char bracket, bool object) {
+  BeforeValue();
+  mOut.push_back(bracket);
+  mLevels.push_back({object, true});
+}
+
+void JsonWriter::Close(char bracket, bool object) {
+  assert(!mLevels.empty() && mLevels.back().object == object && !mAfterKey && "unbalanced JSON End");
+  (void)object;
+  mLevels.pop_back();
+  mOut.push_back(bracket);
+}
+
+JsonWriter& JsonWriter::BeginObject() {
+  Open('{', true);
+  return *this;
+}
+
+JsonWriter& JsonWriter::EndObject() {
+  Close('}', true);
+  return *this;
+}
+
+JsonWriter& JsonWriter::BeginArray() {
+  Open('[', false);
+  return *this;
+}
+
+JsonWriter& JsonWriter::EndArray() {
+  Close(']', false);
+  return *this;
+}
+
+JsonWriter& JsonWriter::Key(std::string_view key) {
+  assert(!mLevels.empty() && mLevels.back().object && !mAfterKey && "a Key belongs in an object");
+  if (!mLevels.back().empty)
+    mOut.push_back(',');
+  mLevels.back().empty = false;
+  AppendJsonQuoted(mOut, key);
+  mOut.push_back(':');
+  mAfterKey = true;
+  return *this;
+}
+
+JsonWriter& JsonWriter::String(std::string_view text) {
+  BeforeValue();
+  AppendJsonQuoted(mOut, text);
+  return *this;
+}
+
+JsonWriter& JsonWriter::Bool(bool value) {
+  BeforeValue();
+  mOut += value ? "true" : "false";
+  return *this;
+}
+
+JsonWriter& JsonWriter::Null() {
+  BeforeValue();
+  mOut += "null";
+  return *this;
+}
+
+JsonWriter& JsonWriter::Int(int64_t value) {
+  BeforeValue();
+  mOut += std::to_string(value);
+  return *this;
+}
+
+JsonWriter& JsonWriter::UInt(uint64_t value) {
+  BeforeValue();
+  mOut += std::to_string(value);
+  return *this;
+}
+
+std::string JsonWriter::NumberText(double value) {
+  if (!std::isfinite(value))
+    return "null";
+  char text[40];
+  if (std::fabs(value) < 9e15 && std::trunc(value) == value)
+    std::snprintf(text, sizeof(text), "%lld", static_cast< long long >(value));
+  else
+    std::snprintf(text, sizeof(text), "%.17g", value);
+  return text;
+}
+
+std::string JsonWriter::FloatText(float value) {
+  if (!std::isfinite(value))
+    return "null";
+  char text[32];
+  std::snprintf(text, sizeof(text), "%.9g", static_cast< double >(value));
+  return text;
+}
+
+JsonWriter& JsonWriter::Number(double value) {
+  BeforeValue();
+  mOut += NumberText(value);
+  return *this;
+}
+
+JsonWriter& JsonWriter::Float(float value) {
+  BeforeValue();
+  mOut += FloatText(value);
+  return *this;
+}
+
+JsonWriter& JsonWriter::Raw(std::string_view json) {
+  BeforeValue();
+  mOut += json;
+  return *this;
+}
+
+JsonWriter& JsonWriter::Value(const PortJson::Value& value) {
+  switch (value.GetType()) {
+  case PortJson::Value::Type::Null: return Null();
+  case PortJson::Value::Type::Bool: return Bool(value.AsBool());
+  case PortJson::Value::Type::Number: return Number(value.AsNumber());
+  case PortJson::Value::Type::String: return String(value.AsString());
+  case PortJson::Value::Type::Array:
+    BeginArray();
+    for (const PortJson::Value& element : value.AsArray())
+      Value(element);
+    return EndArray();
+  case PortJson::Value::Type::Object:
+    BeginObject();
+    for (const auto& [key, member] : value.AsObject())
+      Key(key).Value(member);
+    return EndObject();
+  }
+  return Null();
+}
+
+std::string JsonWriter::Take() {
+  assert(mLevels.empty() && !mAfterKey && "JSON taken before every Begin had its End");
+  std::string out = std::move(mOut);
+  mOut.clear();
+  mLevels.clear();
+  mAfterKey = false;
+  return out;
+}
+
+} // namespace port

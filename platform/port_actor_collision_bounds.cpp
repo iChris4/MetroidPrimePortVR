@@ -186,8 +186,7 @@ bool Reader::ModelBounds(const Where& where, float out[6]) {
   }
   // A big-endian length, then a zlib stream: two header bytes, the DEFLATE
   // data, and a checksum the decoder never reaches.
-  const auto byte = [&raw](size_t i) { return size_t(static_cast<uint8_t>(raw[i])); };
-  const size_t length = byte(0) << 24 | byte(1) << 16 | byte(2) << 8 | byte(3);
+  const size_t length = ReadBE32(reinterpret_cast<const uint8_t*>(raw.data()));
   if (length < kHeaderSize || length > kMaxResourceBytes) {
     return false;
   }

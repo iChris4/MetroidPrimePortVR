@@ -1,4 +1,5 @@
 #include "port_remastered_text.h"
+#include "port_test.h"
 
 #include <cstdio>
 #include <cstring>
@@ -9,14 +10,6 @@
 using namespace PortRemastered;
 
 namespace {
-int sFailures = 0;
-
-void Check(bool condition, const char* what) {
-  if (!condition) {
-    std::fprintf(stderr, "FAIL: %s\n", what);
-    ++sFailures;
-  }
-}
 
 void Put32(std::vector<uint8_t>& out, uint32_t value) {
   for (int i = 0; i < 4; ++i) {
@@ -148,18 +141,18 @@ void TestMsbt() {
 
   std::vector<TextEntry> entries;
   std::string error;
-  Check(ParseMsbt(file.data(), file.size(), "USEN", entries, error), "the second language is found");
-  Check(entries.size() == 2, "both messages are read");
+  CHECK_MSG(ParseMsbt(file.data(), file.size(), "USEN", entries, error), "the second language is found");
+  CHECK_MSG(entries.size() == 2, "both messages are read");
   if (entries.size() == 2) {
-    Check(entries[0].label == "[0000ABCD]_002" && entries[0].text == u"first", "a label goes with its index");
-    Check(entries[1].label == "Named" && entries[1].text == tagged, "a zero in a tag does not end the text");
+    CHECK_MSG(entries[0].label == "[0000ABCD]_002" && entries[0].text == u"first", "a label goes with its index");
+    CHECK_MSG(entries[1].label == "Named" && entries[1].text == tagged, "a zero in a tag does not end the text");
   }
   entries.clear();
-  Check(ParseMsbt(file.data(), file.size(), "EUFR", entries, error) && entries.size() == 1 &&
+  CHECK_MSG(ParseMsbt(file.data(), file.size(), "EUFR", entries, error) && entries.size() == 1 &&
             entries[0].text == u"premier",
         "the first language is found");
   entries.clear();
-  Check(!ParseMsbt(file.data(), file.size(), "JPJP", entries, error), "a missing language is an error");
+  CHECK_MSG(!ParseMsbt(file.data(), file.size(), "JPJP", entries, error), "a missing language is an error");
   for (size_t cut = 0; cut < file.size(); cut += 7) {
     entries.clear();
     ParseMsbt(file.data(), cut, "USEN", entries, error);  // must not read past `cut`
@@ -167,90 +160,90 @@ void TestMsbt() {
 
   uint32_t strg = 0;
   uint32_t index = 0;
-  Check(SplitTextLabel("[0000ABCD]_002", strg, index) && strg == 0xABCD && index == 2, "a table label splits");
-  Check(!SplitTextLabel("[0000ABCD]_Name", strg, index), "a named label is Remastered's own");
-  Check(!SplitTextLabel("MapLegend", strg, index), "a plain label is Remastered's own");
-  Check(!SplitTextLabel("[0000abcd]_002", strg, index), "ids are upper case");
+  CHECK_MSG(SplitTextLabel("[0000ABCD]_002", strg, index) && strg == 0xABCD && index == 2, "a table label splits");
+  CHECK_MSG(!SplitTextLabel("[0000ABCD]_Name", strg, index), "a named label is Remastered's own");
+  CHECK_MSG(!SplitTextLabel("MapLegend", strg, index), "a plain label is Remastered's own");
+  CHECK_MSG(!SplitTextLabel("[0000abcd]_002", strg, index), "ids are upper case");
 }
 
 void TestConvert() {
   std::u16string out;
-  Check(!ConvertText(u"Same  words\nhere.", u"&just=center;Same words here.", out),
-        "the same words in another layout stay the disc's");
-  Check(ConvertText(u"New words", u"&just=center;&main-color=#FF0000FF;Old&main-color=#FFFFFFFF; words", out) &&
-            out == u"&just=center;New words",
-        "the layout prefix is kept, a leading colour is not");
-  Check(ConvertText(u"A " + kRed + u"red" + kReset + u" word", u"A word", out) &&
-            out == u"A &push;&main-color=#FF0A0AFF;red&pop; word",
-        "a colour run is pushed and popped");
-  Check(ConvertText(u"Ends " + kRed + u"red", u"x", out) && out == u"Ends &push;&main-color=#FF0A0AFF;red&pop;",
-        "an open colour is closed");
-  Check(ConvertText(Tag(0, 2, {char16_t(60)}) + u"Small" + Tag(0, 2, {char16_t(100)}), u"x", out) && out == u"Small",
-        "a size is dropped");
+  CHECK_MSG(!ConvertText(u"Same  words\nhere.", u"&just=center;Same words here.", out),
+            "the same words in another layout stay the disc's");
+  CHECK_MSG(ConvertText(u"New words", u"&just=center;&main-color=#FF0000FF;Old&main-color=#FFFFFFFF; words", out) &&
+                out == u"&just=center;New words",
+            "the layout prefix is kept, a leading colour is not");
+  CHECK_MSG(ConvertText(u"A " + kRed + u"red" + kReset + u" word", u"A word", out) &&
+                out == u"A &push;&main-color=#FF0A0AFF;red&pop; word",
+            "a colour run is pushed and popped");
+  CHECK_MSG(ConvertText(u"Ends " + kRed + u"red", u"x", out) && out == u"Ends &push;&main-color=#FF0A0AFF;red&pop;",
+            "an open colour is closed");
+  CHECK_MSG(ConvertText(Tag(0, 2, {char16_t(60)}) + u"Small" + Tag(0, 2, {char16_t(100)}), u"x", out) && out == u"Small",
+            "a size is dropped");
   const std::u16string closing = {char16_t(0x0F), char16_t(1), char16_t(3)};
-  Check(ConvertText(Tag(1, 3, {char16_t(1)}) + u"Boxed" + closing, u"x", out) && out == u"Boxed",
-        "a layout tag and its closing tag are dropped");
-  Check(!ConvertText(u"Press " + Tag(1, 0, {char16_t(0xCD30)}) + u" now", u"x", out), "a button keeps the disc's text");
-  Check(!ConvertText(u"See " + Tag(1, 1, u"\x05TXTR_") + u" icon", u"x", out), "an icon keeps the disc's text");
-  Check(!ConvertText(u"This & that", u"x", out), "an ampersand would start a tag");
-  Check(!ConvertText(u"Café", u"x", out), "a glyph outside ASCII keeps the disc's text");
+  CHECK_MSG(ConvertText(Tag(1, 3, {char16_t(1)}) + u"Boxed" + closing, u"x", out) && out == u"Boxed",
+            "a layout tag and its closing tag are dropped");
+  CHECK_MSG(!ConvertText(u"Press " + Tag(1, 0, {char16_t(0xCD30)}) + u" now", u"x", out), "a button keeps the disc's text");
+  CHECK_MSG(!ConvertText(u"See " + Tag(1, 1, u"\x05TXTR_") + u" icon", u"x", out), "an icon keeps the disc's text");
+  CHECK_MSG(!ConvertText(u"This & that", u"x", out), "an ampersand would start a tag");
+  CHECK_MSG(!ConvertText(u"Café", u"x", out), "a glyph outside ASCII keeps the disc's text");
   const std::u16string cut = {u'a', char16_t(0x0E), char16_t(0), char16_t(3), char16_t(4), char16_t(0)};
-  Check(!ConvertText(cut, u"x", out), "a tag cut short is refused");
-  Check(ConvertText(u"Morphology: Stone\ncreeper\nVines grow on a mass-\nproduced rock.",
-                    u"Species: Stone creeper\nVines grow on rocks.", out) &&
-            out == u"Morphology: Stone creeper\nVines grow on a mass-produced rock.",
-        "only the disc's own line breaks are kept");
-  Check(!ConvertText(u"Abnormal heat\ntraces.", u"Abnormal heat traces.", out),
-        "a string whose breaks alone changed stays the disc's");
-  Check(ConvertText(u"Log 1\n\nNew text.", u"&font=1;Log 1\n\nOld text.", out) && out == u"&font=1;Log 1\n\nNew text.",
-        "a blank line after a heading is kept");
+  CHECK_MSG(!ConvertText(cut, u"x", out), "a tag cut short is refused");
+  CHECK_MSG(ConvertText(u"Morphology: Stone\ncreeper\nVines grow on a mass-\nproduced rock.",
+                        u"Species: Stone creeper\nVines grow on rocks.", out) &&
+                out == u"Morphology: Stone creeper\nVines grow on a mass-produced rock.",
+            "only the disc's own line breaks are kept");
+  CHECK_MSG(!ConvertText(u"Abnormal heat\ntraces.", u"Abnormal heat traces.", out),
+            "a string whose breaks alone changed stays the disc's");
+  CHECK_MSG(ConvertText(u"Log 1\n\nNew text.", u"&font=1;Log 1\n\nOld text.", out) && out == u"&font=1;Log 1\n\nNew text.",
+            "a blank line after a heading is kept");
 }
 
 void TestTranslate() {
   std::u16string out;
-  Check(TranslateText(u"Caf\u00e9 cr\u00e8me", u"&just=center;Coffee", u"Coffee", out) &&
-            out == u"&just=center;Caf\u00e9 cr\u00e8me",
-        "a translation keeps its accents and the disc's layout");
-  Check(TranslateText(u"Une\nligne", u"One\nline", u"One\nline", out) && out == u"Une\nligne",
-        "breaks are kept where the English has the disc's");
-  Check(TranslateText(u"Une\nlongue\n\n\nligne pro-\nduite", u"One line", u"One\nlong\n\nline", out) &&
-            out == u"Une longue\n\nligne pro-duite",
-        "else only paragraph breaks are kept, as one blank line");
-  Check(TranslateText(u"Dr\u00fccke " + Tag(1, 0, {char16_t(0xCD30)}) + u" jetzt",
-                      u"Press &image=SI,0.7,A;now", u"Press x now", out) &&
-            out == u"Dr\u00fccke &image=SI,0.7,A; jetzt",
-        "a button becomes the disc's image");
-  Check(!TranslateText(u"Dr\u00fccke " + Tag(1, 0, {char16_t(0xCD30)}), u"Press now", u"Press now", out),
-        "a button the disc lacks stays English");
-  Check(!TranslateText(u"Dr\u00fccke", u"Press &image=SI,0.7,A;", u"Press", out),
-        "an image the translation lacks stays English");
+  CHECK_MSG(TranslateText(u"Caf\u00e9 cr\u00e8me", u"&just=center;Coffee", u"Coffee", out) &&
+                out == u"&just=center;Caf\u00e9 cr\u00e8me",
+            "a translation keeps its accents and the disc's layout");
+  CHECK_MSG(TranslateText(u"Une\nligne", u"One\nline", u"One\nline", out) && out == u"Une\nligne",
+            "breaks are kept where the English has the disc's");
+  CHECK_MSG(TranslateText(u"Une\nlongue\n\n\nligne pro-\nduite", u"One line", u"One\nlong\n\nline", out) &&
+                out == u"Une longue\n\nligne pro-duite",
+            "else only paragraph breaks are kept, as one blank line");
+  CHECK_MSG(TranslateText(u"Dr\u00fccke " + Tag(1, 0, {char16_t(0xCD30)}) + u" jetzt",
+                          u"Press &image=SI,0.7,A;now", u"Press x now", out) &&
+                out == u"Dr\u00fccke &image=SI,0.7,A; jetzt",
+            "a button becomes the disc's image");
+  CHECK_MSG(!TranslateText(u"Dr\u00fccke " + Tag(1, 0, {char16_t(0xCD30)}), u"Press now", u"Press now", out),
+            "a button the disc lacks stays English");
+  CHECK_MSG(!TranslateText(u"Dr\u00fccke", u"Press &image=SI,0.7,A;", u"Press", out),
+            "an image the translation lacks stays English");
   // Remastered's door icons are decoration: the disc names a door by its colour.
   const std::u16string whiteDoor = Tag(1, 1, u"\u001cTXTR_WhiteDoor\u0001");
-  Check(TranslateText(u"Utilisez " + Tag(1, 0, {char16_t(0xCD08)}) + u" pour les " + whiteDoor + u" portes",
-                      u"Use &image=SA,3.0,0.6,1.0,1A29C0E6,951546A8; for Ice Doors", u"x", out) &&
-            out == u"Utilisez &image=SA,3.0,0.6,1.0,1A29C0E6,951546A8; pour les portes",
-        "a door icon is dropped with its space, the button keeps the disc's image");
-  Check(TranslateText(u"Onde " + Tag(1, 0, {char16_t(0xCD37)}) + u" portes", u"Wave Doors", u"x", out) &&
-            out == u"Onde portes",
-        "a door glyph button is dropped");
-  Check(!TranslateText(u"Onde " + Tag(1, 0, {char16_t(0xCD36)}) + u" portes", u"Wave Doors", u"x", out),
-        "another glyph the disc lacks stays English");
-  Check(TranslateText(u"Appuyez sur " + Tag(1, 0, {char16_t(0xCD17)}) + u".", u"Press START to access", u"x", out) &&
-            out == u"Appuyez sur START.",
-        "START as plain text where the disc prints it");
-  Check(!TranslateText(u"Appuyez sur " + Tag(1, 0, {char16_t(0xCD17)}) + u".", u"Press now", u"x", out),
-        "START stays a refusal where the disc does not print it");
-  Check(TranslateText(u"Rouge " + kRed + u"vif", u"x", u"x", out) && out == u"Rouge &push;&main-color=#FF0A0AFF;vif&pop;",
-        "a colour run is kept");
-  Check(!TranslateText(u"A & B", u"x", u"x", out), "an ampersand stays English");
-  Check(!TranslateText(Tag(0, 2, {char16_t(60)}), u"x", u"x", out), "an empty translation stays English");
+  CHECK_MSG(TranslateText(u"Utilisez " + Tag(1, 0, {char16_t(0xCD08)}) + u" pour les " + whiteDoor + u" portes",
+                          u"Use &image=SA,3.0,0.6,1.0,1A29C0E6,951546A8; for Ice Doors", u"x", out) &&
+                out == u"Utilisez &image=SA,3.0,0.6,1.0,1A29C0E6,951546A8; pour les portes",
+            "a door icon is dropped with its space, the button keeps the disc's image");
+  CHECK_MSG(TranslateText(u"Onde " + Tag(1, 0, {char16_t(0xCD37)}) + u" portes", u"Wave Doors", u"x", out) &&
+                out == u"Onde portes",
+            "a door glyph button is dropped");
+  CHECK_MSG(!TranslateText(u"Onde " + Tag(1, 0, {char16_t(0xCD36)}) + u" portes", u"Wave Doors", u"x", out),
+            "another glyph the disc lacks stays English");
+  CHECK_MSG(TranslateText(u"Appuyez sur " + Tag(1, 0, {char16_t(0xCD17)}) + u".", u"Press START to access", u"x", out) &&
+                out == u"Appuyez sur START.",
+            "START as plain text where the disc prints it");
+  CHECK_MSG(!TranslateText(u"Appuyez sur " + Tag(1, 0, {char16_t(0xCD17)}) + u".", u"Press now", u"x", out),
+            "START stays a refusal where the disc does not print it");
+  CHECK_MSG(TranslateText(u"Rouge " + kRed + u"vif", u"x", u"x", out) && out == u"Rouge &push;&main-color=#FF0A0AFF;vif&pop;",
+            "a colour run is kept");
+  CHECK_MSG(!TranslateText(u"A & B", u"x", u"x", out), "an ampersand stays English");
+  CHECK_MSG(!TranslateText(Tag(0, 2, {char16_t(60)}), u"x", u"x", out), "an empty translation stays English");
 
   uint32_t strg = 0;
   std::string name;
-  Check(SplitNamedLabel("[0000ABCD]_MapLegend", strg, name) && strg == 0xABCD && name == "MapLegend",
-        "a named label splits");
-  Check(!SplitNamedLabel("[0000ABCD]_002", strg, name), "an index label is not a named one");
-  Check(!SplitNamedLabel("MapLegend", strg, name), "a label without a table is not");
+  CHECK_MSG(SplitNamedLabel("[0000ABCD]_MapLegend", strg, name) && strg == 0xABCD && name == "MapLegend",
+            "a named label splits");
+  CHECK_MSG(!SplitNamedLabel("[0000ABCD]_002", strg, name), "an index label is not a named one");
+  CHECK_MSG(!SplitNamedLabel("MapLegend", strg, name), "a label without a table is not");
 }
 
 void TestMerge() {
@@ -265,27 +258,27 @@ void TestMerge() {
   std::vector<uint8_t> merged;
   int reworded = 0;
   int translated = 0;
-  Check(MergeStringTable(retail.data(), retail.size(), text, false, merged, reworded, translated) && reworded == 1 &&
-            translated == 0,
-        "one string changes");
-  Check(merged.size() % 32 == 0, "the table is padded to a block");
+  CHECK_MSG(MergeStringTable(retail.data(), retail.size(), text, false, merged, reworded, translated) && reworded == 1 &&
+                translated == 0,
+            "one string changes");
+  CHECK_MSG(merged.size() % 32 == 0, "the table is padded to a block");
   std::vector<uint8_t> expect =
       Strg({{0x4652454E, {u"un", u"deux", u"trois"}}, {english, {u"one", u"&just=center;second", u"three"}}});
-  Check(merged.size() >= expect.size() && std::memcmp(merged.data(), expect.data(), expect.size()) == 0,
-        "the other strings and languages are as they were");
+  CHECK_MSG(merged.size() >= expect.size() && std::memcmp(merged.data(), expect.data(), expect.size()) == 0,
+            "the other strings and languages are as they were");
 
   // A translation by index, and one by a name whose English is the disc's.
   text.byIndex[1]["EUFR"] = u"seconde";
   text.byName["Third"]["USEN"] = u"three";
   text.byName["Third"]["EUFR"] = u"troisi\u00e8me";
-  Check(MergeStringTable(retail.data(), retail.size(), text, false, merged, reworded, translated) && reworded == 1 &&
-            translated == 2,
-        "two strings are translated");
+  CHECK_MSG(MergeStringTable(retail.data(), retail.size(), text, false, merged, reworded, translated) && reworded == 1 &&
+                translated == 2,
+            "two strings are translated");
   expect = Strg({{0x4652454E, {u"un", u"deux", u"trois"}},
                  {english, {u"one", u"&just=center;second", u"three"}},
                  {french, {u"un", u"&just=center;seconde", u"troisi\u00e8me"}}});
-  Check(merged.size() >= expect.size() && std::memcmp(merged.data(), expect.data(), expect.size()) == 0,
-        "a language is added, the disc's own French where it has no translation");
+  CHECK_MSG(merged.size() >= expect.size() && std::memcmp(merged.data(), expect.data(), expect.size()) == 0,
+            "a language is added, the disc's own French where it has no translation");
 
   // An explicit name -> index pair (1.00 only) places a string whose English was reworded.
   std::vector<std::u16string> hyperStrings(22, u"filler");
@@ -294,33 +287,33 @@ void TestMerge() {
   TableText named;
   named.byName["HyperMode"]["USEN"] = u"Hypermode";
   named.byName["HyperMode"]["EUFR"] = u"Hypermode FR";
-  Check(MergeStringTable(hyper.data(), hyper.size(), named, false, merged, reworded, translated, 0x0552A456) &&
-            translated == 1 && reworded == 1,
-        "HyperMode is placed at index 21 of 0552A456 only...");
-  Check(!MergeStringTable(hyper.data(), hyper.size(), named, false, merged, reworded, translated, 0x500EC6A0),
-        "...and not in another table");
-  Check(!MergeStringTable(hyper.data(), hyper.size(), named, true, merged, reworded, translated, 0x0552A456),
-        "...nor on a disc whose indices move");
+  CHECK_MSG(MergeStringTable(hyper.data(), hyper.size(), named, false, merged, reworded, translated, 0x0552A456) &&
+                translated == 1 && reworded == 1,
+            "HyperMode is placed at index 21 of 0552A456 only...");
+  CHECK_MSG(!MergeStringTable(hyper.data(), hyper.size(), named, false, merged, reworded, translated, 0x500EC6A0),
+            "...and not in another table");
+  CHECK_MSG(!MergeStringTable(hyper.data(), hyper.size(), named, true, merged, reworded, translated, 0x0552A456),
+            "...nor on a disc whose indices move");
 
   // A screen title keeps the disc's brackets.
   const std::vector<uint8_t> titled = Strg({{english, {u"&just=center;[ Inventory ]"}}});
   TableText title;
   title.byName["InventoryScreenTitle"]["USEN"] = u"Inventory";
   title.byName["InventoryScreenTitle"]["EUGE"] = u"Inventar";
-  Check(MergeStringTable(titled.data(), titled.size(), title, false, merged, reworded, translated) && reworded == 0 &&
-            translated == 1,
-        "a bracketed title is matched by its words");
+  CHECK_MSG(MergeStringTable(titled.data(), titled.size(), title, false, merged, reworded, translated) && reworded == 0 &&
+                translated == 1,
+            "a bracketed title is matched by its words");
   expect = Strg({{english, {u"&just=center;[ Inventory ]"}}, {0x45554745, {u"&just=center;[ Inventar ]"}}});
-  Check(merged.size() >= expect.size() && std::memcmp(merged.data(), expect.data(), expect.size()) == 0,
-        "and its translation is bracketed too");
+  CHECK_MSG(merged.size() >= expect.size() && std::memcmp(merged.data(), expect.data(), expect.size()) == 0,
+            "and its translation is bracketed too");
 
   text.byIndex.erase(1);
   text.byName.clear();
-  Check(!MergeStringTable(retail.data(), retail.size(), text, false, merged, reworded, translated) && reworded == 0,
-        "a table with nothing new is not written");
+  CHECK_MSG(!MergeStringTable(retail.data(), retail.size(), text, false, merged, reworded, translated) && reworded == 0,
+            "a table with nothing new is not written");
   text.byIndex[1]["USEN"] = u"second";
   for (size_t cut = 0; cut < retail.size(); ++cut) {
-    Check(!MergeStringTable(retail.data(), cut, text, false, merged, reworded, translated), "a table cut short is refused");
+    CHECK_MSG(!MergeStringTable(retail.data(), cut, text, false, merged, reworded, translated), "a table cut short is refused");
   }
 
   // Another version's table: an inserted string moves 1.00's, and a rewritten one stays the disc's.
@@ -332,21 +325,21 @@ void TestMerge() {
   indexed.byIndex[0]["EUFR"] = u"Boule";
   indexed.byIndex[2]["USEN"] = u"An entirely different chozo lore entry for this one";
   indexed.byIndex[2]["EUFR"] = u"Autre";
-  Check(MergeStringTable(moved.data(), moved.size(), indexed, true, merged, reworded, translated) && reworded == 1 &&
-            translated == 1,
-        "checked indices follow the wording");
+  CHECK_MSG(MergeStringTable(moved.data(), moved.size(), indexed, true, merged, reworded, translated) && reworded == 1 &&
+                translated == 1,
+            "checked indices follow the wording");
   expect = Strg({{english,
                   {u"New", u"Morph Ball kept in the suit", u"A log the PAL disc wrote again from the start here"}},
                  {french, {u"New", u"Boule", u"A log the PAL disc wrote again from the start here"}}});
-  Check(merged.size() >= expect.size() && std::memcmp(merged.data(), expect.data(), expect.size()) == 0,
-        "a moved string is found, a rewritten one is left, English where the disc has no French");
+  CHECK_MSG(merged.size() >= expect.size() && std::memcmp(merged.data(), expect.data(), expect.size()) == 0,
+            "a moved string is found, a rewritten one is left, English where the disc has no French");
 
   // A table the version kept as it was takes Remastered's renames by index.
   const std::vector<uint8_t> kept = Strg({{english, {u"Metroid"}}});
   TableText renamed;
   renamed.byIndex[0]["USEN"] = u"Tallon Metroid";
-  Check(MergeStringTable(kept.data(), kept.size(), renamed, true, merged, reworded, translated) && reworded == 1,
-        "an unmoved table keeps its indices");
+  CHECK_MSG(MergeStringTable(kept.data(), kept.size(), renamed, true, merged, reworded, translated) && reworded == 1,
+            "an unmoved table keeps its indices");
 }
 }  // namespace
 
@@ -355,8 +348,8 @@ int main() {
   TestConvert();
   TestTranslate();
   TestMerge();
-  if (sFailures == 0) {
+  if (port_test::Failures() == 0) {
     std::printf("port_remastered_text_tests: all passed\n");
   }
-  return sFailures == 0 ? 0 : 1;
+  return PORT_TEST_RESULT();
 }

@@ -11,9 +11,13 @@
 // port_remastered_table.h goes through port_remastered_convert.h. The output
 // is the user's, for their use only; the port ships none of it.
 //
-// The mod is written to a hidden staging folder in the mods folder and only
-// takes the place of <mods>/remastered-models at the next start, before mods
-// are scanned: the running game may be reading the files of the one it loaded.
+// The mod is written to a hidden staging folder in the import's root and only
+// takes the place of <root>/remastered-models when nothing is reading the one it
+// replaces: at the next start, before mods are scanned (ApplyPendingImport), or in
+// the background once the mods are unloaded (StartInstall, on the import's own
+// thread). The root is the mods folder on desktop and the app's own internal
+// storage on Android (port_remastered_storage.h); a legacy <mods>/remastered-models
+// keeps loading as the fallback until a full import has written the private one.
 
 #include <array>
 #include <cstddef>
@@ -33,11 +37,31 @@ struct ImportState {
   int done = 0;            // models tried so far
   int total = 0;
   int failed = 0;
+  // Where a full import is: step `step` of `steps` (0 when not counted, as for a movies-only
+  // import), and how far into that step, out of stepTotal (0 when it cannot say).
+  int step = 0;
+  int steps = 0;
+  int stepDone = 0;
+  int stepTotal = 0;
+  bool cancelling = false; // cancel was asked for and the import has not stopped yet
+  bool installing = false; // StartInstall() is moving the finished import into place; it can't be cancelled
   std::string message;     // what it is doing, or how it ended
   std::vector<std::string> lines;  // the newest kImportMaxLines of its log
 };
 
 inline constexpr size_t kImportMaxLines = 200;
+
+// The parts of the game the panel leaves out of the next import, on top of the
+// MP_REMASTERED_* switches (docs/MODS.md): a part is imported only when both want it.
+struct ImportParts {
+  bool hud = true;
+  bool text = true;
+  bool effects = true;
+  bool movies = true;
+  bool gallery = true;
+  bool geometry = true; // the rooms' static geometry (MP_REMASTERED_GEOMETRY)
+};
+void SetImportParts(const ImportParts& parts);
 
 // The mod folder an import ends up as.
 inline constexpr const char* kImportModName = "remastered-models";
@@ -55,8 +79,9 @@ inline constexpr int kConverter = 52;
 inline constexpr int kTextures = 3;
 inline constexpr int kModels = 8;      // the table's models, their looks and the ANCS copies
 // 25: swoosh GRAD is the exact PGRD element, no longer a 101-key KEYP bake.
-inline constexpr int kEffects = 26;    // port_remastered_effect_import and the particle converters
-inline constexpr int kRooms = 19;      // port_remastered_room: roomenv/, .roomgeo, .roomliquid, water maps
+inline constexpr int kEffects = 29;    // port_remastered_effect_import and the particle converters
+// 20: two rooms matching one area write only the closer match's files, not the later room's.
+inline constexpr int kRooms = 20;      // port_remastered_room: roomenv/, .roomgeo, .roomliquid, water maps
 inline constexpr int kRoomModels = 1;  // the rooms' own models and their levels of detail
 inline constexpr int kText = 1;        // port_remastered_text, and the font (port_remastered_font)
 inline constexpr int kHud = 7;         // port_remastered_hud, port_remastered_map
@@ -424,11 +449,13 @@ std::string DefaultKeysPath();
 
 // Starts an import on worker threads; `threads` 0 leaves a couple of cores to
 // the game. The disc must be open. False (with the reason in the state's
-// message) when one is already running or there is no mods folder.
+// message) when one is already running or there is no import root.
 bool StartImport(const std::string& nspPath, const std::string& keysPath, int threads = 0);
 // Only the menu movies (port_remastered_movie.h) and the Extras gallery, into the mod an earlier
 // import made: for a player who had no ffmpeg then, or imported before the gallery. Same state and cancelling;
-// false when one is running or there is no such mod.
+// false when one is running or there is no such mod. It never writes into a legacy
+// <mods>/remastered-models on Android, where the import belongs to the app: a player who still has
+// only that one is asked for a full import instead.
 bool StartMovieImport(const std::string& nspPath, const std::string& keysPath);
 ImportState ImportStatus();
 // Asks the running import to stop; it ends at the next model.
@@ -436,9 +463,28 @@ void CancelImport();
 // Cancels and waits. Call before the disc is closed.
 void StopImport();
 
+// The root the import is made in and read from (port_remastered_storage.h): the mods folder on
+// desktop, where the import is one of the mods, and <internal storage>/remastered-imports on
+// Android, outside the shared mods folder. Empty when there is none, with `error` (when given)
+// saying why: on Android that is the app's internal storage being unavailable, and it is never
+// worked around by writing to the shared mods folder. Created when it is missing.
+std::string ImportRootFolder(std::string* error = nullptr);
+// Whether the root is outside the mods folder, so a legacy import there is only a fallback.
+bool UsesPrivateImportRoot();
+// <root>/remastered-models when that folder is installed, for the mod scan to load
+// (port_mods.cpp); empty when there is none, or when the root is the mods folder the scan already
+// reads. The staging folder is never answered.
+std::string InstalledModFolder();
+
 // Moves a finished import into place. Call before PortMods::Initialize().
 // True if a mod was installed.
 bool ApplyPendingImport();
+// The same on the import's thread, reported as running with `installing` set, after which the state
+// is the import's result again. Nothing may have a file of the installed mod open (unload the mods
+// first); inside the root that is one rename, where the mods folder was shared storage it was a
+// file-by-file walk through Android's media provider. False when an import is running or none is
+// staged.
+bool StartInstall();
 
 // `--import-remastered <nsp> [keys]`: imports with every core, progress on
 // stdout, and installs the mod. The disc must be open. Returns the exit code.

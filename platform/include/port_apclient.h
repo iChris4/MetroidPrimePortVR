@@ -236,6 +236,9 @@ bool DoorOps(uint32_t mrea, const uint8_t* scly, size_t size, std::vector< uint8
 // The doors of a map area whose icon the seed changes: editor id and the
 // door colour (0 blue, 1 shield, 2 ice, 3 wave, 4 plasma). False for none.
 bool MapDoors(uint32_t mapa, std::vector< std::pair< uint32_t, int > >& doors);
+// Whether door table index `door` of area `mrea` is a beam door with no blast
+// shield on it, as the seed (or the disc, with none) leaves it.
+bool BeamDoorUnlockable(uint32_t mrea, int door);
 
 // How many artifacts open the Artifact Temple: the seed's required_artifacts,
 // 12 otherwise.
