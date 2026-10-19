@@ -63,6 +63,8 @@ public:
   bool PortRefusedClosePending() const { return mClosing; }
   // True while another door's close blocks this one from opening again.
   bool PortDoClosePending() const { return mDoClose; }
+  // Think's tail for a door restored open (issue #131 follow-up): see the .cpp.
+  void PortFinishRestoredOpen(CStateManager& mgr);
 #endif
   bool IsBallDoor() const { return mBallDoor; }
   void SetDoClose(const bool close) { mDoClose = close; }
@@ -89,6 +91,14 @@ private:
   bool mProjectilesCollide : 1;
   bool mBallDoor : 1;
   bool mDoClose : 1;
+#ifdef TARGET_PC
+  // Set by PortRestoreDoorState for a door restored open; PortFinishRestoredOpen
+  // clears it. mPortDockNotified: the dock has had the Increment the Open
+  // connection would have sent. mPortRestoreTicks bounds the partner search.
+  bool mPortRestoredOpen : 1;
+  bool mPortDockNotified : 1;
+  int mPortRestoreTicks;
+#endif
 };
 CHECK_SIZEOF(CScriptDoor, (VERSION >= VERSION_GM8P_00 ? 0x2c0 : 0x2b0))
 

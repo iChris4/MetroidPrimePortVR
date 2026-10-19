@@ -6,16 +6,31 @@
 #include "aurora/aurora.h"
 #include "aurora/gfx.h"
 #include "texture.hpp"
+#include "texture_sites.hpp"
 #include "texture_convert.hpp"
+#include "probe.hpp"
 #include "../gx/gx_fmt.hpp"
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
+#include <cstring>
 #include <memory>
+#include <mutex>
+#include <string>
+#include <cstdlib>
+#include <string_view>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
+#include <cstdio>
+#include <vector>
+
+#include <dawn/native/DawnNative.h>
 #include <fmt/format.h>
+#include <magic_enum.hpp>
 #include <tracy/Tracy.hpp>
 #include <webgpu/webgpu_cpp.h>
 
@@ -34,6 +49,19 @@ wgpu::Extent3D physical_size(wgpu::Extent3D size, TextureFormatInfo info) {
 
 std::atomic<int64_t> s_liveCount[2];
 std::atomic<int64_t> s_liveBytes[2];
+// Every live TextureRef, for the breakdown (aurora_get_texture_groups).
+std::mutex s_liveMutex;
+// Leaked: texture handles may outlive static destruction.
+auto& s_liveRefs = *new std::unordered_set<const TextureRef*>;
+auto& s_labels = *new std::unordered_set<std::string>;
+
+const char* intern_label(const char* label) {
+  if (label == nullptr) {
+    return nullptr;
+  }
+  std::lock_guard lock(s_liveMutex);
+  return s_labels.emplace(label).first->c_str();
+}
 
 bool setup_swizzle(wgpu::TextureComponentSwizzleDescriptor& swizzle, u32 format) noexcept {
   if (!webgpu::g_textureComponentSwizzleSupported) {
@@ -102,26 +130,29 @@ u16 wgpu_aniso(GXAnisotropy aniso) {
 }
 } // namespace
 
+static TextureHandle new_texture_2d(uint32_t width, uint32_t height, uint32_t mips, u32 gxFormat,
+                                    wgpu::TextureFormat wgpuFormat, const char* label) noexcept;
+
 TextureHandle new_static_texture_2d(uint32_t width, uint32_t height, uint32_t mips, u32 format, ArrayRef<uint8_t> data,
                                     bool tlut, const char* label) noexcept {
   ZoneScoped;
 
-  auto handle = new_dynamic_texture_2d(width, height, mips, format, label);
-  auto& ref = *handle;
-
   ConvertedTexture converted;
-  if (ref.gxFormat != InvalidTextureFormat) {
+  if (format != InvalidTextureFormat) {
     if (tlut) {
-      CHECK(ref.size.height == 1, "new_static_texture_2d[{}]: expected tlut height 1, got {}", label, ref.size.height);
-      CHECK(ref.mipCount == 1, "new_static_texture_2d[{}]: expected tlut mipCount 1, got {}", label, ref.mipCount);
-      converted = convert_tlut(ref.gxFormat, ref.size.width, data);
+      CHECK(height == 1, "new_static_texture_2d[{}]: expected tlut height 1, got {}", label, height);
+      CHECK(mips == 1, "new_static_texture_2d[{}]: expected tlut mipCount 1, got {}", label, mips);
+      converted = convert_tlut(format, width, data);
     } else {
-      converted = convert_texture(ref.gxFormat, ref.size.width, ref.size.height, ref.mipCount, data);
+      converted = convert_texture(format, width, height, mips, data, true);
     }
-    if (!converted.data.empty()) {
-      data = converted.data;
-      ref.hasArbitraryMips = converted.hasArbitraryMips;
-    }
+  }
+  const auto wgpuFormat = converted.data.empty() ? to_wgpu(format) : converted.format;
+  auto handle = new_texture_2d(width, height, mips, format, wgpuFormat, label);
+  auto& ref = *handle;
+  if (!converted.data.empty()) {
+    data = converted.data;
+    ref.hasArbitraryMips = converted.hasArbitraryMips;
   }
 
   uint32_t offset = 0;
@@ -168,12 +199,22 @@ void TextureRef::count_live(int sign) noexcept {
                                    std::max<uint32_t>(size.depthOrArrayLayers, 1);
   s_liveCount[kind] += sign;
   s_liveBytes[kind] += sign * static_cast<int64_t>(bytes);
+  std::lock_guard lock(s_liveMutex);
+  if (sign > 0) {
+    s_liveRefs.insert(this);
+  } else {
+    s_liveRefs.erase(this);
+  }
 }
 
 TextureHandle new_dynamic_texture_2d(uint32_t width, uint32_t height, uint32_t mips, u32 gxFormat,
                                      const char* label) noexcept {
+  return new_texture_2d(width, height, mips, gxFormat, to_wgpu(gxFormat), label);
+}
+
+static TextureHandle new_texture_2d(uint32_t width, uint32_t height, uint32_t mips, u32 gxFormat,
+                                    wgpu::TextureFormat wgpuFormat, const char* label) noexcept {
   ZoneScopedS(3);
-  const auto wgpuFormat = to_wgpu(gxFormat);
   const wgpu::Extent3D size{
       .width = width,
       .height = height,
@@ -202,7 +243,7 @@ TextureHandle new_dynamic_texture_2d(uint32_t width, uint32_t height, uint32_t m
   }
   auto textureView = texture.CreateView(&textureViewDescriptor);
   return std::make_shared<TextureRef>(std::move(texture), std::move(textureView), wgpu::TextureView{}, size, wgpuFormat,
-                                      mips, gxFormat);
+                                      mips, gxFormat, intern_label(label));
 }
 
 TextureHandle new_render_texture(uint32_t width, uint32_t height, u32 gxFormat, const char* label,
@@ -243,7 +284,8 @@ TextureHandle new_render_texture(uint32_t width, uint32_t height, u32 gxFormat, 
     sampleTextureView = texture.CreateView(&textureViewDescriptor);
   }
   return std::make_shared<TextureRef>(std::move(texture), std::move(sampleTextureView),
-                                      std::move(attachmentTextureView), size, wgpuFormat, mips, gxFormat);
+                                      std::move(attachmentTextureView), size, wgpuFormat, mips, gxFormat,
+                                      intern_label(label));
 }
 
 TextureHandle new_conv_texture(uint32_t width, uint32_t height, u32 gxFormat, const char* label) noexcept {
@@ -276,7 +318,8 @@ TextureHandle new_conv_texture(uint32_t width, uint32_t height, u32 gxFormat, co
   auto attachmentTextureView = texture.CreateView(&textureViewDescriptor);
   wgpu::TextureView sampleTextureView = attachmentTextureView;
   return std::make_shared<TextureRef>(std::move(texture), std::move(sampleTextureView),
-                                      std::move(attachmentTextureView), size, wgpuFormat, 1, gxFormat);
+                                      std::move(attachmentTextureView), size, wgpuFormat, 1, gxFormat,
+                                      intern_label(label));
 }
 
 const wgpu::TextureView& array_texture_view(TextureRef& ref) noexcept {
@@ -383,10 +426,188 @@ wgpu::SamplerDescriptor TextureBind::get_descriptor() const noexcept {
 }
 } // namespace aurora::gfx
 
+namespace aurora::gfx {
+namespace {
+std::mutex s_dawnMutex;
+AuroraDawnMemory s_dawnMemory;
+bool s_dawnSampled = false;
+std::atomic<int64_t> s_dawnSampleNs = 0;
+std::atomic<texture_sites::Site*> s_sites = nullptr;
+std::atomic_bool s_dawnReduceRequested = false;
+// Allocator slack (allocated - used) above which the recycled memory is handed back, and the slack a
+// release left behind: what ReduceMemoryUsage cannot free (partly used heaps) is not retried until the
+// slack grows past it by the threshold again.
+constexpr uint64_t kDawnReduceSlack = 64ull << 20;
+uint64_t s_dawnSlackFloor = 0;
+bool s_dawnReducePending = false;
+
+void reduce_dawn_memory(WGPUDevice device, const dawn::native::AllocatorMemoryInfo& before) {
+  const bool requested = s_dawnReduceRequested.exchange(false, std::memory_order_relaxed);
+  const uint64_t slack = before.totalAllocatedMemory - std::min(before.totalUsedMemory, before.totalAllocatedMemory);
+  s_dawnSlackFloor = std::min(s_dawnSlackFloor, slack);
+  if (!requested && !s_dawnReducePending && slack < s_dawnSlackFloor + kDawnReduceSlack) {
+    return;
+  }
+  // Dawn's allocators keep freed GPU heaps for reuse and never return them on their own (issue #162).
+  s_dawnReducePending = dawn::native::ReduceMemoryUsage(device);
+  const auto after = dawn::native::GetAllocatorMemoryInfo(device);
+  s_dawnSlackFloor = after.totalAllocatedMemory - std::min(after.totalUsedMemory, after.totalAllocatedMemory);
+  if (!requested && after.totalAllocatedMemory == before.totalAllocatedMemory) {
+    return; // a pending retry that freed nothing yet
+  }
+  Log.info("dawn: released recycled GPU memory ({}): allocated {} -> {} MiB, used {} MiB{}",
+           requested ? "requested" : "slack", before.totalAllocatedMemory >> 20, after.totalAllocatedMemory >> 20,
+           after.totalUsedMemory >> 20, s_dawnReducePending ? ", more after in-flight work" : "");
+}
+} // namespace
+
+// Dawn's memory queries are not synchronized with its other calls (the device has no implicit synchronization), so
+// they run here, on the thread that submits, and the game thread reads the copy.
+void sample_dawn_memory() noexcept {
+  const int64_t now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                          std::chrono::steady_clock::now().time_since_epoch())
+                          .count();
+  const int64_t last = s_dawnSampleNs.load(std::memory_order_relaxed);
+  if ((last != 0 && now - last < 1'000'000'000) || !webgpu::g_device) {
+    return;
+  }
+  s_dawnSampleNs.store(now, std::memory_order_relaxed);
+  const WGPUDevice device = webgpu::g_device.Get();
+  const auto usage = dawn::native::ComputeEstimatedMemoryUsageInfo(device);
+  auto allocator = dawn::native::GetAllocatorMemoryInfo(device);
+  reduce_dawn_memory(device, allocator);
+  allocator = dawn::native::GetAllocatorMemoryInfo(device);
+  std::lock_guard lock(s_dawnMutex);
+  s_dawnMemory = {usage.totalUsage, usage.texturesUsage, usage.buffersUsage, allocator.totalUsedMemory,
+                  allocator.totalAllocatedMemory};
+  s_dawnSampled = true;
+}
+
+void texture_sites::note(Site& site, const wgpu::TextureDescriptor* descriptor) noexcept {
+  if (!site.registered.exchange(true, std::memory_order_acq_rel)) {
+    site.next = s_sites.load(std::memory_order_relaxed);
+    while (!s_sites.compare_exchange_weak(site.next, &site, std::memory_order_release, std::memory_order_relaxed)) {
+    }
+  }
+  // calc_texture_size is fatal for formats the port does not know; count the rest by their name.
+  uint64_t bytes = 0;
+  const std::string_view name = magic_enum::enum_name(descriptor->format);
+  if (name.starts_with("BC") || name.starts_with("ASTC") || name.starts_with("ETC2") || name.starts_with("EAC")) {
+    bytes = calc_texture_size(descriptor->format, descriptor->size.width, descriptor->size.height,
+                              descriptor->mipLevelCount);
+  } else {
+    uint32_t texelBytes = 4;
+    size_t channels = 0;
+    while (channels < name.size() && std::string_view("RGBA").find(name[channels]) != std::string_view::npos) {
+      ++channels;
+    }
+    if (name.starts_with("BGRA")) {
+      channels = 4;
+    }
+    if (name.starts_with("Depth16")) {
+      texelBytes = 2;
+    } else if (name.starts_with("Stencil8")) {
+      texelBytes = 1;
+    } else if (name.starts_with("Depth32FloatStencil8")) {
+      texelBytes = 8;
+    } else if (channels != 0 && channels < name.size() && name[channels] >= '0' && name[channels] <= '9' &&
+               !name.starts_with("RGB10") && !name.starts_with("RGB9")) {
+      const uint32_t bits = static_cast<uint32_t>(std::atoi(name.data() + channels));
+      texelBytes = std::max<uint32_t>(static_cast<uint32_t>(channels) * bits / 8, 1);
+    }
+    bytes = uint64_t{descriptor->size.width} * descriptor->size.height * texelBytes;
+    if (descriptor->mipLevelCount > 1) {
+      bytes += bytes / 3;
+    }
+  }
+  bytes *= std::max<uint32_t>(descriptor->size.depthOrArrayLayers, 1) * std::max<uint32_t>(descriptor->sampleCount, 1);
+  site.count.fetch_add(1, std::memory_order_relaxed);
+  site.bytes.fetch_add(bytes, std::memory_order_relaxed);
+}
+} // namespace aurora::gfx
+
 void aurora_get_texture_stats(AuroraTextureStats* out) {
   using namespace aurora::gfx;
   for (int kind = 0; kind < 2; ++kind) {
     out->count[kind] = static_cast<uint32_t>(std::max<int64_t>(s_liveCount[kind].load(), 0));
     out->bytes[kind] = static_cast<uint64_t>(std::max<int64_t>(s_liveBytes[kind].load(), 0));
   }
+  probe::live_stats(out->count[2], out->bytes[2]);
+}
+
+void aurora_reduce_gpu_memory(void) { aurora::gfx::s_dawnReduceRequested.store(true, std::memory_order_relaxed); }
+
+bool aurora_get_dawn_memory(AuroraDawnMemory* out) {
+  std::lock_guard lock(aurora::gfx::s_dawnMutex);
+  *out = aurora::gfx::s_dawnMemory;
+  return aurora::gfx::s_dawnSampled;
+}
+
+uint32_t aurora_get_texture_sites(AuroraTextureSite* out, uint32_t cap) {
+  using namespace aurora::gfx;
+  uint32_t n = 0;
+  for (const texture_sites::Site* site = s_sites.load(std::memory_order_acquire); site != nullptr; site = site->next) {
+    if (n < cap) {
+      const char* name = site->name;
+      if (const char* lib = std::strstr(name, "lib/")) {
+        name = lib + 4;
+      }
+      out[n] = {name, site->count.load(std::memory_order_relaxed), site->bytes.load(std::memory_order_relaxed)};
+    }
+    ++n;
+  }
+  return n;
+}
+
+uint32_t aurora_get_texture_groups(AuroraTextureGroup* out, uint32_t cap) {
+  using namespace aurora::gfx;
+  std::vector<AuroraTextureGroup> groups;
+  {
+    struct Key {
+      const char* label;
+      uint32_t width, height, mips, format, depth;
+      bool operator==(const Key& o) const noexcept {
+        return label == o.label && width == o.width && height == o.height && mips == o.mips && format == o.format &&
+               depth == o.depth;
+      }
+    };
+    struct KeyHash {
+      size_t operator()(const Key& k) const noexcept {
+        size_t h = std::hash<const void*>()(k.label);
+        for (const uint32_t v : {k.width, k.height, k.mips, k.format, k.depth}) {
+          h = h * 1000003u ^ v;
+        }
+        return h;
+      }
+    };
+    std::unordered_map<Key, size_t, KeyHash> index;
+    std::lock_guard lock(s_liveMutex);
+    for (const TextureRef* ref : s_liveRefs) {
+      const Key key{ref->label, ref->size.width, ref->size.height, ref->mipCount,
+                    static_cast<uint32_t>(ref->format), ref->size.depthOrArrayLayers};
+      const auto [it, added] = index.try_emplace(key, groups.size());
+      if (added) {
+        AuroraTextureGroup g{};
+        g.label = ref->label != nullptr ? ref->label : "(none)";
+        const auto name = magic_enum::enum_name(ref->format);
+        std::snprintf(g.format, sizeof(g.format), "%.*s", static_cast<int>(name.size()), name.data());
+        g.width = ref->size.width;
+        g.height = ref->size.height;
+        g.mips = ref->mipCount;
+        groups.push_back(g);
+      }
+      AuroraTextureGroup& g = groups[it->second];
+      ++g.count;
+      g.bytes += ref->format == wgpu::TextureFormat::Undefined
+                     ? 0
+                     : calc_texture_size(ref->format, ref->size.width, ref->size.height, ref->mipCount) *
+                           std::max<uint32_t>(ref->size.depthOrArrayLayers, 1);
+    }
+  }
+  std::sort(groups.begin(), groups.end(), [](const AuroraTextureGroup& a, const AuroraTextureGroup& b) {
+    return a.count != b.count ? a.count > b.count : a.bytes > b.bytes;
+  });
+  const uint32_t n = std::min<uint32_t>(cap, static_cast<uint32_t>(groups.size()));
+  std::copy_n(groups.begin(), n, out);
+  return static_cast<uint32_t>(groups.size());
 }

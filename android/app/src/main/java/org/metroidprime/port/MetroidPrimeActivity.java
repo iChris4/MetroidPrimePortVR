@@ -44,7 +44,8 @@ public final class MetroidPrimeActivity extends SDLActivity {
     // Distinct from SDL's own dialog request codes, which count up from 0.
     private static final int REQUEST_TEXTURE_PACK = 0x7e57;
     private static final int REQUEST_STORAGE = 0x7e58;
-    // The Remastered import's .nsp/.xci (+0) and prod.keys (+1).
+    // The Remastered import's .nsp/.xci (+0) and prod.keys (+1), a PAL disc for its
+    // languages (+2) and a disc for the full Flaahgra theme (+3).
     private static final int REQUEST_REMASTERED = 0x7e59;
     private TouchControlsView touchControls;
     private final AtomicBoolean texturePackCopying = new AtomicBoolean();
@@ -69,6 +70,14 @@ public final class MetroidPrimeActivity extends SDLActivity {
         return exitReport;
     }
 
+    // ActivityManager.isLowRamDevice() (Android Go and the like), read by
+    // port_memory_log.cpp to build pipelines on first use instead of at startup.
+    private static volatile boolean lowRamDevice = false;
+
+    static boolean lowRamDevice() {
+        return lowRamDevice;
+    }
+
     private String buildExitReport() {
         StringBuilder report = new StringBuilder();
         ActivityManager manager = (ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
@@ -77,6 +86,7 @@ public final class MetroidPrimeActivity extends SDLActivity {
         }
         ActivityManager.MemoryInfo memory = new ActivityManager.MemoryInfo();
         manager.getMemoryInfo(memory);
+        lowRamDevice = manager.isLowRamDevice();
         report.append(String.format(Locale.ROOT,
             "port: device memory: %d MiB, %d MiB available, low-memory threshold %d MiB, app heap class %d MiB",
             memory.totalMem >> 20, memory.availMem >> 20, memory.threshold >> 20, manager.getMemoryClass()));
@@ -369,7 +379,7 @@ public final class MetroidPrimeActivity extends SDLActivity {
 
     // Called from the debug overlay, on the SDL thread: picks the Remastered
     // .nsp/.xci (which 0), prod.keys (which 1) or a PAL disc image for its
-    // languages (which 2). None has a MIME type of its own.
+    // languages (which 2) or a disc image for the full Flaahgra theme (which 3). None has a MIME type of its own.
     public void pickRemasteredFile(int which) {
         runOnUiThread(() -> {
             Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT)
@@ -472,7 +482,7 @@ public final class MetroidPrimeActivity extends SDLActivity {
             }
             return;
         }
-        if (requestCode >= REQUEST_REMASTERED && requestCode <= REQUEST_REMASTERED + 2) {
+        if (requestCode >= REQUEST_REMASTERED && requestCode <= REQUEST_REMASTERED + 3) {
             Uri uri = data != null && resultCode == RESULT_OK ? data.getData() : null;
             if (uri != null) {
                 rememberRemasteredPick(requestCode - REQUEST_REMASTERED, uri);

@@ -1,6 +1,7 @@
 // Dev tool for the Remastered particle reader (port_remastered_effect).
 //
 //   tool dump <file.GENP>            print the parsed effect
+//   tool kssm <file.GENP>            print its spawn tables as the converter reads them
 //   tool mtin <file.GENP>...         one line per generator with a material
 //                                    instance: its MATI and PMTR values
 //   tool scan <romfs> [outdir]       parse every GENP in every pak under <romfs>
@@ -161,6 +162,52 @@ int Dump(const std::string& path) {
     return 1;
   }
   std::cout << PortRemastered::DumpEffect(effect, data.data());
+  return 0;
+}
+
+// Every KSSM in the effect as ParseSpawnTable reads it.
+void SpawnTables(const PortRemastered::EffectNode& node, const uint8_t* data, size_t size) {
+  using namespace PortRemastered;
+  for (const EffectProperty& property : node.properties) {
+    if (property.fourcc != EffectFourCC("KSSM")) {
+      continue;
+    }
+    EffectSpawnTable table;
+    if (!ParseSpawnTable(data, size, property, table)) {
+      std::cout << EffectGuidString(node.id) << " KSSM does not parse\n";
+      continue;
+    }
+    std::cout << EffectGuidString(node.id) << " KSSM end " << table.header[2] << " events " << table.events
+              << " tables " << table.tables.size() << "\n";
+    for (const EffectValue& component : table.components) {
+      std::cout << "  component " << DumpEffectValue(component, data) << "\n";
+    }
+    for (const EffectSpawnTable::Table& each : table.tables) {
+      std::cout << "  start " << each.word << " period " << EffectFourCCString(each.selector.fourcc) << "\n";
+      for (const EffectSpawnTable::Frame& frame : each.frames) {
+        for (const EffectSpawnTable::Spawn& spawn : frame.spawns) {
+          std::cout << "    frame " << frame.frame << " " << EffectFourCCString(spawn.form) << " "
+                    << EffectGuidString(spawn.id) << " component " << int32_t(spawn.component) << " instances "
+                    << EffectFourCCString(spawn.instances.fourcc) << "\n";
+        }
+      }
+    }
+  }
+  for (const EffectNode& child : node.children) {
+    SpawnTables(child, data, size);
+  }
+}
+
+int Kssm(const std::string& path) {
+  std::ifstream file(path, std::ios::binary);
+  const std::vector<uint8_t> data((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+  PortRemastered::EffectNode effect;
+  std::string error;
+  if (!PortRemastered::ParseEffect(data.data(), data.size(), effect, error)) {
+    std::cerr << path << ": " << error << "\n";
+    return 1;
+  }
+  SpawnTables(effect, data.data(), data.size());
   return 0;
 }
 
@@ -1361,6 +1408,9 @@ int main(int argc, char** argv) {
   }
   if (mode == "dump" && argc == 3) {
     return Dump(argv[2]);
+  }
+  if (mode == "kssm" && argc == 3) {
+    return Kssm(argv[2]);
   }
   if (mode == "mtin" && argc >= 3) {
     return Materials(argc - 2, argv + 2);

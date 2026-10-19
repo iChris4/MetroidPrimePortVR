@@ -11,6 +11,9 @@ constexpr uint32_t Size = 128;
 constexpr uint32_t MipCount = 6; // 128 .. 4
 
 void shutdown();
+// Live textures this file owns (cubes incl. blend targets, volumes, lightmaps, the probe and the fixed
+// BRDF/empty ones) and their bytes, for aurora_get_texture_stats.
+void live_stats(uint32_t& count, uint64_t& bytes);
 const wgpu::TextureView& cube_view();
 const wgpu::Sampler& sampler();
 // Mip 0 of one face, as a resolve target.

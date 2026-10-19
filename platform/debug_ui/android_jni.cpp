@@ -377,6 +377,8 @@ Java_org_metroidprime_port_MetroidPrimeActivity_nativeRemasteredPicked(JNIEnv* e
     std::lock_guard lock(PortDebug::sRemasteredPickMutex);
     if (which == PortDebug::kPalLanguagesPick) {
       PortDebug::sPalLanguagesPick = chars;
+    } else if (which == PortDebug::kFlaahgraPick) {
+      PortDebug::sFlaahgraPick = chars;
     } else {
       PortDebug::sRemasteredPicks.emplace_back(int(which), chars);
     }

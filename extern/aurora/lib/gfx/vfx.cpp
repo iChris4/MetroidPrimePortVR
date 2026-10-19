@@ -28,6 +28,7 @@
 #include <utility>
 #include <unordered_map>
 #include <vector>
+#include "texture_sites.hpp"
 
 // Remastered's VFX particle materials, drawn natively (see aurora/vfx.hpp). The formulas are the
 // ones recovered from the Remastered shaders (build/mpr/vfx/SPEC.md section 2); the tone curve,
@@ -104,6 +105,8 @@ struct State_ {
   wgpu::PipelineLayout pipelineLayout;
   std::map<std::array<uint64_t, 7>, wgpu::RenderPipeline> pipelines;
   std::map<std::array<const void*, 1 + 2 * SlotCount>, wgpu::BindGroup> groups;
+  // Set when an atlas is evicted: the cached bind groups still hold its views, so the render thread drops them.
+  std::atomic<bool> groupsStale{false};
   wgpu::Texture dummyTexture;
   wgpu::TextureView dummyView;
 };
@@ -628,6 +631,7 @@ void ensure_dummy(const DrawContext& ctx) {
       .size = {1, 1, 1},
       .format = wgpu::TextureFormat::RGBA8Unorm,
   };
+  AURORA_NOTE_TEXTURE(&descriptor);
   g_state.dummyTexture = ctx.device.CreateTexture(&descriptor);
   const uint8_t white[4] = {255, 255, 255, 255};
   const wgpu::TexelCopyTextureInfo dst{.texture = g_state.dummyTexture};
@@ -699,6 +703,7 @@ void build_array(const EncoderTaskContext& ctx, const wgpu::CommandEncoder& cmd,
       .format = src.format,
       .mipLevelCount = mips,
   };
+  AURORA_NOTE_TEXTURE(&descriptor);
   entry->texture = ctx.device.CreateTexture(&descriptor);
   for (uint32_t layer = 0; layer < entry->layers; ++layer) {
     const uint32_t col = layer % entry->cols;
@@ -777,6 +782,9 @@ bool ensure_registered() {
             groupKey[SlotCount + i] = samplers[i].Get();
           }
           groupKey[2 * SlotCount] = ctx.uniformBuffer.Get();
+          if (g_state.groupsStale.exchange(false, std::memory_order_acq_rel)) {
+            g_state.groups.clear();
+          }
           auto group = g_state.groups.find(groupKey);
           if (group == g_state.groups.end()) {
             if (g_state.groups.size() > 512) {
@@ -866,6 +874,7 @@ void evict_idle() {
     if (now - it->second->lastUse > EvictAfter && it->second->state.load() != State::Requested) {
       g_state.byId.erase(it->second->id);
       it = g_state.byKey.erase(it);
+      g_state.groupsStale.store(true, std::memory_order_release);
     } else {
       ++it;
     }

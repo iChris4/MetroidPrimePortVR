@@ -1,5 +1,6 @@
 #include "MetroidPrime/Player/CPlayerGun.hpp"
 #include "port_debug.h"
+#include "port_power_charge_release.h"
 #include "port_room_env.h"
 #include "port_shot_aim.h"
 #include "port_synthetic_effect.h"
@@ -931,6 +932,11 @@ inline bool just_froze(bool frozen, bool playerFrozen) {
 }
 
 void CPlayerGun::Update(float grappleSwingT, float cameraBobT, float dt, CStateManager& mgr) {
+#ifdef TARGET_PC
+  if (!PortDebug::StackBeams()) {
+    PortReleaseStackedBeams();
+  }
+#endif
   CPlayer& player = *mgr.Player();
   const CGunMorph::EGunState gunState = x678_morph.GetGunState();
   CPlayerState& playerState = *mgr.PlayerState();
@@ -1394,7 +1400,15 @@ void CPlayerGun::ResetCharged(float dt, CStateManager& mgr) {
     return;
   }
 
-  if (x32c_chargePhase >= kCP_FxGrowing) {
+#ifdef TARGET_PC
+  const bool powerRapidCharge = NPortPowerChargeRelease::IsScopedRapidCharge(
+      mPortRapidCharge, x310_currentBeam == CPlayerState::kBI_Power);
+#else
+  const bool powerRapidCharge = false;
+#endif
+  if (NPortPowerChargeRelease::IsChargedRelease(
+          x32c_chargePhase, kCP_FxGrowing, kCP_AnimAndSfx, x832_27_chargeAnimStarted,
+          powerRapidCharge)) {
     x833_30_canShowAuxMuzzleEffect = false;
     UpdateNormalShotCycle(dt, mgr);
     x832_24_coolingCharge = true;
@@ -1448,6 +1462,56 @@ bool CPlayerGun::ExitMissile() {
   return true;
 }
 
+#ifdef TARGET_PC
+// Port (stack_beams): the projectiles of every other owned beam, from the shot just fired.
+void CPlayerGun::PortFireStackedBeams(float dt, CStateManager& mgr, const CTransform4f& xf,
+                                      uint targetHoming) {
+  const bool enabled = PortDebug::StackBeams() && !x833_28_phazonBeamActive;
+  if (!enabled) {
+    PortReleaseStackedBeams();
+    return;
+  }
+  const CPlayerState& playerState = *mgr.GetPlayerState();
+  for (int i = 0; i < 4; ++i) {
+    CGunWeapon* beam = x760_selectableBeams[i];
+    if (i == x310_currentBeam || beam == nullptr || beam == x72c_currentBeam ||
+        !playerState.HasPowerUp(mBeamArr[i])) {
+      continue;
+    }
+    beam->PortLockStackTokens();
+    beam->PortFireStackedProjectile(
+        x834_27_underwater, dt, CPlayerState::EChargeStage(x330_chargeState), xf, mgr,
+        static_cast< const TUniqueId& >(targetHoming ? GetTargetId(mgr) : kInvalidUniqueId),
+        x340_chargeBeamFactor, x340_chargeBeamFactor);
+  }
+}
+
+// The selected beam's shot cool down, or with stack_beams the slowest owned beam's.
+float CPlayerGun::PortShotCoolDown(const CStateManager& mgr) const {
+  float coolDown = x72c_currentBeam->GetWeaponInfo().x0_coolDown;
+  if (!PortDebug::StackBeams() || x833_28_phazonBeamActive) {
+    return coolDown;
+  }
+  const CPlayerState& playerState = *mgr.GetPlayerState();
+  for (int i = 0; i < 4; ++i) {
+    const CGunWeapon* beam = x760_selectableBeams[i];
+    if (beam != nullptr && playerState.HasPowerUp(mBeamArr[i])) {
+      coolDown = rstl::max_val(coolDown, beam->GetWeaponInfo().x0_coolDown);
+    }
+  }
+  return coolDown;
+}
+
+// Releases the stacked beams' projectile tokens once the setting is off.
+void CPlayerGun::PortReleaseStackedBeams() {
+  for (int i = 0; i < 4; ++i) {
+    if (x760_selectableBeams[i] != nullptr) {
+      x760_selectableBeams[i]->PortUnlockStackTokens();
+    }
+  }
+}
+#endif
+
 void CPlayerGun::UpdateNormalShotCycle(float dt, CStateManager& mgr) {
   if (!ExitMissile() || mgr.GetCameraManager()->IsInCinematicCamera()) {
     return;
@@ -1491,6 +1555,9 @@ void CPlayerGun::UpdateNormalShotCycle(float dt, CStateManager& mgr) {
       x834_27_underwater, dt, CPlayerState::EChargeStage(x330_chargeState), xf, mgr,
       static_cast< const TUniqueId& >(targetHoming ? GetTargetId(mgr) : kInvalidUniqueId),
       x340_chargeBeamFactor, x340_chargeBeamFactor);
+#ifdef TARGET_PC
+  PortFireStackedBeams(dt, mgr, xf, targetHoming);
+#endif
 
   mgr.InformListeners(GetGunMotionTransform().GetTranslation(), kLNT_PlayerFire);
 }
@@ -1721,11 +1788,15 @@ void CPlayerGun::UpdateChargeState(float dt, CStateManager& mgr) {
   float fxStart = kChargeFxStart;
   float chargeSpeed = kChargeSpeed;
 #ifdef TARGET_PC
+  const bool powerRapidCharge = NPortPowerChargeRelease::IsScopedRapidCharge(
+      mPortRapidCharge, x310_currentBeam == CPlayerState::kBI_Power);
   if (const SPortRapidCharge* beam = mPortRapidCharge ? PortRapidChargeFor(x310_currentBeam) : nullptr) {
     animStart = float(beam->triggered) / float(beam->full);
     fxStart = float(beam->warmUp) / float(beam->full);
     chargeSpeed = 60.f / float(beam->full);
   }
+#else
+  const bool powerRapidCharge = false;
 #endif
 #ifdef TARGET_PC
   // Remastered (UpdateChargeRumbleTriggered 0xc9b41c): one rumble once the charge time passes warmUp.
@@ -1764,6 +1835,8 @@ void CPlayerGun::UpdateChargeState(float dt, CStateManager& mgr) {
               mgr.GetRumbleManager()->Rumble(mgr, kRFX_PlayerGunCharge, 1.f, kRP_Three);
         }
         x832_27_chargeAnimStarted = true;
+        x330_chargeState = NPortPowerChargeRelease::ChargeStageAtAnimationStart(
+            x330_chargeState, kCS_Charged, powerRapidCharge, x832_27_chargeAnimStarted);
       }
     } else if (x340_chargeBeamFactor >= fxStart && !IsWeaponStateSet(0x8)) {
       x832_25_chargeEffectVisible = true;
@@ -2271,7 +2344,11 @@ void CPlayerGun::UpdateWeaponFire(float dt, CPlayerState& playerState, CStateMan
   CPlayer& player = *mgr.Player();
 
   if (!x832_24_coolingCharge && !x834_30_inBigStrike) {
+#ifdef TARGET_PC
+    float coolDown = PortShotCoolDown(mgr);
+#else
     float coolDown = x72c_currentBeam->GetWeaponInfo().x0_coolDown;
+#endif
     if ((pressedStates & 0x1) == 0) {
       if (x390_cooldown >= coolDown) {
         x390_cooldown = coolDown;

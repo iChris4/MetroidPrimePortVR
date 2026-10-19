@@ -4,6 +4,7 @@
 #include "port_strings.h"
 
 #include "port_disc.h"
+#include "port_flaahgra_music.h"
 #include "port_gci.h"
 #include "port_paths.h"
 
@@ -218,9 +219,20 @@ void Finish(bool ok, int tables, const std::string& message) {
   sInstalled = -1;
 }
 
-std::string DoneMessage(int tables) {
+// The PAL disc has the whole Flaahgra theme the NTSC discs cut short
+// (port_flaahgra_music.h), so one PAL import brings that in too. Its failure
+// doesn't fail the languages; the sentence says what happened.
+std::string AddFlaahgraTheme(const std::string& path) {
+  std::string error;
+  if (PortFlaahgraMusic::Import(path, error)) {
+    return "Added the full Flaahgra theme as a mod.";
+  }
+  return "The full Flaahgra theme was not added: " + error;
+}
+
+std::string DoneMessage(int tables, const std::string& flaahgra) {
   return "Added the PAL disc's languages (" + std::to_string(tables) +
-         " text tables). Restart the game to see them in every menu.";
+         " text tables). Restart the game to see them in every menu. " + flaahgra;
 }
 
 }  // namespace
@@ -237,7 +249,11 @@ bool Start(const std::string& path) {
   std::thread([path] {
     std::string error;
     const int tables = Import(path, error);
-    Finish(tables > 0, tables, tables > 0 ? DoneMessage(tables) : error);
+    if (tables > 0) {
+      Finish(true, tables, DoneMessage(tables, AddFlaahgraTheme(path)));
+    } else {
+      Finish(false, tables, error);
+    }
   }).detach();
   return true;
 }
@@ -296,6 +312,7 @@ int RunFromCommandLine(const std::string& path) {
     return 1;
   }
   std::printf("Added the PAL disc's languages: %d text tables in %s\n", tables, PortGci::PathString(Folder()).c_str());
+  std::printf("%s\n", AddFlaahgraTheme(path).c_str());
   return 0;
 }
 

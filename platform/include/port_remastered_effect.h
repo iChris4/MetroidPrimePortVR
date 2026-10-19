@@ -103,19 +103,22 @@ struct EffectSpawnTable {
   struct Spawn {
     EffectGuid id{};           // an embedded child's id
     uint32_t form = 0;         // its form's type ('GENP' or 'SWSH')
-    bool conditional = false;  // an element (a chance, it seems) instead of NONE
+    uint32_t component = ~0u;  // the component it is placed by, ~0 for none
+    bool conditional = false;  // an instance count element instead of NONE
+    EffectValue instances;     // that element (NONE: one instance)
   };
   struct Frame {
     uint32_t frame = 0;
     std::vector<Spawn> spawns;
   };
   struct Table {
-    uint32_t word = 0;
-    EffectValue selector;  // CNST(0), or a parameter (TPVI) with a default
+    uint32_t word = 0;     // the start frame of its period
+    EffectValue selector;  // the period: CNST (0 = none), or a parameter (TPVI) with a default
     std::vector<Frame> frames;
   };
   uint32_t header[3]{};  // retail's first three words; the third is the end frame
-  uint32_t events = 0;   // SEVT events (Remastered only, not kept)
+  uint32_t events = 0;   // SEVT events (Remastered only)
+  std::vector<EffectValue> components;  // those events, indexed by Spawn::component
   std::vector<Table> tables;  // empty for NONE
 };
 
@@ -141,6 +144,8 @@ bool ParseMaterialTrack(const uint8_t* data, size_t size, const EffectProperty& 
 // Indented text dump of a parsed effect, one property per line, for diffing
 // against retail PART dumps.
 std::string DumpEffect(const EffectNode& effect, const uint8_t* data);
+// One value of an effect parsed from `data`, as DumpEffect writes it.
+std::string DumpEffectValue(const EffectValue& value, const uint8_t* data);
 
 // Every GUID the effect refers to (textures, materials, models, sounds,
 // parameter ids), in file order, without duplicates. Embedded children are

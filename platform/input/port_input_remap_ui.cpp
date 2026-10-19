@@ -912,7 +912,7 @@ const std::vector<SGroup>& Groups() {
           Action::VisorPrev},
          true},
         {"Morph Ball", {Action::SpringBall}, true},
-        {"Gyro", {Action::GyroAim}, true},
+        {"Gyro", {Action::GyroAim, Action::ResetAim}, true},
         // Read instead of the game buttons in menus and on the map ("Separate menu buttons").
         {"Menus and map",
          {Action::MenuA, Action::MenuB, Action::MenuX, Action::MenuY, Action::MenuL, Action::MenuR,

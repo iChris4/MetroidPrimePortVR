@@ -50,6 +50,21 @@ public:
   std::unique_ptr< CPortVfxData > xPortVfx;
   // port-only PSRO: POFS is turned by the swoosh's orientation (Remastered's ROTV(v, EXTR))
   bool xPortRotateOffset = false;
+  // port-only PRAZ/PRAF: Remastered's PROT KPIN(RAZY(EMRV, ROTV(axis, RLCL), fallback)), the
+  // fallback the orientation (PRAF 1) or identity
+  std::unique_ptr< CVectorElement > xPortRazyAxis;
+  bool xPortRazyFallbackLocal = false;
+  // port-only PROZ: Remastered's PROT of [KPIN]([RADD(EXTR, ]REUL(0, 0, z))), z in degrees,
+  // kept from each point's birth or else re-evaluated for every live point each frame
+  std::unique_ptr< CRealElement > xPortRotZ;
+  bool xPortRotKeep = false;
+  bool xPortRotOriented = false;
+  // port-only XFMD 3: Remastered draws the points in the emitter's frame (SetupTransformMode
+  // 0x2887d8: global T/Q/S alias the system vars, local orientation identity, point position zero)
+  bool xPortXfmdFollow = false;
+  // port-only XFMD 4 with an EMVR of SMOV(EXTT, 0, EXTR) and no SMVR: points are born at the
+  // external translation and rotation (vars b8/bc), drawn at identity and unit scale (a8/ac/b0)
+  bool xPortXfmdMover = false;
   // port-only PIRN: a converted Remastered swoosh, whose COLR runs over the live points
   bool xPortIrnd = false;
   // port-only PVRT: Remastered particle variables (names, types, defaults)

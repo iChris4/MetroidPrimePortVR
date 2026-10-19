@@ -190,7 +190,14 @@ CIOWin::EMessageReturn CMFGame::OnMessage(const CArchitectureMessage& message,
     CStateManager& mgr = *mStateManager;
     const bool mouseActive = mFlowState == kGFS_InGame && mgr.GetPlayer()->MouseControlsAllowed(mgr);
     if (!mouseActive && PortDebug::MouseAim() && PortDebug::MouseGameplayActive()) {
+      // Pausing has already switched CSfxManager to the pause screen's channel,
+      // and a stop looks only in the current channel: the held charge loop (a
+      // game-channel sound) was never stopped and played on forever. Cancel
+      // against the game channel without SetChannel's silence/restore.
+      const CSfxManager::ESfxChannels channel = CSfxManager::mCurrentChannel;
+      CSfxManager::mCurrentChannel = CSfxManager::kSC_Game;
       mgr.Player()->PlayerGun()->CancelMouseInput(mgr);
+      CSfxManager::mCurrentChannel = channel;
     }
     PortDebug::SetMouseGameplayActive(mouseActive);
     mGuiManager->Update(mgr, dt, queue, IsCameraActiveFlow());

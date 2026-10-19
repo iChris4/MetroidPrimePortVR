@@ -1380,7 +1380,53 @@ bool ParseMaterialField(const std::string& s, int& field, int& count) {
 }
 
 // stats: what the last frame cost, and the game's heap.
+// stats textures [n]: the live sampled textures and render targets grouped by creation label, size and
+// format, the n (default 25) most numerous groups first.
+void CmdStatsTextures() {
+  int top = 25;
+  if (sCmd.args.size() > 2) {
+    top = std::clamp(std::atoi(sCmd.args[2].c_str()), 1, 500);
+  }
+  std::vector<AuroraTextureGroup> groups(static_cast<size_t>(top));
+  const uint32_t total = aurora_get_texture_groups(groups.data(), static_cast<uint32_t>(top));
+  uint32_t shown = std::min<uint32_t>(total, static_cast<uint32_t>(top));
+  AuroraTextureStats stats{};
+  aurora_get_texture_stats(&stats);
+  Out("texture groups: %u (textures %u + targets %u live); top %u by count", total, stats.count[0], stats.count[1],
+      shown);
+  for (uint32_t i = 0; i < shown; ++i) {
+    const AuroraTextureGroup& g = groups[i];
+    Out("%5u x %4ux%-4u mips %2u %-18s %8.2f MiB  %s", g.count, g.width, g.height, g.mips, g.format,
+        g.bytes / 1048576.0, g.label);
+  }
+  std::vector<AuroraTextureSite> sites(64);
+  const uint32_t siteCount = aurora_get_texture_sites(sites.data(), static_cast<uint32_t>(sites.size()));
+  Out("direct CreateTexture sites (made so far, not live): %u", siteCount);
+  for (uint32_t i = 0; i < std::min<uint32_t>(siteCount, static_cast<uint32_t>(sites.size())); ++i) {
+    Out("%7llu made %9.2f MiB  %s", static_cast<unsigned long long>(sites[i].count), sites[i].bytes / 1048576.0,
+        sites[i].site);
+  }
+  Finish();
+}
+
+// pipetrim [frames]: releases the built pipelines unused for the last `frames` (16, the minimum) frames at
+// the next frame start, as Android's onTrimMemory does. Prints the count before; the log has the result.
+void CmdPipeTrim() {
+  uint32_t frames = 16;
+  if (sCmd.args.size() > 1) {
+    frames = static_cast<uint32_t>(std::strtoul(sCmd.args[1].c_str(), nullptr, 10));
+  }
+  Out("pipelines built: %u; evicting those unused for %u frames at the next frame (see the log)",
+      aurora_get_pipeline_count(), std::max<uint32_t>(frames, 16));
+  aurora_trim_pipelines(frames);
+  Finish();
+}
+
 void CmdStats() {
+  if (sCmd.args.size() > 1 && sCmd.args[1] == "textures") {
+    CmdStatsTextures();
+    return;
+  }
   if (const AuroraStats* stats = aurora_get_stats()) {
     Out("frame: %.0f fps, %u draws (%u merged), %u PBR, %u passes, pipelines %u made %u waiting", aurora_get_fps(),
         stats->drawCallCount, stats->mergedDrawCallCount, CCubeMaterial::sPortPBRDraws, stats->renderPassCount,
@@ -1396,8 +1442,15 @@ void CmdStats() {
   {
     AuroraTextureStats textures{};
     aurora_get_texture_stats(&textures);
-    Out("textures: %u, %.1f MiB; render targets %u, %.1f MiB", textures.count[0], textures.bytes[0] / 1048576.f,
-        textures.count[1], textures.bytes[1] / 1048576.f);
+    Out("textures: %u, %.1f MiB; render targets %u, %.1f MiB; lighting %u, %.1f MiB", textures.count[0],
+        textures.bytes[0] / 1048576.f, textures.count[1], textures.bytes[1] / 1048576.f, textures.count[2],
+        textures.bytes[2] / 1048576.f);
+    AuroraDawnMemory dawn{};
+    if (aurora_get_dawn_memory(&dawn)) {
+      Out("dawn: %.1f MiB estimated (textures %.1f, buffers %.1f); allocator %.1f MiB used of %.1f allocated",
+          dawn.total / 1048576.f, dawn.textures / 1048576.f, dawn.buffers / 1048576.f,
+          dawn.allocatorUsed / 1048576.f, dawn.allocatorAllocated / 1048576.f);
+    }
   }
   {
     const IAllocator::SMetrics m = CMemorySys::GetGameAllocator().GetMetrics();
@@ -1982,7 +2035,7 @@ void CmdFov() {
   const float fov =
       sCmd.args.size() > 1 ? static_cast< float >(std::atof(sCmd.args[1].c_str())) : 0.f;
   if (!(fov >= PortDebug::kFovMin && fov <= PortDebug::kFovMax)) {
-    return Finish("usage: fov <45..90>   first-person vertical FOV (retail 55)");
+    return Finish("usage: fov <45..120>   first-person vertical FOV (retail 55)");
   }
   PortDebug::SetFirstPersonFov(fov);
   Finish();
@@ -2134,6 +2187,18 @@ void CmdMapUi() {
     PortDebug::SetMapExtraUi(v == "1");
   }
   Out(PortDebug::MapExtraUi() ? "mapui 1" : "mapui 0");
+  Finish();
+}
+
+void CmdStackBeams() {
+  if (sCmd.args.size() > 1) {
+    const std::string& v = sCmd.args[1];
+    if (v != "0" && v != "1") {
+      return Finish("usage: stackbeams [0|1]");
+    }
+    PortDebug::SetStackBeams(v == "1");
+  }
+  Out(PortDebug::StackBeams() ? "stackbeams 1" : "stackbeams 0");
   Finish();
 }
 
@@ -2330,7 +2395,7 @@ void CmdPickups() {
 }
 
 void CmdBeamDoors(CStateManager& mgr) {
-  // beamdoors [status|list [here]|unlock <door index|all>|reset]: the beam
+  // beamdoors [status|on|off|list [here]|unlock <door index|all>|reset]: the beam
   // doorways the player has opened (PortBeamDoors). Door indices are the ones
   // `list` prints (PortApWorld's door table).
   const std::string sub = sCmd.args.size() > 1 ? Lower(sCmd.args[1]) : "status";
@@ -2341,6 +2406,9 @@ void CmdBeamDoors(CStateManager& mgr) {
   const int count = PortApWorld::BeamDoorwayCount();
   if (sub == "reset") {
     PortBeamDoors::Reset();
+  } else if (sub == "on" || sub == "off") {
+    // The loaded doors follow on the next game tick (PortBeamDoors::Tick).
+    PortDebug::SetBeamDoorsStayUnlocked(sub == "on");
   } else if (sub == "unlock") {
     if (sCmd.args.size() < 3) {
       return Finish("usage: beamdoors unlock <door index|all>");
@@ -2384,7 +2452,7 @@ void CmdBeamDoors(CStateManager& mgr) {
       }
     }
   } else if (sub != "status") {
-    return Finish("usage: beamdoors [status|list [here]|unlock <door index|all>|reset]");
+    return Finish("usage: beamdoors [status|on|off|list [here]|unlock <door index|all>|reset]");
   }
   int open = 0;
   for (int bit = 0; bit < count; ++bit)
@@ -3546,8 +3614,10 @@ const CommandSpec kCommands[] = {
      "shader dump <dir>          write every WGSL module made, as <hash>.wgsl, with index.tsv (also MP_WGSL_DUMP)\n"
      "shader override <dir>|off  compile <hash>.wgsl files from a dir in place of the generated ones, then reload\n"
      "shader reload              drop the shader and pipeline caches so edited overrides compile (MP_WGSL_OVERRIDE)"},
+    {"pipetrim", CmdPipeTrim, nullptr,
+     "pipetrim [frames]          release built pipelines unused for `frames` (min 16, default 16) frames; they rebuild on demand"},
     {"stats", CmdStats, nullptr,
-     "stats                      the last frame's draws and buffers, the heap, room geometry and environments"},
+     "stats [textures [n]]       the last frame's draws and buffers, texture and lighting totals, Dawn's GPU memory, the heap, room geometry and environments; `textures` lists the n (25) most numerous live texture groups by label, size and format"},
     {"roomenv", nullptr, nullptr,
      "roomenv [on|off|exposure on|off]  the room environments mods supply; exposure: by room, not by cube\n"
      "roomenv grades | state <id> <state>  the colour grades; as if script object <id> (hex) sent <state>\n"
@@ -3587,7 +3657,7 @@ const CommandSpec kCommands[] = {
      "keypreset classic|mouse   apply a keyboard preset (Controls > Remap), as its button"},
     {"padpreset", CmdPadPreset, nullptr,
      "padpreset gamecube|remastered|modern|southpaw   apply a controller preset to pad 1"},
-    {"fov", CmdFov, nullptr, "fov <45..90>               first-person vertical FOV, as the Options row does"},
+    {"fov", CmdFov, nullptr, "fov <45..120>              first-person vertical FOV, as the Options row does"},
     {"gunoffset", CmdGunOffset, nullptr,
      "gunoffset <r> <f> <u>      arm cannon offset in metres (+-1), as the Video row does"},
     {"pointeraim", CmdPointerAim, nullptr,
@@ -3629,9 +3699,11 @@ const CommandSpec kCommands[] = {
      "reveal <0|1>               reveal every world's map, as the Options row does"},
     {"mapui", CmdMapUi, nullptr,
      "mapui [0|1]                 the map's extra legend entries and the Mark room prompt"},
+    {"stackbeams", CmdStackBeams, nullptr,
+     "stackbeams [0|1]           every shot also fires the other owned beams' projectiles (stack_beams)"},
     {"beamdoors", nullptr, CmdBeamDoors,
-     "beamdoors [status|list [here]|unlock <door index|all>|reset]  the beam doors opened for good\n"
-     "                           (beam_doors_stay_unlocked; unlock restyles the loaded doors)"},
+     "beamdoors [status|on|off|list [here]|unlock <door index|all>|reset]  the beam doors opened for good\n"
+     "                           (beam_doors_stay_unlocked; on/off, unlock restyle the loaded doors)"},
     {"mark", CmdMark, nullptr,
      "mark [list|clear|toggle <area>]  the map's room marks of the current world (world:area)"},
     {"pickups", CmdPickups, nullptr,

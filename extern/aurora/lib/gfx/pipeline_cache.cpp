@@ -12,6 +12,7 @@
 #endif
 #include "../sqlite_utils.hpp"
 #include "../webgpu/gpu.hpp"
+#include <aurora/gfx.h>
 
 #include <algorithm>
 #include <atomic>
@@ -29,6 +30,9 @@
 #include <vector>
 
 #include <SDL3/SDL_iostream.h>
+#if defined(__GLIBC__) || defined(__ANDROID__)
+#include <malloc.h>
+#endif
 #include <absl/container/flat_hash_map.h>
 #include <absl/container/flat_hash_set.h>
 #include <fmt/format.h>
@@ -52,9 +56,14 @@ constexpr const char* EmbeddedSeedName = ":embedded-initial-pipeline-cache:";
 constexpr const char* EmbeddedExtraSeedName = ":embedded-primedgun-pipeline-cache:";
 constexpr const char* SdlVfsName = "aurora_pipeline_cache_sdl_vfs";
 
+// Frames begun by the draw thread (begin_pipeline_frame). Pipelines are stamped with it when a draw
+// looks them up, which is what idle eviction goes by.
+static std::atomic_uint32_t g_pipelineFrame = 0;
+
 struct CachedPipeline {
   wgpu::RenderPipeline pipeline;
   uint32_t firstFrameUsed = UINT32_MAX;
+  uint32_t lastUsedFrame = g_pipelineFrame.load(std::memory_order_relaxed);
 };
 
 struct PendingPipeline {
@@ -493,7 +502,15 @@ static void notify_pipeline_ready(bool queued) {
 }
 
 static PipelineRef g_lastPipelineRef = std::numeric_limits<PipelineRef>::max();
+// The frame g_lastPipelineRef was last stamped in: the same-pipeline shortcut only holds within it.
+static uint32_t g_lastPipelineStampFrame = 0;
 static std::atomic_bool g_dropPipelines = false;
+// Idle eviction (see evict_idle_pipelines): never evicts anything used in the last MinEvictIdleFrames.
+constexpr uint32_t MinEvictIdleFrames = 16;
+constexpr uint32_t EvictSweepFrames = 600;
+constexpr uint32_t NoTrimRequest = UINT32_MAX;
+static std::atomic_uint32_t g_pipelineEvictFrames = 0;
+static std::atomic_uint32_t g_pipelineTrimRequest = NoTrimRequest;
 
 // drop_pipelines() only raises a flag; the next lookup (on the thread that builds draws) does the
 // work, so no draw loses its pipeline in the middle of one.
@@ -519,11 +536,13 @@ static PipelineRef find_pipeline_impl(ShaderType type, const PipelineConfig& con
   }
   const PipelineRef hash = xxh3_hash(config, static_cast<HashType>(type));
   const bool blocking = priority == PipelinePriority::Blocking;
-  if (!blocking && hash == g_lastPipelineRef) {
+  const uint32_t frameNow = g_pipelineFrame.load(std::memory_order_relaxed);
+  if (!blocking && hash == g_lastPipelineRef && g_lastPipelineStampFrame == frameNow) {
     return g_lastPipelineRef;
   }
   if (!renderThread) {
     g_lastPipelineRef = hash;
+    g_lastPipelineStampFrame = frameNow;
   }
   const uint32_t firstFrameUsed = firstFrameUsedOverride.value_or(current_frame());
   bool notifyWorker = false;
@@ -537,6 +556,7 @@ static PipelineRef find_pipeline_impl(ShaderType type, const PipelineConfig& con
     auto pipelineIt = g_pipelines.find(hash);
     if (pipelineIt != g_pipelines.end()) {
       pipelineReady = true;
+      pipelineIt->second.lastUsedFrame = frameNow;
       if (persist && firstFrameUsed < pipelineIt->second.firstFrameUsed) {
         pipelineIt->second.firstFrameUsed = firstFrameUsed;
         cacheWrite = make_pipeline_cache_write(type, hash, config, firstFrameUsed);
@@ -1346,6 +1366,7 @@ static size_t load_pipeline_cache_entries(ShaderType type, uint32_t configVersio
   size_t acceptedRows = 0;
   size_t skippedIncompatibleRows = 0;
   size_t skippedOtherSettingsRows = 0;
+  size_t skippedPbrRows = 0;
   while ((ret = sqlite3_step(g_pipelineCacheLoadStmt)) == SQLITE_ROW) {
     const auto* configBlob = static_cast<const uint8_t*>(sqlite3_column_blob(g_pipelineCacheLoadStmt, 0));
     const auto configSize = sqlite3_column_bytes(g_pipelineCacheLoadStmt, 0);
@@ -1371,6 +1392,11 @@ static size_t load_pipeline_cache_entries(ShaderType type, uint32_t configVersio
         ++skippedOtherSettingsRows;
         continue;
       }
+      // Left in the database, and built by find_pipeline on the first draw that wants it.
+      if (g_config.pipelineCacheSkipPbr && config.shaderConfig.pbr != 0) {
+        ++skippedPbrRows;
+        continue;
+      }
     }
 
     find_pipeline_impl(type, config, [=] { return create(config); }, PipelinePriority::Background, firstFrameUsed);
@@ -1388,6 +1414,10 @@ static size_t load_pipeline_cache_entries(ShaderType type, uint32_t configVersio
     Log.info("pipeline cache: skipped {} incompatible GX rows", skippedIncompatibleRows);
     Log.info("pipeline cache: skipped {} GX rows of another MSAA or eye pass ({}x MSAA here)",
              skippedOtherSettingsRows, device_sample_count());
+    if (g_config.pipelineCacheSkipPbr) {
+      Log.info("pipeline cache: {} PBR rows skipped ({})", skippedPbrRows,
+               g_config.pipelineCacheSkipPbrReason != nullptr ? g_config.pipelineCacheSkipPbrReason : "no PBR");
+    }
   }
   return acceptedRows;
 }
@@ -1398,6 +1428,15 @@ static size_t load_pipeline_cache() {
   }
   prune_old_pipeline_cache_versions();
   if (g_pipelineCacheBroken) {
+    return 0;
+  }
+
+  g_pipelineEvictFrames.store(g_config.pipelineEvictFrames, std::memory_order_relaxed);
+  g_pipelineTrimRequest.store(NoTrimRequest, std::memory_order_relaxed);
+  if (g_config.pipelineCacheLazy) {
+    // The rows stay in the database (and keep recording what is used); nothing is queued, so
+    // queuedPipelines stays 0 and nothing waits on a startup compile.
+    Log.info("pipeline cache: lazy, rows not compiled at startup");
     return 0;
   }
 
@@ -1460,17 +1499,21 @@ bool touch_pipeline(PipelineRef ref) {
   if (g_dropPipelines.exchange(false, std::memory_order_acq_rel)) {
     apply_pipeline_drop();
   }
-  if (ref == g_lastPipelineRef) {
+  const uint32_t frameNow = g_pipelineFrame.load(std::memory_order_relaxed);
+  if (ref == g_lastPipelineRef && g_lastPipelineStampFrame == frameNow) {
     return true;
   }
   std::scoped_lock guard{g_pipelineMutex};
-  if (!g_pipelines.contains(ref)) {
+  if (const auto it = g_pipelines.find(ref); it != g_pipelines.end()) {
+    it->second.lastUsedFrame = frameNow;
+  } else {
     if (!g_pendingPipelines.contains(ref)) {
       return false;
     }
     touch_pending_pipeline(ref, PipelinePriority::Normal);
   }
   g_lastPipelineRef = ref;
+  g_lastPipelineStampFrame = frameNow;
   return true;
 }
 
@@ -1580,9 +1623,64 @@ void set_background_pipelines_paused(bool paused) {
   }
 }
 
+// Releases the built pipelines no draw has looked up for `minIdle` frames. Their cache rows stay, so
+// the next draw that wants one rebuilds it. Draw thread, at frame start only.
+//
+// Why a pipeline in use is never released: every draw stamps its pipeline (find_pipeline,
+// touch_pipeline) with the frame it records in, and a draw reaches the render worker at most a few
+// frames later, where get_pipeline reads it. minIdle is at least MinEvictIdleFrames, well above the
+// frames in flight, so a pipeline a pending frame draws with was stamped within that window. A
+// reference kept across frames (the command processor's memo) goes through touch_pipeline, which
+// stamps it or reports it gone so the caller looks the config up again. Queued builds are not in
+// g_pipelines and are untouched; a build finishing later is stamped at insertion.
+static uint32_t evict_idle_pipelines(uint32_t minIdle, uint32_t* totalOut) {
+  const uint32_t frameNow = g_pipelineFrame.load(std::memory_order_relaxed);
+  uint32_t evicted = 0;
+  std::scoped_lock guard{g_pipelineMutex};
+  for (auto it = g_pipelines.begin(); it != g_pipelines.end();) {
+    if (frameNow - it->second.lastUsedFrame >= minIdle) {
+      g_pipelines.erase(it++);
+      ++evicted;
+    } else {
+      ++it;
+    }
+  }
+  *totalOut = static_cast<uint32_t>(g_pipelines.size());
+  if (evicted != 0) {
+    g_lastPipelineRef = std::numeric_limits<PipelineRef>::max();
+  }
+  return evicted;
+}
+
+static void log_eviction(const char* reason, uint32_t minIdle) {
+  uint32_t kept = 0;
+  const uint32_t evicted = evict_idle_pipelines(minIdle, &kept);
+#if defined(__GLIBC__) || defined(__ANDROID__)
+  // Dawn and the driver free the pipelines' state into the malloc heap, which keeps the pages
+  // unless asked to give them back.
+  if (evicted != 0) {
+#if defined(__ANDROID__)
+    mallopt(M_PURGE, 0); // bionic has no malloc_trim
+#else
+    malloc_trim(0);
+#endif
+  }
+#endif
+  Log.info("pipeline cache: evicted {} pipelines unused for {} frames ({}), {} kept", evicted, minIdle, reason, kept);
+}
+
 void begin_pipeline_frame() {
   if (!g_hasPipelineThread) {
     g_pipelinesPerFrame = 0;
+  }
+  const uint32_t frame = g_pipelineFrame.fetch_add(1, std::memory_order_relaxed) + 1;
+  if (const uint32_t trim = g_pipelineTrimRequest.exchange(NoTrimRequest, std::memory_order_acq_rel);
+      trim != NoTrimRequest) {
+    log_eviction(trim == MinEvictIdleFrames ? "memory trim" : "requested", std::max(trim, MinEvictIdleFrames));
+  }
+  const uint32_t idle = g_pipelineEvictFrames.load(std::memory_order_relaxed);
+  if (idle != 0 && frame % EvictSweepFrames == 0) {
+    log_eviction("idle", std::max(idle, MinEvictIdleFrames));
   }
 }
 
@@ -1603,3 +1701,18 @@ bool get_pipeline(PipelineRef ref, wgpu::RenderPipeline& pipeline) {
 }
 
 } // namespace aurora::gfx
+
+extern "C" {
+void aurora_set_pipeline_eviction(uint32_t idleFrames) {
+  aurora::gfx::g_pipelineEvictFrames.store(idleFrames, std::memory_order_relaxed);
+}
+
+void aurora_trim_pipelines(uint32_t idleFrames) {
+  aurora::gfx::g_pipelineTrimRequest.store(idleFrames, std::memory_order_release);
+}
+
+uint32_t aurora_get_pipeline_count(void) {
+  std::lock_guard guard{aurora::gfx::g_pipelineMutex};
+  return static_cast<uint32_t>(aurora::gfx::g_pipelines.size());
+}
+}

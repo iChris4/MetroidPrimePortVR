@@ -145,7 +145,13 @@ CScriptDoor::CScriptDoor(TUniqueId uid, const rstl::string& name, const CEntityI
 , mConditionsMet(false)
 , mProjectilesCollide(projectilesCollide)
 , mBallDoor(ballDoor)
-, mDoClose(false) {
+, mDoClose(false)
+#ifdef TARGET_PC
+, mPortRestoredOpen(false)
+, mPortDockNotified(false)
+, mPortRestoreTicks(0)
+#endif
+{
   SetThermalFlags(kTF_Cold);
 
   if (open) {
@@ -352,7 +358,63 @@ void CScriptDoor::PortRestoreDoorState(const PortDoorFlags& state) {
   mClosing = state.refusedClosePending;
   mDoClose = state.doClose;
   mConditionsMet = false;
+  // A live open leaves the partner links, the dock's Increment and the connected
+  // room's visibility behind; a save state carries none of them, so Think puts
+  // them back (PortFinishRestoredOpen). A stale link would point at a door that
+  // is no longer there.
+  mPartner1 = kInvalidUniqueId;
+  mPartner2 = kInvalidUniqueId;
+  mPortRestoredOpen = state.open;
+  mPortDockNotified = false;
+  mPortRestoreTicks = 0;
   SetDoorAnimation(state.open ? kDAT_Open : kDAT_Close);
+}
+
+// What OpenDoor leaves that a save state does not carry, for a door restored open.
+// Without the dock's Increment the connected room is loaded but never made visible
+// (a void behind the open door); without the partner link, closing this door never
+// closes the door on the other side, which stays open and holds this one shut
+// ("otherDoor" in GetDoorOpenCondition). The partner is found as OpenDoor finds
+// it, and only by the door of the player's room, so the link has the direction a
+// live open from that side gives it. The search is bounded: the other room's door
+// only exists once its area has loaded.
+void CScriptDoor::PortFinishRestoredOpen(CStateManager& mgr) {
+  if (!mIsOpen) {
+    mPortRestoredOpen = false;
+    return;
+  }
+  CScriptDock* const dock = TCastToPtr< CScriptDock >(mgr.ObjectById(mDockId));
+  if (!dock) {
+    mPortRestoredOpen = false;
+    return;
+  }
+  if (!mPortDockNotified) {
+    mPortDockNotified = true;
+    mgr.DeliverScriptMsg(dock, GetUniqueId(), kSM_Increment);
+  }
+  if (mPartner1 != kInvalidUniqueId || mPartner2 != kInvalidUniqueId ||
+      GetCurrentAreaId() != mgr.GetNextAreaId() || ++mPortRestoreTicks > 600) {
+    mPortRestoredOpen = false;
+    return;
+  }
+  CObjectList& list = mgr.ObjectListById(kOL_PlatformAndDoor);
+  for (int idx = list.GetFirstObjectIndex(); idx != -1; idx = list.GetNextObjectIndex(idx)) {
+    CScriptDoor* const door = TCastToPtr< CScriptDoor >(list[idx]);
+    if (!door || door == this || !door->mIsOpen || door->mPartner1 != kInvalidUniqueId ||
+        door->mPartner2 != kInvalidUniqueId) {
+      continue;
+    }
+    if (const CScriptDock* const dock2 =
+            TCastToConstPtr< CScriptDock >(mgr.GetObjectById(door->GetConnectedDockID()))) {
+      if (dock2->GetAreaId() == dock->GetCurrentConnectedAreaId(mgr) &&
+          dock2->GetCurrentConnectedAreaId(mgr) == dock->GetAreaId()) {
+        mPartner2 = door->GetUniqueId();
+        door->mPartner1 = GetUniqueId();
+        mPortRestoredOpen = false;
+        return;
+      }
+    }
+  }
 }
 #endif
 
@@ -489,6 +551,12 @@ void CScriptDoor::Think(float dt, CStateManager& mgr) {
   if (!mIsOpen && mAnimTime < 0.05f) {
     mAnimTime += dt;
   }
+
+#ifdef TARGET_PC
+  if (mPortRestoredOpen) {
+    PortFinishRestoredOpen(mgr);
+  }
+#endif
 
   if (mConditionsMet) {
     const EDoorOpenCondition cond = GetDoorOpenCondition(mgr);

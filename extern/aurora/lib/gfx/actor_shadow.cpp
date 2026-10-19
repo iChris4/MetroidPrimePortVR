@@ -17,6 +17,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <vector>
+#include "texture_sites.hpp"
 
 // The actors' shadow maps. The casters (an actor's opaque draws, re-drawn depth only with a vs_shadow
 // pipeline whose caster matrix is the actor's own view -> map clip) are recorded per layer and drawn
@@ -50,6 +51,7 @@ void ensure_map() {
       .size = {MapSize, MapSize, MaxLayers},
       .format = MapFormat,
   };
+  AURORA_NOTE_TEXTURE(&descriptor);
   g_state.map = g_device.CreateTexture(&descriptor);
   const wgpu::TextureViewDescriptor arrayView{
       .label = "Actor Shadow Map",

@@ -123,6 +123,10 @@ public:
   // Port: moves a shot's start to where the muzzle is drawn when the gun is drawn at the
   // retail FOV under a wider or narrower view.
   // `aim` false moves only the start (where only the start is used: a combo's muzzle effect).
+  void PortFireStackedBeams(float dt, CStateManager& mgr, const CTransform4f& xf,
+                            uint targetHoming);
+  void PortReleaseStackedBeams();
+  float PortShotCoolDown(const CStateManager& mgr) const;
   void PortShotFromDrawnMuzzle(const CStateManager&, CTransform4f& xf, bool aim = true) const;
   // Port: where a shot from `from` along `dir` would arrive (the aim target at its depth, else
   // the first thing on the line, else far ahead), for re-aiming a moved shot at it.

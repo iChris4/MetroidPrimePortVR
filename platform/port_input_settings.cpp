@@ -94,7 +94,16 @@ bool ApplySetting(std::string_view keyView, std::string_view valueView) {
       s.gyroSpace = static_cast< int >(v);
     }
   } else if (key == "gyro_auto_calibrate") {
-    s.gyroAutoCalibrate = ParseBool(value);
+    // 0/1 were the old on/off; 2 is only in menus.
+    char* end = nullptr;
+    const long v = std::strtol(value.c_str(), &end, 10);
+    if (end != value.c_str()) {
+      if (v >= 0 && v <= 2) {
+        s.gyroAutoCalibrate = static_cast< int >(v);
+      }
+    } else {
+      s.gyroAutoCalibrate = ParseBool(value) ? 1 : 0;
+    }
   } else if (key == "gyro_smoothing" || key == "gyro_tightening") {
     const float f = ParseFloat(value);
     if (std::isfinite(f) && f >= 0.f && f <= kGyroThresholdMax) {
@@ -310,7 +319,7 @@ void WriteAimSettings(std::ostream& out) {
   out << "gyro_source=" << s.gyroSource << '\n';
   out << "gyro_sensitivity=" << s.gyroSensitivity << '\n';
   out << "gyro_space=" << s.gyroSpace << '\n';
-  out << "gyro_auto_calibrate=" << (s.gyroAutoCalibrate ? 1 : 0) << '\n';
+  out << "gyro_auto_calibrate=" << s.gyroAutoCalibrate << '\n';
   out << "gyro_smoothing=" << s.gyroSmoothing << '\n';
   out << "gyro_tightening=" << s.gyroTightening << '\n';
   out << "gyro_cursor_angle=" << s.gyroCursorAngle << '\n';

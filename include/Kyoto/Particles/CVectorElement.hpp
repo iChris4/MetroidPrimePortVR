@@ -250,5 +250,95 @@ private:
   CVectorElement* mFirst;
   CVectorElement* mSecond;
 };
+
+// Remastered RNDV (CVERandomVector::GetValue 0x29e954): a cube point from the
+// current RNG scaled to the magnitude (1 when absent) by an ARM rsqrt estimate.
+class CVEPortRandomVector : public CVectorElement {
+public:
+  explicit CVEPortRandomVector(CRealElement* magnitude);
+  ~CVEPortRandomVector() override;
+
+  bool GetValue(int frame, CVector3f& valOut) const override;
+
+private:
+  CRealElement* mMagnitude;
+};
+
+// Remastered ANCR (CVEAngleCone::GetValue 0x29eebc) with its REUL rotation (axis order 0)
+// given as the three angles: a direction in Remastered's space.
+class CVEPortAngleCone : public CVectorElement {
+public:
+  CVEPortAngleCone(CRealElement* rotateX, CRealElement* rotateY, CRealElement* rotateZ,
+                   CRealElement* xRange, CRealElement* yRange, CRealElement* magnitude);
+  ~CVEPortAngleCone() override;
+
+  bool GetValue(int frame, CVector3f& valOut) const override;
+
+private:
+  CRealElement* mRotate[3];
+  CRealElement* mXRange;
+  CRealElement* mYRange;
+  CRealElement* mMagnitude;
+};
+
+// Remastered NORM (CVENormalizeVector::GetValue 0x29e620): the child scaled to unit length,
+// unchanged when its length is at most 2^-23.
+class CVEPortNormalize : public CVectorElement {
+public:
+  explicit CVEPortNormalize(CVectorElement* a);
+  ~CVEPortNormalize() override;
+
+  bool GetValue(int frame, CVector3f& valOut) const override;
+
+private:
+  CVectorElement* mA;
+};
+
+// Port-only change of basis between Remastered's particle space (X left, Y up, Z forward) and
+// retail's (Z up): BSIS takes a direction or position, (x, y, z) to (-x, z, y), as
+// MPT_CVEConvertToXLeftYUpZForward 0x2a3020; BSSC a scale, (x, y, z) to (x, z, y), as
+// MPT_CVEConvertScaleToXLeftYUpZForward 0x2a30f8. Each is its own inverse.
+class CVEPortBasis : public CVectorElement {
+public:
+  CVEPortBasis(CVectorElement* a, bool scale);
+  ~CVEPortBasis() override;
+
+  bool GetValue(int frame, CVector3f& valOut) const override;
+  bool IsFastConstant() const override;
+
+private:
+  CVectorElement* mA;
+  bool mScale;
+};
+
+// Port-only PRZY: Remastered's rotation RAZY(first, second, fallback) (CERotationFromAxis 0x29d298,
+// PortParticleMath::RotationFromAxisZY) as the Euler degrees PQAD and REUL use, all in
+// Remastered's particle space; the fallback is Euler degrees too.
+class CVEPortRotationFromAxis : public CVectorElement {
+public:
+  CVEPortRotationFromAxis(CVectorElement* first, CVectorElement* second, CVectorElement* fallback);
+  ~CVEPortRotationFromAxis() override;
+
+  bool GetValue(int frame, CVector3f& valOut) const override;
+
+private:
+  CVectorElement* mFirst;
+  CVectorElement* mSecond;
+  CVectorElement* mFallback;
+};
+
+// Remastered system vectors of the generator being evaluated: CMPS (the camera position in world
+// space, CVECameraPositionInWorldSpace 0x2a23ec), CPSS (the camera position in the system's global
+// frame, CVECameraPositionInSystemSpace 0x2a24fc), EXTT and EXTS (the external translation and
+// scale, CVEExternalValue 0x2a2774). Zero outside a generator evaluation (swooshes).
+class CVEPortSystemVector : public CVectorElement {
+public:
+  explicit CVEPortSystemVector(FourCC kind) : mKind(kind) {}
+
+  bool GetValue(int frame, CVector3f& valOut) const override;
+
+private:
+  FourCC mKind;
+};
 #endif
 #endif // _CVECTORELEMENT

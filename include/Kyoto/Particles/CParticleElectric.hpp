@@ -56,6 +56,7 @@ public:
 #ifdef TARGET_PC
   uint PortFxAsset() const override;
   void PortFxDescribe(PortFxInfo& out) const override;
+  bool PortIsRemastered() const { return xPortElc2.get() != nullptr; }
 #endif
 
   class CLineManager {

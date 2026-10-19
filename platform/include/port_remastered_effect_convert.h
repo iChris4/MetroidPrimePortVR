@@ -12,15 +12,15 @@
 //
 // - LTM2 is written as LTME, one frame shorter; LFOT and LTYP enum bytes go
 //   back down by one.
-// - MPCB around a vector is stripped; its angle form (MPAC) and ANCR with an
-//   unrotated cone become retail's ANGC. MPRD becomes RAND.
+// - MPCB around a vector is stripped; its angle form (MPAC) becomes retail's
+//   ANGC. MPRD becomes RAND.
 // - ROTA is negated back.
 // - TEXR's `CNST(id), NONE` becomes retail's `CNST(CNST id)`, and an MTIN
 //   material stands in for a missing TEXR through its texture.
 // - Ids become 32-bit retail ids through ConvertIO.
-// - ASPR becomes ASPH; a cone or sphere turned about X (REUL) becomes an X
-//   bias; RNDV becomes a whole-sphere ANGC; a GRAD gradient becomes 101
-//   percent keyframes (KEYP) over the particle's life.
+// - ANCR and ASPR become the port's own elements of the same fourccs, with
+//   their REUL (axis order 0) as three angle reals (CVEPortAngleCone,
+//   CEEPortAngleSphere); RNDV and GRAD likewise run Remastered's own code.
 // - DFCP/DFCS (a ramp of the depth from the camera) are written as the port's own
 //   real elements of the same fourccs (CREDistanceFromCameraBlend).
 // - Keyframe blocks and words are byte-swapped; a colour's half keys are

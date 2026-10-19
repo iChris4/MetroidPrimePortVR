@@ -238,6 +238,10 @@ std::vector<std::string> RoomLodPaths();
 // Whether any mod folder holds room geometry. Reads the disk, and needs no Initialize:
 // the frame buffers are sized from it before there is a renderer.
 bool HasRoomGeometry();
+// Whether any mod folder would load: the mods setting is on and a folder is not disabled. Like
+// HasRoomGeometry it reads the disk and needs no Initialize. With none, nothing can bring a
+// PBR material (only a mod's converted materials are PBR).
+bool AnyModEnabled();
 // Whether the loaded mods supply room geometry for any area.
 bool RoomGeometryLoaded();
 

@@ -24,6 +24,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include "texture_sites.hpp"
 
 // Remastered's water surface, drawn natively (see aurora/water.hpp). The shader text follows
 // Remastered's _fv_00dddc8 and its TOP and BOTTOM pixel shaders line for line
@@ -567,6 +568,7 @@ void ensure_dummies(const DrawContext& ctx) {
         .size = {1, 1, 1},
         .format = specs[i].format,
     };
+    AURORA_NOTE_TEXTURE(&descriptor);
     g_state.dummyTexture[i] = ctx.device.CreateTexture(&descriptor);
     const wgpu::TexelCopyTextureInfo dst{.texture = g_state.dummyTexture[i]};
     const wgpu::TexelCopyBufferLayout layout{.bytesPerRow = specs[i].size, .rowsPerImage = 1};

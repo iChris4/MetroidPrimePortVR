@@ -9,9 +9,14 @@
 #include "Kyoto/Math/CMatrix3f.hpp"
 #include "Kyoto/Math/CQuaternion.hpp"
 #include "Kyoto/Math/CVector3f.hpp"
+#include "Kyoto/Graphics/CGraphics.hpp"
+#include "Kyoto/Particles/CElementGen.hpp"
 #include "Kyoto/Particles/CParticleGlobals.hpp"
 #include "Kyoto/Particles/IElement.hpp"
 #include "rstl/math.hpp"
+#ifdef TARGET_PC
+#include "Kyoto/Particles/PortParticleMath.hpp"
+#endif
 
 CVEConstant::CVEConstant(CRealElement* x, CRealElement* y, CRealElement* z)
 : x4_x(x), x8_y(y), xc_z(z) {}
@@ -443,10 +448,9 @@ CQuaternion EulerQuaternion(const CVector3f& degrees) {
   return qz * qy * qx;
 }
 
-CVector3f EulerDegreesFromQuaternion(const CQuaternion& rotation) {
+CVector3f EulerDegreesFromMatrix(const CMatrix3f& matrix) {
   constexpr float kRadiansToDegrees = 57.295779513082320876f;
   constexpr float kGimbalCosineThreshold = 1.e-5f;
-  const CMatrix3f matrix = rotation.BuildTransform();
   const float sineY = std::clamp(-matrix.Get20(), -1.f, 1.f);
   const float cosineY = std::hypot(matrix.Get00(), matrix.Get10());
   const float y = std::atan2(sineY, cosineY);
@@ -464,7 +468,39 @@ CVector3f EulerDegreesFromQuaternion(const CQuaternion& rotation) {
   }
   return CVector3f(x * kRadiansToDegrees, y * kRadiansToDegrees, z * kRadiansToDegrees);
 }
+
+CVector3f EulerDegreesFromQuaternion(const CQuaternion& rotation) {
+  return EulerDegreesFromMatrix(rotation.BuildTransform());
+}
 } // namespace
+
+CVEPortRotationFromAxis::CVEPortRotationFromAxis(CVectorElement* first, CVectorElement* second,
+                                                 CVectorElement* fallback)
+: mFirst(first), mSecond(second), mFallback(fallback) {}
+
+CVEPortRotationFromAxis::~CVEPortRotationFromAxis() {
+  delete mFirst;
+  delete mSecond;
+  delete mFallback;
+}
+
+bool CVEPortRotationFromAxis::GetValue(int frame, CVector3f& valOut) const {
+  CVector3f first = CVector3f::Zero();
+  CVector3f second = CVector3f::Zero();
+  mFirst->GetValue(frame, first);
+  mSecond->GetValue(frame, second);
+  CVector3f x, y, z;
+  if (PortParticleMath::RotationFromAxisZY(first, second, x, y, z)) {
+    valOut = EulerDegreesFromMatrix(CMatrix3f(x.GetX(), y.GetX(), z.GetX(), x.GetY(), y.GetY(),
+                                              z.GetY(), x.GetZ(), y.GetZ(), z.GetZ()));
+    return false;
+  }
+  valOut = CVector3f::Zero();
+  if (mFallback) {
+    mFallback->GetValue(frame, valOut);
+  }
+  return false;
+}
 
 CVEOrderedEulerProduct::CVEOrderedEulerProduct(CVectorElement* first, CVectorElement* second)
 : mFirst(first), mSecond(second) {}
@@ -492,5 +528,121 @@ bool CVEOrderedEulerProduct::GetValue(int frame, CVector3f& valOut) const {
 
 bool CVEOrderedEulerProduct::IsFastConstant() const {
   return mFirst->IsFastConstant() && mSecond->IsFastConstant();
+}
+
+CVEPortNormalize::CVEPortNormalize(CVectorElement* a) : mA(a) {}
+
+CVEPortNormalize::~CVEPortNormalize() { delete mA; }
+
+bool CVEPortNormalize::GetValue(int frame, CVector3f& valOut) const {
+  mA->GetValue(frame, valOut);
+  valOut = PortParticleMath::NormalizeVector(valOut);
+  return false;
+}
+
+CVEPortBasis::CVEPortBasis(CVectorElement* a, bool scale) : mA(a), mScale(scale) {}
+
+CVEPortBasis::~CVEPortBasis() { delete mA; }
+
+bool CVEPortBasis::GetValue(int frame, CVector3f& valOut) const {
+  CVector3f v = CVector3f::Zero();
+  const bool ret = mA ? mA->GetValue(frame, v) : false;
+  valOut = CVector3f(mScale ? v.GetX() : -v.GetX(), v.GetZ(), v.GetY());
+  return ret;
+}
+
+bool CVEPortBasis::IsFastConstant() const { return mA != nullptr && mA->IsFastConstant(); }
+
+bool CVEPortSystemVector::GetValue(int, CVector3f& valOut) const {
+  valOut = CVector3f::Zero();
+  CParticleGlobals::SParticleSystem* sys = CParticleGlobals::GetCurrentParticleSystem();
+  if (CParticleGlobals::xPortSwooshEval != nullptr || sys == nullptr || sys->x4_system == nullptr) {
+    return false;
+  }
+  const CElementGen& gen = *sys->x4_system;
+  switch (mKind) {
+  case 'EXTT':
+    valOut = gen.PortExternalTranslation();
+    break;
+  case 'EXTS':
+    valOut = gen.PortExternalScale();
+    break;
+  case 'EXTR': {
+    // The rotation element EXTR (AddRefVar(0, 4, 10), GetRotationElement 0x25d59c) reads the system
+    // orientation; inside a PMRQ tree it is an Euler vector in Remastered's particle space, where
+    // the quaternion's axis is (-x, z, y).
+    const CQuaternion q = gen.PortExternalRotation();
+    valOut = EulerDegreesFromQuaternion(
+        CQuaternion(q.GetScalar(), CVector3f(-q.AxisX(), q.AxisZ(), q.AxisY())));
+  } break;
+  case 'CMPS':
+    // CVECameraPositionInWorldSpace 0x2a23ec: GetCameraTransform 0x27b304's translation; the view
+    // matrix is camera-to-world.
+    valOut = CGraphics::GetViewMatrix().GetTranslation();
+    break;
+  default: {
+    // CPSS: CVECameraPositionInSystemSpace 0x2a24fc, the world camera position taken into the
+    // system's translation, orientation and scale (Compile 0x2a246c).
+    CVector3f t, s;
+    CQuaternion q;
+    gen.PortGlobalFrame(t, q, s);
+    valOut = PortParticleMath::CameraPositionInSystemSpace(
+        CGraphics::GetViewMatrix().GetTranslation(), t, q.GetScalar(), q.AxisX(), q.AxisY(),
+        q.AxisZ(), s);
+  } break;
+  }
+  return false;
+}
+
+CVEPortRandomVector::CVEPortRandomVector(CRealElement* magnitude) : mMagnitude(magnitude) {}
+
+CVEPortRandomVector::~CVEPortRandomVector() { delete mMagnitude; }
+
+bool CVEPortRandomVector::GetValue(int frame, CVector3f& valOut) const {
+  float magnitude = 1.f;
+  if (mMagnitude) {
+    mMagnitude->GetValue(frame, magnitude);
+  }
+  CRandom16* random = CRandom16::GetRandomNumber();
+  const float u0 = random->PortFloat28();
+  const float u1 = random->PortFloat28();
+  const float u2 = random->PortFloat28();
+  valOut = PortParticleMath::RandomVector(u0, u1, u2, magnitude);
+  return false;
+}
+
+CVEPortAngleCone::CVEPortAngleCone(CRealElement* rotateX, CRealElement* rotateY,
+                                   CRealElement* rotateZ, CRealElement* xRange,
+                                   CRealElement* yRange, CRealElement* magnitude)
+: mRotate{rotateX, rotateY, rotateZ}, mXRange(xRange), mYRange(yRange), mMagnitude(magnitude) {}
+
+CVEPortAngleCone::~CVEPortAngleCone() {
+  for (CRealElement* angle : mRotate) {
+    delete angle;
+  }
+  delete mXRange;
+  delete mYRange;
+  delete mMagnitude;
+}
+
+// Children in Remastered's order (rotation, x range, y range, magnitude), each from 0, then
+// the two draws.
+bool CVEPortAngleCone::GetValue(int frame, CVector3f& valOut) const {
+  float angles[3] = {0.f, 0.f, 0.f};
+  for (int i = 0; i < 3; ++i) {
+    mRotate[i]->GetValue(frame, angles[i]);
+  }
+  const PortParticleMath::Quat q = PortParticleMath::EulerQuat(angles[0], angles[1], angles[2]);
+  float xRange = 0.f;
+  float yRange = 0.f;
+  float magnitude = 0.f;
+  mXRange->GetValue(frame, xRange);
+  mYRange->GetValue(frame, yRange);
+  mMagnitude->GetValue(frame, magnitude);
+  CRandom16* random = CRandom16::GetRandomNumber();
+  const float u = random->PortFloat28();
+  const float v = random->PortFloat28();
+  valOut = PortParticleMath::AngleCone(q, xRange, yRange, u, v, magnitude);
+  return false;
 }
 #endif

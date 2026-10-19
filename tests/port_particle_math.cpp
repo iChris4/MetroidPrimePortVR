@@ -1,7 +1,9 @@
 #include "Kyoto/Particles/PortParticleMath.hpp"
 #include "Kyoto/Particles/CParticleGlobals.hpp"
+#include "Kyoto/CRandom16.hpp"
 #include "port_test.h"
 
+#include <cmath>
 #include <cstdio>
 
 namespace {
@@ -155,6 +157,106 @@ int main() {
 
   // No stops: Remastered returns 0.
   CHECK_MSG(!EvalGradient(inner, 0, 4, false, 1, out) && Color(out, 0.f, 0.f, 0.f, 0.f), "no stops yields zero");
+
+  // RNDV: ARM FRSQRTE estimates (8 bits), one FRSQRTS step, so a unit-length
+  // cube point comes out just short of the magnitude.
+  CHECK_MSG(ReciprocalSqrtEstimate(1.f) == 0.998046875f, "FRSQRTE(1)");
+  CHECK_MSG(ReciprocalSqrtEstimate(4.f) == 0.4990234375f, "FRSQRTE(4)");
+  CHECK_MSG(ReciprocalSqrtEstimate(0.25f) == 1.99609375f, "FRSQRTE(0.25)");
+  {
+    const CVector3f axis = RandomVector(1.f, 0.5f, 0.5f, 2.f);
+    CHECK_MSG(Near(axis.GetX(), 1.99998856f, 1e-6f) && axis.GetX() != 2.f && axis.GetY() == 0.f &&
+                  axis.GetZ() == 0.f,
+              "RNDV axis point carries the estimate's error");
+    const CVector3f corner = RandomVector(0.f, 0.f, 0.f, 1.f);
+    CHECK_MSG(NearVector(corner, CVector3f(-0.57735f, -0.57735f, -0.57735f)), "RNDV corner normalised");
+  }
+  // FRECPE/FRECPS (UpdateInverseScale 0x2a6390), SqrtF 0x65f70, NORM and CPSS.
+  CHECK_MSG(ReciprocalEstimate(1.f) == 0.998046875f, "FRECPE(1)");
+  CHECK_MSG(ReciprocalEstimate(-2.f) == -0.4990234375f, "FRECPE(-2)");
+  CHECK_MSG(std::isinf(ReciprocalEstimate(0.f)) && ReciprocalEstimate(INFINITY) == 0.f, "FRECPE 0 and inf");
+  CHECK_MSG(ReciprocalStep(0.f, INFINITY) == 2.f, "FRECPS 0*inf");
+  CHECK_MSG(Near(InverseScale(1.f), 1.f, 1e-7f) && Near(InverseScale(4.f), 0.25f, 1e-7f), "inverse scale");
+  CHECK_MSG(SqrtF(0.f) == 0.f && SqrtF(-1.f) == 0.f && SqrtF(NAN) == 0.f, "SqrtF of v <= 0 is 0");
+  CHECK_MSG(Near(SqrtF(9.f), 3.f, 1e-6f), "SqrtF(9)");
+  {
+    const CVector3f unit = NormalizeVector(CVector3f(3.f, 0.f, 4.f));
+    CHECK_MSG(NearVector(unit, CVector3f(0.6f, 0.f, 0.8f), 1e-6f), "NORM scales to unit length");
+    const CVector3f tiny(1e-8f, 0.f, 0.f);
+    CHECK_MSG(NormalizeVector(tiny).GetX() == 1e-8f, "NORM keeps |v| <= 2^-23");
+    CHECK_MSG(NormalizeVector(CVector3f(0.f, 0.f, 0.f)).GetX() == 0.f, "NORM keeps zero");
+  }
+  {
+    const CVector3f camera(5.f, 2.f, 1.f);
+    const CVector3f one(1.f, 1.f, 1.f);
+    CHECK_MSG(NearVector(CameraPositionInSystemSpace(camera, CVector3f(1.f, 1.f, 1.f), 1.f, 0.f, 0.f, 0.f, one),
+                         CVector3f(4.f, 1.f, 0.f), 1e-6f),
+              "CPSS identity frame is camera - t");
+    // 90 degrees about Z: world +X is the system's -Y.
+    const float h = 0.70710678f;
+    CHECK_MSG(NearVector(CameraPositionInSystemSpace(CVector3f(1.f, 0.f, 0.f), CVector3f(0.f, 0.f, 0.f), h, 0.f,
+                                                     0.f, h, one),
+                         CVector3f(0.f, -1.f, 0.f), 1e-6f),
+              "CPSS turns into the system's frame");
+    CHECK_MSG(NearVector(CameraPositionInSystemSpace(camera, CVector3f(0.f, 0.f, 0.f), 1.f, 0.f, 0.f, 0.f,
+                                                     CVector3f(2.f, 4.f, 0.5f)),
+                         CVector3f(2.5f, 0.5f, 2.f), 1e-6f),
+              "CPSS divides by the system scale");
+  }
+  // RAZY (CERotationFromAxis 0x29d1bc): Z = first, X = second x Z, Y = Z x X.
+  {
+    CVector3f x, y, z;
+    CHECK_MSG(RotationFromAxisZY(CVector3f(0.f, 0.f, 2.f), CVector3f(0.f, 3.f, 0.f), x, y, z) &&
+                  NearVector(x, CVector3f(1.f, 0.f, 0.f), 1e-6f) && NearVector(y, CVector3f(0.f, 1.f, 0.f), 1e-6f) &&
+                  NearVector(z, CVector3f(0.f, 0.f, 1.f), 1e-6f),
+              "RAZY Z up, Y second is the identity");
+    CHECK_MSG(RotationFromAxisZY(CVector3f(1.f, 0.f, 0.f), CVector3f(0.f, 0.f, 1.f), x, y, z) &&
+                  NearVector(x, CVector3f(0.f, 1.f, 0.f), 1e-6f) && NearVector(y, CVector3f(0.f, 0.f, 1.f), 1e-6f) &&
+                  NearVector(z, CVector3f(1.f, 0.f, 0.f), 1e-6f),
+              "RAZY rows follow first, then second x first");
+    CHECK_MSG(!RotationFromAxisZY(CVector3f(0.f, 0.f, 0.f), CVector3f(0.f, 1.f, 0.f), x, y, z),
+              "RAZY refuses a zero first vector");
+    CHECK_MSG(!RotationFromAxisZY(CVector3f(0.f, 2.f, 0.f), CVector3f(0.f, 1.f, 0.f), x, y, z),
+              "RAZY refuses parallel vectors");
+  }
+  {
+    CRandom16 random(0);
+    CHECK_MSG(random.PortFloat28() == 12345.f / 268435456.f, "Remastered draw is the low 28 bits");
+    CHECK_MSG(random.GetSeed() == 0x3039u, "one LCG step per draw");
+  }
+  // ANCR/ASPR (CVEAngleCone 0x29eebc, CVEAngleSphere 0x2cb100) and their REUL order 0.
+  {
+    CHECK_MSG(WrapAngle(1.f) == 1.f, "an angle within pi is not wrapped");
+    CHECK_MSG(std::fabs(WrapAngle(4.f) - (4.f - 6.2831853f)) < 1e-5f, "an angle past pi comes back a turn");
+    CHECK_MSG(FastSinR(0.f) == 0.f && FastCosR(0.f) == 1.f, "FastSinR/FastCosR at 0");
+    const Quat identity = EulerQuat(0.f, 0.f, 0.f);
+    CHECK_MSG(std::fabs(identity.w - 1.f) < 1e-4f && identity.x == 0.f && identity.y == 0.f && identity.z == 0.f,
+              "REUL(0, 0, 0) is the identity");
+    const Quat yaw = EulerQuat(0.f, 90.f, 0.f);
+    CHECK_MSG(std::fabs(yaw.w - 0.70710677f) < 1e-3f && std::fabs(yaw.y - 0.70710677f) < 1e-3f &&
+                  std::fabs(yaw.x) < 1e-6f && std::fabs(yaw.z) < 1e-6f,
+              "REUL(0, 90, 0) turns about Y");
+    CHECK_MSG(NearVector(AngleCone(identity, 90.f, 90.f, .5f, .5f, 2.f), CVector3f(0.f, 0.f, 2.f), 1e-4f),
+              "a centred ANCR draw points down +Z at the magnitude");
+    CHECK_MSG(NearVector(AngleCone(yaw, 90.f, 90.f, .5f, .5f, 1.f), CVector3f(1.f, 0.f, 0.f), 1e-3f),
+              "a REUL(0, 90, 0) cone points down +X");
+    // u = 0 is the +range/2 edge: a = 45 degrees gives (0, -sin a, cos a).
+    CHECK_MSG(NearVector(AngleCone(identity, 90.f, 0.f, 0.f, .5f, 1.f), CVector3f(0.f, -0.70710677f, 0.70710677f), 1e-2f),
+              "ANCR's x range tilts toward -Y");
+    // RADD (CQuaternion::Multiply 0xd43d8): two quarter turns about Y make a half turn, and
+    // i * j = k.
+    const Quat half = QuatMultiply(yaw, yaw);
+    CHECK_MSG(std::fabs(half.w) < 1e-3f && std::fabs(half.y - 1.f) < 1e-3f, "RADD composes two yaws");
+    const Quat k = QuatMultiply(Quat{0.f, 1.f, 0.f, 0.f}, Quat{0.f, 0.f, 1.f, 0.f});
+    CHECK_MSG(k.w == 0.f && k.x == 0.f && k.y == 0.f && k.z == 1.f, "RADD is the Hamilton product a * b");
+    const CVector3f sphere = AngleSphereDirection(identity, 90.f, 0.f, 0.f, .5f);
+    const float length = std::sqrt(sphere.GetX() * sphere.GetX() + sphere.GetY() * sphere.GetY() +
+                                   sphere.GetZ() * sphere.GetZ());
+    CHECK_MSG(std::fabs(length - 1.f) < 1e-5f, "ASPR's direction is normalised");
+    const CVector3f zero = NormalizeInPlace(CVector3f(0.f, 0.f, 0.f));
+    CHECK_MSG(zero.GetX() == 2.f && zero.GetY() == 2.f && zero.GetZ() == 2.f,
+              "Normalize 0x6b0b0 takes zero to (2, 2, 2)");
+  }
 
   if (port_test::Failures() == 0) {
     std::puts("port_particle_math: OK");

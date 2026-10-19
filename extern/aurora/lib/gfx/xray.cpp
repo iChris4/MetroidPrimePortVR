@@ -11,6 +11,7 @@
 #include <array>
 #include <cstring>
 #include <string>
+#include "texture_sites.hpp"
 
 // Remastered's X-ray visor post passes, from its shader 00089f0 (one pixel shader; cb0 p0..p7):
 //  - p0.z == 1, run after the opaque world (RenderPostOpaque): per pixel the depth is remapped to
@@ -291,6 +292,7 @@ void ensure_level(uint32_t width, uint32_t height) {
       .size = {width, height, 1},
       .format = LevelFormat,
   };
+  AURORA_NOTE_TEXTURE(&descriptor);
   g_state.level = g_device.CreateTexture(&descriptor);
   g_state.levelView = g_state.level.CreateView();
 }
@@ -308,6 +310,7 @@ void ensure_frame(uint32_t width, uint32_t height, wgpu::TextureFormat format) {
       .size = {width, height, 1},
       .format = format,
   };
+  AURORA_NOTE_TEXTURE(&descriptor);
   g_state.frame = g_device.CreateTexture(&descriptor);
   g_state.frameView = g_state.frame.CreateView();
 }

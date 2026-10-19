@@ -4,6 +4,7 @@
 #include "gfx/recording.hpp"
 #include "gfx/texture.hpp"
 #include "gfx/resources.hpp"
+#include "gfx/stereo_uniform.hpp"
 #include "gx/shader_info.hpp"
 #include "gx/pipeline.hpp"
 #include "webgpu/gpu.hpp"
@@ -197,19 +198,49 @@ TEST_F(GfxRecordingTest, UniformSnapshotIncludesLogicalTextureSizeAndLineWidth) 
   EXPECT_FALSE(gx::uniform_matches(info, ByteBuffer{}));
 }
 
-TEST_F(GfxRecordingTest, PushPastMappedBufferReturnsOverflowRange) {
-  // The frame's buffers wrap fixed-size mapped staging memory, which used to abort when full.
+TEST_F(GfxRecordingTest, PushPastMappedBufferSpillsAndHonoursFrameLimit) {
   std::array<uint8_t, 64> mapped{};
   frame.storage = ByteBuffer{mapped.data(), mapped.size()};
-  const std::array<uint8_t, 48> data{};
-
-  const auto first = push_storage(data.data(), data.size());
-  EXPECT_FALSE(overflowed(first));
-  EXPECT_EQ(first.size, data.size());
-  EXPECT_TRUE(overflowed(push_storage(data.data(), data.size())));
-  EXPECT_EQ(frame.storage.size(), data.size());
-
+  detail::resources().limits.minStorageBufferOffsetAlignment = 16;
+  std::array<uint8_t, 48> data{};
+  data.fill(37);
+  EXPECT_FALSE(overflowed(push_storage(data.data(), data.size())));
+  const auto second = push_storage(data.data(), data.size());
+  EXPECT_FALSE(overflowed(second));
+  EXPECT_EQ(second.offset, frame_buffer_sizes().base(StagingKind::Storage) + mapped.size());
+  EXPECT_EQ(frame.storage.size(), mapped.size());
+  ASSERT_EQ(frame.spillStorage.length, data.size());
+  EXPECT_EQ(std::memcmp(frame.spillStorage.data.get(), data.data(), data.size()), 0);
+  EXPECT_TRUE(overflowed(push_storage(data.data(), frame_buffer_sizes().maxStorage + 1)));
+  EXPECT_EQ(frame.spillStorage.length, data.size());
   frame.storage = ByteBuffer{};
+  frame.spillStorage = {};
+}
+
+TEST_F(GfxRecordingTest, MultiviewClipBlockRemainsAdjacentWhenUniformStagingSpills) {
+  detail::resources().limits.minUniformBufferOffsetAlignment = 256;
+  std::array<uint8_t, 1536> mono{};
+  mono[0] = 42;
+  std::array<uint8_t, 1536> mapped{};
+  frame.uniforms = ByteBuffer{mapped.data(), mapped.size()};
+  const auto range = push_uniform(mono.data(), mono.size());
+  ASSERT_FALSE(overflowed(range));
+  StereoFrameState state{};
+  state.immersive = true;
+  state.multiview = true;
+  set_frame_stereo(state);
+  set_stereo_draw_route(AURORA_STEREO_ROUTE_FULLSCREEN);
+  const auto layout = StereoUniformLayout::for_gx(0, false, 0, mono.size());
+  ASSERT_TRUE(layout.valid());
+  const auto offsets = stage_stereo_uniforms(mapped.data(), range, layout);
+  EXPECT_EQ(offsets[0], mapped.size());
+  EXPECT_EQ(offsets[1], offsets[0]);
+  EXPECT_EQ(stereo_multiview_mode(), gx::MultiviewClip);
+  ASSERT_EQ(frame.spillUniforms.length, mono.size() + 144);
+  EXPECT_EQ(std::memcmp(frame.spillUniforms.data.get(), mono.data(), mono.size()), 0);
+  EXPECT_FALSE(frame.stereo.uniformsExhausted);
+  frame.uniforms = ByteBuffer{};
+  frame.spillUniforms = {};
 }
 
 TEST_F(GfxRecordingTest, EfbPassUsesDiscoveredSceneLayout) {

@@ -90,8 +90,12 @@ CSamusDoll::CSamusDoll(const CDependencyGroup& suitDgrp, const CDependencyGroup&
 , x1e0_ballMatIdx(hasSpiderBall ? CMorphBall::skSpiderBallCharacter[suit].x4_shader
                                 : CMorphBall::skBallCharacter[suit].x4_shader)
 , x1e4_glassMatIdx(CMorphBall::skSpiderBallGlass[suit].x4_shader)
+#ifdef TARGET_PC
+, x1e8_ballGlowColorIdx(CMorphBall::PortBallGlowColorIdx(suit, hasSpiderBall))
+#else
 , x1e8_ballGlowColorIdx(hasSpiderBall ? CMorphBall::skSpiderBallGlowColorIdx[suit]
                                       : CMorphBall::skBallGlowColorIdx[suit])
+#endif
 , x1ec_itemScreenSamus(gpSimplePool->GetObj("ANCS_ItemScreenSamus"))
 , x1f4_invBeam(gpSimplePool->GetObj(skBeamModels[beam]))
 , x200_invVisor(gpSimplePool->GetObj(skVisorModels[suit]))

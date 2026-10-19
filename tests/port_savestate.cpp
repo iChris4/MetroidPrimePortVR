@@ -328,6 +328,34 @@ int main() {
     REQUIRE(DecideAreaRestore(out.roomState, 2, script.data(), script.size()) ==
             RoomAreaRestore::kSkipUnreadable);
 
+    // Spawn layers (RMST version 3, issue #161): one entry per area in the same
+    // order, the mask of layers the area spawned with, and an unobserved area stays
+    // unknown with no mask. The version-2 file of the same state still parses and
+    // reports no spawn layers.
+    Header layered = in;
+    layered.roomState = saved;
+    layered.roomState.spawnLayersRecorded = true;
+    layered.roomState.spawnLayers = {{2, true, 0x2Bull | (1ull << 40)}, {5, false, 0}};
+    const std::string layeredFile = Encode(layered, blob);
+    REQUIRE(static_cast< uint8_t >(layeredFile[data.size() + 4]) == 3);
+    REQUIRE(Decode(layeredFile, out, outBlob));
+    REQUIRE(outBlob == blob && out.roomState.areas == saved.areas);
+    REQUIRE(out.roomState.fingerprintsRecorded && out.roomState.fingerprints.size() == 2);
+    REQUIRE(out.roomState.spawnLayersRecorded && out.roomState.spawnLayers.size() == 2);
+    REQUIRE(out.roomState.spawnLayers[0].area == 2 && out.roomState.spawnLayers[0].known &&
+            out.roomState.spawnLayers[0].mask == (0x2Bull | (1ull << 40)));
+    REQUIRE(out.roomState.spawnLayers[1].area == 5 && !out.roomState.spawnLayers[1].known &&
+            out.roomState.spawnLayers[1].mask == 0);
+    REQUIRE(Decode(file, out, outBlob));  // the version 2 file from above
+    REQUIRE(out.roomState.fingerprintsRecorded && !out.roomState.spawnLayersRecorded &&
+            out.roomState.spawnLayers.empty());
+    // Entries that do not line up one per area fail closed, as fingerprints do.
+    Header crooked = layered;
+    crooked.roomState.spawnLayers = {{2, true, 3}};
+    REQUIRE(Encode(crooked, blob).size() == data.size());
+    crooked.roomState.spawnLayers = {{5, true, 3}, {2, true, 3}};
+    REQUIRE(Encode(crooked, blob).size() == data.size());
+
     // Little-endian builders, so a hand-written trailer can carry bodies the
     // writer never produces.
     const auto le32 = [](uint32_t v) {

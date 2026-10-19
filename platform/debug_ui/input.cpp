@@ -154,9 +154,51 @@ void SetGyroSpace(int space) {
   MarkDirty();
 }
 
-void SetGyroAutoCalibrate(bool on) { StoreSetting(sInput.gyroAutoCalibrate, on); }
+void SetGyroAutoCalibrate(int mode) {
+  if (mode >= 0 && mode <= 2) {
+    StoreSetting(sInput.gyroAutoCalibrate, mode);
+  }
+}
+
+namespace {
+constexpr double kRecalibrateSeconds = 5.0;
+// SDL_GetTicksNS() the pending recalibration fires at, or 0.
+uint64_t sRecalibrateAtNs = 0;
+// Whether auto calibration ran on the last gyro sample.
+bool sGyroCalibrating = false;
+// Set by the "Reset aim" action, taken by the next aim tick.
+std::atomic<bool> sResetAimRequested{false};
+// Whether the gyro is feeding the aim (mode on, a source found). Under pointer
+// aim it moves the pointer, so the sticks turn the camera.
+bool sGyroDrivesAim = false;
+
+void FireRecalibration() {
+  if (sRecalibrateAtNs != 0 && SDL_GetTicksNS() >= sRecalibrateAtNs) {
+    sRecalibrateAtNs = 0;
+    sGyroMotion.Reset();
+  }
+}
+} // namespace
+
+void StartGyroRecalibration() {
+  sRecalibrateAtNs = SDL_GetTicksNS() + static_cast<uint64_t>(kRecalibrateSeconds * 1e9);
+}
+
+void CancelGyroRecalibration() { sRecalibrateAtNs = 0; }
+
+float GyroRecalibrationCountdown() {
+  FireRecalibration();
+  if (sRecalibrateAtNs == 0) {
+    return -1.f;
+  }
+  return static_cast<float>(double(sRecalibrateAtNs - SDL_GetTicksNS()) * 1e-9);
+}
+
+bool GyroCalibrating() { return sGyroCalibrating; }
 
 void ResetGyroCalibration() { sGyroMotion.Reset(); }
+
+void RequestResetAim() { sResetAimRequested.store(true, std::memory_order_release); }
 
 float GyroCalibrationConfidence() {
   return sGyroMotionSource != nullptr && sGyroHasAccel ? sGyroMotion.Confidence() : -1.f;
@@ -285,8 +327,13 @@ bool ReadGyroRates(float& pitch, float& yaw, float dt) {
     sGyroMotionSource = source;
     sGyroHasAccel = haveAccel;
   }
-  sGyroMotion.Process(gyro, haveAccel ? accel : nullptr, dt, sInput.gyroSpace, sInput.gyroAutoCalibrate, pitch,
-                      yaw);
+  // 2 = only in menus: paused, a frontend screen (no free aim running) or F1
+  // open. Outside them the learned drift is kept, only learning stops.
+  const bool inMenus = Visible() || PausedMenuOpen() || !sMouseGameplayActive;
+  const bool calibrate = sInput.gyroAutoCalibrate == 1 || (sInput.gyroAutoCalibrate == 2 && inMenus);
+  sGyroCalibrating = haveAccel && calibrate;
+  sGyroMotion.Process(gyro, haveAccel ? accel : nullptr, dt, sInput.gyroSpace, calibrate, pitch, yaw,
+                      sInput.gyroAutoCalibrate == 2);
   sGyroFilter.Apply(pitch, yaw, dt, sInput.gyroSmoothing, sInput.gyroTightening);
   return true;
 }
@@ -302,6 +349,8 @@ void PollGyro() {
   const uint64_t nowNs = SDL_GetTicksNS();
   const float dt = sLastNs == 0 ? 0.f : std::min(float(double(nowNs - sLastNs) * 1e-9), 0.1f);
   sLastNs = nowNs;
+  FireRecalibration();
+  sGyroDrivesAim = false;
   if (sSpringFlickLatch > 0.f) {
     sSpringFlickLatch -= dt;
   }
@@ -334,6 +383,7 @@ void PollGyro() {
       sSpringFlickArmed = true;
     }
   }
+  sGyroDrivesAim = aim;
   if (!aim) {
     if (sInput.gyroMode != 0) {
       sGyroStatus = "flicks only (aim needs mouse aim, twin stick or touch controls)";
@@ -509,6 +559,18 @@ bool UpdateMouseAim(bool active, bool locked, float x, float y, float z) {
   const PortMouse::AimState lastAim = sMouseAimState;
   const PortMouse::PointerAim lastPointer = sPointerAim;
   const bool pointer = PointerAim();
+  // Reset aim: recentre the pointer and look level (pitch 0). Yaw stays.
+  if (sResetAimRequested.exchange(false, std::memory_order_acq_rel)) {
+    sPointerAim.Center();
+    if (sMouseAimState.initialized) {
+      sMouseAimState.pitch = 0.f;
+      sMouseAimState.lagPitch = 0.f;
+    }
+  }
+  // Under pointer aim the stick moves the pointer, unless the gyro does: then the
+  // stick (and the keyboard look keys) turn the camera as they do without
+  // pointer aim.
+  const bool stickTurns = pointer && sGyroDrivesAim;
   float dx = sMouseFrameX;
   float dy = sMouseFrameY;
   if (pointer) {
@@ -517,17 +579,22 @@ bool UpdateMouseAim(bool active, bool locked, float x, float y, float z) {
     if (active && !locked) {
       float sx = 0.f, sy = 0.f;
       PointerAimScale(sx, sy);
-      sPointerAim.MoveLagged(dx * sx, dy * sy, sStickFrameX * sx, sStickFrameY * sy);
+      if (stickTurns) {
+        sPointerAim.MoveLagged((dx - sStickFrameX) * sx, (dy - sStickFrameY) * sy, 0.f, 0.f);
+      } else {
+        sPointerAim.MoveLagged(dx * sx, dy * sy, sStickFrameX * sx, sStickFrameY * sy);
+      }
     } else {
       sPointerAim.Center();
     }
     // Only the gyro's own camera turn (if on) moves the view directly.
-    dx = sGyroCameraFrameX;
-    dy = sGyroCameraFrameY;
+    dx = sGyroCameraFrameX + (stickTurns ? sStickFrameX : 0.f);
+    dy = sGyroCameraFrameY + (stickTurns ? sStickFrameY : 0.f);
   }
+  const bool stickLag = !pointer || stickTurns;
   const bool applied = sMouseAimState.Update(active, locked, x, y, z, dx, dy, MouseSensitivity(),
-                                            MouseInvertX(), MouseInvertY(), pointer ? 0.f : sStickFrameX,
-                                            pointer ? 0.f : sStickFrameY);
+                                            MouseInvertX(), MouseInvertY(), stickLag ? sStickFrameX : 0.f,
+                                            stickLag ? sStickFrameY : 0.f);
   if (applied && pointer && sAimTick.First()) {
     float dyaw = 0.f, dpitch = 0.f;
     PortMouse::PointerAim::TurnAt(sPointerAim.x, sPointerAim.y, PointerAimBox() / 100.f,

@@ -22,6 +22,7 @@
 #include "../gfx/texture.hpp"
 #include "../logging.hpp"
 #include "../webgpu/gpu.hpp"
+#include "../gfx/texture_sites.hpp"
 
 namespace aurora::rmlui {
 namespace {
@@ -570,6 +571,7 @@ Rml::TextureHandle WebGPURenderInterface::GenerateTexture(Rml::Span<const Rml::b
       .format = wgpu::TextureFormat::RGBA8Unorm,
       .mipLevelCount = mipmapLevels,
   };
+  AURORA_NOTE_TEXTURE(&textureDesc);
   texData->m_texture = webgpu::g_device.CreateTexture(&textureDesc);
   texData->m_textureView = texData->m_texture.CreateView(nullptr);
 
@@ -709,6 +711,7 @@ void WebGPURenderInterface::EnsureRenderTarget(RenderTarget& target, const char*
       .mipLevelCount = 1,
       .sampleCount = 1,
   };
+  AURORA_NOTE_TEXTURE(&textureDesc);
   target.texture = webgpu::g_device.CreateTexture(&textureDesc);
   target.view = target.texture.CreateView(nullptr);
 
@@ -722,6 +725,7 @@ void WebGPURenderInterface::EnsureRenderTarget(RenderTarget& target, const char*
         .mipLevelCount = 1,
         .sampleCount = LayerSampleCount,
     };
+    AURORA_NOTE_TEXTURE(&multisampleTextureDesc);
     target.multisampleTexture = webgpu::g_device.CreateTexture(&multisampleTextureDesc);
     target.multisampleView = target.multisampleTexture.CreateView(nullptr);
   }
@@ -1263,6 +1267,7 @@ void WebGPURenderInterface::BeginFrame(const webgpu::TextureWithSampler& target,
           .mipLevelCount = 1,
           .sampleCount = LayerSampleCount,
       };
+      AURORA_NOTE_TEXTURE(&multisampleTextureDesc);
       multisampleTexture = webgpu::g_device.CreateTexture(&multisampleTextureDesc);
       multisampleView = multisampleTexture.CreateView(nullptr);
     }
@@ -1426,6 +1431,7 @@ Rml::TextureHandle WebGPURenderInterface::SaveLayerAsTexture() {
       .mipLevelCount = 1,
       .sampleCount = 1,
   };
+  AURORA_NOTE_TEXTURE(&textureDesc);
   texData->m_texture = webgpu::g_device.CreateTexture(&textureDesc);
   texData->m_textureView = texData->m_texture.CreateView(nullptr);
   texData->m_size = textureSize;
@@ -1787,6 +1793,7 @@ wgpu::TextureView WebGPURenderInterface::GetClipMaskStencilView(const wgpu::Exte
       .mipLevelCount = 1,
       .sampleCount = LayerSampleCount,
   };
+  AURORA_NOTE_TEXTURE(&textureDesc);
   m_clipMaskStencilTexture = webgpu::g_device.CreateTexture(&textureDesc);
 
   constexpr wgpu::TextureViewDescriptor viewDesc{

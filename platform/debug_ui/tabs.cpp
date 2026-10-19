@@ -182,6 +182,7 @@ void DrawGameAudio() {
   }
   ImGui::EndDisabled();
   ImGui::SetItemTooltip("These audio options are saved globally and persist across restarts.");
+  DrawFlaahgraTheme();
 }
 
 void DrawOriginalSection() {

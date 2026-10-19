@@ -1495,6 +1495,23 @@ int main() {
                 "the Elite Quarters item unlocks the room, the Omega Pirate no longer does");
       CHECK_MSG(PortApWorld::RoomOps(plain, 0x49175472, {object(0x3A, 0x0035013A, 70)}).size() == 5,
                 "Gravity Chamber keeps its stalactite");
+
+      // A checked pickup goes when it only plays sounds and music and shows its
+      // memo, through relays (one of them back to itself); one that reaches
+      // anything else stays.
+      std::vector< PortSkipCutscenes::ScriptObject > expansion = {
+          object(0x11, 0x0402012E, 1), object(0x13, 0x0002012D, 1), object(0x15, 0x00020130, 1),
+          object(0x09, 0x0002012F, 1), object(0x17, 0x00020131, 1), object(0x61, 0x00020132, 1),
+          object(0x11, 0x00020140, 1), object(0x15, 0x00020141, 1), object(0x04, 0x00020142, 1)};
+      expansion[0].connections = {{1, 1, 0x0002012D}, {1, 13, 0x00020130}, {1, 20, 0x0002012F}};
+      expansion[1].connections = {{1, 4, 0x0002012E}};
+      expansion[2].connections = {{9, 1, 0x00020131}, {9, 20, 0x00020132}, {9, 4, 0x00029999}};
+      expansion[6].connections = {{1, 13, 0x00020141}};
+      expansion[7].connections = {{9, 1, 0x00020142}};
+      const std::vector< uint8_t > leftOut =
+          PortApWorld::TakenPickupOps(expansion, {0x0002012E, 0x00020140, 0x00020150});
+      CHECK_MSG(leftOut == std::vector< uint8_t >({6, 0x04, 0x02, 0x01, 0x2E}),
+                "only the self-contained checked pickup is left out, by its full id");
     }
     std::vector< PortSkipCutscenes::ScriptObject > hatch = objects;
     if (!hatch.empty()) {

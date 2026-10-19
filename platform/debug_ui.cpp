@@ -83,6 +83,7 @@ PortDebug::EAspectMode sAspectMode = PortDebug::kAspect_Window;
 bool sHudWide = false;
 bool sCinemaBars = false;
 bool sSharpScanWindow = false;
+bool sGeneratedBallLooks = true;
 bool sAutoAim = true;
 int sScanSpeed = 100;
 bool sSecondaryCrosshairs = true;
@@ -131,6 +132,7 @@ bool sCheats = false;
 bool sSkippableCutscenes = false;
 // Off by default: a beam door that was opened stays blue (PortBeamDoors).
 bool sBeamDoorsStayUnlocked = false;
+bool sStackBeams = false;
 // The stored choice only. Randomizer and Archipelago games force it on at use
 // (PortSkipCutscenes::Forced), which the getter does not fold in.
 bool sRevision100Compatibility = false;
@@ -504,6 +506,7 @@ void EnsureInitialized() {
   sHudWide = port::EnvFlag("MP_HUD_WIDE", sHudWide);
   sCinemaBars = port::EnvFlag("MP_CINEMA_BARS", sCinemaBars);
   sSharpScanWindow = port::EnvFlag("MP_SHARP_SCAN_WINDOW", sSharpScanWindow);
+  sGeneratedBallLooks = port::EnvFlag("MP_POWER_SPIDER_BALL", sGeneratedBallLooks);
   sAutoAim = port::EnvFlag("MP_AUTO_AIM", sAutoAim);
   sScanSpeed = std::clamp(port::EnvInt("MP_SCAN_SPEED", sScanSpeed), PortDebug::kScanSpeedMin,
                           PortDebug::kScanSpeedMax);

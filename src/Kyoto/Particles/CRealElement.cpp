@@ -388,6 +388,49 @@ float CREDistanceFromCameraBlend::DistanceBlend(float d, float a, float b) {
   // Remastered CalculateBlendValue 0x298f44 (see PortParticleMath.hpp).
   return PortParticleMath::DistanceBlend(d, a, b);
 }
+
+CREPortDivide::CREPortDivide(CRealElement* a, CRealElement* b) : x4_a(a), x8_b(b) {}
+
+CREPortDivide::~CREPortDivide() {
+  delete x4_a;
+  delete x8_b;
+}
+
+bool CREPortDivide::GetValue(int frame, float& valOut) const {
+  // Both operands start at 0 (a missing child leaves them so).
+  float a = 0.f, b = 0.f;
+  if (x4_a) {
+    x4_a->GetValue(frame, a);
+  }
+  if (x8_b) {
+    x8_b->GetValue(frame, b);
+  }
+  valOut = a / b;
+  return false;
+}
+
+CREPortSwooshNodeTime::CREPortSwooshNodeTime(CRealElement* a) : x4_a(a) {}
+
+CREPortSwooshNodeTime::~CREPortSwooshNodeTime() { delete x4_a; }
+
+bool CREPortSwooshNodeTime::GetValue(int frame, float& valOut) const {
+  const CParticleGlobals::SPortSwooshEval* swoosh = CParticleGlobals::xPortSwooshEval;
+  if (swoosh == nullptr || !swoosh->hasNode) {
+    return x4_a->GetValue(frame, valOut);
+  }
+  const int percentage = CParticleGlobals::mParticleLifetimePercentage;
+  const float real = CParticleGlobals::mParticleLifetimePercentageReal;
+  const float remainder = CParticleGlobals::mParticleLifetimePercentageRemainder;
+  CParticleGlobals::mParticleLifetimePercentage = swoosh->nodePercentage;
+  CParticleGlobals::mParticleLifetimePercentageReal =
+      float(swoosh->nodePercentage) + swoosh->nodeRemainder;
+  CParticleGlobals::mParticleLifetimePercentageRemainder = swoosh->nodeRemainder;
+  const bool ret = x4_a->GetValue(frame, valOut);
+  CParticleGlobals::mParticleLifetimePercentage = percentage;
+  CParticleGlobals::mParticleLifetimePercentageReal = real;
+  CParticleGlobals::mParticleLifetimePercentageRemainder = remainder;
+  return ret;
+}
 #endif
 
 bool CREParticleRotationOrLineWidth::GetValue(int, float& valOut) const {

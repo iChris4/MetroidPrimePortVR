@@ -573,7 +573,86 @@ static ByteBuffer BuildRGBA8FromBC1(uint32_t width, uint32_t height, uint32_t mi
   return buf;
 }
 
-ConvertedTexture convert_texture(u32 format, uint32_t width, uint32_t height, uint32_t mips, ArrayRef<uint8_t> data) {
+// Calls fn(block, x, y) for each 4x4 sub-block of a CMPR texture that holds texels, in source order.
+template <typename F>
+static void ForEachCMPRBlock(uint32_t width, uint32_t height, uint32_t mips, const uint8_t* src, F&& fn) {
+  uint32_t w = width;
+  uint32_t h = height;
+  for (uint32_t mip = 0; mip < mips; ++mip) {
+    for (uint32_t yy = 0; yy < h; yy += 8) {
+      for (uint32_t xx = 0; xx < w; xx += 8) {
+        for (uint32_t yb = 0; yb < 8; yb += 4) {
+          for (uint32_t xb = 0; xb < 8; xb += 4) {
+            if (xx + xb < w && yy + yb < h) {
+              fn(mip, src, (xx + xb) / 4, (yy + yb) / 4);
+            }
+            src += 8;
+          }
+        }
+      }
+    }
+    if (w > 1) {
+      w /= 2;
+    }
+    if (h > 1) {
+      h /= 2;
+    }
+  }
+}
+
+// GX and BC1 differ where a three-colour block uses index 3: GX keeps the midpoint colour at alpha 0, BC1 is
+// transparent black, which filtering bleeds into cut-out edges. Only textures without such texels go to BC1.
+static bool CMPRHasTransparentTexels(uint32_t width, uint32_t height, uint32_t mips, const uint8_t* src) {
+  bool transparent = false;
+  ForEachCMPRBlock(width, height, mips, src, [&](uint32_t, const uint8_t* block, uint32_t, uint32_t) {
+    if (transparent || block[0] > block[2] || (block[0] == block[2] && block[1] > block[3])) {
+      return; // big-endian color1 > color2: four-colour block
+    }
+    for (uint32_t y = 0; y < 4; ++y) {
+      const uint8_t bits = block[4 + y];
+      // A 2-bit index of 3 has both bits set.
+      if ((bits & (bits >> 1) & 0x55) != 0) {
+        transparent = true;
+        return;
+      }
+    }
+  });
+  return transparent;
+}
+
+// CMPR is BC1 with 8x8 tiles of four 4x4 blocks, big-endian endpoints and the first texel of each row in the
+// high bits; reorder it to linear little-endian BC1.
+static ByteBuffer BuildBC1FromCMPR(uint32_t width, uint32_t height, uint32_t mips, const uint8_t* src) {
+  size_t total = 0;
+  std::array<size_t, 16> mipOffsets{};
+  std::array<uint32_t, 16> mipBlocksWide{};
+  uint32_t w = width;
+  uint32_t h = height;
+  for (uint32_t mip = 0; mip < mips && mip < mipOffsets.size(); ++mip) {
+    mipOffsets[mip] = total;
+    mipBlocksWide[mip] = (w + 3) / 4;
+    total += static_cast<size_t>(mipBlocksWide[mip]) * ((h + 3) / 4) * 8;
+    w = std::max(w / 2, 1u);
+    h = std::max(h / 2, 1u);
+  }
+  ByteBuffer buf{total};
+  uint8_t* dst = buf.data();
+  ForEachCMPRBlock(width, height, mips, src, [&](uint32_t mip, const uint8_t* block, uint32_t bx, uint32_t by) {
+    uint8_t* out = dst + mipOffsets[mip] + (static_cast<size_t>(by) * mipBlocksWide[mip] + bx) * 8;
+    out[0] = block[1];
+    out[1] = block[0];
+    out[2] = block[3];
+    out[3] = block[2];
+    for (uint32_t y = 0; y < 4; ++y) {
+      const uint8_t bits = block[4 + y];
+      out[4 + y] = static_cast<uint8_t>((bits >> 6) | ((bits >> 2) & 0x0C) | ((bits << 2) & 0x30) | (bits << 6));
+    }
+  });
+  return buf;
+}
+
+ConvertedTexture convert_texture(u32 format, uint32_t width, uint32_t height, uint32_t mips, ArrayRef<uint8_t> data,
+                                 bool allowCompressed) {
   ZoneScoped;
   ByteBuffer converted;
   switch (format) {
@@ -632,6 +711,18 @@ ConvertedTexture convert_texture(u32 format, uint32_t width, uint32_t height, ui
     break;
   case GX_TF_CMPR:
     converted = BuildRGBA8FromCMPR(width, height, mips, data);
+    // BC1 keeps the texture at an eighth of the RGBA8 size. The RGBA8 decode still decides hasArbitraryMips.
+    if (allowCompressed && webgpu::g_bcTexturesSupported && width % 4 == 0 && height % 4 == 0 && mips <= 16 &&
+        !CMPRHasTransparentTexels(width, height, mips, data.data())) {
+      return {
+          .format = wgpu::TextureFormat::BC1RGBAUnorm,
+          .width = width,
+          .height = height,
+          .mips = mips,
+          .data = BuildBC1FromCMPR(width, height, mips, data.data()),
+          .hasArbitraryMips = mips > 1 && arb_mip_check(width, height, mips, converted),
+      };
+    }
     break;
   }
   const auto wgpuFormat = to_wgpu(format);

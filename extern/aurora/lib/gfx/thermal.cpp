@@ -13,6 +13,7 @@
 #include <mutex>
 #include <string>
 #include <vector>
+#include "texture_sites.hpp"
 
 // Remastered's thermal visor post (NRenderThermalVisor), run on the finished EFB:
 //  - cold (shader 7e5c16a5, after the cold actors): the frame sampled at the pixel plus a
@@ -349,6 +350,7 @@ void ensure_textures(const wgpu::Queue& queue) {
         .size = {NoiseSize, NoiseSize, 1},
         .format = wgpu::TextureFormat::R8Unorm,
     };
+    AURORA_NOTE_TEXTURE(&descriptor);
     g_state.noise = g_device.CreateTexture(&descriptor);
     g_state.noiseView = g_state.noise.CreateView();
     g_lutUploaded = false;
@@ -360,6 +362,7 @@ void ensure_textures(const wgpu::Queue& queue) {
         .size = {256, 4, 1},
         .format = wgpu::TextureFormat::RGBA8UnormSrgb,
     };
+    AURORA_NOTE_TEXTURE(&descriptor);
     g_state.lut = g_device.CreateTexture(&descriptor);
     g_state.lutView = g_state.lut.CreateView();
     g_lutUploaded = false;
@@ -391,6 +394,7 @@ void ensure_targets(uint32_t width, uint32_t height) {
         .size = {width, height, 1},
         .format = TargetFormat,
     };
+    AURORA_NOTE_TEXTURE(&descriptor);
     g_state.targets[i] = g_device.CreateTexture(&descriptor);
     g_state.targetViews[i] = g_state.targets[i].CreateView();
   }
@@ -409,6 +413,7 @@ void ensure_frame(uint32_t width, uint32_t height, wgpu::TextureFormat format) {
       .size = {width, height, 1},
       .format = format,
   };
+  AURORA_NOTE_TEXTURE(&descriptor);
   g_state.frame = g_device.CreateTexture(&descriptor);
   g_state.frameView = g_state.frame.CreateView();
 }

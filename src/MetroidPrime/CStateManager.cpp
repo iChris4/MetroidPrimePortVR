@@ -2,6 +2,7 @@
 #include "MetroidPrime/CStateManager.hpp"
 #include "port_actor_shadow.h"
 #include "port_apclient.h"
+#include "port_beam_doors.h"
 #include "port_collision_view.h"
 #include "port_debug.h"
 #include "port_env.h"
@@ -1542,6 +1543,7 @@ void CStateManager::Update(float dt) {
   // Grants any items the Archipelago server has queued and sends collected
   // checks; a no-op when no Archipelago configuration is loaded.
   PortAp::Poll(*this);
+  PortBeamDoors::Tick(*this);
   PortPreScanElevators(*this);
   PortArtifactTemple(*this);
   int debugTeleportArea = -1;

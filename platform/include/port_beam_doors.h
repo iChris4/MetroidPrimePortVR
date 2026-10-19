@@ -153,6 +153,11 @@ void OnForceFaded(CStateManager& mgr, uint32_t mrea, uint32_t editorId);
 // Marks doorway `bit` open and restyles its loaded doors; false when it was
 // already open, the bit is out of range or no game is loaded.
 bool Unlock(CStateManager& mgr, int bit);
+// Once per game frame, on the game thread: when the setting was toggled since
+// the last call, restyles the loaded doors of every open doorway to blue (on) or
+// back to their locked type (off), and refreshes the map icons. The first call
+// only records the setting.
+void Tick(CStateManager& mgr);
 // Closes every doorway again (keeps nothing); false outside a game.
 bool Reset();
 

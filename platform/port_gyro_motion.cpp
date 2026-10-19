@@ -30,7 +30,7 @@ float Motion::Confidence() const { return mMotion->GetAutoCalibrationConfidence(
 bool Motion::Steady() const { return mMotion->GetAutoCalibrationIsSteady(); }
 
 void Motion::Process(const float gyro[3], const float* accel, float dt, int space, bool autoCalibrate,
-                     float& pitch, float& yaw) {
+                     float& pitch, float& yaw, bool keepOffset) {
   // SDL's rates are counter-clockwise positive, so a turn right of a flat pad
   // is a negative y, and of an upright one (its -z up) a positive z;
   // GamepadMotionHelpers uses the same Y-up axes. Without an accelerometer the
@@ -42,7 +42,7 @@ void Motion::Process(const float gyro[3], const float* accel, float dt, int spac
     if (!mHasMode || autoCalibrate != mAutoCalibrate) {
       // Turning calibration off drops what it learned, so a bad estimate can be
       // got rid of.
-      if (mHasMode && !autoCalibrate) {
+      if (mHasMode && !autoCalibrate && !keepOffset) {
         mMotion->ResetContinuousCalibration();
       }
       mMotion->SetCalibrationMode(autoCalibrate ? GamepadMotionHelpers::Stillness | GamepadMotionHelpers::SensorFusion

@@ -97,7 +97,8 @@ void DrawPalLanguages() {
   ImGui::EndDisabled();
   ItemHelp("For a USA disc: pick your own PAL Metroid Prime image (GM8P01) to add its French, German, "
            "Spanish and Italian text and its fonts. Only the text is taken; the game stays the USA "
-           "one. Restart afterwards so every menu and the font take it.");
+           "one. The disc's full Flaahgra boss theme is added too (F1 > Settings > Audio). Restart "
+           "afterwards so every menu and the font take it.");
   if (installed > 0 && !state.running) {
     ImGui::SameLine();
     if (ImGui::Button("Remove")) {

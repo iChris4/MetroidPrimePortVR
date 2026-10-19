@@ -1394,16 +1394,56 @@ void WatchShields(CStateManager& mgr, CGameState::ApProgress& progress) {
   }
 }
 
+namespace {
+
+// The pickups of room `mrea` whose locations are checked, by the session or
+// in the loaded game's record. A death or an older save brings them back
+// while their items stay given.
+std::vector< uint32_t > TakenPickups(uint32_t mrea) {
+  std::vector< uint32_t > taken;
+  if (!BuiltinRules())
+    return taken;
+  size_t count = 0;
+  const MetroidPrime::Location* locations = MetroidPrime::Locations(count);
+  std::vector< int64_t > checked;
+  {
+    Runtime& runtime = GetRuntime();
+    std::lock_guard<std::mutex> lock(runtime.mutex);
+    if (runtime.enabled && runtime.session != nullptr)
+      checked = runtime.session->GetState().checkedLocations;
+  }
+  const CGameState::ApProgress* progress =
+      gpGameState != nullptr && gpGameState->PortApProgress().reconciled ? &gpGameState->PortApProgress()
+                                                                         : nullptr;
+  for (size_t i = 0; i < count; ++i) {
+    if (locations[i].area != mrea)
+      continue;
+    const bool recorded = progress != nullptr && i < 128 && ((progress->checked[i / 32] >> (i % 32)) & 1) != 0;
+    if (recorded || std::find(checked.begin(), checked.end(), locations[i].id) != checked.end())
+      taken.push_back(locations[i].pickup);
+  }
+  return taken;
+}
+
+} // namespace
+
 bool RoomOps(uint32_t mrea, const uint8_t* scly, size_t size, std::vector< uint8_t >& ops) {
   try {
     const std::shared_ptr<const PortApWorld::Layout> seedLayout = SeedLayout();
-    if (seedLayout == nullptr)
+    const std::vector< uint32_t > taken = TakenPickups(mrea);
+    if (seedLayout == nullptr && taken.empty())
       return false;
-    const PortApWorld::Layout& layout = *seedLayout;
     std::vector< PortSkipCutscenes::ScriptObject > objects;
     if (!PortSkipCutscenes::ScanObjects(scly, size, objects))
       return false;
-    ops = PortApWorld::RoomOps(layout, mrea, objects);
+    ops.clear();
+    if (seedLayout != nullptr)
+      ops = PortApWorld::RoomOps(*seedLayout, mrea, objects);
+    const std::vector< uint8_t > pickups = PortApWorld::TakenPickupOps(objects, taken);
+    if (!pickups.empty()) {
+      PortLog::Write("archipelago: room %08X leaves out %zu checked pickup(s)\n", mrea, pickups.size() / 5);
+      ops.insert(ops.end(), pickups.begin(), pickups.end());
+    }
     return !ops.empty();
   } catch (...) {
     return false;
@@ -1471,6 +1511,19 @@ bool BeamDoorUnlockable(uint32_t mrea, int door) {
     uint32_t broken[4];
     return PortApWorld::BeamDoorUnlockable(seedLayout != nullptr ? *seedLayout : disc, mrea, door,
                                            BrokenShields(broken));
+  } catch (...) {
+    return false;
+  }
+}
+
+bool LockedDoorStyle(int door, PortApWorld::DoorStyle& style,
+                     std::vector< uint8_t >& vulnerability) {
+  try {
+    const std::shared_ptr<const PortApWorld::Layout> seedLayout = SeedLayout();
+    const PortApWorld::Layout disc;
+    uint32_t broken[4];
+    return PortApWorld::LockedDoorStyle(seedLayout != nullptr ? *seedLayout : disc, door,
+                                        BrokenShields(broken), style, vulnerability);
   } catch (...) {
     return false;
   }

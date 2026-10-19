@@ -188,7 +188,8 @@ typedef struct {
   /*
    * Multiplies what one frame can hold of vertex, index and array data (5, 2 and 8 MiB at 1),
    * and doubles the 24 MiB of uniforms when above 1. 0 means 1. A frame that outgrows
-   * its buffers aborts, so raise this for content denser than the original game's.
+   * these limits drops the draws that no longer fit and logs a warning once, so raise this for
+   * content denser than the original game's.
    */
   uint32_t frameBufferScale;
 
@@ -239,6 +240,21 @@ typedef struct {
   const char* pipelineCacheExtraSeedName;
   /* The headset will run, so the extra seed's eye pipelines are wanted; without it they are left out. */
   bool pipelineCacheExtraSeedStereo;
+  /*
+   * Keep the pipeline cache (and the merged seed) but do not compile its rows at startup:
+   * pipelines are built on first use. For devices that cannot spare the memory the startup
+   * compile takes (Dawn/driver state per pipeline).
+   */
+  bool pipelineCacheLazy;
+  /* Release built pipelines unused for this many frames (0 = never); see aurora_set_pipeline_eviction. */
+  uint32_t pipelineEvictFrames;
+  /*
+   * Do not compile the cached rows whose shader is PBR at startup: the caller knows nothing
+   * can draw PBR (no mod brings a PBR material). The rows stay in the database, and a PBR
+   * draw still builds its pipeline on first use. pipelineCacheSkipPbrReason is the log text.
+   */
+  bool pipelineCacheSkipPbr;
+  const char* pipelineCacheSkipPbrReason;
 
   /*
    * A directory (with a trailing slash) Dawn searches first for the Vulkan library, e.g. a shim
@@ -252,6 +268,14 @@ typedef struct {
    */
   const char* dawnEnableToggles;
   const char* dawnDisableToggles;
+
+  /*
+   * The per-frame staging buffers hold the full frameBufferScale/frameStorageScale sizes. When
+   * false they start smaller (4, 8, 2 and 8 MiB of vertices, uniforms, indices and arrays, 8
+   * of texture uploads), and a frame that needs more spills into memory allocated for that
+   * frame, up to the scaled sizes.
+   */
+  bool frameBuffersPinned;
 
   /*
    * When set and only the Null backend started (no GPU and no software adapter), this message is

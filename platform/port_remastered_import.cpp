@@ -219,9 +219,12 @@ bool WantsMovies(MovieFormat& format) {
 
 // --- Reusing the previous import ----------------------------------------------
 
-// Off with MP_REMASTERED_REUSE=0. With MP_REMASTERED_REUSE=textures only the converted
-// textures are reused (TextureMemory).
-bool WantsReuse() { return port::EnvFlag("MP_REMASTERED_REUSE", true); }
+// Set from the Mods panel for the next import; not saved, so it lasts until the game is closed.
+std::atomic<bool> sRemakeAll{false};
+
+// Off with MP_REMASTERED_REUSE=0 or the panel's "Full import (no reuse)". With
+// MP_REMASTERED_REUSE=textures only the converted textures are reused (TextureMemory).
+bool WantsReuse() { return !sRemakeAll && port::EnvFlag("MP_REMASTERED_REUSE", true); }
 
 // What a stage of an import made, written to kManifestName in the mod: a re-import whose stage
 // has the same key (and, for a stage that gives out ids, the same ids taken before it) links
@@ -3287,6 +3290,9 @@ ImportState ImportStatus() {
 }
 
 void CancelImport() { sCancel = true; }
+
+void SetRemakeAll(bool remake) { sRemakeAll = remake; }
+bool RemakeAll() { return sRemakeAll; }
 
 void StopImport() {
   sCancel = true;

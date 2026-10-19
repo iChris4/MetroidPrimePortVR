@@ -295,6 +295,25 @@ void TestDoors() {
             "the blue style is the disc's blue door");
   CHECK_MSG(BlueDoorVulnerability().size() == 4 + 15 * 4 + 4 + 4 + 5 * 4 + 4 + 5 * 4,
             "the blue weaknesses are a whole vulnerability");
+
+  // The locked style: every beam doorway's doors have one, and under the
+  // disc's layout it is the lock the disc gives them (never the blue one).
+  int locked = 0;
+  for (int bit = 0; bit < count; ++bit) {
+    for (const DoorChange& door : BeamDoorway(bit)) {
+      DoorStyle lockedStyle;
+      std::vector< uint8_t > weakness;
+      CHECK_MSG(LockedDoorStyle(disc, door.index, nullptr, lockedStyle, weakness) &&
+                    weakness.size() == BlueDoorVulnerability().size(),
+                "a beam door has a locked style");
+      if (lockedStyle.color != style.color)
+        ++locked;
+    }
+  }
+  CHECK_MSG(locked > 0, "a locked beam door does not look blue");
+  DoorStyle noStyle;
+  std::vector< uint8_t > noWeakness;
+  CHECK_MSG(!LockedDoorStyle(disc, -1, nullptr, noStyle, noWeakness), "no door, no style");
 }
 
 } // namespace

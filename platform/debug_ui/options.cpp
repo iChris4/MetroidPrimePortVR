@@ -14,6 +14,7 @@
 #include "port_log.h"
 #include "port_paths.h"
 #include "port_mods.h"
+#include "port_ball_looks.h"
 #include "port_remastered_text.h"
 #include "port_discord.h"
 #include "port_savestate.h"
@@ -432,6 +433,23 @@ bool SharpScanWindow() {
   return sSharpScanWindow && !sOriginalExperience && !PortVr::OpenXRIsRunning();
 }
 
+bool GeneratedBallLooks() {
+  EnsureInitialized();
+  return sGeneratedBallLooks && !sOriginalExperience;
+}
+
+void SetGeneratedBallLooks(bool enabled) {
+  EnsureInitialized();
+  if (sGeneratedBallLooks == enabled) {
+    return;
+  }
+  sGeneratedBallLooks = enabled;
+  MarkDirty();
+  if (PortBallLooks::Requested() != GeneratedBallLooks() && !PortMods::Suspended()) {
+    PortSaveState::RequestModReload();
+  }
+}
+
 const char* PromptGlyphs() {
   const int glyphs = sPromptGlyphs.load(std::memory_order_relaxed);
   return glyphs > 0 ? kPromptGlyphs[glyphs] : nullptr;
@@ -617,6 +635,13 @@ bool BeamDoorsStayUnlocked() {
 }
 
 void SetBeamDoorsStayUnlocked(bool enabled) { StoreSetting(sBeamDoorsStayUnlocked, enabled); }
+
+bool StackBeams() {
+  EnsureInitialized();
+  return sStackBeams && !sOriginalExperience;
+}
+
+void SetStackBeams(bool enabled) { StoreSetting(sStackBeams, enabled); }
 
 bool Revision100Compatibility() { return Loaded(sRevision100Compatibility); }
 void SetRevision100Compatibility(bool enabled) { StoreSetting(sRevision100Compatibility, enabled); }
@@ -1075,7 +1100,9 @@ void SetOriginalExperience(bool enabled) {
   ResetDynamicRes();
   VISetFrameBufferScale(EffectiveRenderScale());
   ApplyGraphicsQuality();
-  if (PortMods::CurrentStatus().active != ModsEnabled() && !PortMods::Suspended()) {
+  if ((PortMods::CurrentStatus().active != ModsEnabled() ||
+       PortBallLooks::Requested() != GeneratedBallLooks()) &&
+      !PortMods::Suspended()) {
     PortSaveState::RequestModReload();
   }
 }

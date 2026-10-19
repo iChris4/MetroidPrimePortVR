@@ -38,6 +38,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include "texture_sites.hpp"
 
 namespace aurora::texture {
 namespace {
@@ -1043,6 +1044,7 @@ gfx::TextureHandle create_converted_texture_handle(const EntryLoadSnapshot& entr
       .mipLevelCount = replacement.mips,
       .sampleCount = 1,
   };
+  AURORA_NOTE_TEXTURE(&textureDescriptor);
   auto texture = webgpu::g_device.CreateTexture(&textureDescriptor);
   const auto viewLabel = fmt::format("{} view", label);
   const wgpu::TextureViewDescriptor textureViewDescriptor{

@@ -214,6 +214,11 @@ bool shader_overridden(u64 hash) noexcept { return false; }
 namespace aurora::gfx {
 void drop_pipelines() {}
 } // namespace aurora::gfx
+extern "C" {
+void aurora_set_pipeline_eviction(uint32_t) {}
+void aurora_trim_pipelines(uint32_t) {}
+uint32_t aurora_get_pipeline_count(void) { return 0; }
+}
 
 // --- Stereo replay stubs (the FIFO never runs immersive here) ---
 namespace aurora::gfx {
@@ -245,6 +250,7 @@ uint64_t epoch() noexcept { return testing::stereoEpoch; }
 
 // --- Buffer push stubs ---
 namespace aurora::gfx {
+const FrameBufferSizes& frame_buffer_sizes() noexcept { static const FrameBufferSizes sizes; return sizes; }
 namespace testing {
 std::vector<uint8_t> pushedVerts; // the last push_verts' bytes
 bool mergeDraws = false;
@@ -255,6 +261,9 @@ ByteBuffer* staging_verts() noexcept { return testing::mergeDraws ? &testing::st
 ByteBuffer* staging_indices() noexcept { return testing::mergeDraws ? &testing::stagedIndices : nullptr; }
 static Range stage_test_bytes(ByteBuffer& buffer, const uint8_t* data, size_t length, size_t alignment) {
   const auto offset = (buffer.size() + alignment - 1) / alignment * alignment;
+  if (!buffer.owned() && offset + length > buffer.capacity()) {
+    return OverflowRange;
+  }
   (void)buffer.append_uninitialized(offset - buffer.size());
   auto* dst = buffer.append_uninitialized(length);
   if (length != 0) {

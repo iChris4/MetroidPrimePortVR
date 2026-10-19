@@ -123,6 +123,32 @@ public:
   ~CIEFrameIndexFromAnimationTime() override;
   bool GetValue(int frame, int& valOut) const override;
 };
+
+// port-only PLPT (u32 offset, int percent): Remastered's ILPT (GetIntElement 0x26a910). CIERealToInt(CREMultiplyAdd(lifetime,
+// percent * 0.01f, 0.5f)): unfused fmul then fadd, truncated, and no clamp of a negative percent
+// (retail's ILPT divides by 100 and clamps it to 0).
+class CIEPortLifetimePercent : public CIntElement {
+  CIntElement* x4_percentVal;
+  int x8_offset; // added to the port's lifetime to give Remastered's (LTME is LTM2 - 1)
+
+public:
+  CIEPortLifetimePercent(int offset, CIntElement* a);
+  ~CIEPortLifetimePercent() override;
+  bool GetValue(int frame, int& valOut) const override;
+};
+
+// port-only PRAN(min, max): Remastered's int RAND (CIERandom 0x2a88a8, CIERandomConstant
+// 0x2a895c) and constant IRND (CIEInitialRandomConstant 0x2a8c40): min + Next() % (max - min + 1),
+// unsigned (min + Next() when the range wraps to 0), whatever min's sign. Retail's RAND takes Next() for min <= 0.
+class CIEPortRandom : public CIntElement {
+  CIntElement* x4_min;
+  CIntElement* x8_max;
+
+public:
+  CIEPortRandom(CIntElement* min, CIntElement* max);
+  ~CIEPortRandom() override;
+  bool GetValue(int frame, int& valOut) const override;
+};
 #endif
 
 class CIETimeChain : public CIntElement {

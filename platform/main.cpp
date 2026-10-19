@@ -33,6 +33,7 @@
 #include "port_memory_log.h"
 #include "port_mods.h"
 #include "port_pal_languages.h"
+#include "port_flaahgra_music.h"
 #include "port_room_geo.h"
 #include "port_importers.h"
 #include "port_remastered_import.h"
@@ -911,6 +912,15 @@ int main(int argc, char** argv) {
         }
         return PortPalLanguages::RunFromCommandLine(argv[2]);
     }
+    // --import-flaahgra-music <image>: add the full Flaahgra theme from a PAL/JP
+    // GameCube or Trilogy image to the mods folder (port_flaahgra_music.h).
+    if (argc >= 2 && std::strcmp(argv[1], "--import-flaahgra-music") == 0) {
+        if (argc != 3) {
+            std::fprintf(stderr, "usage: %s %s <PAL/JP GameCube or Trilogy image>\n", argv[0], argv[1]);
+            return 2;
+        }
+        return PortFlaahgraMusic::RunFromCommandLine(argv[2]);
+    }
 #endif
     // The file log starts first so it holds everything after it, build id included.
     {
@@ -1005,6 +1015,37 @@ int main(int argc, char** argv) {
                        envFrameBuffers >= 0 || envStorageBuffers >= 0 ? "MP_FRAME_BUFFERS/MP_STORAGE_BUFFERS"
                                                                       : "room geometry");
     }
+    // The startup compile of the cached and seeded pipelines costs ~950 MiB of process memory
+    // (issue #162): Android, and any device short on RAM, builds them on first use instead. An 8 GB
+    // tablet held ~900 MiB of driver pipeline state from them and swapped all session.
+    bool pipelineLazy = false;
+    {
+        char why[96] = "";
+        pipelineLazy = PortMemoryLog::LowRamDevice(why, sizeof(why));
+#if defined(__ANDROID__)
+        if (!pipelineLazy) {
+            pipelineLazy = true;
+            std::strncat(why, ", Android", sizeof(why) - std::strlen(why) - 1);
+        }
+#endif
+        const char* reason = why;
+        if (const char* env = port::EnvString("MP_PIPELINE_LAZY"); env != nullptr && env[0] != '\0') {
+            pipelineLazy = port::EnvFlag("MP_PIPELINE_LAZY", pipelineLazy);
+            reason = "MP_PIPELINE_LAZY";
+        }
+        if (pipelineLazy || why[0] != '\0' || reason != why) {
+            PortLog::Write("port: pipelines %s at startup (%s)\n", pipelineLazy ? "built on first use" : "precompiled",
+                           reason);
+        }
+    }
+    uint32_t pipelineEvictFrames = pipelineLazy ? 7200 : 0;
+    if (const char* env = port::EnvString("MP_PIPELINE_EVICT"); env != nullptr && env[0] != '\0') {
+        pipelineEvictFrames = static_cast<uint32_t>(std::strtoul(env, nullptr, 10));
+        PortLog::Write("port: pipeline eviction %u frames (MP_PIPELINE_EVICT)\n", pipelineEvictFrames);
+    }
+    // PBR pipelines are only drawn with a mod's converted materials (issue #162): without an
+    // enabled mod their cached rows are not compiled at startup. MP_PIPELINE_PBR=0|1 overrides.
+    const bool pipelineSkipPbr = !port::EnvFlag("MP_PIPELINE_PBR", PortMods::AnyModEnabled());
     // Settings, mods, save states and the shader caches sit in user/ beside the
     // executable when that folder can be written to (port_paths.h).
     const std::string& userFolder = PortPaths::UserFolder();
@@ -1115,11 +1156,20 @@ int main(int argc, char** argv) {
         .pipelineCacheExtraSeedName = "primedgun_pipeline_cache.db",
         // Set below once OpenXR says whether the headset will run.
         .pipelineCacheExtraSeedStereo = false,
+        // Low-RAM Android builds pipelines on first use (issue #162); MP_PIPELINE_LAZY=0|1 overrides.
+        .pipelineCacheLazy = pipelineLazy,
+        // Idle pipelines are released after ~2 min at 60 fps when pipelines are built on first use;
+        // MP_PIPELINE_EVICT=0|<frames> overrides (issue #162).
+        .pipelineEvictFrames = pipelineEvictFrames,
+        .pipelineCacheSkipPbr = pipelineSkipPbr,
+        .pipelineCacheSkipPbrReason = "no mod enabled",
         // Set below when a custom Vulkan driver (port_gpu_driver.h) is loaded.
         .vulkanLibraryDir = nullptr,
         // Set below from the Driver workarounds settings.
         .dawnEnableToggles = nullptr,
         .dawnDisableToggles = nullptr,
+        // Explicit MP_FRAME_BUFFERS / MP_STORAGE_BUFFERS keep the staging buffers at full size.
+        .frameBuffersPinned = envFrameBuffers >= 0 || envStorageBuffers >= 0,
         // Aurora's Null backend draws nothing: the game would play its sound behind
         // a black window (issue #33). Scripted runs, which can't answer a box, keep it.
         .noGraphicsMessage = port::EnvFlag("MP_NO_DISC_DIALOG")

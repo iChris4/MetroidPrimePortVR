@@ -33,43 +33,14 @@ class SWeaponInfo;
 
 #ifdef TARGET_PC
 namespace NPortChargeFxDetail {
-// CGunWeapon's muzzle-effect slots: 0 is the normal muzzle flash and 1 the charge effect
-// (`ActivateCharge` switches between them; see `GetChargeMuzzleFx`).
-inline constexpr unsigned kMuzzleEffectChargeSlot = 1;
-
-// Preserve the existing Rx(+90) policy for converted non-Power charge effects. Their effective
-// native attachment frames have not been established by the Power-only source audit below.
-// Compose on the sampled locator's own side, keeping its animated translation unchanged.
-inline CTransform4f ConvertedChargeMuzzleFrame(const CTransform4f& locator) {
-  const CVector3f translation = locator.GetTranslation();
-  return CTransform4f(locator.Get00(), locator.Get02(), -locator.Get01(), translation.GetX(),
-                      locator.Get10(), locator.Get12(), -locator.Get11(), translation.GetY(),
-                      locator.Get20(), locator.Get22(), -locator.Get21(), translation.GetZ());
-}
-
-// Power's effective native LBEAM includes the legacy wrapper's right-multiplied rotation
-// correction; raw/bind bone axes alone incorrectly suggested authored EMTR +Z pointed back.
-// The corrected native frame is X left, Y up, Z forward; retail is X right, Y forward, Z up.
-// R_sampled * B, B = [-1 0 0; 0 0 1; 0 1 0], therefore has columns (-col0,col2,col1).
-// B is a proper rotation (det +1): EMTR (0,0,.15) at scale 2 goes .30 forward, not backward.
-// This is only a Power charge-slot policy, not native animation retargeting or pose parity.
-// Source contract: build/s-powercharge-native-20261017/{legacy-locator,emitter-sign}/REPORT.md.
-inline CTransform4f ConvertedPowerChargeMuzzleFrame(const CTransform4f& locator) {
-  const CVector3f translation = locator.GetTranslation();
-  return CTransform4f(-locator.Get00(), locator.Get02(), locator.Get01(), translation.GetX(),
-                      -locator.Get10(), locator.Get12(), locator.Get11(), translation.GetY(),
-                      -locator.Get20(), locator.Get22(), locator.Get21(), translation.GetZ());
-}
-
-// Retail keeps translation only; converted normal flashes keep the full sampled locator.
+// Retail effects take the locator's translation only. A converted effect's vectors are already in
+// the port's space (the importer turns Remastered's X left, Y up, Z forward particle space into it,
+// CVEPortBasis), so it takes the full sampled locator: the Power charge disc's EMTR, Remastered
+// (0,0,.15) and port (0,.15,0), lands .30 forward at scale 2, as on native's LBEAM.
 template < typename Generator >
-void SetLocalLocator(Generator& generator, const CTransform4f& locator, const bool chargeEffect,
-                     const bool isPowerBeam) {
+void SetLocalLocator(Generator& generator, const CTransform4f& locator) {
   if (!generator.PortIsRemastered()) {
     generator.SetGlobalTranslation(locator.GetTranslation());
-  } else if (chargeEffect) {
-    generator.SetGlobalOrientAndTrans(isPowerBeam ? ConvertedPowerChargeMuzzleFrame(locator)
-                                                 : ConvertedChargeMuzzleFrame(locator));
   } else {
     // The sampled locator itself, no copy.
     generator.SetGlobalOrientAndTrans(locator);
@@ -134,6 +105,19 @@ public:
                     const CPlayerState::EChargeStage chargeState, const CTransform4f& xf,
                     CStateManager& mgr, const TUniqueId homingTarget, const float chargeFactor1,
                     const float chargeFactor2);
+#ifdef TARGET_PC
+  // Port (stack_beams): only the projectile(s) a Fire would spawn, no animation, shake,
+  // charge state or sound. Skips when this beam's shot data is not loaded.
+  virtual void PortFireStackedProjectile(const bool underwater, const float dt,
+                                         const CPlayerState::EChargeStage chargeState,
+                                         const CTransform4f& xf, CStateManager& mgr,
+                                         const TUniqueId homingTarget, const float chargeFactor1,
+                                         const float chargeFactor2);
+  // Locks this beam's projectile descriptions independently of Load/Unload (idempotent).
+  void PortLockStackTokens();
+  void PortUnlockStackTokens();
+  bool PortStackTokensLocked() const { return mPortStackWeapons.size() != 0; }
+#endif
   virtual void EnableFx(const bool enable) {}
   virtual void EnableSecondaryFx(const ESecondaryFxType type) {
     x1cc_enabledSecondaryEffect = type;
@@ -252,6 +236,19 @@ protected:
   void UnlockTokens();
 
   static void PointGenerator(void*, const CVector3f*, const CVector3f*, int);
+
+  // The projectile part of Fire, for the shot's `weapon` description.
+  void SpawnProjectile(const TToken< CWeaponDescription >& weapon, bool underwater, float dt,
+                       CPlayerState::EChargeStage chargeState, const CTransform4f& xf,
+                       CStateManager& mgr, TUniqueId homingTarget, float chargeFactor1,
+                       float chargeFactor2);
+#ifdef TARGET_PC
+  // The stacked copy of x144_weapons[chargeState], null unless locked and loaded.
+  const TToken< CWeaponDescription >* PortStackedWeapon(int chargeState);
+
+  // Locked copies of x144_weapons; empty while stacking is off.
+  rstl::reserved_vector< TCachedToken< CWeaponDescription >, 2 > mPortStackWeapons;
+#endif
 };
 CHECK_SIZEOF(CGunWeapon, 0x21c)
 

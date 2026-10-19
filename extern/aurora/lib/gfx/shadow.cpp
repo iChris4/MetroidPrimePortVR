@@ -21,6 +21,7 @@
 #include <cstring>
 #include <limits>
 #include <vector>
+#include "texture_sites.hpp"
 
 // The sun's cascaded shadow map. set_frame fits Remastered's four cascades (shadow_cascade.cpp) to
 // the camera, each snapped to whole texels so it does not swim as the camera moves. The casters (the
@@ -82,6 +83,7 @@ void ensure_map() {
       .size = {g_state.size, g_state.size, cascade::Count},
       .format = MapFormat,
   };
+  AURORA_NOTE_TEXTURE(&descriptor);
   g_state.map = g_device.CreateTexture(&descriptor);
   const wgpu::TextureViewDescriptor arrayView{
       .label = "Shadow Map",

@@ -202,6 +202,12 @@ bool CinemaBars();
 // window's magnification (CMFGame::Draw), instead of stretching a copy of the screen. Off by
 // default and under Original experience.
 bool SharpScanWindow();
+// The morph ball looks retail lacks, made from Varia's at boot (port_ball_looks.h): a Power
+// Suit spider ball instead of the Gravity Suit's, and Gravity and Phazon Suit balls instead
+// of the Power Suit's. On by default, off under Original experience. Setting it reloads the
+// mods, which serve the looks.
+bool GeneratedBallLooks();
+void SetGeneratedBallLooks(bool enabled);
 // The glyph set the on-screen prompts are forced to ("xbox", "playstation", "switch", "gamecube",
 // "keyboard"), or nullptr to follow the input in use. Thread-safe.
 const char* PromptGlyphs();
@@ -339,6 +345,12 @@ void SetSkippableCutscenes(bool enabled);
 // loaded afterwards.
 bool BeamDoorsStayUnlocked();
 void SetBeamDoorsStayUnlocked(bool enabled);
+// stack_beams (CPlayerGun::UpdateNormalShotCycle): every normal or charged arm-cannon
+// shot also fires the projectiles of every other beam owned, from the same transform.
+// Projectiles only (no animation, sound or shake of the extra beams); combos, missiles
+// and the Phazon Beam are unchanged. Off by default, and off in the Original experience.
+bool StackBeams();
+void SetStackBeams(bool enabled);
 // The stored 1.00 sequence-break compatibility choice (raw, not the effective
 // policy). Randomizer and Archipelago games force it on at use.
 bool Revision100Compatibility();
@@ -365,7 +377,7 @@ void SetBootLogos(EBootLogos mode);
 // drawn at the retail FOV whatever this is, like a view-model FOV.
 const float kFovRetail = 55.f;
 const float kFovMin = 45.f;
-const float kFovMax = 90.f;
+const float kFovMax = 120.f;
 float FirstPersonFov();
 void SetFirstPersonFov(float degrees);
 // Arm cannon offset from its retail place, in metres along the camera's right,
@@ -636,9 +648,18 @@ void SetGyroSensitivity(float scale);
 // still; the confidence is 0..1, or negative when the source has no
 // accelerometer (no calibration or gravity then).
 void SetGyroSpace(int space);
-void SetGyroAutoCalibrate(bool on);
+void SetGyroAutoCalibrate(int mode); // 0 off, 1 always, 2 only in menus
+// Manual recalibration: a 5 s countdown (put the pad down), then a reset. Cancel
+// drops a pending one. The state is for the F1 button's label.
+void StartGyroRecalibration();
+void CancelGyroRecalibration();
+float GyroRecalibrationCountdown(); // seconds left, or negative when none pending
+bool GyroCalibrating();             // auto calibration is learning right now
 void ResetGyroCalibration();
 float GyroCalibrationConfidence();
+// Recentres the pointer-aim cursor and levels the camera pitch (the "Reset aim"
+// action; thread-safe, applied on the next aim tick).
+void RequestResetAim();
 // The input engine's "Gyro aim" action, set each frame before PollGyro.
 void SetGyroButton(bool held);
 // Reads the gyro, feeds the aim and spots Spring Ball flicks. Call once per

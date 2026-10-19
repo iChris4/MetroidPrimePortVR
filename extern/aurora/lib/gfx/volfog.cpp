@@ -15,6 +15,7 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#include "texture_sites.hpp"
 
 // Remastered's volumetric fog, as its CRenderPass_VolumetricFog and shaders do it:
 //  - a froxel grid of 16x16 pixels by 64 slices, slice k starting at a view depth of
@@ -381,6 +382,7 @@ wgpu::TextureView make_noise(const wgpu::Queue& queue) {
       .size = {NoiseSize, NoiseSize, NoiseSize},
       .format = wgpu::TextureFormat::R8Unorm,
   };
+  AURORA_NOTE_TEXTURE(&descriptor);
   const auto texture = g_device.CreateTexture(&descriptor);
   const wgpu::TexelCopyTextureInfo dst{.texture = texture};
   const wgpu::TexelCopyBufferLayout layout{.bytesPerRow = 256, .rowsPerImage = NoiseSize};
@@ -576,6 +578,7 @@ void ensure_targets(Domain domain, uint32_t width, uint32_t height, wgpu::Textur
       .size = {width, height, 1},
       .format = format,
   };
+  AURORA_NOTE_TEXTURE(&frameDescriptor);
   frame.texture = g_device.CreateTexture(&frameDescriptor);
   frame.view = frame.texture.CreateView();
 }
@@ -617,6 +620,7 @@ void ensure_froxels(uint32_t width, uint32_t height) {
       .size = {gridWidth, gridHeight, Slices},
       .format = FroxelFormat,
   };
+  AURORA_NOTE_TEXTURE(&froxelDescriptor);
   g_state.froxels = g_device.CreateTexture(&froxelDescriptor);
   g_state.froxelView = g_state.froxels.CreateView();
 }
@@ -795,6 +799,7 @@ const wgpu::TextureView& froxel_view() {
         .size = {1, 1, 1},
         .format = FroxelFormat,
     };
+    AURORA_NOTE_TEXTURE(&descriptor);
     g_state.placeholder = g_device.CreateTexture(&descriptor).CreateView();
   }
   return g_state.placeholder;

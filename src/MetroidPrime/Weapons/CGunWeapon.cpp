@@ -114,7 +114,11 @@ CGunWeapon::CGunWeapon(CAssetId ancsId, EWeaponType type, TUniqueId playerId,
 
 CVelocityInfo::~CVelocityInfo() {}
 
-CGunWeapon::~CGunWeapon() {}
+CGunWeapon::~CGunWeapon() {
+#ifdef TARGET_PC
+  PortUnlockStackTokens();
+#endif
+}
 
 const SWeaponInfo& CGunWeapon::GetWeaponInfo() const {
   return gpTweakPlayerGun->GetBeamInfo(x200_beamId);
@@ -290,13 +294,7 @@ void CGunWeapon::UpdateMuzzleFx(const float dt, const CVector3f& scale, const CV
 void CGunWeapon::UpdateMuzzleFx(const float dt, const CVector3f& scale,
                                 const CTransform4f& locator, const bool emitting) {
   CElementGen& generator = *x1a4_muzzleGenerators[x208_muzzleEffectIdx];
-  // This overload serves both slots: the charge effect (the ball) and the normal muzzle
-  // flash, which shares the call site through `x832_25_chargeEffectVisible`. Only converted
-  // Power charges take the source-backed forward frame; other charge frames are preserved,
-  // and converted normal flashes keep the full sampled locator.
-  const bool chargeEffect = x208_muzzleEffectIdx == NPortChargeFxDetail::kMuzzleEffectChargeSlot;
-  NPortChargeFxDetail::SetLocalLocator(generator, locator, chargeEffect,
-                                     x200_beamId == CPlayerState::kBI_Power);
+  NPortChargeFxDetail::SetLocalLocator(generator, locator);
   generator.SetGlobalScale(scale);
   generator.SetParticleEmission(emitting);
   generator.Update(dt);
@@ -406,10 +404,11 @@ void CGunWeapon::DrawHologram(const CStateManager& mgr, const CTransform4f& xf,
 
 const int CGunWeapon::skShootAnim[2] = {4, 3};
 
-void CGunWeapon::Fire(const bool underwater, const float dt,
-                      const CPlayerState::EChargeStage chargeState, const CTransform4f& xf,
-                      CStateManager& mgr, const TUniqueId homingTarget, const float chargeFactor1,
-                      const float chargeFactor2) {
+void CGunWeapon::SpawnProjectile(const TToken< CWeaponDescription >& weapon, const bool underwater,
+                                 const float dt, const CPlayerState::EChargeStage chargeState,
+                                 const CTransform4f& xf, CStateManager& mgr,
+                                 const TUniqueId homingTarget, const float chargeFactor1,
+                                 const float chargeFactor2) {
   CDamageInfo dInfo(GetDamageInfo(mgr, chargeState, chargeFactor1));
 
   CVector3f scale =
@@ -426,7 +425,6 @@ void CGunWeapon::Fire(const bool underwater, const float dt,
                            : CWeapon::kPA_ArmCannon;
 
   const uint projectileAttribs = attribs | particleChargeAttribs;
-  const TToken< CWeaponDescription >& weapon = x144_weapons[chargeState];
 #ifdef TARGET_PC
   // Remastered sizes a charged shot's effects from a per-beam floor up to 1.85 at full charge
   // (Phazon always 1; CalculateWeaponFXScale, kb func/CGunWeaponMP1-fire-charged), when the
@@ -451,6 +449,55 @@ void CGunWeapon::Fire(const bool underwater, const float dt,
     mgr.AddObject(proj);
     proj->Think(dt, mgr);
   }
+}
+
+#ifdef TARGET_PC
+const TToken< CWeaponDescription >* CGunWeapon::PortStackedWeapon(int chargeState) {
+  if (!PortStackTokensLocked() || !mPortStackWeapons[chargeState].TryCache()) {
+    return nullptr;
+  }
+  return &mPortStackWeapons[chargeState];
+}
+
+void CGunWeapon::PortLockStackTokens() {
+  if (PortStackTokensLocked()) {
+    return;
+  }
+  for (int i = 0; i < x144_weapons.capacity(); ++i) {
+    mPortStackWeapons.push_back(TCachedToken< CWeaponDescription >(x144_weapons[i].GetToken()));
+    mPortStackWeapons[i].Lock();
+  }
+}
+
+void CGunWeapon::PortUnlockStackTokens() {
+  if (!PortStackTokensLocked()) {
+    return;
+  }
+  for (int i = 0; i < mPortStackWeapons.size(); ++i) {
+    mPortStackWeapons[i].Unlock();
+  }
+  mPortStackWeapons = rstl::reserved_vector< TCachedToken< CWeaponDescription >, 2 >();
+}
+
+void CGunWeapon::PortFireStackedProjectile(const bool underwater, const float dt,
+                                           const CPlayerState::EChargeStage chargeState,
+                                           const CTransform4f& xf, CStateManager& mgr,
+                                           const TUniqueId homingTarget, const float chargeFactor1,
+                                           const float chargeFactor2) {
+  if (const TToken< CWeaponDescription >* weapon = PortStackedWeapon(chargeState)) {
+    SpawnProjectile(*weapon, underwater, dt, chargeState, xf, mgr, homingTarget, chargeFactor1,
+                        chargeFactor2);
+  }
+}
+
+#endif
+
+void CGunWeapon::Fire(const bool underwater, const float dt,
+                      const CPlayerState::EChargeStage chargeState, const CTransform4f& xf,
+                      CStateManager& mgr, const TUniqueId homingTarget, const float chargeFactor1,
+                      const float chargeFactor2) {
+  SpawnProjectile(x144_weapons[chargeState], underwater, dt, chargeState, xf, mgr, homingTarget,
+                  chargeFactor1, chargeFactor2);
 
   if (chargeState != CPlayerState::kCS_Normal) {
     x218_25_enableCharge = true;

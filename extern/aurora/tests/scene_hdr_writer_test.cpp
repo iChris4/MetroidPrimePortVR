@@ -436,6 +436,7 @@ TEST(SceneHdrGx, TheTevToneRowsAreInTheUniformOnlyInHdr) {
   gfx::detail::resources().limits.minUniformBufferOffsetAlignment = 256;
   const auto savedTone = g_gxState.pbrTone;
   gfx::detail::FramePacket frame;
+  frame.uniforms.reserve_extra(2u << 20); // Explicit staging capacity, matching a real mapped frame.
   gfx::detail::begin_recording(frame, 0);
   struct Cleanup {
     u32 alignment;
@@ -493,6 +494,7 @@ TEST(SceneHdrGx, ActualBlendFlagFollowsToneRowsWithinTheBindingWindow) {
   const u32 alignment = gfx::detail::resources().limits.minUniformBufferOffsetAlignment;
   gfx::detail::resources().limits.minUniformBufferOffsetAlignment = 16;
   gfx::detail::FramePacket frame;
+  frame.uniforms.reserve_extra(2u << 20); // Explicit staging capacity, matching a real mapped frame.
   gfx::detail::begin_recording(frame, 0);
   struct Cleanup {
     std::array<Vec4<float>, 3> tone;

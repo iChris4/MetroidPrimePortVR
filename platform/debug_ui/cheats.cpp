@@ -357,8 +357,9 @@ void DrawRendering() {
     }
     AuroraTextureStats textures{};
     aurora_get_texture_stats(&textures);
-    ImGui::Text("textures %u, %.0f MiB; render targets %u, %.0f MiB", textures.count[0],
-                textures.bytes[0] / 1048576.f, textures.count[1], textures.bytes[1] / 1048576.f);
+    ImGui::Text("textures %u, %.0f MiB; render targets %u, %.0f MiB; lighting %u, %.0f MiB", textures.count[0],
+                textures.bytes[0] / 1048576.f, textures.count[1], textures.bytes[1] / 1048576.f, textures.count[2],
+                textures.bytes[2] / 1048576.f);
     int areas = 0;
     int instances = 0;
     int models = 0;

@@ -62,7 +62,7 @@
   them. It forces 640x480 (EFB scale 1x, no dynamic resolution, MSAA and
   anisotropy off), 4:3 without the widescreen HUD or Vert+, FOV 55, HUD scale
   100, the game's crosshair, the helmet and visor effects, cutscene bars, unskippable cutscenes and
-  elevator rides, a 60 Hz simulation with the frame cap and no interpolation,
+  elevator rides, no stacked beams, a 60 Hz simulation with the frame cap and no interpolation,
   the disc's font and GameCube button prompts, no mods, unlocks or revealed map,
   and retail controls (no spring ball, fast morph, sticky or rapid charge,
   lock-on toggle, turbo fire or scan/X-ray swap). Mouse aim, gyro, twin stick,
@@ -129,6 +129,11 @@
   again to disable). Changing modes resets the toggle. "Gyro aim" is right
   stick click and left ctrl by default and can be remapped on the Remap page
   ("Gyro" group). With toggle mode, leave the binding itself as a normal press.
+  The "Reset aim" action (`reset_aim`, unbound by default, same group) recentres
+  the pointer-aim cursor and levels the camera pitch (yaw is kept), so lock-on
+  isn't needed as a reset. With pointer aim and gyro on, the twin-stick look
+  stick and keyboard look keys turn the camera as without pointer aim while the
+  gyro moves the pointer.
   `gyro_source` is 0 auto, 1 controller, 2 phone. `gyro_sensitivity` (0.1-10,
   default 2) is camera angle per pad angle: 1 turns the camera as far as the pad
   turned. It ignores the mouse sensitivity and invert. An older `gyro_rate` (aim
@@ -139,9 +144,12 @@
   the real vertical only), 0 local yaw (the pad's flat turn), 3 local roll (the
   turn of a pad held upright) or 4 local yaw and roll (both, Overwatch-style).
   Player and world use the accelerometer; without one they act as local yaw.
-  `gyro_auto_calibrate` (default on) learns the gyro's drift while the pad is
-  still; F1 shows the calibration confidence and has a Recalibrate button. Both
-  use GamepadMotionHelpers (`extern/GamepadMotionHelpers`).
+  `gyro_auto_calibrate` (0 off, 1 always = default, 2 only in menus) learns the
+  gyro's drift while the pad is still; "only in menus" learns while the game is
+  paused, on a menu screen or with F1 open, and keeps the result in play. The old
+  on/off values 0/1 load as off/always. F1 shows the calibration confidence and
+  has a Recalibrate button, which counts down 5 s (Cancel stops it) so the pad can
+  be put down, then relearns. Both use GamepadMotionHelpers (`extern/GamepadMotionHelpers`).
   `gyro_smoothing` and `gyro_tightening` (deg/s, 0-50, both 0 = off by default)
   are JoyShockMapper-style: turns below the smoothing threshold are averaged over
   0.125 s, fading to direct by twice it; turns below the tightening threshold are
@@ -376,6 +384,23 @@
   stretching a copy of the screen centre, so it stays sharp at high resolution and with
   HD textures. Costs a second world render while the scan visor is up; the faceplate
   decor isn't magnified.
+- `MP_POWER_SPIDER_BALL=0|1` (Video > Display "Suit-coloured morph balls", persisted as
+  `power_spider_ball`, default on; off under Original experience): morph ball looks retail
+  lacks, each Varia's with Varia's colours moved to the suit's (shifts fitted from the
+  disc, not stored):
+  - the Power Suit gets a spider ball of its own instead of the Gravity Suit's (the shift
+    between the Power and Varia normal balls), with the Varia ball's glow colour;
+  - before the Spider Ball, the Gravity and Phazon Suits get balls of their own instead of
+    the Power Suit's: Gravity's shift is fitted texel by texel between the Varia and
+    Gravity spider balls, Phazon's from the colour statistics of the Varia spider ball's
+    suit-coloured parts and the Phazon ball's shell. They take their suit's spider ball
+    glow colour.
+
+  They are made from your disc on the first boot and kept in `generated/power-spider/`,
+  `generated/gravity-ball/` and `generated/phazon-ball/` in the user folder (remade when
+  the port's generator or the disc changes), and served with mods on or off, under every
+  mod. A mod with its own look of a ball, such as the Remastered import (both balls), keeps
+  its own; the other looks are still made.
 - `MP_HUD_WIDE=0|1` (Video > Display, persisted as `hud_wide`, default on): widescreen HUD. The
   aspect-matched in-game HUD frames keep each element's shape but move it away
   from the screen centre, so edge elements (scan panels, energy bar, map) reach
@@ -386,7 +411,7 @@
   derived from the aspect ratio, so it holds at any aspect rather than only
   16:9. Menus, the credits and other non-aspect-matched frames are unaffected.
 - Field of view (Video > Display and pause Options > Display, persisted as `fov`,
-  45-90, retail 55): the first-person camera's vertical FOV. The overlay also
+  45-120, retail 55): the first-person camera's vertical FOV. The overlay also
   shows the horizontal FOV it gives at the current aspect. The arm cannon is
   drawn at the retail FOV whatever the setting (a view-model FOV), so it keeps
   its size and place. Shots start where the cannon is drawn and are aimed at
@@ -666,6 +691,17 @@
   finish at once, a Reset ends a beetle's emergence, no skip without a
   cutscene camera). Rooms a mod replaced are left unpatched. Archipelago
   games also skip the Landing Site intro: Samus starts on top of her ship.
+- Stack beams (F1 > Game > Cutscenes, `stack_beams`, off by default and off in the Original
+  experience): every normal or charged arm-cannon shot also fires the projectiles
+  of each other beam you own (Power, Ice, Wave, Plasma), from the same spot, at
+  the same time, with the same charge, aim and homing target. Only projectiles
+  are added: the extra beams play no animation, sound or camera shake and don't
+  change the gun. Charge combos, missiles and the Phazon Beam are unchanged (the
+  setting does nothing while the Phazon Beam is active), unowned beams never
+  fire, and a beam whose projectile data isn't loaded yet is skipped for that
+  shot (nothing blocks). The other beams' projectile data is kept loaded while
+  the setting is on and released when it is turned off. Shots wait for the
+  slowest owned beam's cool down (the Ice Beam's), whichever beam is selected.
 - Unlock beam doors once opened (F1 > Game > Cutscenes, `beam_doors_stay_unlocked`,
   off by default and off in the Original experience): a door locked to the Wave,
   Ice, Plasma or Power Beam that you open by breaking its force field becomes a
@@ -1042,7 +1078,12 @@ other `X:\Users\<name>`: `X:\Users\<user>`); the
   arrays and uniforms are streamed through (1 = 5 + 2 + 8 + 24 MiB); it is 12
   when a mod has room geometry and `MP_ROOM_GEO_RESIDENT` is off (6 on Android),
   and 2 with it on (the default).
-  A frame that outgrows them aborts with a buffer overflow.
+  Those sizes are what a frame can hold; unless `MP_FRAME_BUFFERS` or
+  `MP_STORAGE_BUFFERS` is set, the staging buffers start at 4 + 8 + 2 + 8 MiB
+  (plus 8 MiB for texture uploads) and a frame that needs more spills into a
+  transient buffer, logged once as "spilling into a transient buffer". A frame
+  that outgrows the limits drops the draws that no longer fit, with a warning.
+  `AURORA_STAGING_START_KIB=<n>` (test hook) shrinks the starts to force that.
   `MP_STORAGE_BUFFERS=<1..16>` pins the storage buffers' scale, which otherwise
   follows it and, with `MP_ROOM_GEO_RESIDENT` on, grows after an overflow (up to 6x).
 - `MP_ROOM_GEO_RESIDENT=<0|1>` (setting `room_geo_gpu`, F1 > Debug >
@@ -1304,8 +1345,9 @@ headers, applies the same rule to its own on/off variables (`MP_LOG_COPY_TEX`,
   `MP_ROOM_ENV_EXPOSURE_LOG=1`: log the room exposure state (area, hint values,
   EV, target) each time it is worked out.
 - Remastered import: `MP_REMASTERED_REUSE=0` makes every stage again instead of
-  reusing the previous import's unchanged ones (`textures`: only the converted
-  textures are reused); `MP_REMASTERED_JOINTS=1` logs the models' skin matching
+  reusing the previous import's unchanged ones, as the Mods panel's "Full import
+  (no reuse)" does (`textures`: only the converted textures are reused);
+  `MP_REMASTERED_JOINTS=1` logs the models' skin matching
   (each joint's vote and the bones it got) to stderr; `MP_REMASTERED_MISS=1`
   lists each room's untraced script connections by kind in the import log.
 - `MP_RANDO_SWEEP_LAYERS=1`: with `MP_RANDO_SWEEP`, tour each area once per script

@@ -6,6 +6,7 @@
 #include "port_env.h"
 #include "port_strings.h"
 #include "port_paths.h"
+#include "port_ball_looks.h"
 #include "port_remastered_storage.h"
 
 #include "port_debug.h"
@@ -281,6 +282,20 @@ bool HasRoomGeometry() {
   return HasRoomGeometryNow(ScanModFolders(Folder()));
 }
 
+bool AnyModEnabled() {
+  if (!PortDebug::ModsEnabled()) {
+    return false;
+  }
+  const std::vector<std::string> disabled = SplitDisabled(PortDebug::ModsDisabled());
+  for (const PortRemasteredStorage::ModFolder& mod : ScanModFolders(Folder())) {
+    const std::string name = PathString(PathFromString(mod.path).filename());
+    if (std::find(disabled.begin(), disabled.end(), name) == disabled.end()) {
+      return true;
+    }
+  }
+  return false;
+}
+
 const Status& CurrentStatus() { return sStatus; }
 
 const char* StaleRemasteredImport() { return sStatus.staleImport.empty() ? nullptr : sStatus.staleImport.c_str(); }
@@ -464,6 +479,8 @@ void Initialize() {
   // port_remastered_storage.h): it loads as a mod either way.
   const std::vector<PortRemasteredStorage::ModFolder> scan = ScanModFolders(sStatus.folder);
   if (sStatus.folder.empty() && scan.empty()) {
+    // No user folder: the generated layer has nowhere to keep its cache either.
+    PortBallLooks::SetState(false, 0);
     return;
   }
   const std::vector<std::string> disabled = SplitDisabled(PortDebug::ModsDisabled());
@@ -618,6 +635,30 @@ void Initialize() {
     }
   }
 
+  // The generated ball looks (port_ball_looks.h): with mods on or off, under
+  // every mod. A mod with a look of its own of a ball (the Remastered import)
+  // keeps all of it; the other looks are still made.
+  {
+    const bool wanted = PortDebug::GeneratedBallLooks() && !sSuspended;
+    unsigned active = 0;
+    if (wanted) {
+      for (const PortBallLooks::Look look : PortBallLooks::kLooks) {
+        const std::vector<std::pair<uint32_t, uint32_t>> keys = PortBallLooks::ModelKeys(look);
+        const bool replaced =
+            std::any_of(keys.begin(), keys.end(), [&](const auto& key) { return loose.count(key) != 0; });
+        if (replaced) {
+          PortLog::Write("mods: a mod has its own %s; the generated one is left out\n", PortBallLooks::Name(look));
+          continue;
+        }
+        for (PortMods::LooseResource& resource : PortBallLooks::Collect(look)) {
+          loose.emplace(std::pair{resource.type, resource.id}, std::move(resource));
+          active |= 1u << unsigned(look);
+        }
+      }
+    }
+    PortBallLooks::SetState(wanted, active);
+  }
+
   // Which loose resources each PAK takes. Ids no PAK holds are added to
   // NoARAM.pak, which the game keeps loaded from boot.
   std::set<std::pair<uint32_t, uint32_t>> used;
@@ -714,8 +755,9 @@ void Initialize() {
       extra.push_back(std::move(file));
     }
     for (const auto& [key, resource] : loose) {
-      if (used.count(key) != 0) {
-        ++sStatus.mods[looseMod[key]].resources;
+      const auto mod = looseMod.find(key);
+      if (used.count(key) != 0 && mod != looseMod.end()) {
+        ++sStatus.mods[mod->second].resources;
       }
     }
   }

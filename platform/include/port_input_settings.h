@@ -80,7 +80,8 @@ struct Settings {
   // 2 world, 3 local roll, 4 local yaw and roll); and whether the gyro's drift
   // is measured while the pad is still.
   int gyroSpace = 1;
-  bool gyroAutoCalibrate = true;
+  // Auto calibration: 0 off, 1 always, 2 only in menus (paused, a frontend screen or F1 open).
+  int gyroAutoCalibrate = 1;
   // Gyro smoothing and tightening thresholds in deg/s (0 = off; see PortGyro::Filter).
   float gyroSmoothing = 0.f;
   float gyroTightening = 0.f;

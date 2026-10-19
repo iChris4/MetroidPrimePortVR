@@ -75,6 +75,14 @@ void DrawCutscenesSection() {
            "opens it, blue map icon and scan. Missile, Bomb and Disabled doors and blast shields "
            "are not affected. Takes effect from the next door you open; turning it off shows the "
            "colours again in rooms loaded afterwards.");
+  bool stackBeams = sStackBeams;
+  if (ImGui::Checkbox("Stack beams", &stackBeams)) {
+    SetStackBeams(stackBeams);
+  }
+  ItemHelp("Every normal or charged shot also fires the shots of each other beam you own, from "
+           "the same spot at the same time. Only the projectiles are added: charge combos, "
+           "missiles and the Phazon Beam are unchanged, and a beam whose shot data is still "
+           "loading is skipped for that shot.");
   EndOriginalLocked(locked);
 
   // Not under the Original experience lock: the stored choice applies there too.

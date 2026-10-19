@@ -9,9 +9,11 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstring>
 #include <mutex>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace aurora::gfx::probe {
@@ -19,6 +21,38 @@ using webgpu::g_device;
 
 namespace {
 Module Log("aurora::gfx::probe");
+std::atomic<int64_t> g_liveCount;
+std::atomic<int64_t> g_liveBytes;
+// Counts its textures in the live totals for as long as the owner holds it.
+struct Live {
+  uint32_t count = 0;
+  uint64_t bytes = 0;
+  Live() = default;
+  Live(uint32_t count, uint64_t bytes) : count(count), bytes(bytes) { add(1); }
+  Live(Live&& o) noexcept : count(std::exchange(o.count, 0)), bytes(std::exchange(o.bytes, 0)) {}
+  Live& operator=(Live&& o) noexcept {
+    if (this != &o) {
+      add(-1);
+      count = std::exchange(o.count, 0);
+      bytes = std::exchange(o.bytes, 0);
+    }
+    return *this;
+  }
+  ~Live() { add(-1); }
+  void add(int sign) const {
+    g_liveCount += sign * int64_t(count);
+    g_liveBytes += sign * int64_t(bytes);
+  }
+};
+// A cube's whole mip chain, all faces.
+uint64_t cube_bytes(uint32_t size, uint32_t mipCount, uint32_t texelSize) {
+  uint64_t total = 0;
+  for (uint32_t m = 0; m < mipCount; ++m) {
+    const uint64_t edge = std::max(size >> m, 1u);
+    total += edge * edge * texelSize * 6;
+  }
+  return total;
+}
 constexpr uint32_t FaceCount = 6;
 wgpu::Texture g_texture;
 wgpu::TextureView g_cubeView;
@@ -31,6 +65,7 @@ struct RoomCube {
   uint32_t mipCount = 0;
   // A blend target's faces, one 2D view per face and mip (face-major).
   std::vector<wgpu::TextureView> faces;
+  Live live;
 };
 // Written on the FIFO thread (create/destroy) and the game thread (blend targets, with the FIFO
 // drained); the lock covers lookups from both.
@@ -120,11 +155,13 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
 struct Volume {
   std::array<wgpu::Texture, VolumeTextures> textures;
   std::array<wgpu::TextureView, VolumeTextures> views;
+  Live live;
 };
 std::unordered_map<uint32_t, Volume> g_volumes;
 struct Lightmap {
   wgpu::Texture texture;
   wgpu::TextureView view;
+  Live live;
 };
 std::unordered_map<uint32_t, Lightmap> g_lightmaps;
 wgpu::Texture g_emptyLightmap;
@@ -135,6 +172,7 @@ wgpu::Texture g_emptyBrdfLut;
 wgpu::TextureView g_emptyBrdfLutView;
 wgpu::Texture g_emptyVolume;
 wgpu::TextureView g_emptyVolumeView;
+Live g_probeLive, g_emptyLightmapLive, g_brdfLive, g_emptyBrdfLive, g_emptyVolumeLive;
 
 void ensure() {
   if (g_texture) {
@@ -151,6 +189,7 @@ void ensure() {
       .sampleCount = 1,
   };
   g_texture = g_device.CreateTexture(&textureDescriptor);
+  g_probeLive = Live(1, calc_texture_size(format, Size, Size, MipCount) * FaceCount);
   const wgpu::TextureViewDescriptor cubeDescriptor{
       .label = "PBR Probe cube view",
       .format = format,
@@ -356,9 +395,14 @@ void shutdown() {
   g_brdfLutView = {};
   g_emptyBrdfLut = {};
   g_emptyBrdfLutView = {};
+  g_emptyLightmapLive = {};
+  g_emptyVolumeLive = {};
+  g_brdfLive = {};
+  g_emptyBrdfLive = {};
   g_sampler = {};
   g_cubeView = {};
   g_texture = {};
+  g_probeLive = {};
 }
 
 const wgpu::TextureView& cube_view() {
@@ -391,6 +435,11 @@ void encode_mips(const wgpu::CommandEncoder& cmd, uint32_t face, Range uvRange) 
   }
 }
 
+void live_stats(uint32_t& count, uint64_t& bytes) {
+  count = static_cast<uint32_t>(std::max<int64_t>(g_liveCount.load(), 0));
+  bytes = static_cast<uint64_t>(std::max<int64_t>(g_liveBytes.load(), 0));
+}
+
 void create_cube(uint32_t id, uint32_t size, uint32_t mipCount, const uint8_t* texels, size_t length) {
   constexpr auto format = wgpu::TextureFormat::RGBA16Float;
   constexpr uint32_t texelSize = 8;
@@ -415,6 +464,7 @@ void create_cube(uint32_t id, uint32_t size, uint32_t mipCount, const uint8_t* t
   cube.size = size;
   cube.mipCount = mipCount;
   cube.texture = g_device.CreateTexture(&textureDescriptor);
+  cube.live = Live(1, cube_bytes(size, mipCount, texelSize));
   const uint8_t* in = texels;
   for (uint32_t f = 0; f < FaceCount; ++f) {
     for (uint32_t m = 0; m < mipCount; ++m) {
@@ -519,6 +569,7 @@ bool blend_cubes(uint32_t dst, const uint32_t* src, const float* weights, uint32
       cube.size = size;
       cube.mipCount = mipCount;
       cube.texture = g_device.CreateTexture(&textureDescriptor);
+      cube.live = Live(1, cube_bytes(size, mipCount, 8));
       const wgpu::TextureViewDescriptor cubeDescriptor{
           .label = "PBR blended cube view",
           .format = wgpu::TextureFormat::RGBA16Float,
@@ -569,6 +620,7 @@ void create_volume(uint32_t id, uint32_t sizeX, uint32_t sizeY, uint32_t sizeZ, 
     return;
   }
   Volume volume;
+  // volume.live accumulates below; added to the totals once the volume is whole.
   const uint8_t* in = texels;
   for (uint32_t i = 0; i < VolumeTextures; ++i) {
     const bool half = i < 2;
@@ -587,6 +639,8 @@ void create_volume(uint32_t id, uint32_t sizeX, uint32_t sizeY, uint32_t sizeZ, 
         .sampleCount = 1,
     };
     volume.textures[i] = g_device.CreateTexture(&textureDescriptor);
+    volume.live.count += 1;
+    volume.live.bytes += uint64_t(padX) * padY * padZ * texelSize;
     // A slice at a time, through the frame's uploads (see create_cube).
     std::vector<uint8_t> slice(size_t(padX) * padY * texelSize, 0);
     for (uint32_t z = 0; z < padZ; ++z) {
@@ -607,6 +661,7 @@ void create_volume(uint32_t id, uint32_t sizeX, uint32_t sizeY, uint32_t sizeZ, 
     }
     volume.views[i] = volume.textures[i].CreateView();
   }
+  volume.live.add(1);
   g_volumes[id] = std::move(volume);
 }
 
@@ -645,6 +700,7 @@ void create_lightmap(uint32_t id, uint32_t width, uint32_t height, uint32_t laye
   };
   Lightmap lightmap;
   lightmap.texture = g_device.CreateTexture(&textureDescriptor);
+  lightmap.live = Live(1, layerBytes * layers);
   // A layer at a time, through the frame's uploads (see create_volume).
   for (uint32_t layer = 0; layer < layers; ++layer) {
     const wgpu::TexelCopyTextureInfo dst{
@@ -685,6 +741,7 @@ const wgpu::TextureView& lightmap_view(uint32_t id) {
         .format = wgpu::TextureFormat::RGBA16Float,
     };
     g_emptyLightmap = g_device.CreateTexture(&descriptor);
+    g_emptyLightmapLive = Live(1, 4 * 8);
     const wgpu::TextureViewDescriptor viewDescriptor{
         .label = "Empty PBR baked lightmap view",
         .format = wgpu::TextureFormat::RGBA16Float,
@@ -701,6 +758,7 @@ bool set_brdf_lut(const uint8_t* texels, size_t length) {
   if (length != BrdfLutBytes) {
     g_brdfLut = {};
     g_brdfLutView = {};
+    g_brdfLive = {};
     return false;
   }
   const wgpu::TextureDescriptor descriptor{
@@ -710,6 +768,7 @@ bool set_brdf_lut(const uint8_t* texels, size_t length) {
       .format = wgpu::TextureFormat::RG8Unorm,
   };
   g_brdfLut = g_device.CreateTexture(&descriptor);
+  g_brdfLive = Live(1, 16 * 8 * 2);
   const wgpu::TexelCopyTextureInfo dst{.texture = g_brdfLut};
   queue_texture_upload_data(texels, 16 * 2, 8, dst, wgpu::Extent3D{16, 8, 1});
   g_brdfLutView = g_brdfLut.CreateView();
@@ -728,6 +787,7 @@ const wgpu::TextureView& brdf_lut_view() {
         .format = wgpu::TextureFormat::RG8Unorm,
     };
     g_emptyBrdfLut = g_device.CreateTexture(&descriptor);
+    g_emptyBrdfLive = Live(1, 2);
     g_emptyBrdfLutView = g_emptyBrdfLut.CreateView();
   }
   return g_emptyBrdfLutView;
@@ -747,6 +807,7 @@ const wgpu::TextureView& volume_view(uint32_t id, uint32_t index) {
         .format = wgpu::TextureFormat::RGBA8Unorm,
     };
     g_emptyVolume = g_device.CreateTexture(&descriptor);
+    g_emptyVolumeLive = Live(1, 4);
     g_emptyVolumeView = g_emptyVolume.CreateView();
   }
   return g_emptyVolumeView;

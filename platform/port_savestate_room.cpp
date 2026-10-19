@@ -6,9 +6,12 @@
 #include "MetroidPrime/CHealthInfo.hpp"
 #include "MetroidPrime/CObjectList.hpp"
 #include "MetroidPrime/CPhysicsActor.hpp"
+#include "MetroidPrime/CScriptLayerManager.hpp"
 #include "MetroidPrime/CStateManager.hpp"
 #include "MetroidPrime/CWorld.hpp"
 #include "MetroidPrime/Enemies/CPatterned.hpp"
+#include "MetroidPrime/Player/CGameState.hpp"
+#include "MetroidPrime/Player/CWorldState.hpp"
 #include "MetroidPrime/ScriptObjects/CScriptCounter.hpp"
 #include "MetroidPrime/ScriptObjects/CScriptDoor.hpp"
 #include "MetroidPrime/ScriptObjects/CScriptPlatform.hpp"
@@ -17,6 +20,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <map>
 #include <set>
 
 // Block tags of a RoomObject. A reader skips tags it does not know.
@@ -362,7 +366,99 @@ void RestorePlatforms(CStateManager& mgr, const RoomState& room, const std::set<
     PortRoomState::RestorePlatformPose(mgr, *saved[i].platform, saved[i].xf);
 }
 
+
+// Spawn layers (issue #161). The layer bits each area's script objects were
+// last spawned with, keyed by world and area, and the override ArmSpawnLayers
+// installed for a state load.
+std::map< std::pair< uint32_t, int >, uint64_t > sSpawnMasks;
+struct SpawnOverride {
+  uint32_t world = 0;
+  int area = 0;
+  uint64_t spawn = 0;  // bits the area spawns with
+  uint64_t live = 0;   // bits to put back afterwards
+};
+std::vector< SpawnOverride > sOverrides;
+
+uint32_t WorldKey(CStateManager& mgr) {
+  const CWorld* world = mgr.GetWorld();
+  return world != nullptr ? static_cast< uint32_t >(world->IGetWorldAssetId()) : 0;
+}
+
+uint64_t LayerMask(const CScriptLayerManager& layers, int area) {
+  return layers.GetAreaLayers()[area].m_layerBits;
+}
+
+void SetLayerMask(CScriptLayerManager& layers, int area, uint64_t mask) {
+  const int count = layers.GetAreaLayerCount(TAreaId(area));
+  for (int l = 0; l < count; ++l)
+    layers.SetLayerActive(TAreaId(area), TLayerId(l), ((mask >> l) & 1) != 0);
+}
+
+CScriptLayerManager* WorldLayers(uint32_t worldId, int area) {
+  if (gpGameState == nullptr)
+    return nullptr;
+  CScriptLayerManager* layers = gpGameState->StateForWorld(static_cast< CAssetId >(worldId)).GetLayerState().GetPtr();
+  if (layers == nullptr || area < 0 || area >= static_cast< int >(layers->GetAreaLayers().size()))
+    return nullptr;
+  return layers;
+}
+
+void RestoreOverride(const SpawnOverride& o) {
+  if (CScriptLayerManager* layers = WorldLayers(o.world, o.area))
+    SetLayerMask(*layers, o.area, o.live);
+}
+
 } // namespace
+
+void NoteAreaSpawnBegin(CStateManager& mgr, int area) {
+  const CScriptLayerManager* layers = mgr.WorldLayerState().GetPtr();
+  if (layers == nullptr || area < 0 || area >= static_cast< int >(layers->GetAreaLayers().size()))
+    return;
+  sSpawnMasks[{WorldKey(mgr), area}] = LayerMask(*layers, area);
+}
+
+void NoteAreaSpawnEnd(CStateManager& mgr, int area) {
+  const uint32_t world = WorldKey(mgr);
+  for (size_t i = 0; i < sOverrides.size(); ++i) {
+    if (sOverrides[i].world == world && sOverrides[i].area == area) {
+      RestoreOverride(sOverrides[i]);
+      sOverrides.erase(sOverrides.begin() + static_cast< ptrdiff_t >(i));
+      return;
+    }
+  }
+}
+
+void ArmSpawnLayers(const RoomState& room, uint32_t worldId) {
+  // The game state was just rebuilt: an override left from before belongs to the old one.
+  sOverrides.clear();
+  if (!room.spawnLayersRecorded)
+    return;
+  for (const AreaSpawnLayers& sl : room.spawnLayers) {
+    if (!sl.known)
+      continue;
+    CScriptLayerManager* layers = WorldLayers(worldId, sl.area);
+    if (layers == nullptr)
+      continue;
+    SpawnOverride o{worldId, sl.area, sl.mask, LayerMask(*layers, sl.area)};
+    if (o.spawn == o.live)
+      continue;
+    SetLayerMask(*layers, sl.area, sl.mask);
+    sOverrides.push_back(o);
+  }
+}
+
+void DisarmSpawnLayers() {
+  for (const SpawnOverride& o : sOverrides)
+    RestoreOverride(o);
+  sOverrides.clear();
+}
+
+void SetSpawnLayersLive(bool live) {
+  for (const SpawnOverride& o : sOverrides) {
+    if (CScriptLayerManager* layers = WorldLayers(o.world, o.area))
+      SetLayerMask(*layers, o.area, live ? o.live : o.spawn);
+  }
+}
 
 void CaptureRoomState(CStateManager& mgr, RoomState& out) {
   out = {};
@@ -372,6 +468,7 @@ void CaptureRoomState(CStateManager& mgr, RoomState& out) {
   // This writer records one fingerprint per captured area; an area whose
   // scripting data is not readable stays without one.
   out.fingerprintsRecorded = true;
+  out.spawnLayersRecorded = true;
   std::set< int > areas;
   for (int i = 0; i < world->GetNumAreas(); ++i) {
     if (AreaReady(*world, i)) {
@@ -381,6 +478,14 @@ void CaptureRoomState(CStateManager& mgr, RoomState& out) {
       size_t size = 0;
       LoadedScriptData(*world, i, data, size);
       out.fingerprints.push_back(MakeAreaFingerprint(i, data, size));
+      AreaSpawnLayers sl;
+      sl.area = i;
+      const auto spawned = sSpawnMasks.find({WorldKey(mgr), i});
+      if (spawned != sSpawnMasks.end()) {
+        sl.known = true;
+        sl.mask = spawned->second;
+      }
+      out.spawnLayers.push_back(sl);
     }
   }
   ForEachObject(mgr, [&](CEntity& ent) {

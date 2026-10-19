@@ -9,6 +9,7 @@
 #include "Kyoto/Graphics/CLight.hpp"
 #include "Kyoto/Math/CAABox.hpp"
 #include "Kyoto/Math/CMatrix3f.hpp"
+#include "Kyoto/Math/CQuaternion.hpp"
 #include "Kyoto/Math/CTransform4f.hpp"
 #include "Kyoto/Math/CVector3f.hpp"
 #include "Kyoto/Particles/CParticleGen.hpp"
@@ -19,6 +20,7 @@ class CModVectorElement;
 
 #pragma cpp_extensions on
 #ifdef TARGET_PC
+#include "Kyoto/Particles/CGenDescription.hpp" // PortKssmChild points at a CGenDescription::PortKssm
 #include "Kyoto/Particles/CPortVfxConstants.hpp"
 #include <vector>
 struct CPortVfxMeshBatch;
@@ -227,6 +229,22 @@ public:
     light.SetPortHdrBoundsRadius(outerRadius);
   }
   CVector3f PortSystemOrigin() const { return PortWorldFromLocal(xdc_translation); }
+  // Remastered's external translation/rotation/scale (EXTT/EXTR/EXTS, system vars 0xb/0xc/0xa):
+  // what the owner hands CParticleGen::SetExternalDataSet 0x27b3d8. Remastered has one translation,
+  // one rotation and no local scale; the port's retail split is folded into them.
+  CVector3f PortExternalTranslation() const { return xe8_globalTranslation + xdc_translation; }
+  CQuaternion PortExternalRotation() const {
+    return CQuaternion::FromMatrix(x22c_globalOrientation * x1d8_orientation);
+  }
+  CVector3f PortExternalScale() const {
+    return CVector3f(x100_globalScale.GetX() * x16c_localScale.GetX(),
+                     x100_globalScale.GetY() * x16c_localScale.GetY(),
+                     x100_globalScale.GetZ() * x16c_localScale.GetZ());
+  }
+  // The global frame T_g/Q_g/S_g (desc +0xa8/+0xac/+0xb0, SetupTransformMode 0x2887d8) for the
+  // XFMD mode: 2 = zero/identity/external scale, 3 = the external T/Q/S, 4 = the mover's
+  // position and rotation (the external T/Q for the identity SMVR the converter drops) at unit scale.
+  void PortGlobalFrame(CVector3f& t, CQuaternion& q, CVector3f& s) const;
   // True for a converted Remastered PART (its PIRN marker).
   bool PortIsRemastered() const;
   // Remastered particle variables (PVRT): a handle is looked up once and then binds are cheap.
@@ -379,6 +397,54 @@ private:
   float xPortNestedHdrColor[4];
   float xPortNestedHdrInnerRadius, xPortNestedHdrOuterRadius;
   bool xPortNestedHdrRadiiValid;
+  // A converted Remastered system keeps its seed as 32 bits (x94 is 16): the SEED value, else the
+  // seed it was built with (sPortChildSeed for a Remastered child, else sSeed).
+  uint xPortSeed;
+  // The seed a Remastered parent gives the child it constructs next; consumed by that ctor.
+  static uint sPortChildSeed;
+  static bool sPortChildSeedSet;
+  uint PortChildSeed(const CGenDescription& child) const;
+  // Remastered's CElementGen::SpawnChildSystems (0x249bd8) for a converted effect, and its
+  // spawn tables (PKSM); xPortKssmPeriods are the tables' period slots (their CVars).
+  std::vector< int > xPortKssmPeriods;
+  void PortSpawnChildSystems();
+  void PortSpawnTables();
+  void PortSpawnTableEntry(size_t table, int frame);
+  void PortAddChild(CParticleGen* child);
+  // A child a spawn table placed with an SEVT(SMOV) component: its own frame, the pos slot and
+  // the mover's velocity, the rot it ended on, and the KPIN/IRND latches. `placed` is the world
+  // position the child is held at (child T = placed - its GT); with hasRot its orientation is
+  // held at `rot` the same way. The parent's propagation leaves what the component holds alone.
+  // The tree runs in Remastered's particle space (CVEPortBasis): remPos and vel are in it, pos,
+  // rot and rotQuat are remPos and the tree's rotation taken to the port's.
+  struct PortKssmChild {
+    const CGenDescription::PortKssm* kssm = nullptr; // holds its component and nodes
+    CParticleGen* child = nullptr;
+    u32 component = 0;
+    int frame = 0;
+    CVector3f remPos = CVector3f::Zero();
+    CVector3f pos = CVector3f::Zero();
+    CVector3f vel = CVector3f::Zero();
+    CTransform4f rot = CTransform4f::Identity();
+    CQuaternion rotQuat = CQuaternion::NoRotation();
+    bool hasRot = false;
+    std::vector< float > latches;
+  };
+  std::vector< PortKssmChild > xPortKssmChildren;
+  PortKssmChild* PortFindKssmChild(const CParticleGen* child);
+  float PortKssmReal(PortKssmChild& state, u32 node);
+  CVector3f PortKssmVector(PortKssmChild& state, u32 node);
+  CQuaternion PortKssmRotation(PortKssmChild& state, u32 node);
+  void PortKssmEvaluate(PortKssmChild& state);
+  void PortKssmPlace(const PortKssmChild& state);
+  // XFMD 4's SMVR (CGenDescription::xPortMover), a system-scoped mover: initialised by the first
+  // Update, stepped at the start of each tick. Its pos/rot are T_g/Q_g.
+  PortKssmChild xPortMover;
+  bool xPortMoverInit = false;
+  bool PortHasMover() const;
+  void PortInitMover();
+  void PortEvalSys(bool init);
+  void PortStepMover();
   void PortVfxUpdateSystem();
   // XFMD 3/4: the spawn-baked part of the emitter's transform, and moving the live particles from
   // one such frame to the next.

@@ -370,6 +370,8 @@ void CGameCollision::MoveAirborneStepped(CStateManager& mgr, CPlayer& player, fl
   };
 
   bool hadCollision = false;
+  // Some accepted impact of this tick is_wall (0xbecbb0), for CollidedWithNew 0xcf1a2c below.
+  bool wallImpact = false;
   bool grounded = false; // Remastered object state == 1
   CCollisionInfoList groundList;
   TUniqueId riderId = kInvalidUniqueId; // object +0x1210
@@ -784,6 +786,7 @@ void CGameCollision::MoveAirborneStepped(CStateManager& mgr, CPlayer& player, fl
     float mass;
     float worldDt;
     bool& hadCollision;
+    bool& wallImpact;
     bool& grounded;
     CCollisionInfoList& groundList;
     TUniqueId& riderId;
@@ -1011,6 +1014,7 @@ void CGameCollision::MoveAirborneStepped(CStateManager& mgr, CPlayer& player, fl
         }
         acceptedDynamic.Add(info, false);
         hadCollision = true;
+        if (Classify::IsWall(info.GetMaterialLeft(), n)) wallImpact = true;
 
         const bool isFloor = Classify::IsFloor(info.GetMaterialLeft(), n);
         if (isFloor) {
@@ -1099,6 +1103,10 @@ void CGameCollision::MoveAirborneStepped(CStateManager& mgr, CPlayer& player, fl
         }
         if (isFloor) floorContact = true;
         hadCollision = true;
+        if (boxContact ? PortRemasteredCollisionMaterial::IsWall(tc.orientation, primary.GetZ())
+                       : Classify::IsWall(material, primary)) {
+          wallImpact = true;
+        }
         // A DCLN platform is a CCollidableOBBoxTree (type 4): no flat-floor early-out. A box
         // platform is a CCollidableAABox (type 0), which has it.
         Respond(material, primary, working, w25,
@@ -1147,7 +1155,7 @@ void CGameCollision::MoveAirborneStepped(CStateManager& mgr, CPlayer& player, fl
     }
   };
   Stepper stepper = {mgr,  cache,       player,      actor,    materialFilter,
-                     nativeList, test,  mass,        dt,       hadCollision,
+                     nativeList, test,  mass,        dt,       hadCollision, wallImpact,
                      grounded, groundList, riderId, carry, airRider, platforms,
                      riderOffset, player.PortRider().owner, player.PortRider().Active()};
 
@@ -1522,6 +1530,24 @@ void CGameCollision::MoveAirborneStepped(CStateManager& mgr, CPlayer& player, fl
   // 0xf94720: SetRiderController with the rider the landing step wrote, when valid.
   if (airRider.Controller() != PortRemasteredGroundRider::kTerrainOwner) {
     player.PortRider().Set(airRider.Controller());
+  }
+
+  // 0xc545bc PostPhysicsUpdate calls CPlayerMP1::CollidedWithNew 0xcf1a2c (vptr+0x190, slot
+  // 50) with the tick's collision list whenever it is non-empty, before the OnFloor/Falling
+  // messages. It clears slidingOnWall (0x1074 bit 0x1000), and on the first is_wall impact of
+  // a collision info sets it again when the movement state (0x3f0) is ApplyJump, then calls
+  // SetPlayerHitWallDuringMove 0xc75394 (0x2000, acceleration index 1). Retail's
+  // CPlayer::CollidedWith does neither (CGroundMovement did), so without this ComputeDash
+  // kept steering an orbiting jump into a steep slope and the wall projection lifted her.
+  // With no collision the call is skipped, so the flag keeps its value.
+  if (hadCollision) {
+    player.SetPlayerIsSlidingOnWall(false);
+    if (wallImpact) {
+      if (player.GetPlayerMovementState() == NPlayer::kMS_ApplyJump) {
+        player.SetPlayerIsSlidingOnWall(true);
+      }
+      player.SetPlayerHitWallDuringMove();
+    }
   }
 
   // 0xc545bc CPhysicsActorMP1::PostPhysicsUpdate lands on the mover's object

@@ -121,6 +121,37 @@ void CWaveBeam::Fire(const bool underwater, const float dt,
   animData.SetAnimation(CAnimPlaybackParms(skShootAnim[chargeState], -1, 1.f, true), false);
 }
 
+#ifdef TARGET_PC
+// Stacked: a normal Wave shot is the same fan of three projectiles Fire spawns.
+void CWaveBeam::PortFireStackedProjectile(const bool underwater, const float dt,
+                                          const CPlayerState::EChargeStage chargeState,
+                                          const CTransform4f& xf, CStateManager& mgr,
+                                          const TUniqueId homingTarget, const float chargeFactor1,
+                                          const float chargeFactor2) {
+  if (chargeState != CPlayerState::kCS_Normal) {
+    CGunWeapon::PortFireStackedProjectile(underwater, dt, chargeState, xf, mgr, homingTarget,
+                                          chargeFactor1, chargeFactor2);
+    return;
+  }
+  const TToken< CWeaponDescription >* weapon = PortStackedWeapon(chargeState);
+  if (weapon == nullptr) {
+    return;
+  }
+  float randAng = mgr.Random()->Float() * 360.f;
+  for (int i = 0; i < 3; ++i) {
+    CTransform4f shotXf = xf * CTransform4f::RotateY(CRelAngle::FromDegrees(
+                                   skShotAnglePitch * (randAng + CCast::ToReal32(i))));
+    CEnergyProjectile* proj = rs_new CEnergyProjectile(
+        true, *weapon, GetType(), shotXf, GetPlayerMaterial(),
+        GetDamageInfo(mgr, chargeState, chargeFactor1), mgr.AllocateUniqueId(), kInvalidAreaId,
+        GetPlayerId(), homingTarget, CWeapon::kPA_ArmCannon, underwater, CVector3f(1.f, 1.f, 1.f),
+        rstl::optional_object_null(), CSfxManager::kInternalInvalidSfxId, false);
+    mgr.AddObject(proj);
+    proj->Think(dt, mgr);
+  }
+}
+#endif
+
 void CWaveBeam::Load(CStateManager& mgr, const bool subtypeBasePose) {
   CGunWeapon::Load(mgr, subtypeBasePose);
   x228_wave2nd1.Lock();

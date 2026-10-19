@@ -116,6 +116,7 @@ TEST_F(GxUniformLimitTest, PbrModelModulationIsPackedAfterRoomLights) {
   ASSERT_TRUE(info.usesPbr);
 
   gfx::detail::FramePacket frame;
+  frame.uniforms.reserve_extra(2u << 20); // Explicit staging capacity, matching a real mapped frame.
   gfx::detail::begin_recording(frame, 0);
   // Restores the global state and ends the recording even when an ASSERT_* returns early.
   struct Cleanup {

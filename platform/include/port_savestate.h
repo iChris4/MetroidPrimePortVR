@@ -58,6 +58,15 @@ struct AreaFingerprint {
   bool known = false;  // false: nothing was hashed (no readable data)
   uint64_t hash = 0;
 };
+// One captured area's script layer bits as they were when its script objects were
+// spawned (issue #161). Scripts switch layers at runtime without spawning or
+// removing objects, so the live bits the memory card stream holds can differ from
+// the bits the objects in the room came from; a restore spawns with these.
+struct AreaSpawnLayers {
+  int32_t area = 0;
+  bool known = false;  // false: the area's spawn was not observed
+  uint64_t mask = 0;   // bit n: layer n was spawned
+};
 struct RoomState {
   std::vector< int32_t > areas;     // areas captured (loaded, scripts built)
   std::vector< uint32_t > present;  // editor ids that existed in those areas
@@ -68,6 +77,11 @@ struct RoomState {
   // applied.
   bool fingerprintsRecorded = false;
   std::vector< AreaFingerprint > fingerprints;
+  // False for a state written before spawn layers were recorded (RMST version 2
+  // and older), which rebuilds its areas from the live layer bits as it always did.
+  // When true there is one entry per captured area, in the same order.
+  bool spawnLayersRecorded = false;
+  std::vector< AreaSpawnLayers > spawnLayers;
   bool empty() const { return areas.empty(); }
 };
 // Little-endian field writer and reader for the block payloads.
@@ -183,6 +197,22 @@ struct RoomApplyStats {
 void CaptureRoomState(CStateManager& mgr, RoomState& out);
 int ApplyRoomState(CStateManager& mgr, const RoomState& room, std::vector< int32_t >& done,
                    RoomApplyStats& stats);
+
+// Spawn layers (issue #161), game thread only. CGameArea::LoadScriptObjects calls
+// NoteAreaSpawn{Begin,End} around spawning an area's script objects: Begin records
+// the layer bits about to be spawned (what CaptureRoomState writes), End puts the
+// live bits back if ArmSpawnLayers overrode them. ArmSpawnLayers runs right after a
+// state's game state is installed: it makes each recorded area of world `worldId`
+// spawn with its recorded bits, remembering the live bits it replaced. Disarm
+// restores any live bits still replaced (an area that never finished loading) and
+// forgets the override. SetSpawnLayersLive(true) puts the live bits back for the
+// areas still armed without forgetting them, so a save taken meanwhile writes the
+// live bits; SetSpawnLayersLive(false) arms them again.
+void NoteAreaSpawnBegin(CStateManager& mgr, int area);
+void NoteAreaSpawnEnd(CStateManager& mgr, int area);
+void ArmSpawnLayers(const RoomState& room, uint32_t worldId);
+void DisarmSpawnLayers();
+void SetSpawnLayersLive(bool live);
 
 // Quick resume: one extra state (resume.mpss, outside the slots) written when
 // the app goes to the background or quits, with which memory card file it

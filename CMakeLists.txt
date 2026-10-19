@@ -326,6 +326,8 @@ set(MP_PORT_SOURCES
     platform/port_mods_pak.cpp
     platform/port_pal_languages.cpp
     platform/port_pal_languages_import.cpp
+    platform/port_flaahgra_music.cpp
+    platform/port_flaahgra_music_import.cpp
     platform/port_actor_collision_bounds.cpp
     platform/port_importers.cpp
     platform/port_importers_lines.cpp
@@ -385,6 +387,8 @@ set(MP_PORT_SOURCES
     platform/port_remastered_anim.cpp
     platform/port_remastered_text.cpp
     platform/port_custom_res.cpp
+    platform/port_ball_looks.cpp
+    platform/port_ball_looks_disc.cpp
     platform/port_hints.cpp
     platform/port_ws.cpp
     platform/touch_pad.cpp
@@ -916,6 +920,9 @@ if(MP_BUILD_TESTS)
             platform/port_mods_pak.cpp
         INCLUDES platform/include
         LIBRARIES ZLIB::ZLIB)
+    mp_port_test(port_flaahgra_music_tests
+        SOURCES tests/port_flaahgra_music.cpp platform/port_flaahgra_music.cpp
+        INCLUDES platform/include)
     mp_port_test(port_mods_tests
         SOURCES tests/port_mods.cpp platform/port_mods_pak.cpp
         INCLUDES platform/include)
@@ -1082,6 +1089,11 @@ if(MP_BUILD_TESTS)
     mp_port_test(port_importers_tests
         SOURCES tests/port_importers.cpp platform/port_importers_lines.cpp
         INCLUDES platform/include)
+    mp_port_test(port_ball_looks_tests
+        SOURCES tests/port_ball_looks.cpp platform/port_ball_looks.cpp
+            platform/port_remastered_image.cpp
+        INCLUDES platform/include
+        LIBRARIES astcenc)
     mp_port_test(port_custom_res_tests
         SOURCES tests/port_custom_res.cpp platform/port_custom_res.cpp
         INCLUDES platform/include)
@@ -1237,8 +1249,12 @@ if(MP_BUILD_TESTS)
         SOURCES tests/port_charge_locator.cpp
         INCLUDES include extern/aurora/include
         DEFINITIONS TARGET_PC VERSION=0)
+    mp_port_test(port_power_charge_release_tests
+        SOURCES tests/port_power_charge_release.cpp
+        INCLUDES platform/include
+        DEFINITIONS TARGET_PC VERSION=0)
     mp_port_test(port_particle_math_tests
-        SOURCES tests/port_particle_math.cpp src/Kyoto/Particles/CParticleGlobals.cpp
+        SOURCES tests/port_particle_math.cpp src/Kyoto/Particles/CParticleGlobals.cpp src/Kyoto/CRandom16.cpp
             src/Kyoto/Math/CVector3f.cpp src/Kyoto/Math/CTransform4f.cpp
         INCLUDES include extern/aurora/include
         DEFINITIONS TARGET_PC VERSION=0

@@ -18,6 +18,13 @@ public:
   void UpdateGunFx(bool shotSmoke, float dt, const CStateManager& mgr,
                    const CTransform4f& xf) override;
   void Update(const float dt, CStateManager& mgr) override;
+#ifdef TARGET_PC
+  void PortFireStackedProjectile(const bool underwater, const float dt,
+                                 const CPlayerState::EChargeStage chargeState,
+                                 const CTransform4f& xf, CStateManager& mgr,
+                                 const TUniqueId homingTarget, const float chargeFactor1,
+                                 const float chargeFactor2) override;
+#endif
   void Fire(const bool underwater, const float dt, CPlayerState::EChargeStage chargeState,
             const CTransform4f& xf, CStateManager& mgr, TUniqueId homingTarget,
             const float chargeFactor1, const float chargeFactor2) override;

@@ -713,6 +713,7 @@ std::mutex sRemasteredPickMutex;
 std::vector<std::pair<int, std::string>> sRemasteredPicks;
 // Which 2 of the same picker: a PAL image for its languages (DrawLanguageSection).
 std::string sPalLanguagesPick;
+std::string sFlaahgraPick;
 
 #if defined(__ANDROID__)
 // Not SDL_ShowOpenFileDialog: Android often kills the game behind the picker
@@ -764,6 +765,8 @@ void OpenRemasteredDialog(int which) {
       const int which = int(reinterpret_cast< intptr_t >(userdata));
       if (which == kPalLanguagesPick) {
         sPalLanguagesPick = files[0];
+      } else if (which == kFlaahgraPick) {
+        sFlaahgraPick = files[0];
       } else {
         sRemasteredPicks.emplace_back(which, files[0]);
       }

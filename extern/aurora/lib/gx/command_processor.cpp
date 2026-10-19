@@ -452,12 +452,10 @@ void staging_report() noexcept {
 std::optional<gfx::Range> push_vertex_records(const DeindexPlan* plan, std::span<const u8> data, u32 vtxCount,
                                               size_t alignment) noexcept {
   const bool resolve = plan != nullptr && plan->active;
-  if (!staging_room(gfx::staging_verts(), resolve ? static_cast<size_t>(vtxCount) * plan->dstStride : data.size())) {
-    note_skipped_draw();
-    return std::nullopt;
-  }
   if (!resolve) {
-    return gfx::push_verts(data.data(), data.size(), alignment);
+    const auto range = gfx::push_verts(data.data(), data.size(), alignment);
+    if (gfx::overflowed(range)) { note_skipped_draw(); return std::nullopt; }
+    return range;
   }
   static ByteBuffer resolved;
   resolved.clear();
@@ -467,7 +465,9 @@ std::optional<gfx::Range> push_vertex_records(const DeindexPlan* plan, std::span
     deindex_records(*plan, data.data(), vtxCount, resolved.append_uninitialized(bytes));
     gfx::perf::g_fifoDeindexedVerts.fetch_add(vtxCount, std::memory_order_relaxed);
   }
-  return gfx::push_verts(resolved.data(), resolved.size(), alignment);
+  const auto range = gfx::push_verts(resolved.data(), resolved.size(), alignment);
+  if (gfx::overflowed(range)) { note_skipped_draw(); return std::nullopt; }
+  return range;
 }
 
 // The texture bind groups by what build_texture_bind_group reads. Prime binds a
@@ -1250,6 +1250,7 @@ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, g
     numIndices = prepare_idx_buffer(idxBuf, prim, 0, vtxCount);
     idxRange = gfx::push_indices(idxBuf.data(), idxBuf.size(), 4);
     idxBuf.clear();
+    if (gfx::overflowed(idxRange)) { note_skipped_draw(); return; }
   }
 
   push_gx_draw(prim, fmt, vtxCount, vertRange, idxRange, numIndices);
@@ -1389,7 +1390,13 @@ static void draw_prim(u8 cmd, GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, Byte
   const bool canMerge = lastDraw != nullptr && !lastDraw->cachedGeometry &&
                         (lineMode != 0 || lastDraw->instanceCount == 1) &&
                         lastDraw->immediateData.currentPnMtx == g_gxState.currentPnMtx && verts != nullptr &&
-                        indices != nullptr && lastDraw->vtxCount + vtxCount <= UINT16_MAX &&
+                        indices != nullptr &&
+                        gfx::frame_buffer_sizes().base(gfx::StagingKind::Vertex) == 0 &&
+                        gfx::frame_buffer_sizes().base(gfx::StagingKind::Index) == 0 &&
+                        lastDraw->vertRange.offset + lastDraw->vertRange.size == verts->size() &&
+                        (lastDraw->idxRange.size == 0 ||
+                         lastDraw->idxRange.offset + lastDraw->idxRange.size == indices->size()) &&
+                        lastDraw->vtxCount + vtxCount <= UINT16_MAX &&
                         (prim != GX_LINES || (lastDraw->vtxCount % 2 == 0 && vtxCount % 2 == 0)) &&
                         (prim != GX_TRIANGLES || ((lastDraw->indexCount != 0 || lastDraw->vtxCount % 3 == 0) &&
                                                   vtxCount % 3 == 0));
@@ -1404,11 +1411,7 @@ static void draw_prim(u8 cmd, GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, Byte
     if (perfOn) {
       gfx::perf::add(gfx::perf::g_fifoVertsTicks, t0, gfx::perf::tick());
     }
-    if (!vertRange || !staging_room(gfx::staging_indices(),
-                                    static_cast<size_t>(list_index_count(prim, vtxCount)) * sizeof(u16) + 4)) {
-      if (vertRange) {
-        note_skipped_draw();
-      }
+    if (!vertRange) {
       return;
     }
     handle_draw_unmerged(prim, fmt, vtxCount, *vertRange);
@@ -1432,7 +1435,11 @@ static void draw_prim(u8 cmd, GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, Byte
         lineMode != 0 ? 0
                       : (static_cast<size_t>(list_index_count(prim, vtxCount)) + lastDraw->vtxCount) * sizeof(u16) + 4;
     if (!staging_room(verts, stagedBytes) || !staging_room(indices, indexBytes)) {
-      note_skipped_draw();
+      const auto range = push_vertex_records(plan, vertexData, vtxCount, 4);
+      if (range) {
+        handle_draw_unmerged(prim, fmt, vtxCount, *range);
+      }
+      break;
     } else {
       if (deindex) {
         const gfx::perf::Bucket bucket{gfx::perf::g_fifoDeindexTicks, perfOn};
@@ -1606,20 +1613,20 @@ static void draw_cached_geometry(GXVtxFmt fmt, const geometry_cache::Entry& entr
   auto* lastDraw = drawDirty == 0 && !formatDiffers ? gfx::get_last_draw_command<DrawData>() : nullptr;
   ByteBuffer* const indices = gfx::staging_indices();
   const bool canMerge = lastDraw != nullptr && lastDraw->cachedGeometry && lastDraw->instanceCount == 1 &&
-                        lastDraw->immediateData.currentPnMtx == g_gxState.currentPnMtx && indices != nullptr;
+                        lastDraw->immediateData.currentPnMtx == g_gxState.currentPnMtx && indices != nullptr &&
+                        gfx::frame_buffer_sizes().base(gfx::StagingKind::Index) == 0 &&
+                        lastDraw->idxRange.offset + lastDraw->idxRange.size == indices->size() &&
+                        staging_room(indices, entry.indices.size() * sizeof(u32));
   const bool perfOn = gfx::perf::enabled();
   const auto t0 = gfx::perf::stamp(perfOn);
   const size_t bytes = entry.indices.size() * sizeof(u32);
-  if (!staging_room(gfx::staging_indices(), bytes)) {
-    note_skipped_draw();
-    return;
-  }
   if (!canMerge) {
     count_merge_breaks(formatDiffers, lastDraw == nullptr);
     const gfx::Range idxRange = gfx::push_indices(reinterpret_cast<const u8*>(entry.indices.data()), bytes, 4);
     if (perfOn) {
       gfx::perf::add(gfx::perf::g_fifoVertsTicks, t0, gfx::perf::tick());
     }
+    if (gfx::overflowed(idxRange)) { note_skipped_draw(); return; }
     push_gx_draw(prim, fmt, entry.vertexCount, gfx::Range{0, entry.bytes}, idxRange,
                  static_cast<u32>(entry.indices.size()), true);
     return;

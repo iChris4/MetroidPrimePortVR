@@ -87,14 +87,24 @@ int main() {
   PostLoad();
   REQUIRE_MSG(Get().gyroSensitivity == 1.5f, "gyro_sensitivity wins over gyro_rate");
   REQUIRE_MSG(Text().find("gyro_rate") == std::string::npos, "gyro_rate not written");
-  REQUIRE_MSG(Get().gyroSpace == 1 && Get().gyroAutoCalibrate, "gyro space/calibration defaults");
+  REQUIRE_MSG(Get().gyroSpace == 1 && Get().gyroAutoCalibrate == 1, "gyro space/calibration defaults");
   ApplySetting("gyro_space", "2");
   ApplySetting("gyro_space", "5");
   ApplySetting("gyro_auto_calibrate", "0");
-  REQUIRE_MSG(Get().gyroSpace == 2 && !Get().gyroAutoCalibrate, "gyro space/calibration");
+  REQUIRE_MSG(Get().gyroSpace == 2 && Get().gyroAutoCalibrate == 0, "gyro space/calibration");
   REQUIRE_MSG(Text().find("gyro_space=2\n") != std::string::npos &&
                   Text().find("gyro_auto_calibrate=0\n") != std::string::npos,
               "gyro space/calibration written");
+  ApplySetting("gyro_auto_calibrate", "1");
+  REQUIRE_MSG(Get().gyroAutoCalibrate == 1, "gyro_auto_calibrate 1 = always (old on)");
+  ApplySetting("gyro_auto_calibrate", "2");
+  REQUIRE_MSG(Get().gyroAutoCalibrate == 2 &&
+                  Text().find("gyro_auto_calibrate=2\n") != std::string::npos,
+              "gyro_auto_calibrate 2 = only in menus, written");
+  ApplySetting("gyro_auto_calibrate", "true");
+  REQUIRE_MSG(Get().gyroAutoCalibrate == 1, "gyro_auto_calibrate true = always");
+  ApplySetting("gyro_auto_calibrate", "false");
+  REQUIRE_MSG(Get().gyroAutoCalibrate == 0, "gyro_auto_calibrate false = off");
   REQUIRE_MSG(Get().gyroSmoothing == 0.f && Get().gyroTightening == 0.f, "gyro filter defaults off");
   ApplySetting("gyro_smoothing", "5");
   ApplySetting("gyro_tightening", "3");

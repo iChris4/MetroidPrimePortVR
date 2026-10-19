@@ -37,14 +37,16 @@ namespace {
 // Doorways broken for real whose restyle waits for the shield to finish fading.
 std::set< int > sPending;
 
-// The doors of a doorway that are loaded take the blue look and weaknesses now;
-// the ones in rooms not loaded get them from their room patch when they load.
-void Restyle(CStateManager& mgr, int bit) {
-  PortApWorld::DoorStyle style;
-  if (!PortApWorld::BlueDoorStyle(style))
-    return;
-  const std::vector< uint8_t > weakness = PortApWorld::BlueDoorVulnerability();
+// The doors of a doorway that are loaded take the look and weaknesses `styleOf`
+// gives them now (false: leave that door); the ones in rooms not loaded get
+// theirs from their room patch when they load.
+template < typename StyleOf >
+void RestyleWith(CStateManager& mgr, int bit, StyleOf styleOf) {
   for (const PortApWorld::DoorChange& door : PortApWorld::BeamDoorway(bit)) {
+    PortApWorld::DoorStyle style;
+    std::vector< uint8_t > weakness;
+    if (!styleOf(door, style, weakness))
+      continue;
     for (int k = 0; k < 2; ++k) {
       if (door.forces[k] != 0) {
         const TUniqueId uid = mgr.GetIdForScript(TEditorId(door.forces[k]));
@@ -70,11 +72,42 @@ void Restyle(CStateManager& mgr, int bit) {
       }
     }
   }
-  // The map icons of the loaded map areas.
+}
+
+// The map icons of the loaded map areas.
+void RefreshMap(CStateManager& mgr) {
   if (const CWorld* world = mgr.GetWorld()) {
     if (CMapWorld* map = world->GetMapWorld())
       map->PortRefreshDoors();
   }
+}
+
+// Doorway `bit` goes blue (`onlyUnlockable`: just the doors the setting may
+// unlock, for a doorway that was recorded while the setting was off).
+void Restyle(CStateManager& mgr, int bit, bool onlyUnlockable = false) {
+  PortApWorld::DoorStyle blue;
+  if (!PortApWorld::BlueDoorStyle(blue))
+    return;
+  const std::vector< uint8_t > weakness = PortApWorld::BlueDoorVulnerability();
+  RestyleWith(mgr, bit,
+              [&](const PortApWorld::DoorChange& door, PortApWorld::DoorStyle& style,
+                  std::vector< uint8_t >& vulnerability) {
+                if (onlyUnlockable && !PortAp::BeamDoorUnlockable(door.mrea, door.index))
+                  return false;
+                style = blue;
+                vulnerability = weakness;
+                return true;
+              });
+}
+
+// Doorway `bit` goes back to the locks its doors have without the setting; a
+// door whose blast shield still stands never turned blue and is left alone.
+void Relock(CStateManager& mgr, int bit) {
+  RestyleWith(mgr, bit, [](const PortApWorld::DoorChange& door, PortApWorld::DoorStyle& style,
+                           std::vector< uint8_t >& vulnerability) {
+    return PortAp::BeamDoorUnlockable(door.mrea, door.index) &&
+           PortAp::LockedDoorStyle(door.index, style, vulnerability);
+  });
 }
 
 } // namespace
@@ -88,6 +121,7 @@ bool Unlock(CStateManager& mgr, int bit) {
     return false;
   Set(bits, bit);
   Restyle(mgr, bit);
+  RefreshMap(mgr);
   PortLog::Write("beam doors: doorway %d stays unlocked\n", bit);
   return true;
 }
@@ -115,6 +149,32 @@ void OnForceFaded(CStateManager& mgr, uint32_t mrea, uint32_t editorId) {
   if (bit < 0 || sPending.erase(bit) == 0 || !Test(gpGameState->PortBeamDoorBits(), bit))
     return;
   Restyle(mgr, bit);
+  RefreshMap(mgr);
+}
+
+void Tick(CStateManager& mgr) {
+  static bool seen = false;
+  static bool last = false;
+  const bool now = Enabled();
+  if (seen && now == last)
+    return;
+  const bool first = !seen;
+  seen = true;
+  last = now;
+  if (first || gpGameState == nullptr)
+    return;
+  if (!now)
+    sPending.clear();
+  const uint* bits = gpGameState->PortBeamDoorBits();
+  for (int bit = 0; bit < PortApWorld::BeamDoorwayCount(); ++bit) {
+    if (!Test(bits, bit))
+      continue;
+    if (now)
+      Restyle(mgr, bit, true);
+    else
+      Relock(mgr, bit);
+  }
+  RefreshMap(mgr);
 }
 
 bool Reset() {

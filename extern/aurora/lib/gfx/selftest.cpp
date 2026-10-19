@@ -408,7 +408,9 @@ void expect_converted(Image& e) {
     }
   }
   const u32 red = rgb(255, 0, 0), blue = rgb(0, 0, 255);
-  const u32 mid0 = rgb(159, 0, 95), mid1 = rgb(95, 0, 159);  // GX blends DXT1 at 5/8 + 3/8, not 2/3 + 1/3
+  // GX blends DXT1 at 5/8 + 3/8; an opaque CMPR texture goes to BC1 where supported, which blends at 2/3 + 1/3.
+  const bool bc1 = webgpu::g_bcTexturesSupported;
+  const u32 mid0 = bc1 ? rgb(170, 0, 85) : rgb(159, 0, 95), mid1 = bc1 ? rgb(85, 0, 170) : rgb(95, 0, 159);
   const u32 row[4] = {red, blue, mid0, mid1};
   for (u32 ty = 0; ty < 8; ++ty) {
     for (u32 tx = 0; tx < 8; ++tx) {

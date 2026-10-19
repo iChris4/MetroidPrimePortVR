@@ -249,6 +249,51 @@ bool CIEFrameIndexFromAnimationTime::GetValue(int frame, int& valOut) const {
   valOut = index;
   return false;
 }
+
+CIEPortRandom::CIEPortRandom(CIntElement* min, CIntElement* max) : x4_min(min), x8_max(max) {}
+
+CIEPortRandom::~CIEPortRandom() {
+  delete x4_min;
+  delete x8_max;
+}
+
+bool CIEPortRandom::GetValue(int frame, int& valOut) const {
+  int min = 0, max = 0;
+  x4_min->GetValue(frame, min);
+  x8_max->GetValue(frame, max);
+  const u32 v = static_cast< u32 >(CRandom16::GetRandomNumber()->Next());
+  const u32 range = static_cast< u32 >(max - min) + 1;
+  // An ARM udiv by 0 gives 0, so an empty range leaves v whole.
+  valOut = static_cast< int >((range != 0 ? v % range : v) + static_cast< u32 >(min));
+  return false;
+}
+
+CIEPortLifetimePercent::CIEPortLifetimePercent(int offset, CIntElement* a)
+: x4_percentVal(a), x8_offset(offset) {}
+
+CIEPortLifetimePercent::~CIEPortLifetimePercent() { delete x4_percentVal; }
+
+bool CIEPortLifetimePercent::GetValue(int frame, int& valOut) const {
+  int a = 0;
+  x4_percentVal->GetValue(frame, a);
+  // Separate statements: Remastered's fmul and fadd are not fused (CREMultiplyAddConstant
+  // 0x295368), and the percent is scaled by 0.01f first (GetIntAsReal 0x26d794).
+  const float percent = static_cast< float >(a) * 0.01f;
+  const float lifetime = static_cast< float >(CParticleGlobals::GetParticleLifetime() + x8_offset);
+  const float scaled = lifetime * percent;
+  const float rounded = scaled + 0.5f;
+  // CIERealToInt 0x2a9700: fcvtzs, which saturates and takes NaN to 0.
+  if (rounded != rounded) {
+    valOut = 0;
+  } else if (rounded >= 2147483648.0f) {
+    valOut = 0x7fffffff;
+  } else if (rounded <= -2147483648.0f) {
+    valOut = int(0x80000000u);
+  } else {
+    valOut = static_cast< int >(rounded);
+  }
+  return false;
+}
 #endif
 
 bool CIEClamp::GetValue(int frame, int& valOut) const {

@@ -47,4 +47,27 @@ private:
   CRealElement* x1c_angleYRange;
 };
 
+#ifdef TARGET_PC
+// Remastered ASPR (CVEAngleSphere::GetValue 0x2cb100) with its REUL rotation (axis order 0)
+// given as the three angles. The origin, position and velocity are in the port's space; the
+// direction is drawn in Remastered's and turned by the basis (-x, z, y).
+class CEEPortAngleSphere : public CEmitterElement {
+public:
+  CEEPortAngleSphere(CVectorElement* origin, CRealElement* rotateX, CRealElement* rotateY,
+                     CRealElement* rotateZ, CRealElement* range1, CRealElement* range2,
+                     CRealElement* radius, CRealElement* speed);
+  ~CEEPortAngleSphere();
+
+  bool GetValue(int frame, CVector3f& pPos, CVector3f& pVel) const;
+
+private:
+  CVectorElement* mOrigin;
+  CRealElement* mRotate[3];
+  CRealElement* mRange1;
+  CRealElement* mRange2;
+  CRealElement* mRadius;
+  CRealElement* mSpeed;
+};
+#endif
+
 #endif // _CEMITTERELEMENT

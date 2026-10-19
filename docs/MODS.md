@@ -263,6 +263,28 @@ so unpause first; pressed in the menus, it happens when a game starts. Change
 the folder first, then reload: until then the game still reads the old files,
 so don't delete a loaded mod and keep playing.
 
+### Full Flaahgra theme (NTSC discs)
+
+The NTSC GameCube discs (USA 1.00, 1.01 and 1.02) ship the Flaahgra boss theme
+(`Audio/rui_flaaghraL.dsp` and `R.dsp`) cut to its first 36.2 s (1,159,268
+samples), so the fight loops that short piece. The PAL and Japanese GameCube
+discs and Metroid Prime Trilogy (`MP1/Audio/` in its data partition) have the
+whole 114.7 s track in the same format. The port cannot ship it, so F1 > Settings
+> Audio > Flaahgra boss theme > "Full Flaahgra theme..." (USA discs only; a PAL
+disc already has it) takes your own such image and copies those two files into
+the mod `flaahgra-full-theme` of the mods folder, where the loader serves them
+in place of the disc's. Nothing else is read from the image. Each file is
+checked first (DSP ADPCM, 32 kHz, looping, a whole file, longer than the NTSC
+copy, the two channels the same length) and written to a temporary name, then
+renamed. Remove deletes the mod. Adding a PAL disc's languages (below) does the
+same import from that image, so one PAL import brings both.
+
+It is an ordinary mod: Reload mods (F1 > Mods) or a restart makes the game play
+it, and turning mods off (or `MP_MODS` pointing elsewhere) turns it off.
+`metroid_prime_port --import-flaahgra-music <image>` imports without starting
+the game. On Android the picked file is opened through the system (no copy of
+the disc); this path is untested on a device.
+
 ### Importers
 
 An importer is a program of your own that builds a mod from files you have (a
@@ -422,6 +444,9 @@ from a PAL disc..." (or `--import-pal-languages <image>` on the command line)
 reads the PAL image once and copies its French, German, Spanish and Italian
 text tables and fonts to `<user>/languages/`. The game keeps running from the
 USA disc, and the PAL image isn't needed afterwards. "Remove" deletes the copy.
+The same pass adds the PAL disc's full Flaahgra theme (the mod
+`flaahgra-full-theme`, see "Full Flaahgra theme"); if that part fails the
+languages are still added and the message says why.
 The USA disc's fonts are ASCII only, so each accented letter is drawn as its base
 letter, unless the PAL fonts were added (they take effect after a restart) or
 the mod's typeface (`font/deface.sdfont`) is loaded; either one draws the real letter.
@@ -490,20 +515,13 @@ for the `.nsp`/`.xci` and one for the key file. Neither file is copied: the impo
 reads them where they are. It runs on two threads there to keep its memory
 down. Not yet run on a device.
 
-Converted **Power charge effects (slot 1 only)** take the sampled retail locator
-rotation times `B = [-1 0 0; 0 0 1; 0 1 0]`
-(`NPortChargeFxDetail::ConvertedPowerChargeMuzzleFrame`). Its columns are
-`(-col0, col2, col1)`, with determinant +1 and unchanged sampled translation.
-Native Power's effective LBEAM includes a legacy-wrapper rotation correction:
-raw/bind bone axes alone do not describe that attachment. The corrected native
-frame is X left, Y up, Z forward, while retail is X right, Y forward, Z up.
-Thus the authored `(0,0,0.15)` at scale 2 points 0.30 m forward in the sampled
-retail frame; the previous `Rx(+90)` policy pointed it backward. This is a
-source-contract correction, not native animation retargeting or matched-pose
-visual parity. It does not establish other beams' effective native frames:
-converted non-Power charges retain `locator x Rx(+90)` and converted normal
-flashes retain the full sampled locator. Retail effects remain translation-only;
-scale, timing, materials, combo-transfer and auxiliary attachments are unchanged.
+Converted gun effects (charge effects, muzzle and charged-release flashes, the
+Wave charge's secondary effects) take the sampled retail locator in full, while
+retail ones take its translation only (`NPortChargeFxDetail::SetLocalLocator`).
+The importer already turns their vectors from Remastered's particle space (X
+left, Y up, Z forward) into the port's, so no extra frame goes on top: the Power
+charge disc's EMTR, Remastered `(0,0,0.15)`, becomes the port's `(0,0.15,0)` and
+at scale 2 sits 0.30 m forward of the barrel, as on native's LBEAM.
 
 ### Collision stays on the disc's model
 

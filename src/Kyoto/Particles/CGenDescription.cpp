@@ -112,3 +112,16 @@ CGenDescription::~CGenDescription() {
   delete xPortNestedLightOuterRadius;
 #endif
 }
+
+#ifdef TARGET_PC
+CGenDescription::PortKssm::~PortKssm() {
+  for (PortKssmTable& table : tables) {
+    delete table.periodElement;
+    for (PortKssmEntry& entry : table.entries) {
+      for (PortKssmSpawn& spawn : entry.spawns) {
+        delete spawn.instances;
+      }
+    }
+  }
+}
+#endif

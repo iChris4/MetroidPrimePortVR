@@ -71,6 +71,7 @@ constexpr PromptKey kKeys[] = {
     {PAD_BUTTON_B, 32, 32, 0xe6dbfd18d4666ee7ull, "5"},   // BButtonIn
     {PAD_BUTTON_B, 32, 32, 0xcf85aefc93af603full, "14"},  // BButtonOut
     {PAD_BUTTON_X, 32, 32, 0x818890ce3f3a949bull, "5"},   // XButtonOut, "Press X to ... Morph Ball"
+    {PAD_BUTTON_X, 32, 32, 0xe14785826e0e103full, "5"},   // XButtonOut on the PAL disc (same asset, other art)
     {PAD_BUTTON_Y, 32, 32, 0x281ae5aa517797edull, "5"},   // YButtonOut, the pause and map screens
     {PAD_BUTTON_START, 32, 32, 0x1ff9d2b310c0b706ull, "14"},  // StartButtonOut, the pause Return
     {PAD_TRIGGER_L, 32, 32, 0x3f419d4a7ba3cff3ull, "5"},  // LTriggerOut

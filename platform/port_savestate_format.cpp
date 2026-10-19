@@ -23,6 +23,7 @@ constexpr char kRoomMagic[4] = {'R', 'M', 'S', 'T'};
 // loaded the same room script data the state was taken with.
 constexpr uint32_t kRoomVersionLegacy = 1;
 constexpr uint32_t kRoomVersion = 2;
+constexpr uint32_t kRoomVersionLayers = 3;  // version 2 plus the spawn layer section
 constexpr uint32_t kMaxRoomBytes = 8u << 20;
 constexpr uint32_t kMaxRoomCount = 1u << 16;
 constexpr uint32_t kMaxBlocks = 64;
@@ -131,6 +132,16 @@ bool FingerprintsLineUp(const RoomState& room) {
   return true;
 }
 
+bool SpawnLayersLineUp(const RoomState& room) {
+  if (room.spawnLayers.size() != room.areas.size())
+    return false;
+  for (size_t i = 0; i < room.areas.size(); ++i) {
+    if (room.spawnLayers[i].area != room.areas[i])
+      return false;
+  }
+  return true;
+}
+
 std::string EncodeRoom(const RoomState& room) {
   // Fingerprints belong to what this writer produces, so a state whose section
   // does not line up is not written at all rather than as a body whose sections
@@ -140,6 +151,10 @@ std::string EncodeRoom(const RoomState& room) {
   // writes the legacy body.
   const bool recorded = room.fingerprintsRecorded;
   if (recorded && !FingerprintsLineUp(room))
+    return {};
+  // The spawn layer section rides on version 3, which also carries fingerprints.
+  const bool layers = recorded && room.spawnLayersRecorded;
+  if (layers && !SpawnLayersLineUp(room))
     return {};
   std::string body;
   AppendLE32(body, static_cast< uint32_t >(room.areas.size()));
@@ -155,6 +170,15 @@ std::string EncodeRoom(const RoomState& room) {
       AppendLE32(body, static_cast< uint32_t >(fp.area));
       body += fp.known ? static_cast< char >(1) : static_cast< char >(0);
       AppendLE64(body, fp.known ? fp.hash : 0);
+    }
+  }
+  if (layers) {
+    // One entry per area in `areas` order: the known bit, then the layer mask.
+    AppendLE32(body, static_cast< uint32_t >(room.spawnLayers.size()));
+    for (const AreaSpawnLayers& sl : room.spawnLayers) {
+      AppendLE32(body, static_cast< uint32_t >(sl.area));
+      body += sl.known ? static_cast< char >(1) : static_cast< char >(0);
+      AppendLE64(body, sl.known ? sl.mask : 0);
     }
   }
   AppendLE32(body, static_cast< uint32_t >(room.objects.size()));
@@ -181,7 +205,7 @@ std::string EncodeRoom(const RoomState& room) {
     }
   }
   std::string out(kRoomMagic, 4);
-  AppendLE32(out, recorded ? kRoomVersion : kRoomVersionLegacy);
+  AppendLE32(out, layers ? kRoomVersionLayers : (recorded ? kRoomVersion : kRoomVersionLegacy));
   AppendLE32(out, static_cast< uint32_t >(body.size()));
   return out + body;
 }
@@ -199,7 +223,7 @@ bool DecodeRoom(Reader& in, RoomState& room) {
   const uint32_t size = in.U32();
   if (size > kMaxRoomBytes || !in.Need(size) || in.pos + size != in.data.size())
     return false;
-  if (version != kRoomVersionLegacy && version != kRoomVersion)
+  if (version != kRoomVersionLegacy && version != kRoomVersion && version != kRoomVersionLayers)
     return true;
   RoomState r;
   const uint32_t areaCount = in.U32();
@@ -246,6 +270,27 @@ bool DecodeRoom(Reader& in, RoomState& room) {
       if (!in.ok)
         return false;
     }
+  }
+  if (version >= kRoomVersionLayers) {
+    // Same shape rules as the fingerprints: one entry per area, same order.
+    const uint32_t count = in.U32();
+    if (count > kMaxRoomCount || count != areaCount)
+      return false;
+    r.spawnLayersRecorded = true;
+    for (uint32_t i = 0; i < count && in.ok; ++i) {
+      AreaSpawnLayers sl;
+      sl.area = static_cast< int32_t >(in.U32());
+      const uint32_t flags = in.Need(1) ? static_cast< uint8_t >(in.data[in.pos++]) : 0;
+      if (flags > 1)
+        return false;
+      sl.known = flags != 0;
+      sl.mask = in.U64();
+      if (!in.ok || sl.area != r.areas[i] || (!sl.known && sl.mask != 0))
+        return false;
+      r.spawnLayers.push_back(sl);
+    }
+    if (!in.ok)
+      return false;
   }
   const uint32_t objectCount = in.U32();
   if (objectCount > kMaxRoomCount)

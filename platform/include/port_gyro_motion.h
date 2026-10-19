@@ -54,8 +54,10 @@ public:
 
   // accel may be null (a source without an accelerometer): then the raw local
   // rates are used, with no calibration or gravity (player/world act as local yaw).
+  // keepOffset: when calibration is off, keep the drift it learned instead of
+  // dropping it (auto calibrate "only in menus" pauses it outside them).
   void Process(const float gyro[3], const float* accel, float dt, int space, bool autoCalibrate,
-               float& pitch, float& yaw);
+               float& pitch, float& yaw, bool keepOffset = false);
   // Forget orientation and calibration (a new source, or calibration turned off).
   void Reset();
   // How sure the drift calibration is, 0..1, and whether the pad was last seen still.

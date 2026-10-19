@@ -10,6 +10,9 @@ class CStateManager;
 namespace PortRandomizer {
 struct PickupModel;
 }
+namespace PortApWorld {
+struct DoorStyle;
+}
 
 // Archipelago client.
 //
@@ -239,6 +242,8 @@ bool MapDoors(uint32_t mapa, std::vector< std::pair< uint32_t, int > >& doors);
 // Whether door table index `door` of area `mrea` is a beam door with no blast
 // shield on it, as the seed (or the disc, with none) leaves it.
 bool BeamDoorUnlockable(uint32_t mrea, int door);
+// PortApWorld::LockedDoorStyle for this seed (the disc with none) and the broken shields.
+bool LockedDoorStyle(int door, PortApWorld::DoorStyle& style, std::vector< uint8_t >& vulnerability);
 
 // How many artifacts open the Artifact Temple: the seed's required_artifacts,
 // 12 otherwise.

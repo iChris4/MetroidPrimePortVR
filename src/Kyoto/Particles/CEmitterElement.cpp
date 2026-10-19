@@ -3,6 +3,9 @@
 #include "Kyoto/Math/CMath.hpp"
 #include "Kyoto/Math/CRelAngle.hpp"
 #include "Kyoto/Math/CVector3f.hpp"
+#ifdef TARGET_PC
+#include "Kyoto/Particles/PortParticleMath.hpp"
+#endif
 
 CEESimpleEmitter::CEESimpleEmitter(CVectorElement* pos, CVectorElement* vel)
 : x4_pos(pos), x8_vel(vel) {}
@@ -108,3 +111,61 @@ bool CVEAngleSphere::GetValue(int frame, CVector3f& pPos, CVector3f& pVel) const
 
   return false;
 }
+
+#ifdef TARGET_PC
+CEEPortAngleSphere::CEEPortAngleSphere(CVectorElement* origin, CRealElement* rotateX,
+                                       CRealElement* rotateY, CRealElement* rotateZ,
+                                       CRealElement* range1, CRealElement* range2,
+                                       CRealElement* radius, CRealElement* speed)
+: mOrigin(origin)
+, mRotate{rotateX, rotateY, rotateZ}
+, mRange1(range1)
+, mRange2(range2)
+, mRadius(radius)
+, mSpeed(speed) {}
+
+CEEPortAngleSphere::~CEEPortAngleSphere() {
+  delete mOrigin;
+  for (CRealElement* angle : mRotate) {
+    delete angle;
+  }
+  delete mRange1;
+  delete mRange2;
+  delete mRadius;
+  delete mSpeed;
+}
+
+// Children in Remastered's order (origin, radius, speed, rotation, ranges), each from 0, then
+// the two draws. Position is radius * d + origin and velocity d * speed for the normalised d.
+bool CEEPortAngleSphere::GetValue(int frame, CVector3f& pPos, CVector3f& pVel) const {
+  CVector3f origin = CVector3f::Zero();
+  float radius = 0.f;
+  float speed = 0.f;
+  mOrigin->GetValue(frame, origin);
+  mRadius->GetValue(frame, radius);
+  mSpeed->GetValue(frame, speed);
+  float angles[3] = {0.f, 0.f, 0.f};
+  for (int i = 0; i < 3; ++i) {
+    mRotate[i]->GetValue(frame, angles[i]);
+  }
+  const PortParticleMath::Quat q = PortParticleMath::EulerQuat(angles[0], angles[1], angles[2]);
+  float range1 = 0.f;
+  float range2 = 0.f;
+  mRange1->GetValue(frame, range1);
+  mRange2->GetValue(frame, range2);
+  CRandom16* random = CRandom16::GetRandomNumber();
+  const float u = random->PortFloat28();
+  const float v = random->PortFloat28();
+  const CVector3f d = PortParticleMath::AngleSphereDirection(q, range1, range2, u, v);
+  // The basis is a sign and a swap, so it commutes with the products and sums exactly.
+  const float dx = -d.GetX();
+  const float dy = d.GetZ();
+  const float dz = d.GetY();
+  const float px = radius * dx;
+  const float py = radius * dy;
+  const float pz = radius * dz;
+  pPos = CVector3f(px + origin.GetX(), py + origin.GetY(), pz + origin.GetZ());
+  pVel = CVector3f(dx * speed, dy * speed, dz * speed);
+  return false;
+}
+#endif

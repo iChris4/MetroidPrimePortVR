@@ -74,6 +74,10 @@ public:
     CTransform4f worldFromLocal;
     CVector3f systemLocal;
     const CVector3f* segmentPos;
+    // The point's swoosh node key (KEWS, Remastered 0x24f00c), when the point has one.
+    bool hasNode = false;
+    int nodePercentage = 0;
+    float nodeRemainder = 0.f;
   };
   static const SPortSwooshEval* xPortSwooshEval;
   struct PortSwooshEvalScope {

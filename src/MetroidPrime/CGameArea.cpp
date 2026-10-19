@@ -25,6 +25,7 @@
 #ifdef TARGET_PC
 #include "port_randomizer.h"
 #include "port_room_geo.h"
+#include "port_savestate.h"
 #include "port_skip_cutscenes.h"
 
 #include <string.h>
@@ -648,6 +649,10 @@ static void PortDumpInactivePickups(const CGameArea& area, CStateManager& mgr, T
 #endif
 
 void CGameArea::LoadScriptObjects(CStateManager& mgr) {
+#ifdef TARGET_PC
+  // PORT: a save state records the layer bits this area spawns with and rebuilds with them (#161).
+  PortSaveState::NoteAreaSpawnBegin(mgr, x4_selfIdx.Value());
+#endif
   rstl::vector< TEditorId > ids;
   const CScriptLayerManager& layers = *mgr.WorldLayerState();
   int count = layers.GetAreaLayerCount(x4_selfIdx);
@@ -665,6 +670,9 @@ void CGameArea::LoadScriptObjects(CStateManager& mgr) {
 #endif
   }
   mgr.InitScriptObjects(ids);
+#ifdef TARGET_PC
+  PortSaveState::NoteAreaSpawnEnd(mgr, x4_selfIdx.Value()); // PORT: puts the saved live layer bits back
+#endif
 }
 
 void CGameArea::StartStreamIn(CStateManager& mgr) {

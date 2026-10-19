@@ -76,6 +76,16 @@ void DrawVideoDisplay() {
                         "Off: the original magnified copy of the screen.\n"
                         "Off while the headset runs.");
 
+  bool ballLooks = sGeneratedBallLooks;
+  if (ImGui::Checkbox("Suit-coloured morph balls", &ballLooks)) {
+    SetGeneratedBallLooks(ballLooks);
+  }
+  ImGui::SetItemTooltip("On: every suit's morph ball takes its suit's colours, made from Varia's\n"
+                        "and recoloured from your disc at boot: a Power Suit spider ball, and\n"
+                        "Gravity and Phazon Suit balls before the Spider Ball.\n"
+                        "Off: the original, where the Power Suit's spider ball is the Gravity\n"
+                        "Suit's, and the Gravity and Phazon Suits use the Power Suit's ball.");
+
   ImGui::SeparatorText("HUD and view");
   bool hudWide = sHudWide;
   if (ImGui::Checkbox("Widescreen HUD (spread to edges)", &hudWide)) {

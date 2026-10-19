@@ -79,7 +79,7 @@ inline constexpr int kConverter = 52;
 inline constexpr int kTextures = 3;
 inline constexpr int kModels = 8;      // the table's models, their looks and the ANCS copies
 // 25: swoosh GRAD is the exact PGRD element, no longer a 101-key KEYP bake.
-inline constexpr int kEffects = 29;    // port_remastered_effect_import and the particle converters
+inline constexpr int kEffects = 53;    // port_remastered_effect_import and the particle converters
 // 20: two rooms matching one area write only the closer match's files, not the later room's.
 inline constexpr int kRooms = 20;      // port_remastered_room: roomenv/, .roomgeo, .roomliquid, water maps
 inline constexpr int kRoomModels = 1;  // the rooms' own models and their levels of detail
@@ -460,6 +460,10 @@ bool StartMovieImport(const std::string& nspPath, const std::string& keysPath);
 ImportState ImportStatus();
 // Asks the running import to stop; it ends at the next model.
 void CancelImport();
+// The next imports make every stage again instead of reusing the previous import's unchanged
+// ones (as MP_REMASTERED_REUSE=0). Not saved: it lasts until the game is closed.
+void SetRemakeAll(bool remake);
+bool RemakeAll();
 // Cancels and waits. Call before the disc is closed.
 void StopImport();
 

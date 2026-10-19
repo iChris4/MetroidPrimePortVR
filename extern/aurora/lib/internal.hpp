@@ -287,6 +287,8 @@ public:
   [[nodiscard]] size_t capacity() const noexcept { return m_capacity; }
   // False for a view of memory it does not own (a mapped staging region): it cannot grow.
   [[nodiscard]] bool owned() const noexcept { return m_owned; }
+  // Marks the whole capacity used, for memory the buffer wraps.
+  void fill_to_capacity() noexcept { m_length = m_capacity; }
   [[nodiscard]] bool empty() const noexcept { return m_length == 0; }
   // False when appending size bytes would grow a buffer that wraps memory it doesn't own,
   // which aborts.

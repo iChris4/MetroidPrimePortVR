@@ -492,20 +492,33 @@ void DrawControlsTouchGyro() {
            "the real vertical only. Local yaw: the pad's own flat turn, best held flat. Local roll: "
            "the turn of a pad held upright (as a handheld). Local yaw and roll: both at once. Player "
            "and world need an accelerometer; without one they act as local yaw.");
-  bool autoCalibrate = sInput.gyroAutoCalibrate;
-  if (ImGui::Checkbox("Auto calibrate", &autoCalibrate)) {
+  static constexpr const char* kCalibrateNames[] = {"Off", "Always", "Only in menus"};
+  int autoCalibrate = std::clamp(sInput.gyroAutoCalibrate, 0, 2);
+  if (ImGui::Combo("Auto calibrate", &autoCalibrate, kCalibrateNames, 3)) {
     SetGyroAutoCalibrate(autoCalibrate);
   }
   ItemHelp("Measures the gyro's drift whenever the pad is still and removes it, so the camera "
            "doesn't creep. Put the pad down for a couple of seconds to calibrate. Needs an "
-           "accelerometer.");
-  ImGui::SameLine();
-  if (ImGui::Button("Recalibrate")) {
-    ResetGyroCalibration();
+           "accelerometer. Only in menus learns while the game is paused, on a menu screen or "
+           "with this overlay open, and keeps what it learned while you play.");
+  const float countdown = GyroRecalibrationCountdown();
+  if (countdown >= 0.f) {
+    ImGui::BeginDisabled();
+    ImGui::Button(("Calibrating in " + std::to_string(int(std::ceil(countdown))) + "...").c_str());
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel")) {
+      CancelGyroRecalibration();
+    }
+  } else if (ImGui::Button("Recalibrate")) {
+    StartGyroRecalibration();
   }
+  ItemHelp("Waits 5 seconds so you can put the pad down, then clears the gyro's drift "
+           "measurement and learns it again.");
   const float confidence = GyroCalibrationConfidence();
   if (confidence >= 0.f) {
-    ImGui::Text("Calibration: %d%%", int(confidence * 100.f + 0.5f));
+    ImGui::Text("Calibration: %d%%%s", int(confidence * 100.f + 0.5f),
+                GyroCalibrating() ? " (calibrating)" : confidence >= 0.99f ? " (done)" : "");
   } else {
     ImGui::TextDisabled("Calibration: no accelerometer");
   }

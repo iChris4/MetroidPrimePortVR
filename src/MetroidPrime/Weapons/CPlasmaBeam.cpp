@@ -120,6 +120,21 @@ void CPlasmaBeam::Fire(const bool underwater, const float dt,
   NWeaponTypes::play_sfx(kSoundId[chargeState], underwater, false, 0x4a);
 }
 
+#ifdef TARGET_PC
+// Stacked: a charged Plasma shot passes 1 as its scale factor, like Fire; the normal shot's
+// own fire-rate delay is not applied (the lead beam's cycle decides when to fire).
+void CPlasmaBeam::PortFireStackedProjectile(const bool underwater, const float dt,
+                                            const CPlayerState::EChargeStage chargeState,
+                                            const CTransform4f& xf, CStateManager& mgr,
+                                            const TUniqueId homingTarget,
+                                            const float chargeFactor1, const float chargeFactor2) {
+  CGunWeapon::PortFireStackedProjectile(underwater, dt, chargeState, xf, mgr, homingTarget,
+                                        chargeFactor1,
+                                        chargeState == CPlayerState::kCS_Normal ? chargeFactor2
+                                                                                : 1.f);
+}
+#endif
+
 void CPlasmaBeam::UpdateBeam(float dt, const CTransform4f& targetXf, const CVector3f& localBeamPos,
                              CStateManager& mgr) {}
 

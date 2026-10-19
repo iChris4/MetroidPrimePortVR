@@ -651,7 +651,8 @@ void RouteDirectActions(const PortInput::Output& out) {
 // ticks, so they work while the game is paused or the F1 overlay is open.
 bool IsPortAction(Action a) {
   return a == Action::PortMenu || a == Action::SaveState || a == Action::LoadState || a == Action::Screenshot ||
-         a == Action::ToggleOriginal || a == Action::PhotoMode || a == Action::GyroAim;
+         a == Action::ToggleOriginal || a == Action::PhotoMode || a == Action::GyroAim ||
+         a == Action::ResetAim;
 }
 
 // Keys pressed since the last PollPortActions, added by an SDL event watch: a short
@@ -1196,6 +1197,7 @@ void PollPortActions() {
     return;
   }
   PortDebug::SetGyroButton(out.Held(Action::GyroAim));
+  if (out.Pressed(Action::ResetAim)) PortDebug::RequestResetAim();
   if (out.Pressed(Action::PortMenu)) PortDebug::RequestToggle();
   if (out.Pressed(Action::SaveState)) PortDebug::RequestSaveStateHotkey(1);
   if (out.Pressed(Action::LoadState)) PortDebug::RequestSaveStateHotkey(2);

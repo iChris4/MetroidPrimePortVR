@@ -14,6 +14,7 @@
 
 #ifdef TARGET_PC
 #include <memory>
+#include <optional>
 #include <vector>
 #endif
 
@@ -137,8 +138,13 @@ public:
   std::unique_ptr< CPortVfxData > xPortVfx;
   // port-only XFMD (EPortXfmd); kept outside xPortVfx, which a bad VMAT block drops
   u8 xPortXfmd = kPortXfmdRetail;
+  // port-only PMRF: Remastered PMRB/PMCF. 0 = retail (orientation * PMRT, PMOP turned by the
+  // orientation), 1 = PMRT alone, 2 = orientation * PMRT; for 1 and 2 PMOP turns with the model.
+  u8 xPortPmrqFrame = 0;
   // port-only PIRN: a converted Remastered effect, whose nested IRND elements are stable per particle
   bool xPortIrnd = false;
+  // port-only PGID: the first word of a converted Remastered PART's GUID (CElementGen::PortChildSeed)
+  u32 xPortGuidWord = 0;
   // Exact-source nested Remastered point-light metadata (PHDR/PIR0/POR0). The
   // radius elements are owned here and evaluated by the live generator.
   bool xPortNestedHdrLight = false;
@@ -146,16 +152,82 @@ public:
   CRealElement* xPortNestedLightOuterRadius = nullptr;
   // port-only PVRT: Remastered particle variables (names, types, defaults)
   std::unique_ptr< CPortVarTable > xPortVars;
-  // port-only PFCM: each model particle is turned to face the camera before PMRT
-  bool xPortFaceCamera = false;
+  // Port-only PSYS: the system variables (CElementGen::PortEvalSys).
+  std::unique_ptr< CPortSys > xPortSys;
   // port-only PSHP: Remastered SSHP sprite mesh (0 quad; 3 triangle, 4 pentagon, 5 hexagon, 6 octagon)
   u8 xPortSpriteShape = 0;
+  // port-only PBDM: Remastered's blend row where the alpha blend stands in for it
+  // (CElementGen::PortBlendSrc/Dst). 0 = retail alpha, 1 premultiplied, 3 opaque; 2 is AAPH.
+  u8 xPortBlend = 0;
   // port-only PSWX: swooshes started beyond SSWH's one, each with its start frame
   struct PortExtraSwoosh {
     TCachedToken< CSwooshDescription > swoosh;
     int frame;
   };
   std::vector< PortExtraSwoosh > xPortExtraSwooshes;
+  // port-only PKSM: Remastered's spawn tables as its CSpawnSystemKeyframeData keeps them
+  // (ctor 0x293350; run by CElementGen::PortSpawnTables). Replaces KSSM when present.
+  struct PortKssmSpawn {
+    u32 type = 0; // 'PART', 'SWHC' or 'ELSC'
+    // Only the one of `type` is set: a default CToken has no reference, which its
+    // assignment and destructor would dereference.
+    std::optional< TCachedToken< CGenDescription > > part;
+    std::optional< TCachedToken< CSwooshDescription > > swoosh;
+    std::optional< TCachedToken< CElectricDescription > > electric;
+    CIntElement* instances = nullptr; // GetNumInstances (0x2940fc), evaluated at the current frame
+    u32 component = ~0u; // its SEVT component in PortKssm::components; ~0u places it as the parent
+  };
+  // A node of a component's expression trees (pos, rot, the gravity): op is its fourcc, args index
+  // PortKssm::nodes. CNST reals keep `value`; VARF keeps the variable in `slot`; KPIN and IRND keep
+  // their per-instance latch (3 floats or 1) at `slot` of PortKssmChild::latches.
+  struct PortKssmNode {
+    u32 op = 0;
+    u32 args[5] = {};
+    u32 argCount = 0;
+    float value = 0.f;
+    u32 slot = 0;
+    bool loop = false; // KEYE
+    u32 loopStart = 0;
+    std::vector< float > keys;
+  };
+  // An SEVT(SMOV) component: the pos node, the constant delta, the rot node (~0u for NONE) and the
+  // GRAV vector node (~0u for none); `latches` floats per instance. liveExtt: pos reads EXTT
+  // outside any KPIN, so the child follows the emitter.
+  struct PortKssmComponent {
+    u32 pos = 0;
+    float delta[3] = {};
+    u32 rot = ~0u;
+    u32 grav = ~0u;
+    u32 latches = 0;
+    bool liveExtt = false;
+  };
+  struct PortKssmEntry {
+    u32 frame = 0;
+    std::vector< PortKssmSpawn > spawns;
+  };
+  struct PortKssmTable {
+    u32 start = 0;
+    bool periodConst = true; // the period attribute's type is 0 (a constant)
+    s32 period = 0; // its value when constant
+    CIntElement* periodElement = nullptr;
+    std::vector< PortKssmEntry > entries;
+  };
+  struct PortKssm {
+    u32 end = 0;
+    std::vector< PortKssmTable > tables;
+    std::vector< PortKssmNode > nodes;
+    std::vector< PortKssmComponent > components;
+    PortKssm() = default;
+    PortKssm(const PortKssm&) = delete;
+    PortKssm& operator=(const PortKssm&) = delete;
+    ~PortKssm();
+  };
+  std::unique_ptr< PortKssm > xPortKssm;
+  // port-only PSMV: XFMD 4's SMVR mover (CSimpleMoverElement, build/mpr/vfx/RESOLVED-xfmd.md)
+  // as one component in the PKSM node format, or no component for an XFMD 4 with no SMVR (the
+  // emitter's transform unused). Absent for the identity SMOV(EXTT, 0, EXTR), which is the
+  // emitter's own frame.
+  std::unique_ptr< PortKssm > xPortMover;
 #endif
   CVectorElement* x58_PMOP;
   CVectorElement* x5c_PMRT;

@@ -4,6 +4,8 @@
 #include "debug_ui_internal.h"
 
 #include "port_debug.h"
+#include "port_disc.h"
+#include "port_flaahgra_music.h"
 #include "port_pointer.h"
 
 #include <aurora/imgui.h>
@@ -11,6 +13,10 @@
 #include <musyx/port_voices.h>
 
 #include <algorithm>
+#include <cstdio>
+#include <fstream>
+#include <mutex>
+#include <string>
 #include <vector>
 
 namespace PortDebug {
@@ -25,6 +31,72 @@ void DrawAudio() {
   if (ImGui::Checkbox("MusyX audio (effects/streams)", &musyx)) {
     SetMusyxAudioEnabled(musyx);
     MarkDirty();
+  }
+}
+
+// The full Flaahgra boss theme for an NTSC disc (port_flaahgra_music.h).
+void DrawFlaahgraTheme() {
+  const PortDisc::Version disc = PortDisc::Current();
+  if (disc == PortDisc::Version::Pal) {
+    return;  // the PAL disc already has the whole track
+  }
+  ImGui::SeparatorText("Flaahgra boss theme");
+  std::string picked;
+  {
+    std::lock_guard lock(sRemasteredPickMutex);
+#if defined(__ANDROID__)
+    // A pick the previous process never saw (the game was killed behind the picker).
+    static bool sTookFile = false;
+    if (!sTookFile) {
+      sTookFile = true;
+      std::ifstream in(RemasteredPickFile(kFlaahgraPick));
+      std::string uri;
+      if (std::getline(in, uri) && !uri.empty()) {
+        sFlaahgraPick = uri;
+      }
+    }
+#endif
+    picked.swap(sFlaahgraPick);
+  }
+  static std::string sStartError;
+  if (!picked.empty()) {
+#if defined(__ANDROID__)
+    std::remove(RemasteredPickFile(kFlaahgraPick).c_str());
+#endif
+    sStartError = PortFlaahgraMusic::Start(picked) ? "" : "An import is already running.";
+  }
+  const PortFlaahgraMusic::State state = PortFlaahgraMusic::Status();
+  const bool installed = PortFlaahgraMusic::Installed();
+  ImGui::BeginDisabled(state.running);
+  if (ImGui::Button(installed ? "Import the full Flaahgra theme again..." : "Full Flaahgra theme...")) {
+    OpenRemasteredDialog(kFlaahgraPick);
+  }
+  ImGui::EndDisabled();
+  ItemHelp("The NTSC discs have the Flaahgra theme cut to its first 36 s, so the fight loops that. "
+           "Pick your own PAL or Japanese GameCube disc, or Metroid Prime Trilogy (Wii), to add its whole "
+           "114 s track as a mod (flaahgra-full-theme). Use Reload mods (F1 > Mods) or restart to hear it. "
+           "Only these two audio files are taken. Adding a PAL disc's languages (F1 > Game > Language) "
+           "adds this too.");
+  if (installed && !state.running) {
+    ImGui::SameLine();
+    if (ImGui::Button("Remove##flaahgra")) {
+      PortFlaahgraMusic::Remove();
+      sStartError.clear();
+    }
+    ImGui::SetItemTooltip("Deletes the imported theme. Reload mods or restart to go back to the short one.");
+  }
+  if (state.running) {
+    ImGui::TextDisabled("%s...", state.message.c_str());
+  } else if (state.finished && !state.ok) {
+    ImGui::TextColored(ThemeWarnColor(), "%s", state.message.c_str());
+  } else if (!sStartError.empty()) {
+    ImGui::TextColored(ThemeWarnColor(), "%s", sStartError.c_str());
+  } else if (state.finished && state.ok) {
+    ImGui::TextWrapped("%s", state.message.c_str());
+  } else if (installed) {
+    ImGui::TextDisabled("Full theme added. Reload mods or restart to apply it.");
+  } else {
+    ImGui::TextDisabled("Not added: the fight plays the short NTSC theme.");
   }
 }
 

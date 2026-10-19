@@ -16,6 +16,7 @@
 #include "Kyoto/CResFactory.hpp"
 #include "Kyoto/Streams/CMemoryInStream.hpp"
 #include "Kyoto/Streams/CMemoryStreamOut.hpp"
+#include "MetroidPrime/CInGameGuiManager.hpp"
 #include "MetroidPrime/CMain.hpp"
 #include "MetroidPrime/CMemoryCard.hpp"
 #include "MetroidPrime/CStateManager.hpp"
@@ -234,9 +235,13 @@ bool Capture(CStateManager& mgr, Header& header, std::vector< uint8_t >& blob) {
   blob.assign(kBlobSize, 0);
   size_t gameBits = 0;
   {
+    // During a state load's restore, areas not yet spawned carry the state's spawn bits
+    // (#161): write their live bits.
+    SetSpawnLayersLive(true);
     CMemoryStreamOut out(blob.data(), blob.size());
     gpGameState->PutTo(out);
     gameBits = out.PortBitsWritten();
+    SetSpawnLayersLive(false);
   }
   // After the stream is gone: it flushes its last byte at the destructor, and
   // the record's fingerprint has to cover the bytes as they are left here.
@@ -283,6 +288,7 @@ void DoSave(CStateManager& mgr, int slot) {
 }
 
 void QuitToPending(CStateManager& mgr) {
+  DisarmSpawnLayers();
   sInstallPending = true;
   sPlacePending = false;
   sRoomPending = false;
@@ -478,6 +484,8 @@ void Place(CStateManager& mgr) {
   mgr.CameraManager()->ResetCameras(mgr);
   sPendingBlob.clear();
   sRoomPending = PortDebug::SaveStateRoomState() && !h.roomState.empty();
+  if (!sRoomPending)
+    DisarmSpawnLayers();  // no restore will run to the end that disarms them
   sRoomFrames = 0;
   sRoomDone.clear();
   sRoomStats = {};
@@ -491,6 +499,7 @@ void TickRoomState(CStateManager& mgr) {
   if (waiting > 0 && ++sRoomFrames < kRoomApplyFrames)
     return;
   sRoomPending = false;
+  DisarmSpawnLayers();
   PortLog::Write("[savestate] room state: %d applied, %d removed, %d unmatched, %d areas skipped\n",
                  sRoomStats.applied, sRoomStats.removed, sRoomStats.unmatched, sRoomStats.skipped);
 }
@@ -582,7 +591,10 @@ ResumeContext GatherResumeContext() {
   ctx.cinematic = mgr->GetCameraManager() != nullptr && mgr->GetCameraManager()->IsInCinematicCamera();
   ctx.transition = mgr->GetWorldTransManager() != nullptr &&
                    mgr->GetWorldTransManager()->GetTransType() != CWorldTransManager::kTT_Disabled;
-  ctx.saveUi = mgr->GetInSaveUI();
+  // Not CStateManager::GetInSaveUI: that flag goes true at the first pause or message screen and only
+  // a save station clears it (ThinkSaveStation reads it as "the save UI was exited").
+  const CInGameGuiManager* gui = CInGameGuiManager::PortCurrent();
+  ctx.saveUi = gui != nullptr && gui->IsInOrTransitioningToOrFromState(kIGGS_PauseSaveGame);
   return ctx;
 }
 
@@ -715,6 +727,8 @@ bool Tick(CStateManager& mgr) {
     sPlacePending = false;
     if (static_cast< uint32_t >(mgr.GetWorld()->IGetWorldAssetId()) == sPendingHeader.worldId) {
       Place(mgr);
+    } else {
+      DisarmSpawnLayers();
     }
     if (sResumeLoading) {
       // The file stays until the next snapshot replaces it: a crash before
@@ -766,7 +780,10 @@ void ReloadModsNow() {
 void SetInFrontEnd(bool inFrontEnd) {
   sInFrontEnd = inFrontEnd;
   if (inFrontEnd) {
-    // Back at the title: the snapshot belongs to a game that was left.
+    // Back at the title: the snapshot, a room restore still running and the layers
+    // armed for it belong to a game that was left.
+    sRoomPending = false;
+    DisarmSpawnLayers();
     std::lock_guard< std::mutex > lock(sSnapMutex);
     sSnap.valid = false;
     sSnap.bytes.clear();
@@ -811,16 +828,36 @@ void InstallPending() {
     }
   }
   LoadMapData(sPendingBlob);
+  // Rebuild the areas with the layers their objects were spawned with (#161); each area puts
+  // the saved live bits back as its objects are spawned.
+  if (PortDebug::SaveStateRoomState())
+    ArmSpawnLayers(sPendingHeader.roomState, sPendingHeader.worldId);
   sPlacePending = true;
 }
 
 namespace {
 
-bool SafeNow(CStateManager& mgr) {
-  const ResumeContext ctx = GatherResumeContext();
-  std::string why;
-  return ResumeSkipReason(ctx) == nullptr && PlayerCanSave(mgr, why);
+// Logs why quick resume is (not) taking snapshots, once per change of reason.
+void ResumeNote(const std::string& reason) {
+  static std::string sLast;
+  if (reason == sLast)
+    return;
+  sLast = reason;
+  PortLog::Write("[resume] snapshots: %s\n", reason.c_str());
 }
+
+// The reason a snapshot can't be taken now, or empty when it can.
+std::string UnsafeReason(CStateManager& mgr) {
+  const ResumeContext ctx = GatherResumeContext();
+  if (const char* skip = ResumeSkipReason(ctx))
+    return skip;
+  std::string why;
+  if (!PlayerCanSave(mgr, why))
+    return why;
+  return {};
+}
+
+bool SafeNow(CStateManager& mgr) { return UnsafeReason(mgr).empty(); }
 
 uint64_t RoomKey(const CStateManager& mgr) {
   return (static_cast< uint64_t >(static_cast< uint32_t >(mgr.GetWorld()->IGetWorldAssetId())) << 32) |
@@ -843,11 +880,15 @@ bool TakeSnapshot(CStateManager& mgr) {
   Capture(mgr, header, blob);
   ResumeSnapshot snap;
   snap.meta = CurrentMeta();
-  if (snap.meta.fileIdx > 2)
+  if (snap.meta.fileIdx > 2) {
+    ResumeNote("blocked: no card file selected (file " + std::to_string(snap.meta.fileIdx) + ")");
     return false;
+  }
   snap.path = ResumePath();
-  if (snap.path.empty())
+  if (snap.path.empty()) {
+    ResumeNote("blocked: no resume path (no user folder)");
     return false;
+  }
   snap.bytes = EncodeResume(snap.meta, Encode(header, blob));
   snap.world = header.world;
   snap.room = header.room;
@@ -977,6 +1018,7 @@ void ResumeTick(CStateManager& mgr) {
     return;
   }
   if (sInFrontEnd || mgr.GetPlayer() == nullptr || mgr.GetWorld() == nullptr || gpGameState == nullptr) {
+    ResumeNote(sInFrontEnd ? "paused: in the front end" : "paused: no player or world");
     return;
   }
   const auto now = Clock::now();
@@ -998,18 +1040,27 @@ void ResumeTick(CStateManager& mgr) {
         sSnap.valid = false;
         sSnap.gen++;
         haveSnap = false;
+        PortLog::Write("[resume] snapshot dropped: another card file or game (file %u -> %u)\n",
+                       static_cast< unsigned >(sSnap.meta.fileIdx), static_cast< unsigned >(meta.fileIdx));
       } else {
         sameRoom = ((static_cast< uint64_t >(sSnap.worldId) << 32) | sSnap.areaId) == key;
         sinceSnap = std::chrono::duration< double >(now - sSnap.taken).count();
       }
     }
   }
-  const bool safe = SafeNow(mgr);
+  const std::string unsafe = UnsafeReason(mgr);
+  const bool safe = unsafe.empty();
+  if (!safe)
+    ResumeNote("blocked: " + unsafe);
+  else
+    ResumeNote("safe");
   if (ResumeRefreshDue(safe, haveSnap, sameRoom, std::chrono::duration< double >(now - sRoomSince).count(),
                        sinceSnap)) {
     // Written at once (a few KB): a crash leaves this snapshot to resume from.
-    if (TakeSnapshot(mgr))
-      FlushSnapshot(true);
+    if (TakeSnapshot(mgr)) {
+      if (!FlushSnapshot(true))
+        ResumeNote("blocked: writing the snapshot failed");
+    }
   }
 }
 

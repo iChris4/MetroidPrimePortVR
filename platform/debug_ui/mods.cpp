@@ -193,6 +193,13 @@ void DrawRemasteredImport() {
       ImGui::SetTooltip("The mods are unloaded while it runs, and loaded again with the new import when it ends.");
     }
     ImGui::EndDisabled();
+    ImGui::SameLine();
+    bool remakeAll = PortRemastered::RemakeAll();
+    if (ImGui::Checkbox("Full import (no reuse)##remastered", &remakeAll)) {
+      PortRemastered::SetRemakeAll(remakeAll);
+    }
+    ItemHelp("Converts everything again instead of reusing the previous import, so it takes as long "
+             "as the first one. Normally only the stages whose inputs changed are made again. Lasts until the game is closed.");
     if (state.finished && state.ok) {
       ImGui::PushStyleColor(ImGuiCol_Text, ThemeGoodColor(ImVec4(0.5f, 1.f, 0.5f, 1.f)));
       ImGui::TextWrapped("%s", state.message.c_str());

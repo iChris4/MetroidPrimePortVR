@@ -824,7 +824,12 @@ gfx::BindGroupRef common_bind_group_ref() {
   return gfx::bind_group_ref(desc);
 }
 
-gfx::BindGroupRef uniform_bind_group_ref() {
+namespace {
+// Draws record this in place of the uniform buffer's bind group: the buffer is replaced when a
+// frame outgrows it, so the group is looked up when the draw is encoded.
+constexpr auto UniformBindGroupSentinel = static_cast<gfx::BindGroupRef>(~0ull);
+
+gfx::BindGroupRef current_uniform_bind_group_ref() {
   const std::array entries{
       wgpu::BindGroupEntry{
           .binding = 0,
@@ -840,6 +845,13 @@ gfx::BindGroupRef uniform_bind_group_ref() {
   };
   return gfx::bind_group_ref(desc);
 }
+
+gfx::BindGroupRef resolve_bind_group(gfx::BindGroupRef ref) {
+  return ref == UniformBindGroupSentinel ? current_uniform_bind_group_ref() : ref;
+}
+} // namespace
+
+gfx::BindGroupRef uniform_bind_group_ref() { return UniformBindGroupSentinel; }
 
 wgpu::RenderPipeline create_pipeline(const PipelineConfig& config) {
   ZoneScoped;
@@ -969,7 +981,7 @@ void render(const DrawData& data, const wgpu::RenderPassEncoder& pass) {
   pass.SetBindGroup(0, commonBindGroup, commonOffsets.size(), commonOffsets.data());
 
   if (data.bindGroup1 != 0) {
-    const auto bindGroup = gfx::find_bind_group(data.bindGroup1);
+    const auto bindGroup = gfx::find_bind_group(resolve_bind_group(data.bindGroup1));
     if ((data.dynamicBindGroupMask & DynamicGroup1) != 0) {
       const std::array offsets{data.bindGroup1DynamicOffset};
       pass.SetBindGroup(1, bindGroup, offsets.size(), offsets.data());
@@ -979,7 +991,7 @@ void render(const DrawData& data, const wgpu::RenderPassEncoder& pass) {
   }
 
   if (data.bindGroup2 != 0) {
-    const auto bindGroup = gfx::find_bind_group(data.bindGroup2);
+    const auto bindGroup = gfx::find_bind_group(resolve_bind_group(data.bindGroup2));
     if ((data.dynamicBindGroupMask & DynamicGroup2) != 0) {
       const std::array offsets{data.bindGroup2DynamicOffset};
       pass.SetBindGroup(2, bindGroup, offsets.size(), offsets.data());
