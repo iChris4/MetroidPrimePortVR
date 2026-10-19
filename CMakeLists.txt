@@ -768,6 +768,8 @@ if(MP_BUILD_TESTS)
         INCLUDES platform/include extern/aurora/include extern/aurora/lib)
     mp_port_test(port_vr_snap_turn_tests SOURCES tests/port_vr_snap_turn.cpp
         INCLUDES platform/include extern/aurora/include extern/aurora/lib)
+    mp_port_test(port_vr_smooth_turn_tests SOURCES tests/port_vr_smooth_turn.cpp
+        INCLUDES platform/include)
     mp_port_test(port_vr_action_view_tests SOURCES tests/port_vr_action_view.cpp
         INCLUDES platform/include extern/aurora/include extern/aurora/lib)
     mp_port_test(port_vr_camera_transition_tests SOURCES tests/port_vr_camera_transition.cpp

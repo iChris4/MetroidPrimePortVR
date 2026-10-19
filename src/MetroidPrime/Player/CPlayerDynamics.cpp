@@ -479,6 +479,13 @@ void CPlayer::ComputeMovement(const CFinalInput& input, CStateManager& mgr, floa
       turnSpeedMultiplier = gpTweakPlayer->GetFreeLookTurnSpeedMultiplier();
     }
   }
+#ifdef TARGET_PC
+  const auto vrPad = PortVr::GetVrPadState();
+  if (vrPad.active && vrPad.gameplay && x304_orbitState == kOS_NoOrbit &&
+      !IsMorphBallTransitioning()) {
+    turnSpeedMultiplier *= vrPad.smooth_turn_speed_scale;
+  }
+#endif
   if (x304_orbitState == kOS_NoOrbit ||
       (x3dd_lookButtonHeld && x304_orbitState != kOS_OrbitObject &&
        x304_orbitState != kOS_Grapple)) {

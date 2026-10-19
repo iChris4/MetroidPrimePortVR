@@ -73,6 +73,7 @@ VrMove VrDirectionalMove(float flatSpeed, bool onGround, float dt, uint32_t tick
 struct VrPadState {
     bool active = false;        // the VR controllers own port 0
     bool gameplay = false;      // first person, unmorphed, no menu: PrimedGun gameplay mapping
+    float smooth_turn_speed_scale = 1.0f; // rate beyond the virtual stick's full deflection
     bool orbit_lock = false;    // gameplay with the lock button held on an orbit target
     bool weapon_panel = false;  // the beam wheel is open
     int weapon_selected = -1;   // 0 Power, 1 Wave, 2 Ice, 3 Plasma, -1 none

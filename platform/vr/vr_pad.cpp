@@ -10,6 +10,7 @@
 #include "vr/vr_rumble.h"
 #include "vr/vr_settings.h"
 #include "vr/vr_snap_turn.h"
+#include "vr/vr_smooth_turn.h"
 #include "vr/vr_visor_dpad.h"
 
 #include "MetroidPrime/CStateManager.hpp"
@@ -243,7 +244,7 @@ void ApplyClassic(const OpenXRControllerState& left, const OpenXRControllerState
 }
 
 // Gameplay and orbit lock: PrimedGun's first-person layout.
-void ApplyGameplay(const OpenXRControllerState& left, const OpenXRControllerState& right, uint32_t weapon_hand,
+float ApplyGameplay(const OpenXRControllerState& left, const OpenXRControllerState& right, uint32_t weapon_hand,
                    bool orbit, bool grapple, bool grips_ready, const PortVrSettings& settings,
                    const std::array<std::string, 2>& profiles, PADStatus& pad) {
     const OpenXRControllerState& weapon = weapon_hand == 1 ? right : left;
@@ -264,14 +265,19 @@ void ApplyGameplay(const OpenXRControllerState& left, const OpenXRControllerStat
     // With the snap turn on it is the only thing that does: the look stick
     // then only snaps, and a snap waits until the grapple is over. PrimedGun's
     // lock layout, which L held on the grapple point gave it, did the same.
+    float turnSpeedScale = 1.0f;
     pad.stickY = ToStick(move.thumbstick_y);
     if (orbit) {
         pad.stickX = ToStick(move.thumbstick_x);
     } else {
         float turn = settings.directional_movement_enabled && !grapple ? 0.0f : move.thumbstick_x;
         if (!settings.snap_turn_enabled && !modifier) {
-            const float sensitivity = std::min(settings.look_yaw_sensitivity, 1.0f);
-            turn += look.thumbstick_x * sensitivity;
+            // Grapple steering stays on the game's ordinary swing input.
+            const float sensitivity = grapple ? std::min(settings.look_yaw_sensitivity, 1.0f)
+                                              : settings.look_yaw_sensitivity;
+            const auto smooth = SmoothTurn::Mix(turn, look.thumbstick_x, sensitivity);
+            turn = smooth.stick;
+            turnSpeedScale = smooth.speed_scale;
         }
         pad.stickX = ToStick(turn);
     }
@@ -303,6 +309,7 @@ void ApplyGameplay(const OpenXRControllerState& left, const OpenXRControllerStat
         if (GripPressed(off, profiles[weapon_hand == 1 ? 0 : 1], settings)) pad.button |= PAD_TRIGGER_Z;
         if (GripPressed(weapon, profiles[weapon_hand], settings)) pad.button |= PAD_BUTTON_Y;
     }
+    return turnSpeedScale;
 }
 
 } // namespace
@@ -469,9 +476,10 @@ void VrPadUpdate(const CStateManager* mgr) noexcept {
 
     PADStatus pad{};
     pad.err = PAD_ERR_NONE;
+    float turnSpeedScale = 1.0f;
     if (gameplay) {
-        ApplyGameplay(left, right, weapon_hand, orbit, grapple, grips_ready, settings, snapshot.interaction_profiles,
-                      pad);
+        turnSpeedScale = ApplyGameplay(left, right, weapon_hand, orbit, grapple, grips_ready, settings,
+                                       snapshot.interaction_profiles, pad);
     } else {
         ApplyClassic(left, right, weapon_hand, morph_ball, settings, snapshot.interaction_profiles, pad);
     }
@@ -485,6 +493,7 @@ void VrPadUpdate(const CStateManager* mgr) noexcept {
     g_state.active = true;
     g_state.gameplay = gameplay;
     g_state.orbit_lock = orbit;
+    g_state.smooth_turn_speed_scale = turnSpeedScale;
     g_state.weapon_panel = g_wheel.open;
     g_state.weapon_selected = static_cast<int>(g_wheel.selected);
     g_state.weapon_hand = weapon_hand;
