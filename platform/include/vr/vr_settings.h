@@ -148,9 +148,9 @@ struct PortVrSettings {
     bool space_warp = true;
     // The scan visor window's zoom in the headset. The window copies the view
     // behind its centre and stretches it over its pane, which magnifies each
-    // eye's view; off (the default), the pane shows exactly the view behind it,
+    // eye's view; off, the pane shows exactly the view behind it,
     // clear of the scan dim, inside the window's frame. The desktop always zooms.
-    bool scan_zoom = false;
+    bool scan_zoom = true;
     // The beam wheel's hover shown on the HUD: while the weapon hand's B holds
     // the wheel open, the beam the aim ray points at has its beam box on the
     // HUD lit (CHudVisorBeamMenu), where PrimedGun drew its own panel of four

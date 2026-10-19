@@ -44,7 +44,7 @@ constexpr KeyInfo kKeys[] = {
     {"vr_remove_cinematic_bars", K::Bool, "1"},
     {"vr_sky_at_infinity", K::Bool, "1"},
     {"vr_space_warp", K::Bool, "1"},
-    {"vr_scan_zoom", K::Bool, "0"},
+    {"vr_scan_zoom", K::Bool, "1"},
     {"vr_screen_distance_meters", K::Float, "1.5", 0.5f, 5.0f, 0.05f},
     {"vr_screen_width_meters", K::Float, "2", 0.5f, 5.0f, 0.05f},
     {"vr_lean_back_degrees", K::Float, "0", -45.0f, 45.0f, 1.0f},

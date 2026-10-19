@@ -1586,18 +1586,11 @@ float CCompoundTargetReticle::CalculateClampedScale(CVector3f pos, float scale, 
   const CGameCamera& cam = mgr.GetCameraManager()->GetCurrentCamera(mgr);
   CTransform4f camXf = mgr.GetCameraManager()->GetCurrentCameraTransform(mgr);
 #ifdef TARGET_PC
-  // Draws pass points placed for the presented camera (PortPresentGroup), but
-  // the scale is measured against the tick's camera. Between ticks the two are
-  // up to a step apart, so walking forward or back pulsed the clamped size of
-  // the X-ray ring and thermal reticle at every sim step (issue #97). Measure
-  // the point where it sits relative to the drawn camera.
-  pos = mgr.GetCameraManager()->GetSimulationCameraTransform(mgr) * camXf.GetInverse() * pos;
-#endif
-  CVector3f viewSpace = cam.GetTransform().TransposeMultiply(pos);
-#ifdef TARGET_PC
   const auto settings = PortVr::GetVrSettings();
   const bool scanVisor = mgr.GetPlayerState()->GetCurrentVisor() == CPlayerState::kPV_Scan;
-  if (PortVr::VrImmersive() && settings.CannonTargetingForVisor(scanVisor)) {
+  // Scan targets follow the headset gaze even when cannon targeting is off.
+  // Body-camera forward depth reaches zero when the player looks sideways.
+  if (PortVr::VrImmersive() && (scanVisor || settings.CannonTargetingForVisor(scanVisor))) {
     CVector3f head = camXf.GetTranslation();
     CVector3f gaze;
     PortVr::VrHeadGaze(camXf, head, gaze);
@@ -1610,7 +1603,11 @@ float CCompoundTargetReticle::CalculateClampedScale(CVector3f pos, float scale, 
     return PortVr::LookScan::ScanIndicatorScale(
         {offset.GetX(), offset.GetY(), offset.GetZ()}, unitWidth, clampMin, clampMax, scale);
   }
+  // Desktop size clamps use the tick camera; convert the presented point only
+  // after the headset-distance path has measured it in the rendered world.
+  pos = mgr.GetCameraManager()->GetSimulationCameraTransform(mgr) * camXf.GetInverse() * pos;
 #endif
+  CVector3f viewSpace = cam.GetTransform().TransposeMultiply(pos);
   float projX1 = cam.GetPerspectiveMatrix().MultiplyOneOverW(viewSpace).GetX();
   float pixelScale =
       cam.GetPerspectiveMatrix().MultiplyOneOverW(viewSpace + CVector3f(scale, 0.f, 0.f)).GetX() -

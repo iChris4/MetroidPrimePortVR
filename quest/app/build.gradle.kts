@@ -110,8 +110,8 @@ android {
         // Quest 2 shipped Android 10 (API 29); AHardwareBuffer needs 26.
         minSdk = 29
         targetSdk = 34
-        versionCode = 5
-        versionName = "2.0.0-alpha.4"
+        versionCode = 6
+        versionName = "2.0.0-beta.1"
 
         ndk {
             abiFilters += "arm64-v8a"
