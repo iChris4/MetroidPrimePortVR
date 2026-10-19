@@ -1022,7 +1022,11 @@ int main(int argc, char** argv) {
     {
         char why[96] = "";
         pipelineLazy = PortMemoryLog::LowRamDevice(why, sizeof(why));
-#if defined(__ANDROID__)
+        // PrimedGun: not on the Quest. A Vulkan multiview eye pass encoded while its pipelines
+        // are still building (draws skipped) faults the Quest 3's GPU (Adreno 740: "CP opcode
+        // error", VK_ERROR_DEVICE_LOST) in the first immersive frames; built at startup, as
+        // before, they are ready by then. A low-RAM device still builds them on first use.
+#if defined(__ANDROID__) && !defined(MP_ENABLE_OPENXR)
         if (!pipelineLazy) {
             pipelineLazy = true;
             std::strncat(why, ", Android", sizeof(why) - std::strlen(why) - 1);

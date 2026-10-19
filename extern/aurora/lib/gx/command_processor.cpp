@@ -1147,7 +1147,12 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u32 vtxCount, gfx::Rang
     if ((cache.multiviewPipelineMask & modeBit) == 0) {
       PipelineConfig eyeConfig = cache.config;
       eyeConfig.shaderConfig.multiview = eyeMode;
-      cache.multiviewPipelineRefs[eyeMode] = gfx::pipeline_ref(eyeConfig);
+      // A multiview eye pass must not run with any of its draws skipped for a pipeline still
+      // building: on the Quest 3 (Adreno 740) such a pass faults the GPU ("CP opcode error",
+      // VK_ERROR_DEVICE_LOST). The cache builds them at startup; one it did not have is waited
+      // for here, a hitch the first time instead. Per-eye passes (EyeClipImmediate) skip safely.
+      const bool waitForBuild = eyeMode != EyeClipImmediate || blocking_pipelines();
+      cache.multiviewPipelineRefs[eyeMode] = gfx::pipeline_ref(eyeConfig, waitForBuild);
       cache.multiviewPipelineMask |= modeBit;
     }
     multiviewPipeline = cache.multiviewPipelineRefs[eyeMode];

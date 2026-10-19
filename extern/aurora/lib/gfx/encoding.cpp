@@ -182,6 +182,34 @@ void render_stereo_eye_pass_commands(const wgpu::RenderPassEncoder& pass, Render
   }
 }
 
+// Whether a multiview eye pass would issue any draw. A multiview render pass with no draws
+// faults the Quest 3's Adreno 740 (kernel "CP opcode error"; the device is lost after a few
+// within two seconds): the frames a save state or world load records draw nothing, and so
+// does a pass whose draws' pipelines are all still building. Such a pass replays per eye
+// instead (render_stereo_eye_pass), which clears and draws nothing without a fault.
+bool stereo_multiview_pass_draws(const RenderPass& passInfo) {
+  for (const auto& cmd : passInfo.commands) {
+    if (cmd.type != CommandType::Draw) {
+      continue;
+    }
+    const auto& draw = cmd.data.draw;
+    wgpu::RenderPipeline pipeline;
+    if (draw.kind == DrawKind::GX) {
+      const auto& data = inline_payload<gx::DrawData>(draw.payload.data());
+      if (data.stereoUniformOffset[0] != UINT32_MAX && data.multiviewPipeline != PipelineRef{} &&
+          get_pipeline(data.multiviewPipeline, pipeline) && pipeline) {
+        return true;
+      }
+    } else if (draw.kind == DrawKind::Clear) {
+      const auto& data = inline_payload<clear::DrawData>(draw.payload.data());
+      if (data.multiviewPipeline != PipelineRef{} && get_pipeline(data.multiviewPipeline, pipeline) && pipeline) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 // One eye's render pass over the same attachments semantics as the mono pass
 // (its clears and loads mirrored), on the eye target.
 void render_stereo_eye_pass(wgpu::CommandEncoder& cmd, RenderPass& passInfo, uint32_t passIndex, uint32_t eye) {
@@ -520,7 +548,7 @@ void render(wgpu::CommandEncoder& cmd, FramePacket& frame, RenderPass& passInfo,
 
   // The same pass into each eye, before this pass's resolve so an eye draw
   // samples the EFB copies at the same point in the frame as the mono draw did.
-  if (passInfo.stereo.enabled && passInfo.stereo.multiview) {
+  if (passInfo.stereo.enabled && passInfo.stereo.multiview && stereo_multiview_pass_draws(passInfo)) {
     render_stereo_multiview_pass(cmd, passInfo, passIndex);
   } else if (passInfo.stereo.enabled) {
     for (uint32_t eye = 0; eye < AURORA_STEREO_EYE_COUNT; ++eye) {

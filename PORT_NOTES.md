@@ -1,3 +1,53 @@
+## VR: an empty multiview eye pass faults the Quest 3's GPU (2026-10-19)
+
+beta.1 (upstream port 0.30.0) crashed on the Quest 3 with Multiview eyes on: a
+few frames after the presentation turned immersive after a save load, a resume,
+a save-state load from the VR menu or the Artifact Temple's crater warp, the
+kernel logged "adreno-gen7-gmu CP opcode error", Dawn "vkQueueSubmit failed with
+VK_ERROR_DEVICE_LOST", and the render worker aborted. Multiview off never
+crashed; Dawn's validation sees nothing wrong.
+
+The cause, from the kernel log against a per-pass count of the draws each eye
+pass issues: every Vulkan multiview render pass that issues no draw at all is
+one CP opcode error on the Adreno 740 (deterministic: four empty passes, four
+faults), and kgsl kills the context after three faults within two seconds,
+which Dawn reports as the device lost at its next submit. Passes with nothing
+in them come from the frames a save state or world load records (four frames
+of viewport and scissor commands only), and from upstream 570dc7709, which
+builds every Android build's pipelines on first use instead of at startup
+(issue #162): the first immersive frames then replay passes whose draws all
+wait for their pipeline, so the HUD pass was empty for four frames and the
+world pass had 205 of 374 draws. That is why beta.1 crashed on the first save
+load while 0.28 and 0.29 (precompiled) only crashed on later reloads.
+
+- `extern/aurora/lib/gfx/encoding.cpp`: `stereo_multiview_pass_draws` scans the
+  pass for a GX draw with a built multiview pipeline and staged eye uniforms, or
+  a clear with its multiview pipeline; when there is none, the pass replays per
+  eye (`render_stereo_eye_pass`, whose views exist under multiview too), which
+  honours the same clear and load semantics and faults nothing. Draws whose
+  multiview pipeline is still building are skipped there as before.
+- `platform/main.cpp`: the OpenXR build builds the cached pipelines at startup
+  on Android again (6.4-7.0 s behind the title and the compile toast on a warm
+  Quest 3 cache); only a low-RAM device (under 4 GiB or `isLowRamDevice()`)
+  builds them on first use. `MP_PIPELINE_LAZY=1` still forces first use.
+- `extern/aurora/lib/gx/command_processor.cpp`: the eye passes' multiview
+  pipelines (MultiviewClip, MultiviewFull) are looked up blocking, so a config
+  the cache lacks waits for its build (a one-off hitch; 260 ms with every
+  multiview pipeline missing) instead of thinning a multiview pass. Per-eye
+  passes (PC VR, multiview off) still skip a draw whose pipeline is building.
+
+Desk reproduction on the Quest 3 (headset on the desk, proximity automated,
+`MP_SKIP_CUTSCENES=1 MP_FAST_BOOT=1`, logs read back over adb): a save-state
+load through the console (`state load 8`, Artifact Temple) faulted 2 of 2 times
+before the change (3 empty passes, 4 faults each) and 0 of 3 after; the console
+warp to the Crater Entry Point and 3 cold boots into the Landing Site ran with no
+fault, and the kernel log showed none across the run. Before the precompile
+change, the Landing Site boot alone faulted in about 7 of 10 boots. Ruled out
+on the way: Dawn validation (clean), the storage clamp, passthrough, shadows,
+room geometry on the GPU, deindexing, direct presentation, pipelined
+rendering, the EFB resize rework, Dawn's recycled-memory release, the staging
+spill, and serialising pipeline creation against Queue::Submit.
+
 ## The map screen draws its rooms in one batch (2026-10-12)
 
 On the Quest 3 the map screen was the slowest screen in the game: one GX draw
