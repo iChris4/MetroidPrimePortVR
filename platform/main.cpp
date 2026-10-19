@@ -1248,6 +1248,11 @@ int main(int argc, char** argv) {
         // PortVr: a Quest has no desktop to fall back to.
         if (PortVr::GetVrSettings().required || PortVr::OpenXRHeadsetIsOnlyDisplay()) {
             PortVr::OpenXRRequestAppQuit("The headset could not start: " + PortVr::OpenXRLastError());
+            // PortVr: every early exit from here on ends OpenXR itself. Left to the static
+            // OpenXRIntegration's destructor, xrDestroyInstance runs after the statically
+            // linked loader's own statics are gone and crashes in its logger (a crash dump
+            // at exit when the game closed without a disc).
+            PortVr::OpenXRShutdownBeforeAurora();
             return 1;
         }
     }
@@ -1402,6 +1407,7 @@ int main(int argc, char** argv) {
                      "metroid_prime_port: no disc image given.\n"
                      "  usage: %s <path to Metroid Prime (USA v1.00, or PAL: experimental).iso>\n"
                      "  or set MP_DISC, or place the image next to the executable.\n", argv[0]);
+        PortVr::OpenXRShutdownBeforeAurora();
         aurora_shutdown();
         return 1;
     }
@@ -1441,6 +1447,7 @@ int main(int argc, char** argv) {
             if (!discFromArgs) {
                 PortLog::Write("metroid_prime_port: closed at the disc message\n");
             }
+            PortVr::OpenXRShutdownBeforeAurora();
             aurora_shutdown();
             return 1;
         }
@@ -1448,6 +1455,7 @@ int main(int argc, char** argv) {
         discImage = PickDisc();
         if (discImage.empty()) {
             PortLog::Write("metroid_prime_port: no disc image given.\n");
+            PortVr::OpenXRShutdownBeforeAurora();
             aurora_shutdown();
             return 1;
         }
@@ -1544,6 +1552,7 @@ int main(int argc, char** argv) {
             PortLog::Write("port: OpenXR did not start: %s\n", PortVr::OpenXRLastError().c_str());
             if (PortVr::GetVrSettings().required || PortVr::OpenXRHeadsetIsOnlyDisplay()) {
                 PortVr::OpenXRRequestAppQuit("The headset session could not start: " + PortVr::OpenXRLastError());
+                PortVr::OpenXRShutdownBeforeAurora();
                 aurora_dvd_close();
                 aurora_shutdown();
                 return 1;
