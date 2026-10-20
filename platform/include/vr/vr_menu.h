@@ -359,6 +359,7 @@ enum class PortItem : uint8_t {
     LookToLockOn,
     LookToGrapple,
     LookLockNoCameraTurn,
+    WristVisor,
     BeamWheelHighlight,
     RoomScale,
     MessageBoxInView,
@@ -409,6 +410,8 @@ inline PortList PortItems(const View& view) {
     add(PortItem::RoomScale);
     add(PortItem::MessageBoxInView);
     add(PortItem::FloatingHud);
+    add(PortItem::WristVisor);
+
     add(PortItem::Reset);
     return list;
 }
@@ -706,6 +709,8 @@ inline Row PortRow(const State& s, const PortVrSettings& v, const View& view, Po
         return {"LOOK TO GRAPPLE", OnOff(v.look_to_grapple)};
     case PortItem::LookLockNoCameraTurn:
         return {"NO CAMERA TURN ON LOCK", OnOff(v.look_lock_no_camera_turn)};
+    case PortItem::WristVisor:
+        return {"OFF-HAND VISOR WRISTBAND", OnOff(v.wrist_visor_enabled)};
     case PortItem::BeamWheelHighlight:
         return {"BEAM WHEEL HUD HIGHLIGHT", OnOff(v.beam_wheel_hud_highlight)};
     case PortItem::RoomScale:
@@ -1137,6 +1142,14 @@ inline void ResetCustomControllerLayout(PortVrSettings& v) {
     v.custom_grip_threshold = d.custom_grip_threshold;
     v.custom_touchpad_threshold = d.custom_touchpad_threshold;
     v.custom_stick_threshold = d.custom_stick_threshold;
+    v.wrist_visor_enabled = d.wrist_visor_enabled;
+    v.wrist_offset_x = d.wrist_offset_x;
+    v.wrist_offset_y = d.wrist_offset_y;
+    v.wrist_offset_z = d.wrist_offset_z;
+    v.wrist_pitch = d.wrist_pitch;
+    v.wrist_yaw = d.wrist_yaw;
+    v.wrist_roll = d.wrist_roll;
+
     v.custom_label_profile = d.custom_label_profile;
     v.custom_move_hand = d.custom_move_hand; v.custom_look_hand = d.custom_look_hand;
     v.custom_visor_hand = d.custom_visor_hand; v.custom_visor_mode = d.custom_visor_mode;
@@ -1242,6 +1255,14 @@ inline void ResetAll(PortVrSettings& v) {
 // to its default.
 inline void ResetPortConfig(PortVrSettings& v) {
     const PortVrSettings d{};
+    v.wrist_visor_enabled = d.wrist_visor_enabled;
+    v.wrist_offset_x = d.wrist_offset_x;
+    v.wrist_offset_y = d.wrist_offset_y;
+    v.wrist_offset_z = d.wrist_offset_z;
+    v.wrist_pitch = d.wrist_pitch;
+    v.wrist_yaw = d.wrist_yaw;
+    v.wrist_roll = d.wrist_roll;
+
     v.render_scale = d.render_scale;
     v.display_refresh_rate = d.display_refresh_rate;
     v.foveation = d.foveation;
@@ -1655,6 +1676,9 @@ inline void Activate(State& s, PortVrSettings& v, const View& view, double now, 
             break;
         case PortItem::LookLockNoCameraTurn:
             v.look_lock_no_camera_turn = !v.look_lock_no_camera_turn;
+            break;
+        case PortItem::WristVisor:
+            v.wrist_visor_enabled = !v.wrist_visor_enabled;
             break;
         case PortItem::BeamWheelHighlight:
             v.beam_wheel_hud_highlight = !v.beam_wheel_hud_highlight;

@@ -54,3 +54,33 @@ Changing controller type translates bindings that match the previous controller
 defaults to the new controller equivalents. Custom assignments and sensitivity
 values are retained. Load default layout resets every binding to the selected
 controller preset and restores sensitivity defaults.
+
+## Visor wristband
+
+Enable **Controller > Visor selection > Off-hand visor wristband** (off by default).
+It also appears in the F1 VR settings and the headset's Port Config page.
+The HUD's actual visor icon and frame models follow the off-hand wrist in a single row on the side of the forearm
+(mirrored for left-handed play).
+Bring the main controller above an icon (up to 12 cm) and select it
+(A or right trigger in right-hand mode; X or left trigger in left-hand mode). The wrist calls the same model draw routine as the HUD, using the actual widget
+colour, inherited opacity, HUD draw alpha, lighting and authored blend mode. Hover enlarges the icon slightly; locked visors remain dim. They draw after the visor effects, alongside the HUD, while retaining tracked
+world-space placement and drawing over the gun. Unacquired visors are dim and cannot be selected.
+The symbols draw over the cannon; their transparent areas reveal the scene.
+
+The wristband works with the original controls and custom layouts. Selection uses a stable hover and buffers the press until a simulation tick
+can accept it (up to 0.65 seconds). It requires a fresh press and consumes that
+button until release, preventing an
+accidental shot, jump or other bound action. It is hidden in menus, cinematics and
+Morph Ball, and cannot change visors during scanning or grappling; a press during a short visor transition is buffered.
+
+### Wrist placement
+
+The approved placement defaults are X/Y/Z = 0 m, pitch 40°, yaw -40°, roll 50°.
+Calibration controls have been removed from the menus. Saved placement values
+remain supported, and controller/config reset restores these approved defaults.
+The whole row uses one rigid transform, keeping icon faces parallel.
+
+The row is ordered **X-ray, Thermal, Scan, Combat** from left to right. Icon
+symbols rotate 90 degrees left within their frames, reversing the quarter-turn
+for left-handed play so they stay upright. Blend passes match the HUD exactly;
+there is no independent wrist brightness boost or forced full opacity.

@@ -234,6 +234,7 @@ set(MP_PORT_SOURCES
     platform/vr/openxr_integration.cpp
     platform/vr/vr_pad.cpp
     platform/vr/vr_view.cpp
+    platform/vr/vr_wrist_visor.cpp
     platform/vr/vr_look_scan.cpp
     platform/vr/vr_menu.cpp
     platform/vr/vr_debug_tab.cpp
@@ -771,6 +772,8 @@ if(MP_BUILD_TESTS)
         INCLUDES platform/include extern/aurora/include extern/aurora/lib)
     mp_port_test(port_vr_snap_turn_tests SOURCES tests/port_vr_snap_turn.cpp
         INCLUDES platform/include extern/aurora/include extern/aurora/lib)
+    mp_port_test(port_vr_wrist_visor_tests SOURCES tests/port_vr_wrist_visor.cpp
+        INCLUDES platform/include)
     mp_port_test(port_vr_controller_layout_tests SOURCES tests/port_vr_controller_layout.cpp
         INCLUDES platform/include)
     mp_port_test(port_vr_smooth_turn_tests SOURCES tests/port_vr_smooth_turn.cpp

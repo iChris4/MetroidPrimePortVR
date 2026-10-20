@@ -43,7 +43,7 @@ object PrimedGunTabs {
 
     // PrimedGun's Reset Controller (launcher/ui/controller_tab.cpp).
     private val CONTROLLER_KEYS = arrayOf(
-        "vr_use_right_hand", "vr_vr_overlays_enabled", "vr_vr_menu_hold_left_stick",
+        "vr_wrist_offset_x", "vr_wrist_offset_y", "vr_wrist_offset_z", "vr_wrist_pitch", "vr_wrist_yaw", "vr_wrist_roll", "vr_wrist_visor_enabled", "vr_use_right_hand", "vr_vr_overlays_enabled", "vr_vr_menu_hold_left_stick",
         "vr_vr_menu_requires_head_zone", "vr_vr_menu_floating", "vr_cinematic_screen_enabled",
         "vr_game_menu_screen_enabled", "vr_message_box_immersive", "vr_floating_hud",
         "vr_rumble_enabled",
@@ -114,7 +114,11 @@ object PrimedGunTabs {
         add(PrimedGunItem.Note(context.getString(R.string.primedgun_rumble_split_note)))
         add(slider(context, R.string.primedgun_rumble_intensity, "vr_rumble_intensity"))
 
-        add(PrimedGunItem.Header("Visor gesture tuning"))
+        add(PrimedGunItem.Header("Visor selection"))
+        add(PrimedGunItem.Switch("Off-hand visor wristband",
+            get = { LauncherSettings.bool("vr_wrist_visor_enabled") },
+            set = { LauncherSettings.setBool("vr_wrist_visor_enabled", it) }))
+        add(PrimedGunItem.Note("Move the main controller near a visor icon on your off-hand wrist and press A or right trigger in right-hand mode, or X or left trigger in left-hand mode."))
         add(slider(context, R.string.primedgun_dpad_head_radius, "vr_xr_dpad_head_radius"))
         add(slider(context, R.string.primedgun_dpad_head_y_below, "vr_xr_dpad_head_y_below"))
         add(slider(context, R.string.primedgun_dpad_deadzone, "vr_xr_dpad_deadzone"))

@@ -51,7 +51,9 @@ void BuildControllerTab(TabContext& ctx, QTabWidget* tabs) {
   ctx.Float(layout, QObject::tr("Rumble intensity"), "vr_rumble_intensity");
 
   ctx.Separator(layout);
-  layout->addWidget(ctx.Section(QObject::tr("Visor gesture tuning")));
+  layout->addWidget(ctx.Section(QObject::tr("Visor selection")));
+  ctx.Check(layout, QObject::tr("Off-hand visor wristband"), "vr_wrist_visor_enabled",
+            QObject::tr("Move the main controller near a visor icon on your off-hand wrist and press A or right trigger in right-hand mode, or X or left trigger in left-hand mode."));
   ctx.Float(layout, QObject::tr("Head radius"), "vr_xr_dpad_head_radius");
   ctx.Float(layout, QObject::tr("Below head"), "vr_xr_dpad_head_y_below");
   ctx.Float(layout, QObject::tr("Stick deadzone"), "vr_xr_dpad_deadzone");
@@ -76,6 +78,14 @@ void BuildControllerTab(TabContext& ctx, QTabWidget* tabs) {
   layout->addStretch();
 
   QObject::connect(resetController, &QPushButton::clicked, resetController, [&ctx] {
+    ctx.model.ResetToDefault("vr_wrist_visor_enabled");
+    ctx.model.ResetToDefault("vr_wrist_offset_x");
+    ctx.model.ResetToDefault("vr_wrist_offset_y");
+    ctx.model.ResetToDefault("vr_wrist_offset_z");
+    ctx.model.ResetToDefault("vr_wrist_pitch");
+    ctx.model.ResetToDefault("vr_wrist_yaw");
+    ctx.model.ResetToDefault("vr_wrist_roll");
+
     ctx.model.ResetToDefault("vr_custom_layout_enabled");
     ctx.model.ResetToDefault("vr_custom_trigger_threshold");
     ctx.model.ResetToDefault("vr_custom_grip_threshold");

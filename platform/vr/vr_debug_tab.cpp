@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "vr/vr_debug_tab.h"
+#include <cstdio>
 
 #include "vr/openxr_integration.h"
 #if defined(MP_ENABLE_OPENXR)
@@ -311,7 +312,8 @@ void DrawVrDebugTab() {
     ImGui::Text("Move stick: the game's walk");
   }
 
-  ImGui::SeparatorText("Visor gesture");
+  ImGui::SeparatorText("Visor selection");
+  changed |= ImGui::Checkbox("Off-hand visor wristband", &s.wrist_visor_enabled);
   changed |= ImGui::Checkbox("Pick visors with the off hand next to the head", &s.xr_dpad_enabled);
   ImGui::TextWrapped("Hold the off-hand controller beside the headset and push its stick: up combat, left scan, "
                      "down thermal, right X-ray. Meanwhile that stick does not move Samus.");

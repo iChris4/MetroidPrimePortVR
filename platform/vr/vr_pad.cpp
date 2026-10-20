@@ -13,6 +13,8 @@
 #include "vr/vr_smooth_turn.h"
 #include "vr/vr_controller_layout.h"
 #include "vr/vr_visor_dpad.h"
+#include "vr/vr_wrist_visor.h"
+#include "vr/vr_view.h"
 
 #include "MetroidPrime/CStateManager.hpp"
 #include "MetroidPrime/Cameras/CCameraManager.hpp"
@@ -72,6 +74,9 @@ std::mutex g_mutex;
 VrPadState g_state;
 WheelState g_wheel;
 VisorDpad::Tracker g_visor;
+WristVisor::Tracker g_wrist;
+WristVisor::SelectionQueue g_wristRequests;
+int g_wristHover = -1;
 SnapTurn::Tracker g_snap;
 float g_snap_pending = 0.0f; // degrees, positive right: VrTakeSnapTurn's, game thread only
 MoveState g_move;             // game thread only, as the ramp and its tick
@@ -123,13 +128,13 @@ double NowSeconds() noexcept {
 // The guard at the top of CPlayer::UpdateVisorState: a visor press counts only
 // unmorphed, out of a grapple and a grapple point lock, between transitions and
 // outside a scan. Anything else the game drops.
-bool VisorPressAccepted(const CStateManager& mgr, const CPlayer& player) {
+bool VisorPressAccepted(const CStateManager& mgr, const CPlayer& player, bool allowTransition = false) {
     if (player.GetOrbitState() == CPlayer::kOS_Grapple ||
         TCastToConstPtr< CScriptGrapplePoint >(mgr.GetObjectById(player.GetOrbitTargetId()))) {
         return false;
     }
     return player.GetMorphballTransitionState() == CPlayer::kMS_Unmorphed &&
-           !mgr.GetPlayerState()->GetIsVisorTransitioning() &&
+           (allowTransition || !mgr.GetPlayerState()->GetIsVisorTransitioning()) &&
            player.GetPlayerScanState() == CPlayer::kSS_NotScanning;
 }
 
@@ -381,6 +386,8 @@ void VrPadUpdate(const CStateManager* mgr) noexcept {
         g_state = {};
         g_wheel = {};
         g_visor.Reset();
+        g_wrist.Reset();
+        g_wristRequests.Reset(); g_wristHover = -1;
         g_snap.Reset();
         g_snap_pending = 0.0f;
         g_move = {};
@@ -431,6 +438,25 @@ void VrPadUpdate(const CStateManager* mgr) noexcept {
     const bool grips_ready = g_gameplay_samples >= kGripGraceSamples;
 
     const uint32_t weapon_hand = settings.use_right_hand ? 1u : 0u;
+    unsigned wristOwned = 1u; // Combat visor is always available.
+    if (mgr && mgr->GetPlayerState()) {
+        const auto& playerState = *mgr->GetPlayerState();
+        if (playerState.HasPowerUp(CPlayerState::kIT_ScanVisor)) wristOwned |= 4u;
+        if (playerState.HasPowerUp(CPlayerState::kIT_ThermalVisor)) wristOwned |= 8u;
+        if (playerState.HasPowerUp(CPlayerState::kIT_XRayVisor)) wristOwned |= 2u;
+    }
+    const bool wristActive = settings.wrist_visor_enabled && gameplay && VrImmersive();
+    const int wristHover = wristActive ? WristVisor::Hover(snapshot, weapon_hand, g_wristHover, WristVisor::Calibration(settings)) : -1;
+    const auto wrist = g_wrist.Update(wristActive, wristHover, WristVisor::SelectionPressed(snapshot, settings.use_right_hand, settings),
+                                      WristVisor::SlotMask(wristOwned), wristActive && mgr && VisorPressAccepted(*mgr, *mgr->GetPlayer(), true));
+    g_wristHover = wristHover;
+    if (!wristActive) g_wristRequests.Reset();
+    if (wrist.selected >= 0) g_wristRequests.Submit(WristVisor::VisorForSlot[wrist.selected], NowSeconds());
+    // Remove the selection press before either legacy or custom bindings see it.
+    if (wrist.consume) WristVisor::ConsumeSelection(snapshot, weapon_hand);
+    // While focused on the wrist, the other hand's primary must not fall through
+    // to a legacy/custom action (such as Morph Ball forcing a visor change).
+    if (wrist.hover >= 0) snapshot.controllers[1u - weapon_hand].primary = false;
     const uint32_t visor_hand = settings.custom_layout_enabled ? settings.custom_visor_hand : weapon_hand == 1 ? 0u : 1u; // PrimedGun's D-pad hand: the off hand
     OpenXRControllerState left = snapshot.controllers[0];
     OpenXRControllerState right = snapshot.controllers[1];
@@ -461,6 +487,7 @@ void VrPadUpdate(const CStateManager* mgr) noexcept {
                 if (!held) g_visor.Reset();
             }
         }
+        if (wrist.hover >= 0 || wrist.consume) { in.armed = false; g_visor.Reset(); }
         visor = g_visor.Update(in);
     }
     // The snap turn, on the look stick before the visor gesture takes it:
@@ -564,6 +591,9 @@ void VrPadUpdate(const CStateManager* mgr) noexcept {
     g_state.weapon_panel = g_wheel.open;
     g_state.weapon_selected = static_cast<int>(g_wheel.selected);
     g_state.weapon_hand = weapon_hand;
+    g_state.wrist_visible = wristActive;
+    g_state.wrist_hover = wrist.hover;
+    g_state.wrist_owned = wristOwned;
     g_state.visor_zone = visor.zone;
     g_state.visor_direction = static_cast<int>(visor.direction);
     g_state.move_owned = g_move.owns;
@@ -571,6 +601,8 @@ void VrPadUpdate(const CStateManager* mgr) noexcept {
     g_state.move_heading_degrees =
         g_move.owns ? std::atan2(g_move.heading[0], g_move.heading[1]) * (180.0f / 3.14159265358979f) : 0.0f;
 }
+
+int VrTakeWristVisorRequest() noexcept { return g_wristRequests.Take(NowSeconds()); }
 
 void VrNoteInGameMenu(bool open) noexcept { g_in_game_menu = open; }
 

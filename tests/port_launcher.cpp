@@ -260,6 +260,13 @@ void TestDefaultsMatchGame() {
       {"vr_rot_offset_z", FormatFloat(s.rot_offset_z)},
       {"vr_cannon_texture_slot", FormatInt(s.cannon_texture_slot)},
   };
+  expected.emplace_back("vr_wrist_offset_x", FormatFloat(s.wrist_offset_x));
+  expected.emplace_back("vr_wrist_offset_y", FormatFloat(s.wrist_offset_y));
+  expected.emplace_back("vr_wrist_offset_z", FormatFloat(s.wrist_offset_z));
+  expected.emplace_back("vr_wrist_pitch", FormatFloat(s.wrist_pitch));
+  expected.emplace_back("vr_wrist_yaw", FormatFloat(s.wrist_yaw));
+  expected.emplace_back("vr_wrist_roll", FormatFloat(s.wrist_roll));
+  expected.emplace_back("vr_wrist_visor_enabled", FormatBool(s.wrist_visor_enabled));
   expected.emplace_back("vr_custom_layout_enabled", FormatBool(s.custom_layout_enabled));
   expected.emplace_back("vr_custom_trigger_threshold", FormatFloat(s.custom_trigger_threshold));
   expected.emplace_back("vr_custom_grip_threshold", FormatFloat(s.custom_grip_threshold));
@@ -314,6 +321,12 @@ void TestRangesInsideGameClamps() {
       {"vr_custom_grip_threshold", 0.05f, 0.95f},
       {"vr_custom_touchpad_threshold", 0.05f, 0.95f},
       {"vr_custom_stick_threshold", 0.05f, 0.95f},
+      {"vr_wrist_offset_x", -0.50f, 0.50f},
+      {"vr_wrist_offset_y", -0.50f, 0.50f},
+      {"vr_wrist_offset_z", -0.50f, 0.50f},
+      {"vr_wrist_pitch", -180.00f, 180.00f},
+      {"vr_wrist_yaw", -180.00f, 180.00f},
+      {"vr_wrist_roll", -180.00f, 180.00f},
       {"vr_custom_label_profile", 0.f, 6.f},
       {"vr_custom_move_hand", 0.f, 1.f}, {"vr_custom_look_hand", 0.f, 1.f},
       {"vr_custom_visor_hand", 0.f, 1.f}, {"vr_custom_visor_mode", 0.f, 2.f},

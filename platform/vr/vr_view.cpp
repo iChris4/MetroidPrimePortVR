@@ -590,6 +590,29 @@ int VrBeamWheelHoverBeam() noexcept {
     return BeamWheel::GameBeamId(static_cast<BeamWheel::Beam>(pad.weapon_selected));
 }
 
+CTransform4f VrTrackingToWorldTransform(const CPlayer& player, const CTransform4f& cameraXf) noexcept {
+    const auto settings = GetVrSettings();
+    const auto snapshot = OpenXRGetInputSnapshot();
+    OpenXRFrameRequest request{};
+    const bool haveRequest = OpenXRLatestFrameRequest(request);
+    const float scale = haveRequest && request.units_per_meter > 0.f ? request.units_per_meter : settings.world_scale;
+    std::array<float, 3> base{};
+    if (haveRequest && request.base_valid) {
+        base = request.base_position;
+        if (s_roomScale.valid && request.tracking_origin_generation == s_roomScale.generation) {
+            base[0] += s_roomScale.consumed[0]; base[2] += s_roomScale.consumed[2];
+        }
+    } else if (snapshot.head_pose.valid) base = snapshot.head_pose.position;
+    const auto body = BodyYaw(cameraXf);
+    const auto origin = player.GetEyePosition() - body.Transform(PrimeFromXr(base) * scale);
+    const auto x = body.Transform(CVector3f(scale, 0.f, 0.f));
+    const auto y = body.Transform(CVector3f(0.f, 0.f, scale));
+    const auto z = body.Transform(CVector3f(0.f, -scale, 0.f));
+    return CTransform4f(x.GetX(), y.GetX(), z.GetX(), origin.GetX(),
+                        x.GetY(), y.GetY(), z.GetY(), origin.GetY(),
+                        x.GetZ(), y.GetZ(), z.GetZ(), origin.GetZ());
+}
+
 namespace {
 bool TrackedCannonPose(const CPlayer& player, const CTransform4f& cameraXf,
                        const PortVrSettings& settings, CVector3f& worldPosition,

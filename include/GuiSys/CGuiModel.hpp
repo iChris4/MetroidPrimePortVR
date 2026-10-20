@@ -17,6 +17,9 @@ public:
 
   const rstl::optional_object< TCachedToken< CModel > >& GetModel() const { return xb8_model; }
   bool GetIsFinishedLoadingWidgetSpecific() const override;
+#ifdef TARGET_PC
+  void DrawWrist(const CTransform4f& transform, float alpha) const;
+#endif
   void Touch() const override;
   void Draw(const CGuiWidgetDrawParms& parms) const override;
   // bool TestCursorHit(const CMatrix4f& vp, const CVector2f& point) const override;
@@ -27,6 +30,10 @@ public:
   FourCC GetWidgetTypeID() const;
 
 private:
+  void DrawModelPasses(const CGuiWidgetDrawParms& parms, bool overlay) const;
+#ifdef TARGET_PC
+  mutable float mPortHudDrawAlpha = 1.f;
+#endif
   mutable rstl::optional_object< TCachedToken< CModel > > xb8_model;
   CAssetId xc8_modelId;
   uint xcc_lightMask;

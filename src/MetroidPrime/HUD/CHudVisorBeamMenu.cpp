@@ -16,6 +16,7 @@
 
 #ifdef TARGET_PC
 #include "port_debug.h"
+#include "vr/vr_view.h"
 #endif
 
 static const char* const skBaseWidgetNames[] = {"BaseWidget_VisorMenu", "BaseWidget_BeamMenu"};
@@ -156,6 +157,11 @@ void CHudVisorBeamMenu::Update(float dt, const bool init) {
       icons[i] = x28_menuItems[i].x4_model_icon;
     }
     PortDebug::CaptureWheelIcons(x4_type, icons);
+    if (x4_type == kVBM_Visor) {
+      CGuiModel* frames[4];
+      for (int i = 0; i < 4; ++i) frames[i] = x28_menuItems[i].x0_model_loz;
+      PortVr::VrWristCaptureModels(icons, frames);
+    }
   }
 #endif
   const bool swapBeamControls = gpGameState->GameOptions().GetSwapBeamControls();

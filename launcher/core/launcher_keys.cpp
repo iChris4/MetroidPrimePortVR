@@ -19,6 +19,14 @@ using K = KeyKind;
 // tests/port_launcher.cpp checks the defaults against PortVrSettings{} and the
 // ranges against the game's clamps.
 constexpr KeyInfo kKeys[] = {
+    {"vr_wrist_visor_enabled", K::Bool, "0"},
+    {"vr_wrist_offset_x", K::Float, "0", -0.50f, 0.50f, 0.005f},
+    {"vr_wrist_offset_y", K::Float, "0", -0.50f, 0.50f, 0.005f},
+    {"vr_wrist_offset_z", K::Float, "0", -0.50f, 0.50f, 0.005f},
+    {"vr_wrist_pitch", K::Float, "40", -180.00f, 180.00f, 1.000f},
+    {"vr_wrist_yaw", K::Float, "-40", -180.00f, 180.00f, 1.000f},
+    {"vr_wrist_roll", K::Float, "50", -180.00f, 180.00f, 1.000f},
+
     {"vr_custom_layout_enabled", K::Bool, "0"},
     {"vr_custom_trigger_threshold", K::Float, "0.55", 0.05f, 0.95f, 0.01f},
     {"vr_custom_grip_threshold", K::Float, "0.55", 0.05f, 0.95f, 0.01f},

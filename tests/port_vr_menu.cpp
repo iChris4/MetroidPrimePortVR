@@ -419,15 +419,18 @@ void TestConfig() {
   Check(v.floating_hud && BuildRows(s, v, pc)[11].label == std::string("FLOATING HUD") &&
             BuildRows(s, v, pc)[11].value == "ON",
         "floating HUD switch");
-  // Page 3: reset.
+  // Page 3: wristband and reset.
   Click(s, v, pc, kNextX, kPageY, now, actions);
-  Check(s.port_page == 2 && ItemCount(s, pc) == 1, "config page 3");
+  Check(s.port_page == 2 && ItemCount(s, pc) == 2, "config page 3");
+  Check(!v.wrist_visor_enabled, "wristband is opt-in");
   Click(s, v, pc, kLabelX, RowY(kPortConfigTab, 0), now, actions);
+  Check(v.wrist_visor_enabled, "headset wristband toggle works");
+  Click(s, v, pc, kLabelX, RowY(kPortConfigTab, 1), now, actions);
   Check(s.reset_confirm == kResetPortConfig && Near(v.render_scale, kVrRenderScaleMax), "reset config armed");
-  Click(s, v, pc, kLabelX, RowY(kPortConfigTab, 0), now, actions);
+  Click(s, v, pc, kLabelX, RowY(kPortConfigTab, 1), now, actions);
   Check(Near(v.render_scale, PortVrSettings{}.render_scale) && v.display_refresh_rate == 0.0f &&
             v.remove_cinematic_bars && v.look_to_lock_on && v.look_to_grapple && !v.look_lock_no_camera_turn &&
-            v.cannon_targeting && v.room_scale && v.message_box_immersive && !v.floating_hud &&
+            !v.wrist_visor_enabled && Near(v.wrist_pitch, PortVrSettings{}.wrist_pitch) && v.cannon_targeting && v.room_scale && v.message_box_immersive && !v.floating_hud &&
             Near(v.metroid_hud_size, 2.0f),
         "reset config");
 

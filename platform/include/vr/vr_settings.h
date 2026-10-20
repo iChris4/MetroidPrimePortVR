@@ -25,6 +25,14 @@ enum class RumbleHand : uint8_t { Both, Left, Right, Split };
 enum class FoveationLevel : uint8_t { Off, Low, Medium, High };
 
 struct PortVrSettings {
+    bool wrist_visor_enabled = false;
+    float wrist_offset_x = 0.f;
+    float wrist_offset_y = 0.f;
+    float wrist_offset_z = 0.f;
+    float wrist_pitch = 40.f;
+    float wrist_yaw = -40.f;
+    float wrist_roll = 50.f;
+
     bool custom_layout_enabled = false;
     float custom_trigger_threshold = 0.55f;
     float custom_grip_threshold = 0.55f;

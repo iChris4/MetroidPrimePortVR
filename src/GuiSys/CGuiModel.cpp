@@ -9,6 +9,7 @@
 
 #ifdef TARGET_PC
 #include "port_pointer.h"
+#include "vr/vr_view.h"
 #endif
 
 #include <cstdio>
@@ -38,7 +39,11 @@ CGuiModel::CGuiModel(const CGuiWidgetParms& parms, CSimplePool* sp, CAssetId mod
   }
 }
 
-CGuiModel::~CGuiModel() {}
+CGuiModel::~CGuiModel() {
+#ifdef TARGET_PC
+  PortVr::VrWristForgetModel(this);
+#endif
+}
 
 void CGuiModel::Draw(const CGuiWidgetDrawParms& parms) const {
   CGraphics::SetModelMatrix(GetWorldTransform());
@@ -58,6 +63,18 @@ void CGuiModel::Draw(const CGuiWidgetDrawParms& parms) const {
     PortGuiHit::Record(this, CGraphics::GetModelMatrix(), model->GetBoundingBox().GetMinPoint(),
                        model->GetBoundingBox().GetMaxPoint());
 #endif
+#ifdef TARGET_PC
+    mPortHudDrawAlpha = parms.GetAlpha();
+#endif
+    DrawModelPasses(parms, false);
+  }
+
+  CGuiWidget::Draw(parms);
+}
+
+// Both the regular HUD and the wrist reuse this exact material/colour path.
+void CGuiModel::DrawModelPasses(const CGuiWidgetDrawParms& parms, bool overlay) const {
+    CModel* const model = xb8_model->GetObject();
     CColor col = GetModifiedColor().WithAlphaModulatedBy(parms.GetAlpha());
     GetParentFrame()->EnableLights(xcc_lightMask);
 
@@ -76,25 +93,25 @@ void CGuiModel::Draw(const CGuiWidgetDrawParms& parms) const {
       flags = CModelFlags::ColorModulate(col);
       break;
     case kGMDF_Alpha:
-      flags = CModelFlags::AlphaBlended(col).DepthCompareUpdate(GetIsAlwaysDepthRead(),
-                                                              GetIsAlwaysDepthWrite());
+      flags = CModelFlags::AlphaBlended(col).DepthCompareUpdate((!overlay && GetIsAlwaysDepthRead()),
+                                                              (!overlay && GetIsAlwaysDepthWrite()));
       break;
     case kGMDF_Additive:
-      flags = CModelFlags::Additive(col).DepthCompareUpdate(GetIsAlwaysDepthRead(),
-                                                          GetIsAlwaysDepthWrite());
+      flags = CModelFlags::Additive(col).DepthCompareUpdate((!overlay && GetIsAlwaysDepthRead()),
+                                                          (!overlay && GetIsAlwaysDepthWrite()));
       break;
     case kGMDF_AlphaAdditiveOverdraw:
-      flags = CModelFlags::AlphaBlended(col).DepthCompareUpdate(GetIsAlwaysDepthRead(), false);
+      flags = CModelFlags::AlphaBlended(col).DepthCompareUpdate((!overlay && GetIsAlwaysDepthRead()), false);
       if (GetIsDepthBackwards()) {
         flags = flags.DepthBackwards();
       }
-      model->Draw(flags);
-      flags = CModelFlags::AdditiveRGB(col).DepthCompareUpdate(GetIsAlwaysDepthRead(),
-             GetIsAlwaysDepthWrite());
+      model->Draw(overlay ? flags.DepthCompareUpdate(false, false) : flags);
+      flags = CModelFlags::AdditiveRGB(col).DepthCompareUpdate((!overlay && GetIsAlwaysDepthRead()),
+             (!overlay && GetIsAlwaysDepthWrite()));
       if (GetIsDepthBackwards()) {
         flags = flags.DepthBackwards();
       }
-      model->Draw(flags);
+      model->Draw(overlay ? flags.DepthCompareUpdate(false, false) : flags);
       doDraw = false;
       break;
     default:
@@ -106,17 +123,21 @@ void CGuiModel::Draw(const CGuiWidgetDrawParms& parms) const {
       if (GetIsDepthBackwards()) {
         flags = flags.DepthBackwards();
       }
-      model->Draw(flags);
+      model->Draw(overlay ? flags.DepthCompareUpdate(false, false) : flags);
     }
 
     if (cullChanged) {
       CGraphics::SetCullMode(kCM_None);
     }
     GetParentFrame()->DisableLights();
-  }
-
-  CGuiWidget::Draw(parms);
 }
+#ifdef TARGET_PC
+void CGuiModel::DrawWrist(const CTransform4f& transform, float alpha) const {
+  if (!xb8_model.valid() || !GetIsFinishedLoading() || !xb8_model->GetObject()) return;
+  CGraphics::SetModelMatrix(transform);
+  DrawModelPasses(CGuiWidgetDrawParms(mPortHudDrawAlpha * alpha), true);
+}
+#endif
 
 void CGuiModel::Touch() const {
   if (xb8_model && xb8_model->GetObject()) {

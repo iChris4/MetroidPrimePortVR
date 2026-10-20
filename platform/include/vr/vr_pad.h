@@ -78,6 +78,9 @@ struct VrPadState {
     bool weapon_panel = false;  // the beam wheel is open
     int weapon_selected = -1;   // 0 Power, 1 Wave, 2 Ice, 3 Plasma, -1 none
     uint32_t weapon_hand = 1;   // 0 left, 1 right
+    bool wrist_visible = false;
+    int wrist_hover = -1;
+    unsigned wrist_owned = 0;
     bool visor_zone = false;    // the off hand is at the head: its stick is the D-pad
     int visor_direction = -1;   // VisorDpad::Dir: 0 up (combat), 1 right (X-ray), 2 down (thermal), 3 left (scan)
     bool move_owned = false;    // directional movement has the move stick (VrMove::owns)
@@ -94,5 +97,7 @@ VrPadState GetVrPadState() noexcept;
 // ordinary SDL pad and never set it.
 bool VrPadOwnsPort0() noexcept;
 bool VrCustomLayoutActive() noexcept;
+// Called only when CPlayer can accept a visor change, on an actual simulation tick.
+int VrTakeWristVisorRequest() noexcept;
 
 } // namespace PortVr
