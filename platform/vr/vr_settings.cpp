@@ -169,6 +169,13 @@ struct Field {
           [](const PortVrSettings& s, std::ostream& o) { o << s.name; }}
 
 const Field kFields[] = {
+    VR_BOOL(custom_layout_enabled),
+    VR_INT(custom_move_hand, 0, 1), VR_INT(custom_look_hand, 0, 1),
+    VR_INT(custom_visor_hand, 0, 1), VR_INT(custom_visor_mode, 0, 2),
+#define VR_BIND(name, initial, group, label) VR_INT(custom_##name, 0, 36),
+#include "vr/vr_controller_bindings.inc"
+#undef VR_BIND
+
     // headset renderer
     VR_BOOL(enabled),
     VR_BOOL(required),

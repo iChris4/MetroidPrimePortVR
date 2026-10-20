@@ -16,9 +16,15 @@
 #include <QVBoxLayout>
 
 namespace PrimedGunLauncher {
+void ShowControllerLayout(TabContext& ctx);
 
 void BuildControllerTab(TabContext& ctx, QTabWidget* tabs) {
   QVBoxLayout* layout = ctx.MakeScrollTab(tabs, QObject::tr("Controller"));
+  auto* customize = new QPushButton(QObject::tr("Customize controller layout"));
+  layout->addWidget(customize);
+  QObject::connect(customize, &QPushButton::clicked, customize, [&ctx] { ShowControllerLayout(ctx); });
+  ctx.Check(layout, QObject::tr("Use custom controller layout"), "vr_custom_layout_enabled",
+            QObject::tr("Overrides standard VR bindings and other input remaps. Configure the layout with the button above."));
   layout->addWidget(ctx.Section(QObject::tr("Controller Mapping")));
   auto* resetController = new QPushButton(QObject::tr("Reset Controller"));
   layout->addWidget(resetController);
@@ -83,6 +89,12 @@ void BuildControllerTab(TabContext& ctx, QTabWidget* tabs) {
   layout->addStretch();
 
   QObject::connect(resetController, &QPushButton::clicked, resetController, [&ctx] {
+    ctx.model.ResetToDefault("vr_custom_layout_enabled");
+    ctx.model.ResetToDefault("vr_custom_move_hand"); ctx.model.ResetToDefault("vr_custom_look_hand");
+    ctx.model.ResetToDefault("vr_custom_visor_hand"); ctx.model.ResetToDefault("vr_custom_visor_mode");
+#define VR_BIND(name, initial, group, label) ctx.model.ResetToDefault("vr_custom_" #name);
+#include "vr/vr_controller_bindings.inc"
+#undef VR_BIND
     // PrimedGun's Reset Controller: every one of these back to its default.
     for (const char* key :
          {"vr_use_right_hand", "vr_vr_overlays_enabled", "vr_vr_menu_hold_left_stick",

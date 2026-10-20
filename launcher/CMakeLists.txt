@@ -13,6 +13,7 @@ qt_add_executable(PrimedGun WIN32
     ui/calibration_tab.cpp
     ui/cannon_tab.cpp
     ui/controller_tab.cpp
+    ui/controller_layout_dialog.cpp
     ui/launcher_window.cpp
     ui/layout_tab.cpp
     ui/port_config_tab.cpp
@@ -85,3 +86,14 @@ qt_generate_deploy_app_script(
     NO_TRANSLATIONS
     NO_UNSUPPORTED_PLATFORM_ERROR)
 install(SCRIPT ${primedgun_deploy_script})
+
+if(MP_BUILD_TESTS)
+    add_executable(port_controller_layout_ui_tests
+        ${PROJECT_SOURCE_DIR}/tests/port_controller_layout_ui.cpp
+        ui/controller_layout_dialog.cpp ui/tab_context.cpp ui/widgets.cpp)
+    target_include_directories(port_controller_layout_ui_tests PRIVATE ui ${PROJECT_SOURCE_DIR}/platform/include)
+    target_link_libraries(port_controller_layout_ui_tests PRIVATE primedgun_launcher_core Qt6::Widgets)
+    set_target_properties(port_controller_layout_ui_tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}")
+    add_test(NAME port_controller_layout_ui_tests COMMAND port_controller_layout_ui_tests)
+    set_tests_properties(port_controller_layout_ui_tests PROPERTIES LABELS port ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()

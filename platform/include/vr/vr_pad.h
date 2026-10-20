@@ -93,5 +93,6 @@ VrPadState GetVrPadState() noexcept;
 // and the look stick turns or snaps. Gamepad mode's controllers are an
 // ordinary SDL pad and never set it.
 bool VrPadOwnsPort0() noexcept;
+bool VrCustomLayoutActive() noexcept;
 
 } // namespace PortVr

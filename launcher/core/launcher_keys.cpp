@@ -19,6 +19,15 @@ using K = KeyKind;
 // tests/port_launcher.cpp checks the defaults against PortVrSettings{} and the
 // ranges against the game's clamps.
 constexpr KeyInfo kKeys[] = {
+    {"vr_custom_layout_enabled", K::Bool, "0"},
+    {"vr_custom_move_hand", K::Int, "0", 0, 1, 1},
+    {"vr_custom_look_hand", K::Int, "1", 0, 1, 1},
+    {"vr_custom_visor_hand", K::Int, "0", 0, 1, 1},
+    {"vr_custom_visor_mode", K::Int, "0", 0, 2, 1},
+#define VR_BIND(name, initial, group, label) {"vr_custom_" #name, K::Int, #initial, 0, 36, 1},
+#include "vr/vr_controller_bindings.inc"
+#undef VR_BIND
+
     // Port Config: headset
     {"vr_enabled", K::Bool, "1"},
     {"vr_controller_mode", K::Choice, "primedgun", 0, 0, 0, true, true, "primedgun,gamepad,none"},

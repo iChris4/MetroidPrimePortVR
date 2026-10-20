@@ -4,6 +4,8 @@
 
 #ifdef TARGET_PC
 #include "port_debug.h"
+#include "vr/vr_pad.h"
+#include "MetroidPrime/Tweaks/CTweaks.hpp"
 #endif
 
 CTweakPlayerControl::~CTweakPlayerControl() {}
@@ -24,6 +26,9 @@ CTweakPlayerControl::GetMapping(ControlMapper::ECommands command) const {
     return m_mappings[0];
 
 #ifdef TARGET_PC
+  if (PortVr::VrCustomLayoutActive() && gpTweakPlayerControl1 != nullptr) {
+    return gpTweakPlayerControl1->m_mappings[command];
+  }
   // Remastered's Dual Sticks layout has the Scan and X-Ray visors on each
   // other's D-pad directions.
   if (PortDebug::SwapScanXray()) {

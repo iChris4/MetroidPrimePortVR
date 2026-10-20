@@ -231,6 +231,7 @@ val checkSdlVersion by tasks.registering {
 // PrimedGunVrActivity unpacks them, as upstream's MetroidPrimeActivity does.
 val syncPortAssets by tasks.registering(Sync::class) {
     into(generatedAssets)
+    from(File(portRoot, "platform/include/vr/vr_controller_bindings.inc"))
     from(File(portRoot, "textures")) {
         into("textures")
     }

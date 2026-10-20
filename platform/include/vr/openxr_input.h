@@ -161,6 +161,10 @@ private:
     XrAction m_trackpad_force = XR_NULL_HANDLE;
     XrAction m_button_primary = XR_NULL_HANDLE;   // A / X
     XrAction m_button_secondary = XR_NULL_HANDLE; // B / Y
+    XrAction m_dpad_up = XR_NULL_HANDLE, m_dpad_down = XR_NULL_HANDLE;
+    XrAction m_dpad_left = XR_NULL_HANDLE, m_dpad_right = XR_NULL_HANDLE;
+    XrAction m_shoulder = XR_NULL_HANDLE;
+    XrAction m_button_tertiary = XR_NULL_HANDLE, m_button_quaternary = XR_NULL_HANDLE;
     XrAction m_menu = XR_NULL_HANDLE;
     XrAction m_aim_pose = XR_NULL_HANDLE;
     XrAction m_grip_pose = XR_NULL_HANDLE;

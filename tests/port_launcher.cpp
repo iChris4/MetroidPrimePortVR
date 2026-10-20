@@ -178,7 +178,7 @@ void TestDefaultsMatchGame() {
            : f == PortVr::FoveationLevel::High   ? "high"
                                                  : "off";
   };
-  const std::pair<const char*, std::string> expected[] = {
+  std::vector<std::pair<const char*, std::string>> expected = {
       {"vr_enabled", FormatBool(s.enabled)},
       {"vr_controller_mode", mode(s.controller_mode)},
       {"vr_mirror_view", mirror(s.mirror_view)},
@@ -260,6 +260,14 @@ void TestDefaultsMatchGame() {
       {"vr_rot_offset_z", FormatFloat(s.rot_offset_z)},
       {"vr_cannon_texture_slot", FormatInt(s.cannon_texture_slot)},
   };
+  expected.emplace_back("vr_custom_layout_enabled", FormatBool(s.custom_layout_enabled));
+  expected.emplace_back("vr_custom_move_hand", FormatInt(s.custom_move_hand));
+  expected.emplace_back("vr_custom_look_hand", FormatInt(s.custom_look_hand));
+  expected.emplace_back("vr_custom_visor_hand", FormatInt(s.custom_visor_hand));
+  expected.emplace_back("vr_custom_visor_mode", FormatInt(s.custom_visor_mode));
+#define VR_BIND(name, initial, group, label) expected.emplace_back("vr_custom_" #name, FormatInt(s.custom_##name));
+#include "vr/vr_controller_bindings.inc"
+#undef VR_BIND
   std::set<std::string> checked;
   for (const auto& [key, value] : expected) {
     const KeyInfo* info = FindKey(key);

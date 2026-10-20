@@ -25,6 +25,15 @@ enum class RumbleHand : uint8_t { Both, Left, Right, Split };
 enum class FoveationLevel : uint8_t { Off, Low, Medium, High };
 
 struct PortVrSettings {
+    bool custom_layout_enabled = false;
+    int custom_move_hand = 0;
+    int custom_look_hand = 1;
+    int custom_visor_hand = 0;
+    int custom_visor_mode = 0; // 0 near-head gesture; 1 hold selector; 2 physical buttons only
+#define VR_BIND(name, initial, group, label) int custom_##name = initial;
+#include "vr/vr_controller_bindings.inc"
+#undef VR_BIND
+
     // --- headset renderer (Wiicompiled [vr]) ---
     bool enabled = true;
     bool required = false;             // a failed headset start stops the game instead of falling back

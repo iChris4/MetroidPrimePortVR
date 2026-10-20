@@ -72,9 +72,14 @@ object PrimedGunTabs {
     )
 
     private fun controllerItems(context: Context): List<PrimedGunItem> = buildList {
+        add(PrimedGunItem.Action("Customize controller layout") { ControllerLayoutDialog.show(context) })
+        add(PrimedGunItem.Switch("Use custom controller layout", refreshes = true,
+            get = { LauncherSettings.bool("vr_custom_layout_enabled") },
+            set = { LauncherSettings.setBool("vr_custom_layout_enabled", it) }))
         add(header(context, R.string.primedgun_section_controller_mapping))
         add(PrimedGunItem.Action(context.getString(R.string.primedgun_reset_controller)) {
             LauncherSettings.reset(*CONTROLLER_KEYS)
+            LauncherNative.keyTable().map { it.substringBefore('\t') }.filter { it.startsWith("vr_custom_") }.forEach { LauncherSettings.reset(it) }
         })
         // Stored as use_right_hand, so the "left hand" option is the inverted case.
         add(

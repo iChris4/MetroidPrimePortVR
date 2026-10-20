@@ -383,6 +383,7 @@ public:
                                       "XR_FB_passthrough"};
         config.instance_create_next = OpenXRAndroidInstanceCreateNext();
 #endif
+        config.optional_extensions.push_back("XR_VALVE_frame_controller_interaction");
         if (!runtime_->Initialize(config)) {
             SetError("OpenXR instance initialization failed: " + runtime_->LastError().message);
             ResetPreparedObjects();

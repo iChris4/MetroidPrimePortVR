@@ -29,6 +29,9 @@ struct OpenXRControllerState {
     bool primary = false;   // A (right) / X (left)
     bool secondary = false; // B (right) / Y (left)
     bool menu = false;
+    bool dpad_up = false, dpad_down = false, dpad_left = false, dpad_right = false;
+    bool shoulder = false;
+    bool tertiary = false, quaternary = false; // Steam Frame X / Y
     bool thumbstick_click = false;
     bool thumbstick_touch = false;
     bool trackpad_click = false;    // Index / Vive trackpads
