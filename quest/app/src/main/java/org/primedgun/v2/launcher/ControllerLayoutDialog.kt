@@ -27,9 +27,9 @@ object ControllerLayoutDialog {
         val rows = mutableMapOf<String, Spinner>()
         val names = mutableListOf("Not assigned")
         for (hand in listOf("Left", "Right")) {
-            names.addAll(listOf("Primary (A / X / Square)", "Secondary (B / Y / Triangle)", "Trigger", "Grip / squeeze", "Stick / trackpad click", "Menu / View (if available)", "Touchpad press", "Stick / trackpad up", "Stick / trackpad down", "Stick / trackpad left", "Stick / trackpad right", "Physical D-pad up", "Physical D-pad down", "Physical D-pad left", "Physical D-pad right", "Shoulder (if available)").map { "$hand — $it" })
+            names.addAll(listOf("Primary (A / X / Square)", "Secondary (B / Y / Triangle)", "Trigger", "Grip / squeeze", "Stick / trackpad click", "Menu / View (if available)", "Touchpad press", "Stick / trackpad up", "Stick / trackpad down", "Stick / trackpad left", "Stick / trackpad right", "Physical D-pad up", "Physical D-pad down", "Physical D-pad left", "Physical D-pad right", "Shoulder (if available)").map { "$hand - $it" })
         }
-        names.addAll(listOf("Right — X (Steam Frame)", "Right — Y (Steam Frame)", "Left — extra face button 3", "Left — extra face button 4"))
+        names.addAll(listOf("Right - X (Steam Frame)", "Right - Y (Steam Frame)", "Left - extra face button 3", "Left - extra face button 4"))
         fun row(parent: LinearLayout, key: String, label: String, items: List<String>): Spinner {
             parent.addView(TextView(context).apply { text = label; setPadding(0, 12, 0, 0) })
             return Spinner(context).apply {

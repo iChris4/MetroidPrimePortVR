@@ -76,7 +76,7 @@ void ShowControllerLayout(TabContext& ctx) {
   auto* visorNote = new QLabel(QObject::tr("Direct visor bindings below work in every mode. With Hold selected, moving "
       "the visor stick changes visors only while its selector button is held. Its movement, turn and jump inputs are suppressed meanwhile."));
   visorNote->setWordWrap(true); group("Visors")->addRow(visorNote);
-  auto* jumpNote = new QLabel(QObject::tr("Keep Jump — main input on a stick direction and assign Jump — additional input "
+  auto* jumpNote = new QLabel(QObject::tr("Keep Jump - main input on a stick direction and assign Jump - additional input "
       "to a button to use both independently. Beam select is held while swinging the weapon controller."));
   jumpNote->setWordWrap(true); group("On foot")->addRow(jumpNote);
   const auto relabel = [&] {
@@ -84,7 +84,7 @@ void ShowControllerLayout(TabContext& ctx) {
       const int selected = combo->currentData().isValid() ? combo->currentData().toInt() : 0;
       combo->clear(); combo->addItem("Not assigned", 0);
       for (int hand = 0; hand < 2; ++hand) {
-        const QString side = hand == 0 ? "Left — " : "Right — ";
+        const QString side = hand == 0 ? "Left - " : "Right - ";
         QString primary = hand == 0 ? "X / primary button" : "A / primary button";
         QString secondary = hand == 0 ? "Y / secondary button" : "B / secondary button";
         if (family->currentIndex() == 1) { primary = "A / lower button"; secondary = "B / upper button"; }
@@ -96,8 +96,8 @@ void ShowControllerLayout(TabContext& ctx) {
           "Physical D-pad left", "Physical D-pad right", "Shoulder (if available)"};
         for (int i = 0; i < 16; ++i) combo->addItem(side + labels[i], 1 + 16 * hand + i);
       }
-      combo->addItem("Right — X (Steam Frame)", 33); combo->addItem("Right — Y (Steam Frame)", 34);
-      combo->addItem("Left — extra face button 3", 35); combo->addItem("Left — extra face button 4", 36);
+      combo->addItem("Right - X (Steam Frame)", 33); combo->addItem("Right - Y (Steam Frame)", 34);
+      combo->addItem("Left - extra face button 3", 35); combo->addItem("Left - extra face button 4", 36);
       combo->setCurrentIndex(combo->findData(selected));
     }
   };
@@ -106,6 +106,7 @@ void ShowControllerLayout(TabContext& ctx) {
   relabel();
   for (const auto& [key, combo] : rows) combo->setCurrentIndex(combo->findData(ctx.model.Int(key)));
   auto* defaults = new QPushButton(QObject::tr("Load default layout for these controllers")); body->addWidget(defaults);
+  defaults->setObjectName("loadControllerDefaults");
   QObject::connect(defaults, &QPushButton::clicked, &dialog, [&] {
 #define VR_BIND(name, initial, section, label) rows.at("vr_custom_" #name)->setCurrentIndex(rows.at("vr_custom_" #name)->findData(initial));
 #include "vr/vr_controller_bindings.inc"

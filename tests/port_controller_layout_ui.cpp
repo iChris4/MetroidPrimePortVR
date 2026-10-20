@@ -9,6 +9,7 @@
 #include <QPushButton>
 #include <QPixmap>
 #include <QTimer>
+#include <QTabWidget>
 #include <QDir>
 #include <cstdio>
 #include <cstdlib>
@@ -30,6 +31,8 @@ int main(int argc, char** argv) {
     auto* mode = dialog->findChild<QComboBox*>("vr_custom_visor_mode"); mode->setCurrentIndex(mode->findData(1));
     auto* hold = dialog->findChild<QComboBox*>("vr_custom_visor_hold"); hold->setCurrentIndex(hold->findData(7));
     dialog->grab().save(QDir(QApplication::applicationDirPath()).filePath("controller-layout-preview.png"));
+    dialog->findChild<QTabWidget*>()->setCurrentIndex(4);
+    dialog->grab().save(QDir(QApplication::applicationDirPath()).filePath("controller-layout-visors-preview.png"));
     dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Apply)->click();
   });
   ShowControllerLayout(ctx);
@@ -43,4 +46,14 @@ int main(int argc, char** argv) {
   });
   ShowControllerLayout(ctx);
   Check(model.Int("vr_custom_jump_extra") == 17, "Cancel discards edits");
+  QTimer::singleShot(50, [&] {
+    auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+    dialog->findChild<QComboBox*>("controllerFamily")->setCurrentIndex(4);
+    dialog->findChild<QPushButton*>("loadControllerDefaults")->click();
+    dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Apply)->click();
+  });
+  ShowControllerLayout(ctx);
+  Check(model.Int("vr_custom_label_profile") == 4, "controller label choice persists");
+  Check(model.Int("vr_custom_visor_mode") == 2 && model.Int("vr_custom_visor_left") == 14, "Frame preset selects real D-pad visors");
+  Check(model.Int("vr_custom_morph") == 33 && model.Int("vr_custom_unmorph") == 33, "Frame D-pad is not also used to morph");
 }
