@@ -938,9 +938,8 @@ void OpenXRInput::Sync(XrTime predicted_display_time, const OpenXRPointerScreen&
             controls[h].trigger_value = hands[h].trigger; controls[h].squeeze_value = hands[h].squeeze;
             controls[h].thumbstick_x = hands[h].stick_x; controls[h].thumbstick_y = hands[h].stick_y;
         }
-        panel_hands[0].thumbstick_click = ControllerLayout::Pressed(controls, settings.custom_menu);
-        panel_hands[1].thumbstick_click = false;
-        panel_hands[0].menu = panel_hands[1].menu = false;
+        panel_hands = ControllerLayout::PanelInputs(controls, settings.custom_menu, settings.custom_confirm,
+                                                    settings.custom_back, was_open, options.pointing_hand);
     }
     options.long_press = !settings.custom_layout_enabled && settings.vr_menu_hold_left_stick;
     options.needs_head_zone = !settings.custom_layout_enabled && settings.vr_menu_requires_head_zone;

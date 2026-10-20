@@ -1,6 +1,7 @@
 #pragma once
 
 #include "vr/openxr_controller_snapshot.h"
+#include "vr/openxr_hand_inputs.h"
 #include <algorithm>
 #include <cmath>
 
@@ -39,5 +40,23 @@ inline float Value(const std::array<OpenXRControllerState, 2>& hands, int bindin
 }
 inline bool Pressed(const std::array<OpenXRControllerState, 2>& hands, int binding) noexcept {
     return Value(hands, binding) > 0.55f;
+}
+// Translate the overlay's toggle/select controls too. All physical buttons are
+// retained as release-gate input, so closing a panel cannot fire a held game action.
+inline std::array<HandInputs, 2> PanelInputs(const std::array<OpenXRControllerState, 2>& hands,
+                                          int menu, int confirm, int back, bool open, uint32_t pointer) noexcept {
+    std::array<HandInputs, 2> out{};
+    for (size_t i = 0; i < hands.size(); ++i) {
+        const auto& h = hands[i];
+        if (!h.connected) continue;
+        out[i].stick_x = h.thumbstick_x; out[i].stick_y = h.thumbstick_y;
+        out[i].secondary = h.primary || h.secondary || h.menu || h.thumbstick_click || h.trackpad_click ||
+            h.dpad_up || h.dpad_down || h.dpad_left || h.dpad_right || h.shoulder || h.tertiary || h.quaternary ||
+            h.trigger_click || h.trigger_value > 0.5f || h.squeeze_click || h.squeeze_value > 0.5f ||
+            h.squeeze_force > 0.5f || h.trackpad_force > 0.5f;
+    }
+    out[0].thumbstick_click = Pressed(hands, menu) || (open && Pressed(hands, back));
+    out[pointer & 1u].trigger = Pressed(hands, confirm) ? 1.f : 0.f;
+    return out;
 }
 } // namespace PortVr::ControllerLayout

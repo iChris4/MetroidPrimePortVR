@@ -45,4 +45,17 @@ int main() {
     hands[1].connected = false;
     Check(!Pressed(hands, 33) && !Pressed(hands, 19), "disconnected controllers cannot leave held input");
     Check(!Pressed(hands, 0) && !Pressed(hands, -1) && !Pressed(hands, 37), "unbound/invalid controls are idle");
+    hands = {};
+    hands[0].connected = hands[1].connected = true;
+    hands[1].trigger_value = 1.f;
+    auto panel = PanelInputs(hands, 5, 1, 34, true, 1);
+    Check(panel[1].trigger == 0.f && panel[1].secondary, "old trigger does not select; it still gates release");
+    hands[0].primary = true;
+    panel = PanelInputs(hands, 5, 1, 34, true, 1);
+    Check(panel[1].trigger == 1.f, "custom confirm selects the overlay with the pointing hand");
+    hands[1].quaternary = true;
+    panel = PanelInputs(hands, 5, 1, 34, true, 1);
+    Check(panel[0].thumbstick_click, "custom Back closes an open overlay");
+    panel = PanelInputs(hands, 5, 1, 34, false, 1);
+    Check(!panel[0].thumbstick_click && panel[1].secondary, "held Back cannot reopen or leak through after closing");
 }
