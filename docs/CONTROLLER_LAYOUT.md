@@ -18,7 +18,7 @@ stick selections in the editor replace the standard stick assignment.
 - **Visors:** choose the near-head gesture, hold a selector input while using the
   visor stick, or use only physical D-pad / directly assigned visor inputs. The
   selector's stick does not move, turn or jump while it is changing visors.
-- **Steam Frame:** select its labels and load its preset to use the native D-pad
+- **Steam Frame:** select its controller type to translate standard bindings and use the native D-pad
   for Combat (up), Thermal (down), Scan (left) and X-ray (right). Its right X/Y
   buttons and shoulders are separate assignable inputs. The native profile is
   used when the runtime advertises XR_VALVE_frame_controller_interaction.
@@ -38,3 +38,19 @@ editor changes the labels/preset, not the runtime's device selection.
 The PC and Quest launchers use the same persisted vr_custom_* keys. Binding IDs
 and defaults are shared through platform/include/vr/vr_controller_bindings.inc.
 Custom layout is off for existing and new installations until enabled explicitly.
+
+## Input sensitivity
+
+The **Input sensitivity** tab adjusts trigger travel, grip/squeeze pressure,
+touchpad pressure and stick-direction activation from 5% to 95% (default 55%).
+Lower values activate sooner. The stick slider controls stick-up jump and other
+bound stick directions; movement and turning keep their own deadzones. Additional
+button jump is independent. Pressure thresholds require an analog input exposed
+by the controller/runtime; digital-only triggers, grips and touchpads use clicks.
+Changes apply with the layout and Cancel discards them. Load defaults resets all
+four sliders. These settings affect custom bindings, including VR menu controls.
+
+Changing controller type translates bindings that match the previous controller
+defaults to the new controller equivalents. Custom assignments and sensitivity
+values are retained. Load default layout resets every binding to the selected
+controller preset and restores sensitivity defaults.

@@ -875,9 +875,12 @@ void OpenXRInput::Sync(XrTime predicted_display_time, const OpenXRPointerScreen&
         extra[hand].thumbstick_touch = boolean(m_thumbstick_touch, hand);
         extra[hand].trigger_click = boolean(m_trigger_click, hand);
         extra[hand].squeeze_click = boolean(m_squeeze_click, hand);
-        extra[hand].squeeze_force = scalar(m_squeeze_force, hand);
+        bool squeeze_force_active = false;
+        extra[hand].squeeze_force = scalar(m_squeeze_force, hand, &squeeze_force_active);
+        extra[hand].trigger_analog = trigger_active;
+        extra[hand].grip_analog = squeeze_active || squeeze_force_active;
         extra[hand].trackpad_click = boolean(m_trackpad_click, hand);
-        extra[hand].trackpad_force = scalar(m_trackpad_force, hand);
+        extra[hand].trackpad_force = scalar(m_trackpad_force, hand, &extra[hand].touchpad_analog);
         extra[hand].dpad_up = boolean(m_dpad_up, hand);
         extra[hand].dpad_down = boolean(m_dpad_down, hand);
         extra[hand].dpad_left = boolean(m_dpad_left, hand);
@@ -939,7 +942,7 @@ void OpenXRInput::Sync(XrTime predicted_display_time, const OpenXRPointerScreen&
             controls[h].thumbstick_x = hands[h].stick_x; controls[h].thumbstick_y = hands[h].stick_y;
         }
         panel_hands = ControllerLayout::PanelInputs(controls, settings.custom_menu, settings.custom_confirm,
-                                                    settings.custom_back, was_open, options.pointing_hand);
+                                                    settings.custom_back, was_open, options.pointing_hand, ControllerLayout::Thresholds(settings));
     }
     options.long_press = !settings.custom_layout_enabled && settings.vr_menu_hold_left_stick;
     options.needs_head_zone = !settings.custom_layout_enabled && settings.vr_menu_requires_head_zone;

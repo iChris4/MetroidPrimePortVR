@@ -10,6 +10,40 @@ int main() {
     using namespace PortVr;
     using namespace ControllerLayout;
     std::array<OpenXRControllerState, 2> hands{};
+    // Independent thresholds must affect analog travel even if the runtime's click is already down.
+    PortVrSettings sensitivity;
+    sensitivity.custom_trigger_threshold = 0.8f;
+    sensitivity.custom_grip_threshold = 0.7f;
+    sensitivity.custom_touchpad_threshold = 0.6f;
+    sensitivity.custom_stick_threshold = 0.9f;
+    hands[1].connected = true;
+    hands[1].trigger_value = 0.75f; hands[1].trigger_click = true;
+    Check(!Pressed(hands, 19, Thresholds(sensitivity)), "trigger click cannot bypass analog threshold");
+    hands[1].trigger_analog = true; hands[1].trigger_value = 0.f;
+    Check(!Pressed(hands, 19, Thresholds(sensitivity)), "active analog channel at zero does not fall back to click");
+    hands[1].trigger_value = 0.85f;
+    Check(Pressed(hands, 19, Thresholds(sensitivity)), "trigger activates above configured travel");
+    hands[1].squeeze_value = 0.65f; hands[1].squeeze_click = true;
+    Check(!Pressed(hands, 20, Thresholds(sensitivity)), "grip threshold applies independently");
+    hands[1].squeeze_force = 0.75f;
+    Check(Pressed(hands, 20, Thresholds(sensitivity)), "Index grip force can activate grip");
+    hands[1].trackpad_force = 0.55f; hands[1].trackpad_click = true;
+    Check(!Pressed(hands, 23, Thresholds(sensitivity)), "touchpad click cannot bypass pressure threshold");
+    hands[1].trackpad_force = 0.65f;
+    Check(Pressed(hands, 23, Thresholds(sensitivity)), "touchpad activates above configured pressure");
+    hands[1].thumbstick_y = 0.85f; hands[1].primary = true;
+    Check(!Pressed(hands, 24, Thresholds(sensitivity)) && Pressed(hands, 17, Thresholds(sensitivity)),
+          "stick jump threshold does not affect additional button jump");
+    hands[1].thumbstick_y = 0.95f;
+    Check(Pressed(hands, 24, Thresholds(sensitivity)), "stick jump activates above configured deflection");
+    hands[1].trigger_value = 0.75f;
+    Check(PanelInputs(hands, 5, 19, 18, true, 1, Thresholds(sensitivity))[1].trigger == 0.f,
+          "overlay confirm uses the same trigger threshold");
+    sensitivity.custom_trigger_threshold = 0.1f;
+    hands[1].trigger_click = false; hands[1].trigger_value = 0.2f;
+    Check(PanelInputs(hands, 5, 1, 18, false, 1, Thresholds(sensitivity))[1].secondary,
+          "lightly held trigger still gates input when closing the overlay");
+    hands = {};
     PortVrSettings layout;
     Check(!layout.custom_layout_enabled, "legacy layout remains the default");
     hands[1].connected = true;

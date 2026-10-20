@@ -1133,6 +1133,10 @@ inline int SnapTurnStep(int current, int direction) {
 inline void ResetCustomControllerLayout(PortVrSettings& v) {
     const PortVrSettings d{};
     v.custom_layout_enabled = false;
+    v.custom_trigger_threshold = d.custom_trigger_threshold;
+    v.custom_grip_threshold = d.custom_grip_threshold;
+    v.custom_touchpad_threshold = d.custom_touchpad_threshold;
+    v.custom_stick_threshold = d.custom_stick_threshold;
     v.custom_label_profile = d.custom_label_profile;
     v.custom_move_hand = d.custom_move_hand; v.custom_look_hand = d.custom_look_hand;
     v.custom_visor_hand = d.custom_visor_hand; v.custom_visor_mode = d.custom_visor_mode;

@@ -227,7 +227,7 @@ void ApplyClassic(const OpenXRControllerState& left, const OpenXRControllerState
     pad.substickY = ToStick(right.thumbstick_y);
     if (settings.custom_layout_enabled) {
         const std::array<OpenXRControllerState, 2> hands{left, right};
-        const auto bound = [&](int binding) { return ControllerLayout::Pressed(hands, binding); };
+        const auto bound = [&](int binding) { return ControllerLayout::Pressed(hands, binding, ControllerLayout::Thresholds(settings)); };
         if (morph_ball) {
             if (bound(settings.custom_bomb)) pad.button |= PAD_BUTTON_A;
             if (bound(settings.custom_unmorph)) pad.button |= PAD_BUTTON_X;
@@ -284,9 +284,9 @@ float ApplyGameplay(const OpenXRControllerState& left, const OpenXRControllerSta
     const auto bound = [&](int binding) {
         if (custom && (binding == settings.custom_beam ||
             (settings.custom_visor_mode == 1 && binding == settings.custom_visor_hold))) return false;
-        return ControllerLayout::Pressed(hands, binding);
+        return ControllerLayout::Pressed(hands, binding, ControllerLayout::Thresholds(settings));
     };
-    const bool modifier = custom ? ControllerLayout::Pressed(hands, settings.custom_beam) : weapon.secondary; // hold + swing
+    const bool modifier = custom ? ControllerLayout::Pressed(hands, settings.custom_beam, ControllerLayout::Thresholds(settings)) : weapon.secondary; // hold + swing
     const bool a_jump = settings.combat_jump_use_primary_button;
 
     // Forward / back on the move stick. Sideways: the orbit strafe in a lock,
@@ -453,7 +453,7 @@ void VrPadUpdate(const CStateManager* mgr) noexcept {
         in.now = NowSeconds();
         if (settings.custom_layout_enabled) {
             const bool holdMode = settings.custom_visor_mode == 1;
-            const bool held = ControllerLayout::Pressed(snapshot.controllers, settings.custom_visor_hold);
+            const bool held = ControllerLayout::Pressed(snapshot.controllers, settings.custom_visor_hold, ControllerLayout::Thresholds(settings));
             in.armed = gameplay && hand.connected && settings.custom_visor_mode != 2 &&
                        (holdMode ? held : (hand.aim_pose.valid && snapshot.head_pose.valid));
             if (holdMode) {
@@ -523,7 +523,7 @@ void VrPadUpdate(const CStateManager* mgr) noexcept {
     // PrimedGun ignores it while the visor gesture is up.
     {
         const bool pressed = (settings.custom_layout_enabled
-            ? ControllerLayout::Pressed(snapshot.controllers, settings.custom_height)
+            ? ControllerLayout::Pressed(snapshot.controllers, settings.custom_height, ControllerLayout::Thresholds(settings))
             : right.connected && right.thumbstick_click) && !visor.zone;
         if (pressed && !g_recenter_was_pressed) {
             OpenXRRequestRecenter();
@@ -543,11 +543,11 @@ void VrPadUpdate(const CStateManager* mgr) noexcept {
     // The beam wheel owns the weapon hand's B while it is held; the orbit lock
     // keeps its L (the game does the locking) and the pad's C-stick is free.
     const bool beamHeld = settings.custom_layout_enabled
-        ? ControllerLayout::Pressed(snapshot.controllers, settings.custom_beam) : weapon.secondary;
+        ? ControllerLayout::Pressed(snapshot.controllers, settings.custom_beam, ControllerLayout::Thresholds(settings)) : weapon.secondary;
     UpdateWeaponWheel(weapon, gameplay && beamHeld, gameplay, pad);
     pad.button |= DpadButton(visor.held);
     if (settings.custom_layout_enabled) {
-        const auto bound = [&](int binding) { return ControllerLayout::Pressed(snapshot.controllers, binding); };
+        const auto bound = [&](int binding) { return ControllerLayout::Pressed(snapshot.controllers, binding, ControllerLayout::Thresholds(settings)); };
         if (bound(settings.custom_visor_up)) pad.button |= PAD_BUTTON_UP;
         if (bound(settings.custom_visor_down)) pad.button |= PAD_BUTTON_DOWN;
         if (bound(settings.custom_visor_left)) pad.button |= PAD_BUTTON_LEFT;

@@ -26,6 +26,10 @@ enum class FoveationLevel : uint8_t { Off, Low, Medium, High };
 
 struct PortVrSettings {
     bool custom_layout_enabled = false;
+    float custom_trigger_threshold = 0.55f;
+    float custom_grip_threshold = 0.55f;
+    float custom_touchpad_threshold = 0.55f;
+    float custom_stick_threshold = 0.55f;
     int custom_label_profile = 0;
     int custom_move_hand = 0;
     int custom_look_hand = 1;

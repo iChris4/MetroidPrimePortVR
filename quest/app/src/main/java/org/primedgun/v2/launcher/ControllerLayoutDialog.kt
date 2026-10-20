@@ -3,6 +3,7 @@ package org.primedgun.v2.launcher
 
 import android.app.AlertDialog
 import android.content.Context
+import android.graphics.Color
 import android.view.View
 import android.widget.*
 
@@ -16,11 +17,15 @@ object ControllerLayoutDialog {
                 Binding("vr_custom_" + it.groupValues[1], it.groupValues[2].toInt(), it.groupValues[3], it.groupValues[4])
             }.toList()
         }
+        fun help(message: String) = TextView(context).apply {
+            text = message
+            setTextColor(Color.rgb(240, 161, 42))
+        }
         val body = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL; setPadding(24, 12, 24, 12) }
         val enabled = CheckBox(context).apply { text = "Use custom controller layout"; isChecked = true }
         body.addView(enabled)
-        body.addView(TextView(context).apply { text = "Overrides standard VR bindings and other remaps. Keep stick jump and assign an additional jump button independently. Beam select is held while swinging the weapon hand. Only bind controls your controllers have." })
-        val groups = bindings.groupBy { it.group }
+        body.addView(help("Overrides standard VR bindings and other remaps. Beam select is held while swinging the weapon hand. Only bind controls your controllers have."))
+        val groups = bindings.groupBy { it.group }.toMutableMap().apply { put("Input sensitivity", emptyList()) }
         val sectionPicker = Spinner(context).apply { adapter = ArrayAdapter(context, android.R.layout.simple_spinner_dropdown_item, groups.keys.toList()) }
         body.addView(sectionPicker)
         val pages = mutableMapOf<String, LinearLayout>()
@@ -42,11 +47,30 @@ object ControllerLayoutDialog {
             pages[name] = page; body.addView(page)
             entries.forEach { row(page, it.key, it.label, names) }
         }
+        val thresholds = mutableMapOf<String, SeekBar>()
+        fun threshold(key: String, label: String) {
+            val page = pages.getValue("Input sensitivity")
+            val title = TextView(context)
+            page.addView(title)
+            val slider = SeekBar(context).apply { max = 90; progress = (LauncherSettings.float(key) * 100).toInt() - 5 }
+            fun update() { title.text = "$label: ${slider.progress + 5}%" }
+            slider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(bar: SeekBar?, progress: Int, fromUser: Boolean) { update() }
+                override fun onStartTrackingTouch(bar: SeekBar?) {}
+                override fun onStopTrackingTouch(bar: SeekBar?) {}
+            })
+            update(); page.addView(slider); thresholds[key] = slider
+        }
+        threshold("vr_custom_trigger_threshold", "Trigger activation")
+        threshold("vr_custom_grip_threshold", "Grip / squeeze activation")
+        threshold("vr_custom_touchpad_threshold", "Touchpad pressure activation")
+        threshold("vr_custom_stick_threshold", "Stick direction activation (jump)")
+        pages.getValue("Input sensitivity").addView(help("Lower values activate sooner; higher values need more travel or pressure. The stick threshold controls stick-up jump and other assigned stick directions, without changing movement or turning. Digital-only controls use their click instead."))
         val move = row(pages.getValue("On foot"), "vr_custom_move_hand", "Movement stick / trackpad", listOf("Left", "Right"))
         val look = row(pages.getValue("On foot"), "vr_custom_look_hand", "Look / turn stick / trackpad", listOf("Left", "Right"))
         row(pages.getValue("Visors"), "vr_custom_visor_hand", "Visor selector stick / trackpad", listOf("Left", "Right"))
         val mode = row(pages.getValue("Visors"), "vr_custom_visor_mode", "Visor selection method", listOf("Controller near head + visor stick", "Hold visor selector button + visor stick", "Physical D-pad / assigned visor buttons only"))
-        pages.getValue("Visors").addView(TextView(context).apply { text = "Hold mode suppresses movement, turning and jumping from the visor stick while its button is held. Direct visor buttons work in all modes." })
+        pages.getValue("Visors").addView(help("Hold mode suppresses movement, turning and jumping from the visor stick while its button is held. Direct visor buttons work in all modes."))
         sectionPicker.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
                 val active = groups.keys.toList()[position]; pages.forEach { (name, page) -> page.visibility = if (name == active) View.VISIBLE else View.GONE }
@@ -54,6 +78,7 @@ object ControllerLayoutDialog {
             override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
         }
         fun defaults() {
+            thresholds.values.forEach { it.progress = 50 }
             bindings.forEach { rows.getValue(it.key).setSelection(it.initial) }
             move.setSelection(0); look.setSelection(1); mode.setSelection(0); rows.getValue("vr_custom_visor_hand").setSelection(0)
             if (!LauncherSettings.bool("vr_use_right_hand")) {
@@ -77,6 +102,7 @@ object ControllerLayoutDialog {
                         (mode.selectedItemPosition == 1 && rows.getValue("vr_custom_visor_hold").selectedItemPosition == 0))) {
                     Toast.makeText(context, "Use different move/look sticks, assign VR settings, Confirm and Back, and a visor selector for Hold mode.", Toast.LENGTH_LONG).show()
                 } else {
+                    thresholds.forEach { (key, slider) -> LauncherSettings.setFloat(key, (slider.progress + 5) / 100f) }
                     rows.forEach { (key, spinner) -> LauncherSettings.setInt(key, spinner.selectedItemPosition) }
                     LauncherSettings.setBool("vr_custom_layout_enabled", enabled.isChecked)
                     (context as? LauncherActivity)?.let { activity ->

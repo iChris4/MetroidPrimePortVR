@@ -20,6 +20,10 @@ using K = KeyKind;
 // ranges against the game's clamps.
 constexpr KeyInfo kKeys[] = {
     {"vr_custom_layout_enabled", K::Bool, "0"},
+    {"vr_custom_trigger_threshold", K::Float, "0.55", 0.05f, 0.95f, 0.01f},
+    {"vr_custom_grip_threshold", K::Float, "0.55", 0.05f, 0.95f, 0.01f},
+    {"vr_custom_touchpad_threshold", K::Float, "0.55", 0.05f, 0.95f, 0.01f},
+    {"vr_custom_stick_threshold", K::Float, "0.55", 0.05f, 0.95f, 0.01f},
     {"vr_custom_label_profile", K::Int, "0", 0, 6, 1},
     {"vr_custom_move_hand", K::Int, "0", 0, 1, 1},
     {"vr_custom_look_hand", K::Int, "1", 0, 1, 1},

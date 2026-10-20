@@ -36,6 +36,9 @@ struct OpenXRControllerState {
     bool thumbstick_touch = false;
     bool trackpad_click = false;    // Index / Vive trackpads
     float trackpad_force = 0.0f;
+    bool trigger_analog = false;
+    bool grip_analog = false;
+    bool touchpad_analog = false;
     float trigger_value = 0.0f;
     bool trigger_click = false;
     float squeeze_value = 0.0f;     // grip
