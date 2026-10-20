@@ -29,7 +29,7 @@ int main(int argc, char** argv) {
     auto* extra = dialog->findChild<QComboBox*>("vr_custom_jump_extra"); Check(extra != nullptr, "additional jump picker exists");
     extra->setCurrentIndex(extra->findData(17));
     auto* mode = dialog->findChild<QComboBox*>("vr_custom_visor_mode"); mode->setCurrentIndex(mode->findData(1));
-    auto* hold = dialog->findChild<QComboBox*>("vr_custom_visor_hold"); hold->setCurrentIndex(hold->findData(7));
+    auto* hold = dialog->findChild<QComboBox*>("vr_custom_visor_hold"); hold->setCurrentIndex(hold->findData(4));
     dialog->grab().save(QDir(QApplication::applicationDirPath()).filePath("controller-layout-preview.png"));
     dialog->findChild<QTabWidget*>()->setCurrentIndex(4);
     dialog->grab().save(QDir(QApplication::applicationDirPath()).filePath("controller-layout-visors-preview.png"));
@@ -38,7 +38,7 @@ int main(int argc, char** argv) {
   ShowControllerLayout(ctx);
   Check(model.Bool("vr_custom_layout_enabled"), "Apply enables custom layout");
   Check(model.Int("vr_custom_jump") == 24 && model.Int("vr_custom_jump_extra") == 17, "button jump does not replace stick jump");
-  Check(model.Int("vr_custom_visor_mode") == 1 && model.Int("vr_custom_visor_hold") == 7, "hold-to-select settings applied");
+  Check(model.Int("vr_custom_visor_mode") == 1 && model.Int("vr_custom_visor_hold") == 4, "hold-to-select settings applied");
   QTimer::singleShot(50, [&] {
     auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
     auto* extra = dialog->findChild<QComboBox*>("vr_custom_jump_extra"); extra->setCurrentIndex(extra->findData(0));

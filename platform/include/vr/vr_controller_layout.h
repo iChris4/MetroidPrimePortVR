@@ -3,6 +3,7 @@
 #include "vr/openxr_controller_snapshot.h"
 #include "vr/openxr_hand_inputs.h"
 #include <algorithm>
+#include <cstddef>
 #include <cmath>
 
 namespace PortVr::ControllerLayout {

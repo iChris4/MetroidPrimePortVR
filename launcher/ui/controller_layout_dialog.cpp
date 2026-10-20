@@ -13,6 +13,7 @@
 #include <QMessageBox>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QStandardItemModel>
 #include <QTabWidget>
 #include <QVBoxLayout>
 #include <array>
@@ -98,6 +99,24 @@ void ShowControllerLayout(TabContext& ctx) {
       }
       combo->addItem("Right - X (Steam Frame)", 33); combo->addItem("Right - Y (Steam Frame)", 34);
       combo->addItem("Left - extra face button 3", 35); combo->addItem("Left - extra face button 4", 36);
+      if (auto* model = qobject_cast<QStandardItemModel*>(combo->model())) {
+        for (int i = 1; i < combo->count(); ++i) {
+          const int input = combo->itemData(i).toInt();
+          const int part = input <= 32 ? (input - 1) % 16 + 1 : 0;
+          const int hand = input <= 16 ? 0 : 1;
+          bool available = true;
+          switch (family->currentIndex()) {
+          case 0: case 3: available = input <= 32 && part != 7 && part < 12; break;
+          case 1: available = input <= 32 && part != 6 && part < 12; break;
+          case 2: available = input <= 32 && part >= 3 && part != 7 && part < 12; break;
+          case 6: available = input <= 32 && part >= 3 && part < 12; break;
+          case 4: available = (input == 33 || input == 34) ||
+              (input <= 32 && part != 7 && !(hand == 1 && part >= 12 && part <= 15)); break;
+          default: break;
+          }
+          if (model->item(i)) model->item(i)->setEnabled(available);
+        }
+      }
       combo->setCurrentIndex(combo->findData(selected));
     }
   };
