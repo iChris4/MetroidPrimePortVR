@@ -26,6 +26,7 @@ enum class FoveationLevel : uint8_t { Off, Low, Medium, High };
 
 struct PortVrSettings {
     bool custom_layout_enabled = false;
+    int custom_label_profile = 0;
     int custom_move_hand = 0;
     int custom_look_hand = 1;
     int custom_visor_hand = 0;

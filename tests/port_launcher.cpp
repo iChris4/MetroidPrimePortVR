@@ -261,6 +261,7 @@ void TestDefaultsMatchGame() {
       {"vr_cannon_texture_slot", FormatInt(s.cannon_texture_slot)},
   };
   expected.emplace_back("vr_custom_layout_enabled", FormatBool(s.custom_layout_enabled));
+  expected.emplace_back("vr_custom_label_profile", FormatInt(s.custom_label_profile));
   expected.emplace_back("vr_custom_move_hand", FormatInt(s.custom_move_hand));
   expected.emplace_back("vr_custom_look_hand", FormatInt(s.custom_look_hand));
   expected.emplace_back("vr_custom_visor_hand", FormatInt(s.custom_visor_hand));

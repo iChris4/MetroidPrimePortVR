@@ -90,6 +90,7 @@ void BuildControllerTab(TabContext& ctx, QTabWidget* tabs) {
 
   QObject::connect(resetController, &QPushButton::clicked, resetController, [&ctx] {
     ctx.model.ResetToDefault("vr_custom_layout_enabled");
+    ctx.model.ResetToDefault("vr_custom_label_profile");
     ctx.model.ResetToDefault("vr_custom_move_hand"); ctx.model.ResetToDefault("vr_custom_look_hand");
     ctx.model.ResetToDefault("vr_custom_visor_hand"); ctx.model.ResetToDefault("vr_custom_visor_mode");
 #define VR_BIND(name, initial, group, label) ctx.model.ResetToDefault("vr_custom_" #name);

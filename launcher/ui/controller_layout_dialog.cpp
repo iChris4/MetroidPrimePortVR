@@ -5,6 +5,7 @@
 #include "style.h"
 #include <QCheckBox>
 #include <QComboBox>
+#include <QCompleter>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QFormLayout>
@@ -24,6 +25,7 @@ void ShowControllerLayout(TabContext& ctx) {
   QDialog dialog(ctx.window);
   dialog.setWindowTitle(QObject::tr("Customize controller layout"));
   dialog.resize(820, 680);
+  if (qEnvironmentVariableIsSet("PRIMEDGUN_LAYOUT_TEST")) dialog.setAttribute(Qt::WA_DontShowOnScreen);
   dialog.setStyleSheet(Style::kPage);
   auto* body = new QVBoxLayout(&dialog);
   auto* enabled = new QCheckBox(QObject::tr("Use custom controller layout"));
@@ -52,6 +54,10 @@ void ShowControllerLayout(TabContext& ctx) {
   };
   const auto row = [&](const char* key, const char* title, const char* section) {
     auto* combo = new QComboBox;
+    combo->setEditable(true);
+    combo->setInsertPolicy(QComboBox::NoInsert);
+    combo->completer()->setFilterMode(Qt::MatchContains);
+    combo->completer()->setCompletionMode(QCompleter::PopupCompletion);
     combo->setObjectName(QString::fromUtf8(key));
     combo->setMinimumWidth(280); rows[key] = combo;
     group(section)->addRow(QString::fromUtf8(title), combo); return combo;
@@ -96,6 +102,7 @@ void ShowControllerLayout(TabContext& ctx) {
     }
   };
   QObject::connect(family, qOverload<int>(&QComboBox::currentIndexChanged), &dialog, [&](int) { relabel(); });
+  family->setCurrentIndex(ctx.model.Int("vr_custom_label_profile"));
   relabel();
   for (const auto& [key, combo] : rows) combo->setCurrentIndex(combo->findData(ctx.model.Int(key)));
   auto* defaults = new QPushButton(QObject::tr("Load default layout for these controllers")); body->addWidget(defaults);
@@ -112,13 +119,18 @@ void ShowControllerLayout(TabContext& ctx) {
       visor->setCurrentIndex(1);
     }
     if (family->currentIndex() == 4) {
-      set("vr_custom_morph", 33); set("vr_custom_pause", 6); set("vr_custom_map", 16); set("vr_custom_missile", 32);
+      set("vr_custom_morph", 33); set("vr_custom_unmorph", 33); set("vr_custom_pause", 6); set("vr_custom_map", 16); set("vr_custom_missile", 32);
       mode->setCurrentIndex(2);
     }
   });
   auto* buttons = new QDialogButtonBox(QDialogButtonBox::Apply | QDialogButtonBox::Cancel); body->addWidget(buttons);
   QObject::connect(buttons->button(QDialogButtonBox::Cancel), &QPushButton::clicked, &dialog, &QDialog::reject);
   QObject::connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked, &dialog, [&] {
+    for (const auto& [key, combo] : rows) {
+      const int index = combo->findText(combo->currentText());
+      if (index < 0) { QMessageBox::warning(&dialog, "Choose an input", "Select an input from the list, or choose Not assigned."); return; }
+      combo->setCurrentIndex(index);
+    }
     if (enabled->isChecked() && (move->currentData() == look->currentData() ||
         rows.at("vr_custom_menu")->currentData().toInt() == 0 ||
         rows.at("vr_custom_confirm")->currentData().toInt() == 0 || rows.at("vr_custom_back")->currentData().toInt() == 0 ||
@@ -127,6 +139,7 @@ void ShowControllerLayout(TabContext& ctx) {
           "and assign a visor selector button when using Hold mode."); return;
     }
     for (const auto& [key, combo] : rows) ctx.model.SetInt(key, combo->currentData().toInt());
+    ctx.model.SetInt("vr_custom_label_profile", family->currentIndex());
     ctx.model.SetBool("vr_custom_layout_enabled", enabled->isChecked());
     ctx.RefreshAll(); ctx.Edited(); dialog.accept();
   });

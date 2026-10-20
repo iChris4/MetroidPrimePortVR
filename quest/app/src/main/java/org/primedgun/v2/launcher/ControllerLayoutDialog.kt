@@ -3,7 +3,6 @@ package org.primedgun.v2.launcher
 
 import android.app.AlertDialog
 import android.content.Context
-import android.graphics.Typeface
 import android.view.View
 import android.widget.*
 
