@@ -1130,7 +1130,19 @@ inline int SnapTurnStep(int current, int direction) {
     return kChoices[static_cast<size_t>(std::clamp(closest_index + direction, 0, static_cast<int>(kChoices.size()) - 1))];
 }
 
+inline void ResetCustomControllerLayout(PortVrSettings& v) {
+    const PortVrSettings d{};
+    v.custom_layout_enabled = false;
+    v.custom_label_profile = d.custom_label_profile;
+    v.custom_move_hand = d.custom_move_hand; v.custom_look_hand = d.custom_look_hand;
+    v.custom_visor_hand = d.custom_visor_hand; v.custom_visor_mode = d.custom_visor_mode;
+#define VR_BIND(name, initial, group, label) v.custom_##name = d.custom_##name;
+#include "vr/vr_controller_bindings.inc"
+#undef VR_BIND
+}
+
 inline void ResetController(PortVrSettings& v) {
+    ResetCustomControllerLayout(v);
     v.use_right_hand = true;
     v.rumble_enabled = true;
     v.rumble_intensity = 1.0f;
@@ -1169,6 +1181,7 @@ inline void ResetMovement(PortVrSettings& v) {
 // switch and the built-in patches kept. The headset renderer's own settings
 // were never in that struct and are not touched (RESET CONFIG has them).
 inline void ResetAll(PortVrSettings& v) {
+    ResetCustomControllerLayout(v);
     const PortVrSettings d{};
     v.use_right_hand = d.use_right_hand;
     v.offset_x = d.offset_x;

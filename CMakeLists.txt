@@ -696,6 +696,10 @@ install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/LICENSE
               ${CMAKE_CURRENT_SOURCE_DIR}/NOTICE
     DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/metroid-prime-port)
 
+if(MP_BUILD_TESTS)
+    enable_testing()
+endif()
+
 # The launcher's Qt-free core is also what port_launcher_tests checks.
 if(MP_BUILD_TESTS OR MP_BUILD_LAUNCHER OR MP_BUILD_QUEST_LAUNCHER)
     add_subdirectory(launcher/core)
@@ -754,7 +758,6 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 
 if(MP_BUILD_TESTS)
-    enable_testing()
     include(cmake/PortTests.cmake)
     mp_port_test(port_vr_stereo_tests SOURCES tests/port_vr_stereo.cpp
         INCLUDES platform/include extern/aurora/include extern/aurora/lib)
