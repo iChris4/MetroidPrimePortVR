@@ -36,6 +36,8 @@ int main() {
     Check(Pressed(hands, 23), "Index trackpad force is bindable");
     hands[1].trigger_click = true;
     Check(Pressed(hands, layout.custom_shoot), "digital controller triggers are accepted");
+    Check(Pressed(hands, layout.custom_spider), "default Morph Ball spider hold uses the right trigger");
+    Check(layout.custom_menu_pause == 2 && layout.custom_back == 18, "menu pause stays separate from Back");
     hands[1].tertiary = true; hands[1].quaternary = false;
     Check(Pressed(hands, 33) && !Pressed(hands, 34), "Steam Frame X and Y stay independent");
     hands[1].shoulder = true;

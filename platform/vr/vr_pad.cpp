@@ -233,7 +233,8 @@ void ApplyClassic(const OpenXRControllerState& left, const OpenXRControllerState
             if (bound(settings.custom_unmorph)) pad.button |= PAD_BUTTON_X;
             if (bound(settings.custom_boost)) pad.button |= PAD_BUTTON_B;
             if (bound(settings.custom_power_bomb)) pad.button |= PAD_BUTTON_Y;
-            if (bound(settings.custom_spider)) { pad.button |= PAD_TRIGGER_L; pad.triggerLeft = 255; }
+            if (bound(settings.custom_spider)) { pad.button |= PAD_TRIGGER_R; pad.triggerRight = 255; }
+            if (bound(settings.custom_ball_camera)) { pad.button |= PAD_TRIGGER_L; pad.triggerLeft = 255; }
             pad.substickY = std::min<int8_t>(pad.substickY, 0);
             if (bound(settings.custom_spring)) pad.substickY = kStickFull;
         } else {
@@ -243,7 +244,7 @@ void ApplyClassic(const OpenXRControllerState& left, const OpenXRControllerState
             if (bound(settings.custom_shoot)) { pad.button |= PAD_TRIGGER_R; pad.triggerRight = 255; }
             if (bound(settings.custom_missile)) pad.button |= PAD_BUTTON_Y;
         }
-        if (bound(settings.custom_pause)) pad.button |= PAD_BUTTON_START;
+        if (bound(settings.custom_menu_pause)) pad.button |= PAD_BUTTON_START;
         if (bound(settings.custom_map)) pad.button |= PAD_TRIGGER_Z;
         pad.analogA = (pad.button & PAD_BUTTON_A) ? 255 : 0;
         pad.analogB = (pad.button & PAD_BUTTON_B) ? 255 : 0;
