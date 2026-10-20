@@ -38,7 +38,7 @@ void ShowControllerLayout(TabContext& ctx) {
   note->setWordWrap(true); body->addWidget(note);
   auto* family = new QComboBox;
   family->setObjectName("controllerFamily");
-  family->addItems({"Quest / Touch / Pico", "Valve Index", "Vive / WMR", "PSVR2", "Steam Frame", "Generic OpenXR"});
+  family->addItems({"Quest / Touch / Pico", "Valve Index", "HTC Vive wands", "PSVR2", "Steam Frame", "Generic OpenXR", "WMR / Reverb"});
   body->addWidget(new QLabel(QObject::tr("Controller button labels"))); body->addWidget(family);
   auto* tabs = new QTabWidget; body->addWidget(tabs, 1);
   std::map<std::string, QFormLayout*> groups;
@@ -119,8 +119,18 @@ void ShowControllerLayout(TabContext& ctx) {
       }
       visor->setCurrentIndex(1);
     }
+    if (family->currentIndex() == 2 || family->currentIndex() == 6) {
+      // Wands and WMR have no face buttons: use their exposed physical controls.
+      const int morphInput = family->currentIndex() == 2 ? 21 : 23;
+      set("vr_custom_morph", morphInput); set("vr_custom_unmorph", morphInput);
+      set("vr_custom_pause", 6); set("vr_custom_menu_pause", 6); set("vr_custom_beam", 22);
+      set("vr_custom_confirm", 19); set("vr_custom_back", 22); set("vr_custom_bomb", 19);
+      set("vr_custom_boost", 20); set("vr_custom_power_bomb", 4);
+      set("vr_custom_spider", 3); set("vr_custom_ball_camera", 0);
+      set("vr_custom_height", family->currentIndex() == 2 ? 0 : 21);
+    }
     if (family->currentIndex() == 4) {
-      set("vr_custom_morph", 33); set("vr_custom_unmorph", 33); set("vr_custom_pause", 6); set("vr_custom_map", 16); set("vr_custom_missile", 32);
+      set("vr_custom_morph", 33); set("vr_custom_unmorph", 33); set("vr_custom_pause", 6); set("vr_custom_menu_pause", 6); set("vr_custom_map", 16); set("vr_custom_missile", 32);
       mode->setCurrentIndex(2);
     }
   });

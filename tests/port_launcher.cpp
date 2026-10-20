@@ -306,7 +306,7 @@ void TestRangesInsideGameClamps() {
     float low, high;
   };
   const Clamp clamps[] = {
-      {"vr_custom_label_profile", 0.f, 5.f},
+      {"vr_custom_label_profile", 0.f, 6.f},
       {"vr_custom_move_hand", 0.f, 1.f}, {"vr_custom_look_hand", 0.f, 1.f},
       {"vr_custom_visor_hand", 0.f, 1.f}, {"vr_custom_visor_mode", 0.f, 2.f},
 #define VR_BIND(name, initial, group, label) {"vr_custom_" #name, 0.f, 36.f},

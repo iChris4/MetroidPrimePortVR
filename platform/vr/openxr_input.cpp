@@ -505,9 +505,14 @@ bool OpenXRInput::SuggestBindings() {
         {&m_menu, "/user/hand/left/input/menu/click"},
     };
     common(touch);
-    if (!suggest("/interaction_profiles/oculus/touch_controller", touch, true)) {
+    if (!suggest("/interaction_profiles/oculus/touch_controller", touch, false)) {
         return false;
     }
+
+    // Optional native PICO profiles share the same button/axis paths as Touch.
+    // A runtime need not emulate the Oculus profile to use these controllers.
+    suggest("/interaction_profiles/bytedance/pico4_controller", touch, false);
+    suggest("/interaction_profiles/bytedance/pico_neo3_controller", touch, false);
 
     // Valve Index: grips and trackpads report force; A / B on both hands.
     std::vector<Binding> index{
@@ -856,16 +861,17 @@ void OpenXRInput::Sync(XrTime predicted_display_time, const OpenXRPointerScreen&
     for (uint32_t hand = 0; hand < kHands; ++hand) {
         HandInputs& inputs = hands[hand];
         bool trigger_active = false, squeeze_active = false, primary_active = false;
+        bool secondary_active = false, menu_active = false;
         inputs.primary = boolean(m_button_primary, hand, &primary_active);
-        inputs.secondary = boolean(m_button_secondary, hand);
-        inputs.menu = boolean(m_menu, hand);
+        inputs.secondary = boolean(m_button_secondary, hand, &secondary_active);
+        inputs.menu = boolean(m_menu, hand, &menu_active);
         inputs.thumbstick_click = boolean(m_thumbstick_click, hand);
         inputs.trigger = scalar(m_trigger, hand, &trigger_active);
         inputs.squeeze = scalar(m_squeeze, hand, &squeeze_active);
         const XrVector2f stick = vector(m_thumbstick, hand);
         inputs.stick_x = stick.x;
         inputs.stick_y = stick.y;
-        connected[hand] = trigger_active || squeeze_active || primary_active;
+        connected[hand] = trigger_active || squeeze_active || primary_active || secondary_active || menu_active;
         extra[hand].thumbstick_touch = boolean(m_thumbstick_touch, hand);
         extra[hand].trigger_click = boolean(m_trigger_click, hand);
         extra[hand].squeeze_click = boolean(m_squeeze_click, hand);

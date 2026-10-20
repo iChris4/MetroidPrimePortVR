@@ -22,12 +22,15 @@ stick selections in the editor replace the standard stick assignment.
   for Combat (up), Thermal (down), Scan (left) and X-ray (right). Its right X/Y
   buttons and shoulders are separate assignable inputs. The native profile is
   used when the runtime advertises XR_VALVE_frame_controller_interaction.
+- **Vive / WMR:** their presets use triggers, grips, menu buttons and pad clicks
+  instead of unavailable face buttons. Wands leave the separate height binding
+  unassigned; choose an available input if you want it.
 - **Morph Ball and menus:** have their own action bindings. On-foot jump does not
   change bomb, boost or unmorph bindings.
 
 Only inputs present on the controller and exposed by its OpenXR runtime can be
 used. Headset system buttons may be reserved by the runtime. Existing Touch,
-Index, Vive, WMR and simple-controller profile bindings remain available; other
+Index, Vive, WMR, native Pico and simple-controller profile bindings remain available; other
 controllers can use the compatible profile their runtime provides. No hardware
 can supply a missing physical control. Controller button-label selection in the
 editor changes the labels/preset, not the runtime's device selection.

@@ -56,4 +56,14 @@ int main(int argc, char** argv) {
   Check(model.Int("vr_custom_label_profile") == 4, "controller label choice persists");
   Check(model.Int("vr_custom_visor_mode") == 2 && model.Int("vr_custom_visor_left") == 14, "Frame preset selects real D-pad visors");
   Check(model.Int("vr_custom_morph") == 33 && model.Int("vr_custom_unmorph") == 33, "Frame D-pad is not also used to morph");
+  Check(model.Int("vr_custom_menu_pause") == 6, "Frame D-pad does not also pause menus");
+  QTimer::singleShot(50, [&] {
+    auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+    dialog->findChild<QComboBox*>("controllerFamily")->setCurrentIndex(2);
+    dialog->findChild<QPushButton*>("loadControllerDefaults")->click();
+    dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Apply)->click();
+  });
+  ShowControllerLayout(ctx);
+  Check(model.Int("vr_custom_morph") == 21 && model.Int("vr_custom_beam") == 22 &&
+        model.Int("vr_custom_confirm") == 19, "Vive preset uses pad click, menu and trigger instead of absent face buttons");
 }
