@@ -379,6 +379,8 @@ public:
   void Update(float dt, CStateManager& mgr);
   bool MouseControlsAllowed(const CStateManager& mgr) const;
   bool MouseLookIsFree(const CStateManager& mgr) const;
+  // port: direct aim, "empty lock-on keeps pitch" set, locked onto an empty orbit point.
+  bool PortEmptyLockKeepsPitch(const CStateManager& mgr) const;
   void UpdateMouseAim(CStateManager& mgr);
   void UpdateTouchLook(float dt, CStateManager& mgr); // port
   void PortVrSnapTurn(CStateManager& mgr);

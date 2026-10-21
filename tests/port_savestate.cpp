@@ -94,6 +94,66 @@ int main() {
     REQUIRE(out.room.size() == 256);
   }
 
+  // Script message journal: what is kept, dedupe and cap, payload round trip.
+  {
+    using namespace PortSaveState;
+    REQUIRE(JournalsScriptMsg(19) && JournalsScriptMsg(14) && JournalsScriptMsg(5));
+    REQUIRE(!JournalsScriptMsg(1) && !JournalsScriptMsg(4) && !JournalsScriptMsg(17));  // active flag
+    REQUIRE(!JournalsScriptMsg(0) && !JournalsScriptMsg(8));                           // Arrived, Next
+    REQUIRE(!JournalsScriptMsg(22) && !JournalsScriptMsg(40));                         // notifications
+
+    std::vector< ScriptMsgEntry > journal;
+    REQUIRE(AppendScriptMsg(journal, {19, 0x00180074}));
+    REQUIRE(!AppendScriptMsg(journal, {19, 0x00180074}));  // a repeat of the last one
+    REQUIRE(AppendScriptMsg(journal, {14, 0xFFFFFFFFu}));
+    REQUIRE(AppendScriptMsg(journal, {19, 0x00180074}));   // not the last one: kept
+    REQUIRE(journal.size() == 3);
+    std::vector< ScriptMsgEntry > full;
+    for (size_t i = 0; i < kMaxScriptMsgs; ++i)
+      REQUIRE(AppendScriptMsg(full, {static_cast< uint8_t >(i % 2 ? 5 : 7), static_cast< uint32_t >(i)}));
+    REQUIRE(!AppendScriptMsg(full, {19, 1}) && full.size() == kMaxScriptMsgs);
+
+    std::vector< ScriptMsgEntry > out;
+    const std::string payload = EncodeScriptMsgs(journal);
+    REQUIRE(payload.size() == 1 + 5 * 3);
+    REQUIRE(DecodeScriptMsgs(payload, out) && out.size() == 3);
+    REQUIRE(out[0].msg == 19 && out[0].sender == 0x00180074 && out[1].msg == 14 &&
+            out[1].sender == 0xFFFFFFFFu && out[2].msg == 19);
+    REQUIRE(DecodeScriptMsgs(EncodeScriptMsgs(full), out) && out.size() == kMaxScriptMsgs);
+    REQUIRE(DecodeScriptMsgs(EncodeScriptMsgs({}), out) && out.empty());
+
+    // Truncated, padded, oversized and unjournalled payloads leave `out` alone.
+    out = journal;
+    for (size_t len = 0; len < payload.size(); ++len)
+      REQUIRE(!DecodeScriptMsgs(payload.substr(0, len), out) && out.size() == 3);
+    REQUIRE(!DecodeScriptMsgs(payload + "x", out));
+    std::string bad = payload;
+    bad[0] = static_cast< char >(kMaxScriptMsgs + 1);
+    REQUIRE(!DecodeScriptMsgs(bad, out));
+    bad = payload;
+    bad[1] = 1;  // Activate is never journalled
+    REQUIRE(!DecodeScriptMsgs(bad, out) && out.size() == 3);
+
+    // The generated and messages blocks survive the room section round trip.
+    Header withMsgs = in;
+    withMsgs.roomState.areas = {36};
+    withMsgs.roomState.present = {0x0024001A};
+    RoomObject wasp;
+    wasp.editorId = 0x0024001A;
+    wasp.active = true;
+    wasp.blocks.push_back({10, payload});
+    RoomObject copy = wasp;
+    copy.blocks = {{9, std::string()}};
+    withMsgs.roomState.objects = {wasp, copy};
+    Header got;
+    std::vector< uint8_t > gotBlob;
+    REQUIRE(Decode(Encode(withMsgs, blob), got, gotBlob) && got.roomState.objects.size() == 2);
+    const RoomBlock* m = FindBlock(got.roomState.objects[0], 10);
+    REQUIRE(m != nullptr && m->data == payload && FindBlock(got.roomState.objects[0], 9) == nullptr);
+    const RoomBlock* g = FindBlock(got.roomState.objects[1], 9);
+    REQUIRE(g != nullptr && g->data.empty() && got.roomState.objects[1].editorId == 0x0024001A);
+  }
+
   // Room state: round trip, skipping of unknown tags and versions, old files.
   {
     using namespace PortSaveState;

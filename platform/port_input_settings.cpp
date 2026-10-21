@@ -116,11 +116,22 @@ bool ApplySetting(std::string_view keyView, std::string_view valueView) {
     }
   } else if (key == "gyro_cursor_camera") {
     s.gyroCursorCamera = ParseBool(value);
+  } else if (key == "reset_aim_both") {
+    s.resetAimBoth = ParseBool(value);
+  } else if (key == "lock_keeps_pitch") {
+    s.lockKeepsPitch = ParseBool(value);
   } else if (key == "gyro_sensitivity") {
     const float f = ParseFloat(value);
     if (std::isfinite(f) && f >= kGyroSensitivityMin && f <= kGyroSensitivityMax) {
       s.gyroSensitivity = f;
       s.gyroSensitivityRead = true;
+    }
+  } else if (key == "gyro_split") {
+    s.gyroSplit = ParseBool(value);
+  } else if (key == "gyro_sensitivity_y") {
+    const float f = ParseFloat(value);
+    if (std::isfinite(f) && f >= kGyroSensitivityMin && f <= kGyroSensitivityMax) {
+      s.gyroSensitivityY = f;
     }
   } else if (key == "gyro_rate") {
     const float f = ParseFloat(value);
@@ -143,6 +154,13 @@ bool ApplySetting(std::string_view keyView, std::string_view valueView) {
     const float f = ParseFloat(value);
     if (std::isfinite(f) && f >= 0.25f && f <= 10.f) {
       s.touchAimSpeed = f;
+    }
+  } else if (key == "touch_aim_split") {
+    s.touchAimSplit = ParseBool(value);
+  } else if (key == "touch_aim_speed_y") {
+    const float f = ParseFloat(value);
+    if (std::isfinite(f) && f >= 0.25f && f <= 10.f) {
+      s.touchAimSpeedY = f;
     }
   } else if (key == "touch_side_margin" || key == "touch_stick_inset" ||
              key == "touch_button_inset") {
@@ -196,6 +214,13 @@ bool ApplySetting(std::string_view keyView, std::string_view valueView) {
     const float f = ParseFloat(value);
     if (std::isfinite(f) && f > 0.f && f <= 1.f) {
       s.mouseSensitivity = f;
+    }
+  } else if (key == "mouse_sensitivity_split") {
+    s.mouseSensitivitySplit = ParseBool(value);
+  } else if (key == "mouse_sensitivity_y") {
+    const float f = ParseFloat(value);
+    if (std::isfinite(f) && f > 0.f && f <= 1.f) {
+      s.mouseSensitivityY = f;
     }
   } else if (key == "mouse_dpi") {
     const int v = std::atoi(value.c_str());
@@ -318,14 +343,20 @@ void WriteAimSettings(std::ostream& out) {
   out << "gyro_mode=" << s.gyroMode << '\n';
   out << "gyro_source=" << s.gyroSource << '\n';
   out << "gyro_sensitivity=" << s.gyroSensitivity << '\n';
+  out << "gyro_split=" << (s.gyroSplit ? 1 : 0) << '\n';
+  out << "gyro_sensitivity_y=" << s.gyroSensitivityY << '\n';
   out << "gyro_space=" << s.gyroSpace << '\n';
   out << "gyro_auto_calibrate=" << s.gyroAutoCalibrate << '\n';
   out << "gyro_smoothing=" << s.gyroSmoothing << '\n';
   out << "gyro_tightening=" << s.gyroTightening << '\n';
   out << "gyro_cursor_angle=" << s.gyroCursorAngle << '\n';
   out << "gyro_cursor_camera=" << (s.gyroCursorCamera ? 1 : 0) << '\n';
+  out << "reset_aim_both=" << (s.resetAimBoth ? 1 : 0) << '\n';
+  out << "lock_keeps_pitch=" << (s.lockKeepsPitch ? 1 : 0) << '\n';
   out << "touch_aim=" << (s.touchAim ? 1 : 0) << '\n';
   out << "touch_aim_speed=" << s.touchAimSpeed << '\n';
+  out << "touch_aim_split=" << (s.touchAimSplit ? 1 : 0) << '\n';
+  out << "touch_aim_speed_y=" << s.touchAimSpeedY << '\n';
   out << "touch_side_margin=" << s.touchSideMargin.load() << '\n';
   out << "touch_stick_inset=" << s.touchStickInset.load() << '\n';
   out << "touch_button_inset=" << s.touchButtonInset.load() << '\n';
@@ -347,6 +378,8 @@ void WriteAimSettings(std::ostream& out) {
   out << "mouse_crosshair=" << (s.mouseCrosshair ? 1 : 0) << '\n';
   out << "crosshair_size=" << s.crosshairSize << '\n';
   out << "mouse_sensitivity=" << s.mouseSensitivity << '\n';
+  out << "mouse_sensitivity_split=" << (s.mouseSensitivitySplit ? 1 : 0) << '\n';
+  out << "mouse_sensitivity_y=" << s.mouseSensitivityY << '\n';
   out << "mouse_dpi=" << s.mouseDpi << '\n';
   out << "pointer_aim=" << (s.pointerAim ? 1 : 0) << '\n';
   out << "pointer_aim_box=" << s.pointerAimBox << '\n';

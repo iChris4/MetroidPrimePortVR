@@ -67,8 +67,13 @@ public:
   bool xPortXfmdMover = false;
   // port-only PIRN: a converted Remastered swoosh, whose COLR runs over the live points
   bool xPortIrnd = false;
+  // port-only PDFG: Remastered's DFOG 1, drawn without volumetric fog (CGenDescription::xPortUnfogged)
+  bool xPortUnfogged = false;
   // port-only PVRT: Remastered particle variables (names, types, defaults)
   std::unique_ptr< CPortVarTable > xPortVars;
+  // port-only: the PKPR elements (per-point KPIN latches), latched at a point's birth in this
+  // order; owned by the element trees
+  std::vector< const CREPortKeep* > xPortKeeps;
 #endif
 };
 

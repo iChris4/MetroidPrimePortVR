@@ -992,9 +992,94 @@ void TestTileSection() {
   cut.pop_back();
   CHECK_MSG(!parse(cut), "tiles: cut short");
 }
+
+// A version 22 file with nothing in it but `volumes` world volumes.
+std::vector<uint8_t> MakeVolumeFile(const std::vector<PortRoomEnv::WorldVolume>& volumes) {
+  std::vector<uint8_t> out = {'M', 'P', 'E', 'V'};
+  Put32(out, 22);
+  for (float t : {4.f, 0.18f, 0.6f, 0.15f}) {
+    PutFloat(out, t);
+  }
+  Put32(out, 0); // probes
+  Put32(out, 0); // cubes
+  Put32(out, 0); // no tiles
+  for (float f : {0.f, 0.f, 0.f, 0.f, 0.9f}) {
+    PutFloat(out, f); // exposure range, bias, contrast, bloom threshold
+  }
+  Put32(out, 0); // tints
+  Put32(out, 0); // grades
+  PutFloat(out, 32.f);
+  PutFloat(out, 0.5f);
+  for (int section = 0; section < 8; ++section) {
+    Put32(out, 0); // backlights, fogs, regions, transitions, suns, lightmap, lights, hints
+  }
+  Put32(out, uint32_t(volumes.size()));
+  for (const PortRoomEnv::WorldVolume& v : volumes) {
+    for (float f : v.centre) PutFloat(out, f);
+    for (float f : v.half) PutFloat(out, f);
+    for (float f : v.axes) PutFloat(out, f);
+  }
+  return out;
+}
+
+void TestWorldVolumes() {
+  using PortRoomEnv::WorldVolume;
+  using Event = PortRoomEnv::WorldVolumeState::Event;
+  WorldVolume a;
+  a.half[0] = a.half[1] = a.half[2] = 1.f;
+  // At x = 10, turned a quarter about z: 2 m along world y, 1 m along world x.
+  WorldVolume b;
+  b.centre[0] = 10.f;
+  b.half[0] = 2.f;
+  b.half[1] = b.half[2] = 1.f;
+  const float axes[9] = {0.f, 1.f, 0.f, -1.f, 0.f, 0.f, 0.f, 0.f, 1.f};
+  std::copy(axes, axes + 9, b.axes);
+  PortRoomEnv::File file;
+  std::string error;
+  const std::vector<uint8_t> good = MakeVolumeFile({a, b});
+  CHECK_MSG(PortRoomEnv::Parse(std::vector<uint8_t>(good), file, error), "volumes: parse");
+  CHECK_MSG(file.worldVolumes.size() == 2 && PortRoomEnv::SameWorldVolumes(file.worldVolumes, {a, b}),
+            "volumes: read back");
+  CHECK_MSG(!PortRoomEnv::Parse(std::vector<uint8_t>(good.begin(), good.end() - 4), file, error),
+            "volumes: cut short");
+  const float inB[3] = {10.f, 1.5f, 0.f}, outB[3] = {11.5f, 0.f, 0.f};
+  CHECK_MSG(PortRoomEnv::InsideWorldVolume(b, inB) && !PortRoomEnv::InsideWorldVolume(b, outB), "volumes: turned box");
+
+  const std::vector<WorldVolume> table{a, b};
+  PortRoomEnv::WorldVolumeState state;
+  std::vector<Event> events;
+  const auto same = [](const std::vector<Event>& got, std::initializer_list<Event> want) {
+    return got.size() == want.size() && std::equal(got.begin(), got.end(), want.begin(), [](const Event& x, const Event& y) {
+             return x.volume == y.volume && x.state == y.state;
+           });
+  };
+  const float atA[3] = {0.f, 0.f, 0.f}, atB[3] = {10.f, 0.f, 0.f};
+  state.Update(table, atA, events);
+  CHECK_MSG(same(events, {{0, 0}}), "volumes: starting inside enters");
+  events.clear();
+  state.Update(table, atA, events);
+  CHECK_MSG(events.empty(), "volumes: staying");
+  state.Update(table, atB, events);
+  CHECK_MSG(same(events, {{0, 1}, {1, 0}}), "volumes: crossing");
+  events.clear();
+  state.Update(table, atA, events);
+  CHECK_MSG(same(events, {{0, 0}, {1, 1}}), "volumes: back");
+  events.clear();
+  // b entered (3) and left (5), a entered last (4): a late area hears them in that order.
+  state.Replay(events);
+  CHECK_MSG(same(events, {{1, 0}, {0, 0}, {1, 1}}), "volumes: replay order");
+  events.clear();
+  state.Update({a}, atA, events);
+  CHECK_MSG(same(events, {{0, 0}}), "volumes: a new table starts outside");
+  events.clear();
+  state.Clear();
+  state.Replay(events);
+  CHECK_MSG(events.empty(), "volumes: cleared");
+}
 } // namespace
 
 int main() {
+  TestWorldVolumes();
   TestTileSection();
   TestBrdfLut();
   TestPowerBomb();

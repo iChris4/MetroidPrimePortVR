@@ -29,7 +29,7 @@ class CElementGen;
 class CRainSplashGenerator;
 class CModelFlags;
 class CActorLights;
-class SWeaponInfo;
+struct SWeaponInfo;
 
 #ifdef TARGET_PC
 namespace NPortChargeFxDetail {

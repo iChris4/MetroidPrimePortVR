@@ -633,8 +633,15 @@ void initialize() {
     }
     // The device buffers' per-frame part starts where staging does, unless the scale was pinned,
     // and grows like it when a frame needs more (grow_frame_buffer). The uniform one holds at
-    // least the bound window.
-    if (g_config.frameBuffersPinned) {
+    // least the bound window. Android takes the full frame limit up front: a mid-frame grow
+    // there was followed by a device loss on an Adreno 618 (issue #165), and with robustness
+    // off nothing catches a bad access.
+#if defined(__ANDROID__)
+    constexpr bool fullDeviceBuffers = true;
+#else
+    constexpr bool fullDeviceBuffers = false;
+#endif
+    if (g_config.frameBuffersPinned || (fullDeviceBuffers && std::getenv("AURORA_STAGING_START_KIB") == nullptr)) {
       g_bufferSizes.deviceVertex = g_bufferSizes.maxVertex;
       g_bufferSizes.deviceUniform = g_bufferSizes.maxUniform;
       g_bufferSizes.deviceIndex = g_bufferSizes.maxIndex;

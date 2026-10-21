@@ -275,7 +275,72 @@ void Clear() {
   }
   sMinMaxDistance = skWorstMinMaxDistance;
 }
+
+#ifdef TARGET_PC
+struct StashSlot {
+  rstl::reserved_vector< CDrawable, 512 > data;
+  rstl::reserved_vector< CDrawablePlaneObject, 8 > planeObjects;
+  rstl::pair< float, float > minMaxDistance;
+};
+static StashSlot* sStash = nullptr;
+
+// Before Sort: the buckets hold pointers into sData only once sorted.
+void Stash(StashSlot& slot) {
+  slot.data.clear();
+  slot.planeObjects.clear();
+  slot.minMaxDistance = sMinMaxDistance;
+  CDrawable* kept = sData->begin();
+  for (CDrawable* it = sData->begin(); it != sData->end(); ++it) {
+    if (it->GetType() == kDT_Decal || it->GetType() == kDT_SimpleShadow) {
+      *kept++ = *it;
+    } else {
+      slot.data.push_back(*it);
+    }
+  }
+  while (sData->end() != kept) {
+    sData->pop_back();
+  }
+  for (CDrawablePlaneObject* it = sPlaneObjectData->begin(); it != sPlaneObjectData->end(); ++it) {
+    slot.planeObjects.push_back(*it);
+  }
+  sPlaneObjectData->clear();
+}
+
+void Restore(const StashSlot& slot) {
+  for (const CDrawable* it = slot.data.begin(); it != slot.data.end(); ++it) {
+    sData->push_back(*it);
+  }
+  for (const CDrawablePlaneObject* it = slot.planeObjects.begin(); it != slot.planeObjects.end();
+       ++it) {
+    sPlaneObjectData->push_back(*it);
+  }
+  sMinMaxDistance = slot.minMaxDistance;
+}
+#endif
 } // namespace Buckets
+
+#ifdef TARGET_PC
+static bool sPortDrawablesOnly = false;
+
+void CCubeRenderer::PortStashBuckets(int slot) {
+  if (Buckets::sStash == nullptr) {
+    Buckets::sStash = new Buckets::StashSlot[kPortBucketStashSlots];
+  }
+  Buckets::Stash(Buckets::sStash[slot]);
+}
+
+void CCubeRenderer::PortRestoreBuckets(int slot) {
+  if (Buckets::sStash != nullptr) {
+    Buckets::Restore(Buckets::sStash[slot]);
+  }
+}
+
+void CCubeRenderer::PortDrawSortedDrawables(int areaIdx) {
+  sPortDrawablesOnly = true;
+  DrawSortedGeometry(areaIdx, 0, 0);
+  sPortDrawablesOnly = false;
+}
+#endif
 
 CCubeRenderer::CAreaListItem::CAreaListItem(
     const rstl::vector< CMetroidModelInstance >* geometry, const CAreaRenderOctTree* octTree,
@@ -918,7 +983,7 @@ void CCubeRenderer::DrawSortedGeometry(int areaIdx, uint mask, uint targetMask) 
     }
 
 #ifdef TARGET_PC
-    if (PortRoomGeo::sReplacingArea) {
+    if (PortRoomGeo::sReplacingArea || sPortDrawablesOnly) {
       continue;
     }
 #endif

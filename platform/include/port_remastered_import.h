@@ -22,6 +22,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -78,10 +79,38 @@ inline constexpr int kConverter = 52;
 // kConverter bump re-imports the models without converting their textures again.
 inline constexpr int kTextures = 3;
 inline constexpr int kModels = 8;      // the table's models, their looks and the ANCS copies
+// 63: ELPS reads its CNST surface flag; the system tween is 0 only at a 0x1000000 lifetime.
+// 62: NEGT, CRCV, SPEV, ELPS, ROTV, PNCV, KEYF, SLTW, CRLN octaves, KESP, one-stop GRAD, PAP0/9,
+//     ADV9 and IAV0..3 are converted; PLNV counts come from MAXP.
+// 30: PLNV writes its shuffler size (0 none), EMRV under XFMD 5 with a constant POFS is PEMV mode 2.
+// 29: PLNE, PLNV (plane emitters) and EMRV (PEMV) are converted, no longer dropped.
+// 28: CREL(LTHN) is retail's CLTN; MPAC, MPCN and ANCM are the exact port-only PMAC, PMCN and PANM.
+// 27: MPXV is converted as the port-only PMXV, no longer dropped.
+// 26: ABS_, COSE, RSGN, IRSN (PIRS) and CODE are converted, no longer dropped.
 // 25: swoosh GRAD is the exact PGRD element, no longer a 101-key KEYP bake.
-inline constexpr int kEffects = 53;    // port_remastered_effect_import and the particle converters
+// 64: DIVD/T2S_/SCLE/SDTR parse, T2S_ and SCLE convert, swoosh SUST, ELC2 NFOM byte.
+// 65: EBDM read as a byte, GPUA exact, ELC2 COLR GRAD lifetime, recipes 20a05041/3fe57e12/f0e276eb/a0482072.
+// 67: recipes 8278c22d/7498e54a (VFX_Pyro, the vfx Pyro feature).
+// 68: recipe d749057f (VFX_Disintegration, the vfx Disintegration feature).
+// 69: recipes cc155f99/04276ae1/d955396d (VFX_FrameBuffer_Indirect_*, the vfx SceneWarp feature).
+// 70: recipe 9e2cbd46 (VFX_VisorSplat, the vfx VisorSplat feature).
+// 71: recipe 9e0605cd (VFX_IceChargeBeam, the vfx IceChargeBeam feature; VMSH v2, VPRM).
+// 72: Remastered's swooshes the disc's WPSC has no field for (plasma ASW1/ASW2) are imported under synthetic ids,
+//     and the WPSC is written into the mod with the field added (AddRetailLink).
+// 73: recipe 1c651f97 (VFX_IceChargeCollision_Unlit, the vfx IceChargeCollision feature; VPRM v2, SMTR colours).
+// 74: the root PART's visor effect data (VESN/VESM as PVSD/PVSN/PVSM) for the VisorGoo splat manager.
+// 75: recipes b5e12668 and d85d4169 (VFX_VisorRunOff, the vfx VisorRunOff/VisorRunOffLit features; CCH0..4).
+// 76: a generator's SVCn/SVRn/SVIn/SVVn tag-1 ILPT is the system's PSLT, which PortEvalSys holds while it runs (PLPT offset 0).
+// 77: recipe 390fc33b (VFX_IceChargeCollision_Lit, the vfx IceChargeCollisionLit feature; the runtime's clustered
+//     light gather from the room lights and the probe from the room env).
+// 78: a VFX material's BC5 texture keeps its red and green as (R, G, 0, 1), not grey plus alpha.
+// 79: INTS is the system scale (port-only PINS).
+// 80: INTR and INTT are the system orientation and translation (port-only PINR/PINT); XFMD 5's INTT is POFS.
+// 85: DFOG 1 is the port-only PDFG (the particles are not volumetric-fogged).
+inline constexpr int kEffects = 87;    // port_remastered_effect_import and the particle converters
 // 20: two rooms matching one area write only the closer match's files, not the later room's.
-inline constexpr int kRooms = 20;      // port_remastered_room: roomenv/, .roomgeo, .roomliquid, water maps
+// 21: roomenv version 22, the world master's hints driven by its camera volumes (the table in every roomenv).
+inline constexpr int kRooms = 21;      // port_remastered_room: roomenv/, .roomgeo, .roomliquid, water maps
 inline constexpr int kRoomModels = 1;  // the rooms' own models and their levels of detail
 inline constexpr int kText = 1;        // port_remastered_text, and the font (port_remastered_font)
 inline constexpr int kHud = 7;         // port_remastered_hud, port_remastered_map
@@ -265,6 +294,59 @@ inline bool ReadUniqueReversedGuidLink(const uint8_t* data, size_t size, const c
   return true;
 }
 }  // namespace detail
+
+// A retail WPSC (class WPSM, tagged fields, _END) with the asset field `field` (ASW1...) set to `id`:
+// a NONE field takes the id, a missing one is added before _END. The result must read back with that
+// id as the field's one top-level link, else the WPSC is unusual (padding, an unknown field) and is
+// left alone. A WPSC that already links the field is not changed.
+inline bool AddRetailLink(const std::vector<uint8_t>& wpsc, const char (&field)[5], uint32_t id,
+                          std::vector<uint8_t>& out, std::string* error = nullptr) {
+  auto fail = [error](std::string message) {
+    if (error != nullptr) {
+      *error = std::move(message);
+    }
+    return false;
+  };
+  const uint32_t wpscClass = PortRemastered::EffectFourCC("WPSM");
+  const uint32_t fieldTag = PortRemastered::EffectFourCC(field);
+  uint32_t have = 0;
+  if (PortRemastered::ReadRetailRoleAssetId(wpsc.data(), wpsc.size(), wpscClass, fieldTag, have)) {
+    return fail("the WPSC already links " + std::string(field));
+  }
+  const uint8_t link[] = {'C', 'N', 'S', 'T', uint8_t(id >> 24), uint8_t(id >> 16), uint8_t(id >> 8), uint8_t(id)};
+  size_t at = std::string::npos;  // where the field's value starts, and how much of it is replaced
+  size_t replaced = 0;
+  for (size_t i = 4; i + 12 <= wpsc.size() && at == std::string::npos; ++i) {
+    if (std::memcmp(wpsc.data() + i, field, 4) == 0 && std::memcmp(wpsc.data() + i + 4, "NONE", 4) == 0) {
+      at = i + 4;
+      replaced = 4;
+    }
+  }
+  std::vector<uint8_t> candidate = wpsc;
+  if (at != std::string::npos) {
+    candidate.erase(candidate.begin() + std::ptrdiff_t(at), candidate.begin() + std::ptrdiff_t(at + replaced));
+    candidate.insert(candidate.begin() + std::ptrdiff_t(at), link, link + sizeof(link));
+  } else {
+    for (size_t i = wpsc.size(); i >= 4 + 4 && at == std::string::npos; --i) {
+      if (std::memcmp(wpsc.data() + i - 4, "_END", 4) == 0) {
+        at = i - 4;
+      }
+    }
+    if (at == std::string::npos) {
+      return fail("the WPSC has no _END");
+    }
+    candidate.insert(candidate.begin() + std::ptrdiff_t(at), field, field + 4);
+    candidate.insert(candidate.begin() + std::ptrdiff_t(at + 4), link, link + sizeof(link));
+  }
+  std::string readError;
+  if (!PortRemastered::ReadRetailRoleAssetId(candidate.data(), candidate.size(), wpscClass, fieldTag, have,
+                                             &readError) ||
+      have != id) {
+    return fail("the WPSC with " + std::string(field) + " added does not read back (" + readError + ")");
+  }
+  out = std::move(candidate);
+  return true;
+}
 
 // Returns a pair only for the exact, uniquely identified USA default-role
 // chain. The RFRM and retail class ids, field tags/kinds, complete GUIDs, and
@@ -483,6 +565,10 @@ std::string InstalledModFolder();
 // Moves a finished import into place. Call before PortMods::Initialize().
 // True if a mod was installed.
 bool ApplyPendingImport();
+// Android only (a no-op elsewhere): deletes the legacy <mods>/remastered-models once the app's own
+// import is installed and usable (PortRemasteredStorage::ShouldDeleteLegacy), and resumes an
+// interrupted deletion. Call after ApplyPendingImport(), before PortMods::Initialize().
+void RemoveLegacyImport();
 // The same on the import's thread, reported as running with `installing` set, after which the state
 // is the import's result again. Nothing may have a file of the installed mod open (unload the mods
 // first); inside the root that is one rename, where the mods folder was shared storage it was a

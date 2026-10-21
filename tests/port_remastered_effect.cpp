@@ -399,6 +399,133 @@ void TestGeneratorFlags() {
             "ATX2 takes an id and four elements");
 }
 
+// ASPV (CVEAngleSphereWithVariance, an emitter: V Q R R I R R I R R R b) and LINV (CVELineWithVariance,
+// a vector: V V I R b) are read to their real arity. Both only appear in two shipped GENPs, in an EMTR.
+void PutIntConstant(std::vector<uint8_t>& out, uint32_t value) {
+  PutFourCC(out, "CNST");
+  Put32(out, value);
+}
+
+std::vector<uint8_t> EmitterEffect() {
+  std::vector<uint8_t> out(0x3c, 0);
+  std::memcpy(out.data(), "RFRM", 4);
+  std::memcpy(out.data() + 0x14, "GENP", 4);
+  PutGenerator(out, false);
+  PutProperty(out, "EMTR", 3);
+  return out;
+}
+
+void FinishEffect(std::vector<uint8_t>& out) {
+  PutProperty(out, "_END", 4);
+  out.insert(out.end(), {'F', 'O', 'O', 'T'});
+}
+
+void TestVarianceEmitters() {
+  std::vector<uint8_t> out = EmitterEffect();
+  PutFourCC(out, "ASPV");
+  PutVector(out, 0.0f, 0.0f, 0.0f);
+  PutFourCC(out, "CNST");  // the rotation: a raw quaternion
+  for (int i = 0; i < 4; ++i) {
+    Put32(out, 0);
+  }
+  PutConstant(out, 1.0f);
+  PutConstant(out, 2.0f);
+  PutIntConstant(out, 1);
+  PutConstant(out, 3.0f);
+  PutConstant(out, 4.0f);
+  PutIntConstant(out, 2);
+  PutConstant(out, 5.0f);
+  PutConstant(out, 6.0f);
+  PutConstant(out, 7.0f);
+  out.push_back(1);
+  FinishEffect(out);
+  EffectNode effect;
+  std::string error;
+  CHECK_MSG(ParseEffect(out.data(), out.size(), effect, error), "ASPV parses");
+  CHECK_MSG(effect.properties.size() == 1 && effect.properties[0].value.size() == 1 &&
+                effect.properties[0].value[0].fourcc == EffectFourCC("ASPV") &&
+                effect.properties[0].value[0].args.size() == 12,
+            "ASPV has twelve arguments");
+
+  out = EmitterEffect();
+  PutFourCC(out, "SEMR");
+  PutFourCC(out, "LINV");
+  PutVector(out, 0.0f, 0.0f, -1.0f);
+  PutVector(out, 0.0f, 0.0f, 1.0f);
+  PutIntConstant(out, 4);
+  PutConstant(out, 0.5f);
+  out.push_back(1);
+  PutVector(out, 0.0f, 0.0f, 0.0f);
+  FinishEffect(out);
+  CHECK_MSG(ParseEffect(out.data(), out.size(), effect, error), "LINV parses");
+  CHECK_MSG(effect.properties.size() == 1 && effect.properties[0].value.size() == 1, "one EMTR");
+  if (effect.properties.size() == 1 && effect.properties[0].value.size() == 1) {
+    const EffectValue& semr = effect.properties[0].value[0];
+    CHECK_MSG(semr.fourcc == EffectFourCC("SEMR") && semr.args.size() == 2 &&
+                  semr.args[0].fourcc == EffectFourCC("LINV") && semr.args[0].args.size() == 5,
+              "SEMR holds a LINV of five arguments");
+  }
+}
+
+// BNPS(SLCT(RAND, ARRY(BNID(name, flag)...))) as a SEMR's position: the bone name is a string
+// constant, so the ARRY's entries are not read across it. ATFB: an id, an int as a real, a flag.
+void PutBone(std::vector<uint8_t>& out, const char* name) {
+  PutFourCC(out, "BNID");
+  PutFourCC(out, "CNST");
+  Put32(out, uint32_t(std::strlen(name)));
+  out.insert(out.end(), name, name + std::strlen(name));
+  PutFourCC(out, "CNST");
+  out.push_back(1);
+}
+
+void TestBoneAndFlipbook() {
+  std::vector<uint8_t> out = EmitterEffect();
+  PutFourCC(out, "SEMR");
+  PutFourCC(out, "BNPS");
+  PutFourCC(out, "SLCT");
+  PutFourCC(out, "RAND");
+  PutIntConstant(out, 0);
+  PutIntConstant(out, 2);
+  PutFourCC(out, "ARRY");
+  Put32(out, 2);
+  PutBone(out, "L_ankle");
+  PutBone(out, "Head_1");
+  PutVector(out, 0.0f, 0.0f, 0.0f);
+  FinishEffect(out);
+  EffectNode effect;
+  std::string error;
+  CHECK_MSG(ParseEffect(out.data(), out.size(), effect, error), "BNPS over BNID parses");
+  if (effect.properties.size() == 1 && effect.properties[0].value.size() == 1) {
+    const EffectValue& semr = effect.properties[0].value[0];
+    CHECK_MSG(semr.fourcc == EffectFourCC("SEMR") && semr.args.size() == 2 &&
+                  semr.args[0].fourcc == EffectFourCC("BNPS") && semr.args[0].args.size() == 1 &&
+                  semr.args[0].args[0].fourcc == EffectFourCC("SLCT"),
+              "SEMR holds a BNPS over a SLCT");
+  } else {
+    CHECK_MSG(false, "one EMTR");
+  }
+
+  out.assign(0x3c, 0);
+  std::memcpy(out.data(), "RFRM", 4);
+  std::memcpy(out.data() + 0x14, "GENP", 4);
+  PutGenerator(out, true);
+  const EffectGuid id = Guid(0x20);
+  PutProperty(out, "TEXR", 1);
+  PutFourCC(out, "ATFB");
+  out.insert(out.end(), id.begin(), id.end());
+  PutIntConstant(out, 120);
+  PutFourCC(out, "CNST");
+  out.push_back(1);
+  PutProperty(out, "_END", 4);
+  Put32(out, 0);
+  out.insert(out.end(), {'F', 'O', 'O', 'T'});
+  CHECK_MSG(ParseEffect(out.data(), out.size(), effect, error), "ATFB parses");
+  CHECK_MSG(effect.properties.size() == 1 && effect.properties[0].value.size() == 1 &&
+                effect.properties[0].value[0].fourcc == EffectFourCC("ATFB") &&
+                effect.properties[0].value[0].args.size() == 3,
+            "ATFB has an id and two arguments");
+}
+
 int main() {
   TestParse();
   TestFailure();
@@ -407,6 +534,8 @@ int main() {
   TestTextureElements();
   TestGeneratorFlags();
   TestDeepNesting();
+  TestVarianceEmitters();
+  TestBoneAndFlipbook();
   if (port_test::Failures() == 0) {
     std::printf("port_remastered_effect: ok\n");
   }

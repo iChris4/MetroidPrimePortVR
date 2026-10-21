@@ -1142,6 +1142,17 @@ void CPlayer::SetOrbitPosition(float distance, CStateManager& mgr) {
   }
   CVector3f flatForward = cameraXf.GetForward();
   flatForward.SetZ(0.f);
+  if (PortEmptyLockKeepsPitch(mgr)) {
+    // port: an empty lock keeps the camera pitch: the point sits on the flat forward at eye
+    // height, so the view neither levels nor breaks the lock for a steep angle.
+    CVector3f dir = flatForward;
+    if (!dir.CanBeNormalized()) {
+      dir = GetTransform().GetForward();
+    }
+    x314_orbitPoint = cameraXf.GetTranslation() + dir.AsNormalized() * distance;
+    x320_orbitVector = CVector3f(0.f, distance, 0.f);
+    return;
+  }
   float dot = CVector3f::Dot(flatForward.AsNormalized(), cameraXf.GetForward());
   dot = CMath::Limit(dot, 1.f);
   const CVector3f orbitVector(0.f, distance / dot, 0.f);

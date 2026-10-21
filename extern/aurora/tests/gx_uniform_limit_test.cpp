@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 
+#include "frame_staging.hpp"
 #include "gfx/frame_packet.hpp"
 #include "gfx/recording.hpp"
 #include "gfx/resources.hpp"
@@ -115,8 +116,9 @@ TEST_F(GxUniformLimitTest, PbrModelModulationIsPackedAfterRoomLights) {
   const auto info = build_shader_info(config);
   ASSERT_TRUE(info.usesPbr);
 
+  gfx::detail::testing::StagingPool staging;
   gfx::detail::FramePacket frame;
-  frame.uniforms.reserve_extra(2u << 20); // Explicit staging capacity, matching a real mapped frame.
+  staging.attach(frame);
   gfx::detail::begin_recording(frame, 0);
   // Restores the global state and ends the recording even when an ASSERT_* returns early.
   struct Cleanup {

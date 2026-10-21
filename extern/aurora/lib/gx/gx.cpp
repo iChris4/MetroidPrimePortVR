@@ -485,9 +485,11 @@ wgpu::RenderPipeline build_pipeline(const PipelineConfig& config, ArrayRef<wgpu:
 // multiply or subtract the frame are left alone: fogging them would fog what is behind twice.
 // Particles are the exception to the additive rule: Remastered's particle renderers inject only
 // the colour T + in-scatter block, and an additive or premultiplied particle (blend mode 2 or 1)
-// carries the static render state's "no fog" flag, so it is not fogged at all.
+// carries the static render state's "no fog" flag, so it is not fogged at all. So does a
+// particle with DFOG 1, whatever its blend (CreateGPSM/CreateSWSH set the flag from it).
 static u8 vol_fog_mode(bool depthOnly) noexcept {
-  if (!g_gxState.volFog || depthOnly || !g_gxState.colorUpdate) {
+  if (!g_gxState.volFog || depthOnly || !g_gxState.colorUpdate ||
+      g_gxState.particleFog == GXState::kParticleUnfogged) {
     return VolFogNone;
   }
   const auto src = g_gxState.blendFacSrc;

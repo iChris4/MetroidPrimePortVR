@@ -393,6 +393,10 @@ void CParticleElectric::Render() {
       UpdateCachedTransform();
     }
     CGraphics::DisableAllLights();
+    // InitStaticRenderStateImpl 0xb72618 with Wave's EBDM 0 (row 0 of 0x45767bc) and no ZBUF: depth
+    // test LEQUAL, depth write off (kb elc2-bolt-generation, "Flags / blend / vertex"). The vfx draw
+    // takes its depth state from the GX state (extern/aurora/lib/gfx/vfx.cpp: gx.depthCompare,
+    // gx.depthFunc, gx.depthUpdate), so this SetDepthWriteMode is what the ELC2 quads are drawn with.
     CGraphics::SetDepthWriteMode(true, kE_LEqual, false);
     CGraphics::SetBlendMode(kBM_Blend, kBF_SrcAlpha, kBF_InvSrcAlpha, kLO_Clear);
     CGraphics::SetModelMatrix(CTransform4f::Identity());

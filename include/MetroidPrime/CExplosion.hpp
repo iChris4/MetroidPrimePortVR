@@ -8,7 +8,7 @@
 #include "rstl/single_ptr.hpp"
 
 #ifdef TARGET_PC
-#include <vector>
+#include "MetroidPrime/CPortNestedLights.hpp"
 #endif
 
 class CParticleGen;
@@ -45,13 +45,8 @@ public:
 
 #ifdef TARGET_PC
 private:
-  struct PortNestedLightProxy {
-    const CParticleGen* generator; // key only; may be stale after the generator tree updates
-    TUniqueId light;
-  };
-  std::vector< PortNestedLightProxy > xPortNestedLights;
+  CPortNestedLights xPortNestedLights;
   void PortUpdateNestedLights(CStateManager& mgr);
-  void PortDeleteNestedLights(CStateManager& mgr);
 #endif
 
 public:

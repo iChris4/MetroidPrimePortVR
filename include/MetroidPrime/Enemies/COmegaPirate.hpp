@@ -38,6 +38,10 @@ public:
   void Attack(CStateManager& mgr, EStateMsg msg, float dt) override;
   void JumpBack(CStateManager& mgr, EStateMsg msg, float dt) override;
   void DoubleSnap(CStateManager& mgr, EStateMsg msg, float dt) override;
+#ifdef TARGET_PC
+  // Save-state restore: see the definition.
+  void PortRestoredFromSave(CStateManager& mgr);
+#endif
   void Shuffle(CStateManager& mgr, EStateMsg msg, float dt) override;
   void Skid(CStateManager& mgr, EStateMsg msg, float dt) override;
   void Suck(CStateManager& mgr, EStateMsg msg, float dt) override;
@@ -216,6 +220,9 @@ private:
   uchar xb79_bossPhaseActive;
   rstl::vector< uchar > xb7c_;
   float xb8c_avoidStaticCollisionTime;
+#ifdef TARGET_PC
+  bool mPortResetInDetach;
+#endif
 };
 CHECK_SIZEOF(COmegaPirate, (VERSION >= VERSION_GM8P_00 ? 0xba0 : 0xB90))
 

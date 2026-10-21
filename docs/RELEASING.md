@@ -154,15 +154,17 @@ version Flatpak reports; `tools/make_flatpak.sh` stops if the two differ.
      unversioned); the AppImage keeps the name `MetroidPrime-x86_64.AppImage`.
    - Windows: run `windows.yml`, `gh run download <id> -n metroid_prime_port-windows`,
      drop CI's `user/` folder (log, `dawn_cache.db`, `pipeline_cache.db`), and zip
-     the rest as `metroid-prime-port-X-windows-x86_64.zip`.
+     the rest as `metroid-prime-port-X-windows-x86_64.zip`. The same run's
+     `metroid_prime_port-windows-arm64` artifact becomes
+     `metroid-prime-port-X-windows-arm64.zip` the same way.
    - macOS: run `macos.yml`, download its artifact and zip `Metroid Prime Port.app`
      and `licenses/` as `metroid-prime-port-X-macos-arm64.zip`.
    - Flatpak: `tools/make_flatpak.sh` (committed `port` branch), shipped as
      `MetroidPrimePort.flatpak`.
    - Android: the signed APK, staged as `metroid-prime-port-X-android-arm64.apk`.
 
-   Every release ships all six assets (AppImage, tarball, Flatpak, Windows,
-   macOS, APK); start all the builds together.
+   Every release ships all seven assets (AppImage, tarball, Flatpak, Windows
+   x86_64 and arm64, macOS, APK); start all the builds together.
 3. Check each artefact's version string, then `git tag -a vX` and `git push user vX`.
 4. `gh release create vX --notes-file …` with every asset passed explicitly, and
    confirm with `gh release view vX --json assets`. Base the notes on the
@@ -175,7 +177,7 @@ version Flatpak reports; `tools/make_flatpak.sh` stops if the two differ.
 | Linux | `cmake -S . -B build/port-gcc` | executable | works; tests green. `cmake --install` also produces a complete tree, verified by running it |
 | Linux | `.github/workflows/linux-release.yml` | AppImage + tarball | manual trigger; builds on AlmaLinux 9 and runs `tools/make_appimage.sh`. Use these for releases, not a desktop build |
 | Linux | `tools/make_flatpak.sh` | Flatpak | manifest installs a working tree and collects notices; builds (`tools/make_flatpak.sh` writes `build/flatpak/MetroidPrimePort.flatpak`). The app id is `io.github.odrannnn.metroidprimeport`, with AppStream metainfo shipped |
-| Windows | `.github/workflows/windows.yml` | zipped `dist/` | weekly (Mondays) and manual trigger; green when run, artifact uploaded, packaged startup checked |
+| Windows | `.github/workflows/windows.yml` | zipped `dist/`, x64 and arm64 | weekly (Mondays) and manual trigger; green when run, artifact uploaded, packaged startup checked. arm64 builds natively on `windows-11-arm` with vcpkg's OpenSSL, never run on a real Windows on Arm machine |
 | macOS | `.github/workflows/macos.yml` | ad-hoc signed `.app` (arm64) + `licenses/` | experimental; weekly and manual trigger; builds, tests and packaged startup checked in CI, never run on a real Mac |
 | Android | `tools/android_apk.sh :app:assembleRelease` | APK | builds, signed with this project's own key; runs on-device (POCO F8 Ultra, 60 FPS), touch/Continue-load still unverified |
 

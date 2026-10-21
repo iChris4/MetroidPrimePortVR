@@ -1542,10 +1542,10 @@ std::string Session::BuildSay(const std::string& text) {
 
 std::string Session::BuildGoal() { return "{\"cmd\":\"StatusUpdate\",\"status\":30}"; }
 
-std::string Session::BuildLocationScouts(const std::vector< int64_t >& ids) {
+std::string Session::BuildLocationScouts(const std::vector< int64_t >& ids, int createAsHint) {
   port::JsonWriter json;
   BeginLocationsPacket(json, "LocationScouts", ids);
-  return json.Key("create_as_hint").Number(0).EndObject().Take();
+  return json.Key("create_as_hint").Number(createAsHint).EndObject().Take();
 }
 
 std::string Session::ItemName(int64_t itemId, int64_t slot) const {
@@ -1712,6 +1712,29 @@ std::string Session::ArtifactHint(int64_t itemId) const {
   } catch (...) {
     return std::string();
   }
+}
+
+bool Session::TakeArtifactScanHint(int64_t itemId, int64_t& location) {
+  if (mOwnSlot == 0)
+    return false;
+  int64_t found = 0;
+  const auto hinted = mArtifactHints.find(itemId);
+  if (hinted != mArtifactHints.end()) {
+    if (hinted->second.player != mOwnSlot)
+      return false;
+    found = hinted->second.location;
+  } else {
+    for (const auto& [id, scout] : mScouts) {
+      if (scout.item == itemId && scout.player == mOwnSlot) {
+        found = id;
+        break;
+      }
+    }
+  }
+  if (found == 0 || !mScanHinted.insert(found).second)
+    return false;
+  location = found;
+  return true;
 }
 
 std::string Session::AnnounceLocation(int64_t locationId) {

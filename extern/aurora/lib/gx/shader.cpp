@@ -2351,6 +2351,7 @@ auto pbr_func(const ShaderConfig& config, const ShaderInfo& info, std::string& v
       let inv_a = {2};)""",
                          base, config.pbrKind == 36 ? "\n      let inv_c = ubuf.pbr_model_coverage.x;" : "", InvAlphaExpr);
   }
+  // In pieces: MSVC rejects one string literal over 16 KB (adjacent ones join).
   std::string source = fmt::format(R"""(
     // PBR (GX_AURORA_SET_PBR)
     {{
@@ -2548,7 +2549,8 @@ auto pbr_func(const ShaderConfig& config, const ShaderInfo& info, std::string& v
           let pbr_vr = textureSampleLevel(pbr_vol_r, pbr_cube_samp, pbr_vuv, 0.0);
           let pbr_vg = textureSampleLevel(pbr_vol_g, pbr_cube_samp, pbr_vuv, 0.0);
           let pbr_vb = textureSampleLevel(pbr_vol_b, pbr_cube_samp, pbr_vuv, 0.0);
-          let pbr_vn = vec3f(dot(ubuf.pbr_volume[3].xyz, pbr_n), dot(ubuf.pbr_volume[4].xyz, pbr_n),
+)"""
+R"""(          let pbr_vn = vec3f(dot(ubuf.pbr_volume[3].xyz, pbr_n), dot(ubuf.pbr_volume[4].xyz, pbr_n),
                              dot(ubuf.pbr_volume[5].xyz, pbr_n));
           let pbr_vq = clamp(vec3f(dot(pbr_vn, pbr_vr.xyz * 2.0 - 1.0), dot(pbr_vn, pbr_vg.xyz * 2.0 - 1.0),
                                    dot(pbr_vn, pbr_vb.xyz * 2.0 - 1.0)) * 0.5 + 0.5, vec3f(0.0), vec3f(1.0));
@@ -2729,7 +2731,8 @@ auto pbr_func(const ShaderConfig& config, const ShaderInfo& info, std::string& v
       }} else if (ubuf.pbr_light_scale.w < -0.5) {{
           pbr_alpha *= -ubuf.pbr_light_scale.w - 1.0;
       }}
-      // Encoded as Remastered's sRGB swapchain does it: the exact piecewise sRGB curve.
+)"""
+R"""(      // Encoded as Remastered's sRGB swapchain does it: the exact piecewise sRGB curve.
       prev = vec4f(srgb_enc(pbr_tm + pbr_pass), pbr_alpha);
       // A debug view (GXSetPBRDebugView): one input of the shading in place of the result.
       if (ubuf.pbr_layer.w > 0.5) {{

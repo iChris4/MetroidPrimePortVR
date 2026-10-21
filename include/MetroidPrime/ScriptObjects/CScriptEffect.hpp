@@ -2,6 +2,9 @@
 #define _CSCRIPTEFFECT
 
 #include "MetroidPrime/CActor.hpp"
+#ifdef TARGET_PC
+#include "MetroidPrime/CPortNestedLights.hpp"
+#endif
 
 class CLightParameters;
 class CElectricDescription;
@@ -67,6 +70,9 @@ private:
   rstl::single_ptr< CActorLights > x138_actorLights;
   TUniqueId x13c_triggerId;
   float x140_destroyDelayTimer;
+#ifdef TARGET_PC
+  CPortNestedLights xPortNestedLights; // lights of the nested PHDR children of x104_particleSystem
+#endif
 };
 
 CHECK_SIZEOF(CScriptEffect, (VERSION >= VERSION_GM8P_00 ? 0x158 : 0x148))

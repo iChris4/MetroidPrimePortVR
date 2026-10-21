@@ -14,7 +14,7 @@ namespace PortRoomEnv {
 namespace {
 
 constexpr uint32_t kMagic = 0x5645504D; // 'MPEV'
-constexpr uint32_t kVersion = 21;
+constexpr uint32_t kVersion = 22;
 constexpr uint32_t kMaxGrades = 64;
 // A fog record up to its link count (inclusive).
 constexpr size_t kFogBytes = 368;
@@ -996,8 +996,99 @@ bool Parse(std::vector<uint8_t>&& data, File& out, std::string& error) {
       out.fluidHints.push_back(h);
     }
   }
+  if (version >= 22) {
+    if (data.size() - at < 4) {
+      error = "cut short";
+      return false;
+    }
+    const uint32_t volumes = ReadLE32(data.data() + at);
+    at += 4;
+    constexpr size_t kVolumeBytes = 15 * 4;
+    if (volumes > kMaxWorldVolumes || (data.size() - at) / kVolumeBytes < volumes) {
+      error = "cut short";
+      return false;
+    }
+    out.worldVolumes.resize(volumes);
+    for (uint32_t i = 0; i < volumes; ++i, at += kVolumeBytes) {
+      WorldVolume& v = out.worldVolumes[i];
+      float* const fields[3] = {v.centre, v.half, v.axes};
+      const size_t counts[3] = {3, 3, 9};
+      size_t o = at;
+      for (int f = 0; f < 3; ++f) {
+        for (size_t k = 0; k < counts[f]; ++k, o += 4) {
+          fields[f][k] = ReadLEFloat(data.data() + o);
+        }
+      }
+      // A box that reads wrong holds no point (its index stays, as links name it).
+      bool ok = true;
+      for (float x : v.centre) ok = ok && std::isfinite(x);
+      for (float x : v.half) ok = ok && std::isfinite(x);
+      for (float x : v.axes) ok = ok && std::isfinite(x);
+      if (!ok) {
+        v = WorldVolume{};
+        v.half[0] = v.half[1] = v.half[2] = -1.f;
+      }
+    }
+  }
   out.data = std::move(data);
   return true;
+}
+
+bool InsideWorldVolume(const WorldVolume& volume, const float pos[3]) {
+  const float d[3] = {pos[0] - volume.centre[0], pos[1] - volume.centre[1], pos[2] - volume.centre[2]};
+  for (int axis = 0; axis < 3; ++axis) {
+    const float* const a = volume.axes + 3 * axis;
+    if (!(std::fabs(d[0] * a[0] + d[1] * a[1] + d[2] * a[2]) <= volume.half[axis])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool SameWorldVolumes(const std::vector<WorldVolume>& a, const std::vector<WorldVolume>& b) {
+  return a.size() == b.size() &&
+         (a.empty() || std::memcmp(a.data(), b.data(), a.size() * sizeof(WorldVolume)) == 0);
+}
+
+void WorldVolumeState::Clear() {
+  inside.clear();
+  entered.clear();
+  exited.clear();
+  seq = 0;
+}
+
+void WorldVolumeState::Update(const std::vector<WorldVolume>& volumes, const float pos[3], std::vector<Event>& out) {
+  if (inside.size() != volumes.size()) {
+    Clear();
+    inside.assign(volumes.size(), 0);
+    entered.assign(volumes.size(), 0);
+    exited.assign(volumes.size(), 0);
+  }
+  for (size_t i = 0; i < volumes.size(); ++i) {
+    const bool now = InsideWorldVolume(volumes[i], pos);
+    if (now == (inside[i] != 0)) {
+      continue;
+    }
+    inside[i] = now ? 1 : 0;
+    (now ? entered : exited)[i] = ++seq;
+    out.push_back({uint32_t(i), now ? 0 : 1});
+  }
+}
+
+void WorldVolumeState::Replay(std::vector<Event>& out) const {
+  std::vector<std::pair<uint64_t, Event>> events;
+  for (size_t i = 0; i < entered.size() && i < exited.size(); ++i) {
+    if (entered[i] != 0) {
+      events.push_back({entered[i], {uint32_t(i), 0}});
+      if (exited[i] > entered[i]) {
+        events.push_back({exited[i], {uint32_t(i), 1}});
+      }
+    }
+  }
+  std::sort(events.begin(), events.end(), [](const auto& x, const auto& y) { return x.first < y.first; });
+  for (const auto& e : events) {
+    out.push_back(e.second);
+  }
 }
 
 bool ExposureHints::Load(const std::vector<FluidHint>& hints, bool cameraInside) {

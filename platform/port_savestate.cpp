@@ -500,8 +500,10 @@ void TickRoomState(CStateManager& mgr) {
     return;
   sRoomPending = false;
   DisarmSpawnLayers();
-  PortLog::Write("[savestate] room state: %d applied, %d removed, %d unmatched, %d areas skipped\n",
-                 sRoomStats.applied, sRoomStats.removed, sRoomStats.unmatched, sRoomStats.skipped);
+  PortLog::Write("[savestate] room state: %d applied, %d generated, %d removed, %d unmatched, "
+                 "%d areas skipped, %d script messages replayed\n",
+                 sRoomStats.applied, sRoomStats.generated, sRoomStats.removed, sRoomStats.unmatched,
+                 sRoomStats.skipped, sRoomStats.replayed);
 }
 
 
@@ -826,6 +828,9 @@ void InstallPending() {
     for (int i = 0; i < PortBeamDoors::kWords; ++i) {
       gpGameState->PortBeamDoorBits()[i] = keptBeam[i];
     }
+  }
+  if (gpGameState != nullptr) {
+    gpGameState->PortBackUpBeamDoors();
   }
   LoadMapData(sPendingBlob);
   // Rebuild the areas with the layers their objects were spawned with (#161); each area puts

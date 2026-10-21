@@ -130,8 +130,11 @@
   stick click and left ctrl by default and can be remapped on the Remap page
   ("Gyro" group). With toggle mode, leave the binding itself as a normal press.
   The "Reset aim" action (`reset_aim`, unbound by default, same group) recentres
-  the pointer-aim cursor and levels the camera pitch (yaw is kept), so lock-on
-  isn't needed as a reset. With pointer aim and gyro on, the twin-stick look
+  the crosshair with pointer aim on, or levels the camera pitch (yaw is kept)
+  with it off, so lock-on isn't needed as a reset; `reset_aim_both` (F1 Controls
+  > Options, default off) makes it do both every time. `lock_keeps_pitch` (same page, default off) makes
+  a lock-on with no target under direct aim hold the camera pitch it had instead
+  of levelling the view. With pointer aim and gyro on, the twin-stick look
   stick and keyboard look keys turn the camera as without pointer aim while the
   gyro moves the pointer.
   `gyro_source` is 0 auto, 1 controller, 2 phone. `gyro_sensitivity` (0.1-10,
@@ -139,6 +142,9 @@
   turned. It ignores the mouse sensitivity and invert. An older `gyro_rate` (aim
   pixels per rad/s, which also scaled with the mouse sensitivity) is read once as
   `gyro_rate × mouse_sensitivity` and no longer written.
+  With `gyro_split=1` (F1 "Separate vertical speed"), `gyro_sensitivity_y`
+  (same range, default 2) drives pitch and `gyro_sensitivity` only yaw; under
+  pointer aim it also scales the pointer's vertical travel.
   `gyro_space` picks which turn moves the camera left/right (GyroWiki's terms):
   1 player (default: turning the pad, flat or upright), 2 world (turning about
   the real vertical only), 0 local yaw (the pad's flat turn), 3 local roll (the
@@ -147,9 +153,12 @@
   `gyro_auto_calibrate` (0 off, 1 always = default, 2 only in menus) learns the
   gyro's drift while the pad is still; "only in menus" learns while the game is
   paused, on a menu screen or with F1 open, and keeps the result in play. The old
-  on/off values 0/1 load as off/always. F1 shows the calibration confidence and
-  has a Recalibrate button, which counts down 5 s (Cancel stops it) so the pad can
-  be put down, then relearns. Both use GamepadMotionHelpers (`extern/GamepadMotionHelpers`).
+  on/off values 0/1 load as off/always. Turning it off keeps the drift learned so
+  far. F1 shows the calibration confidence and has a Recalibrate button, which
+  counts down 5 s (Cancel stops it) so the pad can be put down, then averages the
+  still pad for 3 s (the gyro doesn't aim meanwhile) and uses that as the drift
+  at full confidence. Auto calibration pauses during it and refines the result
+  afterwards; with it off the manual result stays as is. Both use GamepadMotionHelpers (`extern/GamepadMotionHelpers`).
   `gyro_smoothing` and `gyro_tightening` (deg/s, 0-50, both 0 = off by default)
   are JoyShockMapper-style: turns below the smoothing threshold are averaged over
   0.125 s, fading to direct by twice it; turns below the tightening threshold are
@@ -197,7 +206,8 @@
   (`touch_side_margin`, `touch_stick_inset`, `touch_button_inset`) move those
   controls instead, in dp.
   **Touch aim** (Android, `touch_aim`, on by default; `touch_aim_speed`, default
-  2.25 aim px per dp): with twin stick on, the right stick is gone and a finger
+  2.25 aim px per dp; with `touch_aim_split=1`, `touch_aim_speed_y`, same range,
+  sets the vertical speed and `touch_aim_speed` only the horizontal): with twin stick on, the right stick is gone and a finger
   dragged on the free screen area turns the view by the distance dragged, like a
   mouse (`AddTouchAim`, drained in `BeginFrameMouse`). Off, the right stick sets
   a turn rate as before. In the GameCube layout (neither mouse aim nor twin
@@ -778,10 +788,11 @@
   0 Default, 1 Progressive, the default, 2 Additive), set by hand to match the
   seed's YAML because the server doesn't send it (`ARCHIPELAGO.md`).
 - F1 > Debug > Audio holds the audio switches, "Streamed audio (music/movies)"
-  (`ai_audio`, on by default; `MP_DISABLE_AI_AUDIO=1` starts with it off) and
-  "MusyX audio (effects/streams)" (`musyx_audio`, on by default), and the MusyX
-  voice list (collapsed), whose mutes are kept as `voices_muted` (the muted
-  sample ids, comma-separated; no line when none is muted).
+  (`MP_DISABLE_AI_AUDIO=1` starts with it off) and "MusyX audio
+  (effects/streams)", and the MusyX voice list (collapsed) with per-sample mutes
+  and "Unmute all" (which also turns both switches back on). None of these is
+  saved: every launch starts with full sound, and old `ai_audio`,
+  `musyx_audio` and `voices_muted` lines are ignored.
 - F1 > Debug > Cheats holds the cheats: health, items, ammo, area and world
   teleport. The cheats stay hidden
   until Show cheats is ticked (`cheats`, off by default). Invulnerable
@@ -833,9 +844,13 @@ other `X:\Users\<name>`: `X:\Users\<user>`); the
   enemies stay dead, enemies, platforms and moving objects keep position,
   velocity and health, doors keep open or closed (set directly, without firing their connections), timers and counters keep
   their count (about 5 KB, 0.2 ms to capture). Enemy AI state is not kept
-  (they resume from their start behaviour), nor are projectiles, cutscene or
-  boss-fight progress. States without the section, or with the setting off,
-  bring the room back as if just entered.
+  (they resume from their start behaviour), nor are projectiles or cutscene
+  progress. A state saved in a boss fight resumes the fight: objects the script
+  had switched on or off get the same activation they had then, the enemies a
+  script generator had spawned (Hive Totem's War Wasps) are spawned again, and
+  each enemy is sent again the script commands it had been sent (what woke
+  Thardus), before its health and position are put back. States without the
+  section, or with the setting off, bring the room back as if just entered.
   A door saved while it was closing comes back closed with that close still owed:
   the door finishes closing, the messages a live close sends still go out (its
   shield rearms) and it opens again as usual. Its close animation replays from the
@@ -957,6 +972,9 @@ other `X:\Users\<name>`: `X:\Users\<user>`); the
   while the overlay is visible or relative capture/focus is absent. Mouse mode
   uses immediate yaw/pitch with an approximately ±87° pitch range. Up moves aim
   up by default; `MP_MOUSE_INVERT_X=1` and `MP_MOUSE_INVERT_Y=1` invert either axis.
+  With `mouse_sensitivity_split=1` (F1 "Separate vertical speed"),
+  `mouse_sensitivity_y` (radians per count, default 0.0035) sets the vertical
+  speed and `mouse_sensitivity` only the horizontal; free camera ignores it.
   `MP_MOUSE_SENS` and `mouse_sensitivity` are radians per mouse count; the F1
   slider shows them on the Quake/Source/Apex scale (0.022 degrees a count per
   unit, so the default 0.0035 is about 9.12), with a cm/360 readout for

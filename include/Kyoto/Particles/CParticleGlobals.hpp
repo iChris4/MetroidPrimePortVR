@@ -1,6 +1,8 @@
 #ifndef _CPARTICLEGLOBALS
 #define _CPARTICLEGLOBALS
 
+#include <cstring>
+
 #include "types.h"
 
 #include "Kyoto/SObjectTag.hpp"
@@ -12,14 +14,29 @@ public:
     FourCC x0_type;
     CElementGen* x4_system;
     SParticleSystem* x8_prev;
+#ifdef TARGET_PC
+    // Remastered keeps the lifetime tween (UpdateLifetimeTweenValues 0x24ef38) in the system's own
+    // context; the port's global is saved here so a child generator that updates or renders
+    // inside this system leaves it as it was.
+    float xPortSavedTween;
+#endif
 
     SParticleSystem(FourCC type, CElementGen* system)
     : x0_type(type)
     , x4_system(system)
-    , x8_prev(mCurrentParticleSystem) {
+    , x8_prev(mCurrentParticleSystem)
+#ifdef TARGET_PC
+    , xPortSavedTween(xPortSystemTween)
+#endif
+    {
       mCurrentParticleSystem = this;
     }
-    ~SParticleSystem() { mCurrentParticleSystem = x8_prev; }
+    ~SParticleSystem() {
+      mCurrentParticleSystem = x8_prev;
+#ifdef TARGET_PC
+      xPortSystemTween = xPortSavedTween;
+#endif
+    }
   };
 
   static void SetEmitterTime(int time);
@@ -39,8 +56,18 @@ public:
 #ifdef TARGET_PC
   // GC reads address 0 harmlessly when no ADV values are bound; read zeros instead.
   static float* GetParticleAccessParameters() {
-    static float sZeros[8] = {};
+    static float sZeros[13] = {};
     return mParticleAccessParameters != nullptr ? mParticleAccessParameters : sZeros;
+  }
+  // port-only: Remastered's per-particle int variables IAV0..3 (PAP0..3), stored as their bits in
+  // the four floats after ADV1..9 (CElementGen::CAdvancedValues).
+  static int GetParticleAccessInt(int n) {
+    int v;
+    std::memcpy(&v, &GetParticleAccessParameters()[9 + n], sizeof(v));
+    return v;
+  }
+  static void SetParticleAccessInt(float* params, int n, int v) {
+    std::memcpy(&params[9 + n], &v, sizeof(v));
   }
 #else
   static float* GetParticleAccessParameters() { return mParticleAccessParameters; }
@@ -80,6 +107,13 @@ public:
     float nodeRemainder = 0.f;
   };
   static const SPortSwooshEval* xPortSwooshEval;
+  // port-only: the system tween Remastered keeps at ctx+0x60 (UpdateLifetimeTweenValues 0x24ef38 on
+  // time slot 0, written by every system tick): clamp(system frame / system lifetime, 0, 1). A
+  // lifetime of 0 reads as 1, and the infinite one (the port's PSLT default 0x7FFFFF, retail's
+  // 0x1000000) gives 0. The reciprocal is a plain 1 / lifetime; the original's estimate is within
+  // an ulp of it.
+  static float xPortSystemTween;
+  static void PortSetSystemTime(int frame, int lifetime);
   struct PortSwooshEvalScope {
     const SPortSwooshEval* prev;
     explicit PortSwooshEvalScope(const SPortSwooshEval* eval) : prev(xPortSwooshEval) {

@@ -182,6 +182,13 @@ struct ResolveHdr {
 void resolve_pass_into(TextureHandle texture, ClipRect rect, bool clearColor, bool clearAlpha, bool clearDepth,
                        Vec4<float> clearColorValue, float clearDepthValue, GXTexFmt resolveFormat = GX_TF_RGBA8,
                        int probeFace = -1, bool resolveMips = false, const ResolveHdr* hdr = nullptr);
+// The scene copy point (vfx::capture_scene): one break of the EFB pass that resolves its colour into
+// color (the whole target, scaled to color's size, its mips built; hdr as for resolve_pass_into) and,
+// where the device can, snapshots its raw depth (R32Float, this frame slot's pool) into depth. The
+// EFB continues on a pass that loads both. False, with nothing recorded, outside an on-screen EFB pass.
+bool resolve_scene_copy(TextureHandle color, const ResolveHdr* hdr, wgpu::TextureView& depth);
+// The frame slot being recorded: its pool entries stay alive until the render worker has encoded it.
+size_t current_frame_slot() noexcept;
 uint32_t align_uniform(uint32_t value);
 Vec2<uint32_t> get_render_target_size() noexcept;
 void set_viewport(const Viewport& viewport) noexcept;

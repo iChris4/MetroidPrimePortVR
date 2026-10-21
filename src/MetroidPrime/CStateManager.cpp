@@ -20,6 +20,7 @@
 #include "port_room_geo.h"
 #include "port_room_liquid.h"
 #include "port_savestate.h"
+#include "port_scene_copy.h"
 #include "port_skip_cutscenes.h"
 #include "port_viewmodel.h"
 #include "port_console.h"
@@ -1143,6 +1144,9 @@ void CStateManager::RemoveObject(TUniqueId id) {
   for (int i = 0; i < x808_objectLists.size(); ++i) {
     x808_objectLists[i]->RemoveObject(id);
   }
+#ifdef TARGET_PC
+  PortSaveState::NoteRemoved(*this, id.value);
+#endif
 }
 
 void CStateManager::CreateStandardGameObjects() {
@@ -2395,7 +2399,17 @@ rstl::pair< TEditorId, TUniqueId > CStateManager::GenerateObject(const TEditorId
     const rstl::pair< const uchar*, int > layerBuf =
         area->GetLayerScriptBuffer(TLayerId(build.second.value >> 26));
     CMemoryInStream stream(layerBuf.first + build.first->x4_position, build.first->x8_length);
+#ifdef TARGET_PC
+    // Only script generators set the generating flag (a boss's own spawns do not):
+    // a save state brings such a copy back from the template it was made from.
+    const rstl::pair< TEditorId, TUniqueId > made =
+        LoadScriptObject(TAreaId(areaId), build.first->x0_type, build.first->x8_length, stream);
+    if (xf94_26_generatingObject && made.second != kInvalidUniqueId)
+      PortSaveState::NoteGenerated(*this, made.second.value);
+    return made;
+#else
     return LoadScriptObject(TAreaId(areaId), build.first->x0_type, build.first->x8_length, stream);
+#endif
   }
 
   return rstl::pair< TEditorId, TUniqueId >(kInvalidEditorId, kInvalidUniqueId);
@@ -2518,6 +2532,10 @@ void CStateManager::SendScriptMsg(TUniqueId uid, TEditorId target, EScriptObject
   TIdList::const_iterator it = search.first;
   for (; it != search.second; ++it) {
     CEntity* ent = allList->GetObjectById(it->second);
+#ifdef TARGET_PC
+    if (ent != nullptr && !ent->IsScriptingBlocked())
+      PortSaveState::NoteScriptMsg(*this, ent->GetUniqueId().value, uid.value, msg);
+#endif
     DeliverScriptMsg(ent, uid, msg);
   }
 }
@@ -3107,6 +3125,13 @@ void CStateManager::PortCaptureProbeFace() const {
   // Remastered's grade hints that follow the player in a fluid and the camera under water.
   PortRoomEnv::SetFluid(x84c_player != nullptr && x84c_player->IsInFluid(),
                         x870_cameraManager->GetFluidCounter() > 0);
+  {
+    // And the world's hints that follow the camera through the master's trigger volumes (the
+    // game camera, as the room geometry's camera volumes see it).
+    const CVector3f eye = x870_cameraManager->GetCurrentCameraTransform(*this).GetTranslation();
+    const float at[3] = {eye.GetX(), eye.GetY(), eye.GetZ()};
+    PortRoomEnv::SetCameraPoint(at);
+  }
   PortRoomGeo::SetLoadedAreas(mreas, mreaCount);
   PortRoomLiquid::SetLoadedAreas(mreas, mreaCount);
   {
@@ -3351,6 +3376,8 @@ void CStateManager::DrawWorld() const {
   gpRender->SetThermalColdScale(xf28_thermColdScale2 + xf24_thermColdScale1);
 #ifdef TARGET_PC
   bool portRoomGeo[10] = {};
+  // The draw token each area's sorted pass ran with (pass B).
+  uint portDrawToken[10] = {};
   // Collision view "only": the world draws nothing but Samus (port_collision_view.h).
   const bool portCollisionOnly = !thermal && PortCollisionView::Only();
   const CGameArea* portVisArea = nullptr;
@@ -3545,12 +3572,15 @@ void CStateManager::DrawWorld() const {
       PortRoomGeo::AddSorted(area);
     }
     if (isVisArea && !thermal && !portCollisionOnly) {
+      // The decals are queued after the stash below, to draw with the opaque world.
+      x884_actorModelParticles->AddStragglersToRenderer(*this);
+    }
 #else
     if (isVisArea && !thermal) {
-#endif
       CDecalManager::AddToRenderer(frustum, *this);
       x884_actorModelParticles->AddStragglersToRenderer(*this);
     }
+#endif
     ++x8dc_objectDrawToken;
     x84c_player->MorphBall()->DrawBallShadow(const_cast< CStateManager& >(*this));
 #if VERSION >= VERSION_GM8P_00 && VERSION != VERSION_GM8E_02
@@ -3570,14 +3600,38 @@ void CStateManager::DrawWorld() const {
 #endif
     gpRender->EnablePVS(&set, area.GetId().Value());
 #ifdef TARGET_PC
-    // The actors still go through the buckets; only the area's own surfaces stay out.
-    PortRoomGeo::sReplacingArea = portRoomGeo[i];
-#endif
+    // Pass A of Remastered's order (RenderPrimaryPass): opaque world and models, then decals,
+    // for every area before any area's transparents. The area's sorted drawables wait in a
+    // stash for pass B; its decals and simple shadows draw now, sorted among themselves.
+    portDrawToken[i] = x8dc_objectDrawToken;
+    gpRender->PortStashBuckets(i);
+    if (isVisArea && !thermal && !portCollisionOnly) {
+      CDecalManager::AddToRenderer(frustum, *this);
+    }
+    gpRender->PortDrawSortedDrawables(area.GetId().Value());
+#else
     gpRender->DrawSortedGeometry(area.GetId().Value(), mask, targetMask);
-#ifdef TARGET_PC
-    PortRoomGeo::sReplacingArea = false;
 #endif
   }
+
+#ifdef TARGET_PC
+  // Opaque world, opaque models, sky and decals are all down (port_scene_copy.h).
+  PortSceneCopyPoint();
+  // Pass B: each area's sorted drawables and world surfaces, in the same order and with the
+  // fog, light fade, PVS, draw token and room-geometry state pass A had for that area.
+  for (int i = 0; i < areas.size(); ++i) {
+    const CGameArea& area = *areas[i];
+    SetupFogForArea(area);
+    gpRender->SetWorldLightFadeLevel(area.GetPostConstructed()->x1128_worldLightingLevel);
+    gpRender->EnablePVS(&visibility[i], area.GetId().Value());
+    x8dc_objectDrawToken = portDrawToken[i];
+    gpRender->PortRestoreBuckets(i);
+    // The actors still go through the buckets; only the area's own surfaces stay out.
+    PortRoomGeo::sReplacingArea = portRoomGeo[i];
+    gpRender->DrawSortedGeometry(area.GetId().Value(), mask, targetMask);
+    PortRoomGeo::sReplacingArea = false;
+  }
+#endif
 
 #ifdef TARGET_PC
   if (sShadowCheck && portShadow && CGraphics::GetFrameCounter() % 300 == 0) {
@@ -4390,7 +4444,9 @@ void CStateManager::SetBossParams(TUniqueId bossId, float maxEnergy, uint string
   xf20_bossStringIdx = stringIdx;
 }
 
+#ifndef _MSC_VER
 const CPlayer* CStateManager::GetPlayer() const { return x84c_player; }
+#endif
 
 void CStateManager::QueueMessage(int frameCount, CAssetId msg, float f1) {
   xf84_ = frameCount;

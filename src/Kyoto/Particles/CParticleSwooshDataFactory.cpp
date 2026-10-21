@@ -28,7 +28,14 @@ CSwooshDescription* CParticleSwooshDataFactory::CreateGeneratorDescription(CInpu
   }
   CSwooshDescription* desc = rs_new CSwooshDescription();
 
+#ifdef TARGET_PC
+  std::vector< const CREPortKeep* >* const outerKeeps = CPortKeepGlobals::sCollect;
+  CPortKeepGlobals::sCollect = &desc->xPortKeeps;
+#endif
   CreateWPSM(desc, in, pool);
+#ifdef TARGET_PC
+  CPortKeepGlobals::sCollect = outerKeeps;
+#endif
 #ifdef TARGET_PC
   if (desc->xPortVfx) {
     for (CPortVfxMat::Tex& t : desc->xPortVfx->mat.tex) {
@@ -158,6 +165,11 @@ bool CParticleSwooshDataFactory::CreateWPSM(CSwooshDescription* swoosh, CInputSt
         swoosh->xPortRotOriented = (flags & 2) != 0;
       }
       swoosh->xPortRotZ.reset(CParticleDataFactory::GetRealElement(in));
+      break;
+    // Port-only: Remastered's DFOG 1 (xPortUnfogged).
+    case 'PDFG':
+      CParticleDataFactory::GetClassID(in);
+      swoosh->xPortUnfogged = in.ReadLong() != 0;
       break;
     // Port-only Remastered transform mode; only 3 (xPortXfmdFollow) and 4 (xPortXfmdMover) are written.
     case 'XFMD': {

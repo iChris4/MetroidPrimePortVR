@@ -10,6 +10,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <string>
 
 namespace {
@@ -338,8 +340,34 @@ int main() {
   REQUIRE_MSG(!Apply(1, slot, sizeof(slot), untouched, untouchedMarks), "another slot has no file");
   REQUIRE_MSG(!Apply(2, slot, sizeof(slot), untouched, untouchedMarks), "nor the third");
   sIdentity = CardIdentity(usaDir, "GM8P01", 0);
-  REQUIRE_MSG(!Apply(0, slot, sizeof(slot), untouched, untouchedMarks),
-              "nor does another card see this file");
+  REQUIRE_MSG(Apply(0, slot, sizeof(slot), untouched, untouchedMarks) && untouchedMarks.count == 64,
+              "another card path adopts the file for the same slot bytes");
+  untouched[0] = 5;
+  untouchedMarks = PortMapMarks::List();
+  untouchedMarks.Toggle(Pack(4, 4));
+  REQUIRE_MSG(!Apply(0, otherSlot, sizeof(otherSlot), untouched, untouchedMarks) && untouched[0] == 5 &&
+                  untouchedMarks.count == 1,
+              "but not for other slot bytes");
+  // Names outside the slot's pattern are not adopted: a short key, an upper case
+  // key, a temporary, and a beam doors file of the same slot.
+  {
+    const fs::path folder = root / "mapdata";
+    std::vector< uint8_t > blob;
+    {
+      std::ifstream in(slot0, std::ios::binary);
+      blob.assign(std::istreambuf_iterator< char >(in), {});
+    }
+    const char* names[] = {"0123456789abcde-2.bin", "0123456789ABCDEF-2.bin", "0123456789abcdef-2.bin.tmp",
+                           "beam-doors-0123456789abcdef-slot2.bin"};
+    for (const char* name : names) {
+      std::ofstream out(folder / name, std::ios::binary);
+      out.write(reinterpret_cast< const char* >(blob.data()), static_cast< std::streamsize >(blob.size()));
+    }
+    REQUIRE_MSG(!Apply(2, slot, sizeof(slot), untouched, untouchedMarks), "unrelated names are not adopted");
+    for (const char* name : names) {
+      fs::remove(folder / name, ec);
+    }
+  }
   sIdentity = usa;
   // Two slots of one card keep their own files.
   Data second;

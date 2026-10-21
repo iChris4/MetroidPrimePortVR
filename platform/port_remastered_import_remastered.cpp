@@ -88,6 +88,8 @@ bool Remastered::Open(const std::string& nspPath, const std::string& keysPath, s
         }
       } else if (type == kMATI) {
         m_materials.emplace(assets[a].id, Where{m_paks.size(), a});
+      } else if (type == kVECF) {
+        m_vectorFields.emplace(assets[a].id, Where{m_paks.size(), a});
       } else if (type == kGUIF) {
         for (const std::string& name : assets[a].names) {
           m_frames.emplace(FrameKey(name), Where{m_paks.size(), a});
@@ -282,6 +284,7 @@ bool Remastered::ReadEffectAsset(uint32_t type, const ModelUuid& id, std::vector
               : type == kSWSH ? m_swooshes
               : type == kELSM || type == kELC2 ? m_electrics
               : type == kMATI ? m_materials
+              : type == kVECF ? m_vectorFields
                               : m_textures,
               id, out, error);
 }
@@ -289,6 +292,7 @@ bool Remastered::ReadEffectAsset(uint32_t type, const ModelUuid& id, std::vector
 uint32_t Remastered::EffectAssetType(const ModelUuid& id) const {
   return m_textures.count(id) != 0    ? kTXTR
          : m_materials.count(id) != 0 ? kMATI
+         : m_vectorFields.count(id) != 0 ? kVECF
          : m_effects.count(id) != 0   ? kGENP
          : m_swooshes.count(id) != 0  ? kSWSH
          : m_electrics.count(id) != 0 ? m_electricTypes.at(id)

@@ -79,9 +79,24 @@ void TestBoundedHdrCarrier() {
                                             0.f, 0.f, 0.f, 1.f, 0.f, 0.f);
   const float rgb[3] = {1.f, 1.f, 1.f};
   CElementGen::PortSetNestedHdrCarrier(ordinaryHdr, sourceRgba, 20.f, 0.25f, 3.f);
+  CHECK_MSG(ordinaryHdr.GetAngleAttenuationConstant() == 20.f &&
+                ordinaryHdr.GetAttenuationConstant() == 1.f && ordinaryHdr.GetAttenuationLinear() == 0.f &&
+                Close(ordinaryHdr.GetAttenuationQuadratic(), 1.f / (1.5f * 1.5f)),
+            "the retail (TEV) light takes the carrier's intensity, at half strength at half the outer radius");
+  ordinaryHdr.SetAttenuation(0.f, 0.f, 0.f);
   ordinaryHdr.SetPortHdr(rgb, zero, 0.25f, 3.f, CLight::kPHF_Smooth);
   CHECK_MSG(ordinaryHdr.GetRadius() > 1.0e30f,
             "a later ordinary HDR assignment clears the nested-light radius override");
+
+  // PHFO: each authored LFOT 0..3 selects its CLight falloff shape.
+  const CLight::EPortHdrFalloff shapes[4] = {CLight::kPHF_None, CLight::kPHF_Linear,
+                                              CLight::kPHF_Quadratic, CLight::kPHF_Smooth};
+  for (u8 lfot = 0; lfot < 4; ++lfot) {
+    CLight shaped = CLight::BuildCustom(zero, CVector3f(1.f, 0.f, 0.f), CColor::White(), 0.f, 0.f,
+                                        0.f, 1.f, 0.f, 0.f);
+    CElementGen::PortSetNestedHdrCarrier(shaped, sourceRgba, 1.f, 0.25f, 3.f, lfot);
+    CHECK_MSG(shaped.GetPortHdrFalloff() == shapes[lfot], "PHFO selects the authored falloff");
+  }
 }
 }  // namespace
 

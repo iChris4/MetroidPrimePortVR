@@ -12,7 +12,14 @@
 const CDamageVulnerability CTryclops::skPowerBombVulnerability =
     CDamageVulnerability(kVN_Deflect, kVN_Deflect, kVN_Deflect, kVN_Deflect, kVN_Deflect,
                          kVN_Normal, kVN_Deflect, kVN_Deflect, kVN_Deflect, kVN_Deflect,
-                         kVN_Deflect, kVN_Deflect, kVN_Deflect, kVN_Deflect, kVN_Deflect, kDT_None);
+                         kVN_Deflect, kVN_Deflect, kVN_Deflect, kVN_Deflect, kVN_Deflect, kDT_None)
+#ifdef TARGET_PC
+        // Retail's __sinit builds this on the stack and copies it, x60/x64 included, which the
+        // 16-argument ctor never writes: in v1.00 RAM they hold 0x3E666666/6. Explode's switch
+        // sends those to its default case, so charged and combo shots ricochet (#134).
+        .PortSetChargedComboDeflect(kDT_Ricochet)
+#endif
+    ;
 
 CVector3f CTryclops::kBombPosOffset(0.f, 0.f, -0.3f);
 const char* const CTryclops::kMouthLctr = "ballGrab_locator";

@@ -18,7 +18,8 @@ class CInputStream;
 // savestate_room_state): the live script objects of the areas that were
 // loaded when it was saved, keyed by editor id (enemies with their health,
 // position, velocity; platforms, doors, timers, counters, active flags;
-// which objects existed; not AI state). After the rebuild it is applied on top of the
+// which objects existed; script generator copies; the script commands each enemy
+// was sent; not AI state). After the rebuild it is applied on top of the
 // freshly built objects, so killed enemies stay dead and the rest resume
 // where they were. States without the section, or with it switched off, come
 // back the way a memory card load leaves the room.
@@ -193,7 +194,41 @@ struct RoomApplyStats {
   int removed = 0;
   int unmatched = 0;
   int skipped = 0;  // areas left alone: their loaded room script data differs
+  int replayed = 0;   // journalled script messages sent again
+  int generated = 0;  // script generator copies made again
 };
+// Script message journal (boss fights). The room script wakes an enemy with a
+// message (a trigger sends Thardus Action) and then never sends it again, so an
+// enemy rebuilt from disc by a state load would sit in its dormant start state
+// behind doors the save keeps locked. Each scripted enemy keeps the messages the
+// room script's connections delivered to it, in order, and a load replays them.
+// Pure parts here, for the unit test.
+struct ScriptMsgEntry {
+  uint8_t msg = 0;                // EScriptObjectMessage
+  uint32_t sender = 0xFFFFFFFFu;  // the sender's editor id, or none
+};
+// The most entries one enemy keeps (the first ones: what woke it comes first).
+constexpr size_t kMaxScriptMsgs = 32;
+// Whether a message is a command worth replaying. Activation is restored by the
+// active flag, and engine notifications (registration, damage, touches, floor and
+// splash contacts) and patrol traffic (Arrived, Next) are not commands.
+bool JournalsScriptMsg(int msg);
+// Appends `entry` unless it repeats the last entry or the journal is full.
+bool AppendScriptMsg(std::vector< ScriptMsgEntry >& journal, const ScriptMsgEntry& entry);
+// The kTagMessages payload: a count byte, then 5 bytes per entry.
+std::string EncodeScriptMsgs(const std::vector< ScriptMsgEntry >& journal);
+// False, with `out` untouched, for a payload this build never writes.
+bool DecodeScriptMsgs(const std::string& data, std::vector< ScriptMsgEntry >& out);
+
+// Game hooks (CStateManager), game thread only. NoteScriptMsg sees every message
+// a script connection delivers; NoteGenerated marks an object a script generator
+// copied from its template (it shares the template's editor id); NoteRemoved
+// drops what was noted for an object that leaves the world. Ids are raw
+// TUniqueId values (with the version bits).
+void NoteScriptMsg(CStateManager& mgr, uint16_t dest, uint16_t sender, int msg);
+void NoteGenerated(CStateManager& mgr, uint16_t uid);
+void NoteRemoved(CStateManager& mgr, uint16_t uid);
+
 void CaptureRoomState(CStateManager& mgr, RoomState& out);
 int ApplyRoomState(CStateManager& mgr, const RoomState& room, std::vector< int32_t >& done,
                    RoomApplyStats& stats);

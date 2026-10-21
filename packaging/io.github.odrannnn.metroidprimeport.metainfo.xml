@@ -55,6 +55,17 @@
        android/app/build.gradle; tools/make_flatpak.sh refuses to build when the
        two differ, since Flatpak reports the newest entry as the app's version. -->
   <releases>
+    <release version="0.31.0" date="2026-10-21">
+      <description>
+        <p>Remastered clustered lighting for lit effects (the Ice Beam's charge collision first), every Remastered point-light effect lit, more effect elements converted so the last effects that failed whole now load, the original ELC2 lightning look, separate vertical sensitivity for mouse, touch and gyro aim, empty lock-on holding the camera pitch under direct aim, Archipelago and offline randomizer pickup jingles for the placed item and scanned artifact hints, savestate fixes for Omega Pirate, moving platforms and spider tracks, and Fungal Hall Access's beam doors unlocking.</p>
+      </description>
+    </release>
+    <release version="0.30.1" date="2026-10-20">
+      <description>
+        <p>More Remastered effects drawn with their own shaders (Ice Beam charge and impact shards, missile and fire sprites, disintegration, visor goo splats that now actually draw, visor rain runoff, refraction warps), soft particles, the Plasma Beam's swooshes, resuming boss fights from savestates, charged and combo shots ricocheting off reflective enemies as in the original, real manual gyro calibration, unlocked beam doors kept after copying user data into a new release folder, lower storage use on Android, and a fix for mouse clicks wrongly accepting the resume prompt.</p>
+      </description>
+      <url type="details">https://github.com/Odrannnn/MetroidPrimePort/releases/tag/v0.30.1</url>
+    </release>
     <release version="0.30.0" date="2026-10-19">
       <description>
         <p>Remastered effects now run their particle maths as Metroid Prime Remastered does, generated Gravity, Phazon and Power spider ball looks, the full Flaahgra theme imported from a PAL, JP or Trilogy disc, a stack_beams setting, a first-person FOV limit of 120, gyro aiming improvements, lower memory use on Android, and fixes for savestates, PAL menus and doors saved open.</p>

@@ -18,6 +18,11 @@
 #define CGX_INLINE inline
 #endif
 
+// CGX.cpp defines these out of line and other units inline them. ELF linkers
+// keep the strong copy; MSVC's rejects strong plus inline (LNK2005), so under
+// cl.exe only CGX.cpp gets the definitions and everyone else calls them.
+#if !defined(_MSC_VER) || defined(CGX_CPP)
+
 CGX_INLINE void CGX::SetNumChans(uchar num) {
   sGXState.x4e_numChans = num;
   sGXState.x4c_flags.numDirty = num != sGXState.x4d_prevNumChans;
@@ -391,5 +396,7 @@ CGX_INLINE void CGX::SetLineWidth(uchar width, GXTexOffset offset) {
     GXSetLineWidth(width, offset);
   }
 }
+
+#endif // !_MSC_VER || CGX_CPP
 
 #endif // _CGX_IMPL

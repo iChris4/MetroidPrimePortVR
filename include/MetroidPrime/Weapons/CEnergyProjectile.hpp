@@ -5,6 +5,9 @@
 
 #include "MetroidPrime/Cameras/CCameraShakeData.hpp"
 #include "MetroidPrime/Weapons/CGameProjectile.hpp"
+#ifdef TARGET_PC
+#include "MetroidPrime/CPortNestedLights.hpp"
+#endif
 
 #include "Kyoto/Audio/CSfxHandle.hpp"
 #include "Kyoto/Math/CVector3f.hpp"
@@ -60,6 +63,9 @@ private:
   bool x3d0_26_ : 1;
   bool x3d0_27_camShakeDirty : 1;
   float x3d4_curTime;
+#ifdef TARGET_PC
+  CPortNestedLights xPortNestedLights; // lights of the nested PHDR children of the APSM effect
+#endif
 
   static const CMaterialList kCheckMaterial;
 };

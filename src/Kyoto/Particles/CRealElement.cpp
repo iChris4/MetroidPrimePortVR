@@ -334,6 +334,13 @@ bool CREParticleAccessParameter8::GetValue(int, float& valOut) const {
   return false;
 }
 
+#ifdef TARGET_PC
+bool CREParticleAccessParameter9::GetValue(int, float& valOut) const {
+  valOut = CParticleGlobals::GetParticleAccessParameters()[8];
+  return false;
+}
+#endif
+
 bool CREParticleSizeOrLineLength::GetValue(int, float& valOut) const {
   valOut = CParticleGlobals::GetCurrentParticle()->x2c_lineLengthOrSize;
   return false;
@@ -406,6 +413,20 @@ bool CREPortDivide::GetValue(int frame, float& valOut) const {
     x8_b->GetValue(frame, b);
   }
   valOut = a / b;
+  return false;
+}
+
+CREPortTicksToSeconds::CREPortTicksToSeconds(CIntElement* a) : x4_a(a) {}
+
+CREPortTicksToSeconds::~CREPortTicksToSeconds() { delete x4_a; }
+
+bool CREPortTicksToSeconds::GetValue(int frame, float& valOut) const {
+  int n = 0;
+  if (x4_a) {
+    x4_a->GetValue(frame, n);
+  }
+  // skTickPerSecondInv is the double 0x3F91111111111111, 1/60 rounded once.
+  valOut = static_cast< float >(0.016666666666666666 * static_cast< double >(n));
   return false;
 }
 

@@ -4,6 +4,7 @@
 
 #ifdef TARGET_PC
 #include "aurora/vfx.hpp"
+#include "port_log.h"
 #include "port_vfx_read.h"
 #endif
 #include "Kyoto/CFactoryFnReturn.hpp"
@@ -16,8 +17,13 @@
 #include "Kyoto/Particles/CGenDescription.hpp"
 #include "Kyoto/Particles/CIntElement.hpp"
 #include "Kyoto/Particles/CModVectorElement.hpp"
+#ifdef TARGET_PC
+#include "Kyoto/Particles/CPortCurlNoise.hpp"
+#endif
 #include "Kyoto/Particles/CParticleGen.hpp"
+#include "Kyoto/Particles/CPortKeyframeInput.hpp"
 #include "Kyoto/Particles/CPortParticleVars.hpp"
+#include "Kyoto/Particles/CPortSystemTween.hpp"
 #include "Kyoto/Particles/CRealElement.hpp"
 #include "Kyoto/Particles/CSpawnSystemKeyframeData.hpp"
 #include "Kyoto/Particles/CSwooshDescription.hpp"
@@ -31,6 +37,8 @@
 #include "rstl/algorithm.hpp"
 #include "rstl/list.hpp"
 #include "rstl/optional_object.hpp"
+
+#include <cstring>
 #define SBIG(v) v
 
 CTexture* CreateTexture(int value);
@@ -40,6 +48,11 @@ CElementAllocationChunk* IElement::CElementAllocator::sCurrentChunk = nullptr;
 CElementAllocationChunk* IElement::CElementAllocator::sFreeChunk = nullptr;
 
 #ifdef TARGET_PC
+// Set by a CODE emitter (GetEmitterElement 0x264bc4 sets its bool&), read by the EMTR property.
+static bool sPortCodeEmitter = false;
+// Set by a PEMV vector (CGenDescription::xPortPemv), collected per description in GetGPSM.
+static u8 sPortPemv = 0;
+
 namespace {
 // Port-only SLCT (the converter's Writer::Element): an int index, a count word, then count
 // entries of the selecting element's own type.
@@ -121,6 +134,45 @@ CPortSys* PortReadSys(CInputStream& in) {
     }
   }
   return sys.release();
+}
+
+// A PPVR body (after the CNST class id): u32 count, then per item u32 kind, slot and
+// constant-after-start flag, and for kinds 1 and 2 the element. Null on a malformed one.
+CPortPartVars* PortReadPartVars(CInputStream& in) {
+  const u32 count = in.ReadLong();
+  if (count > 13) {
+    return nullptr;
+  }
+  std::unique_ptr< CPortPartVars > vars(new CPortPartVars());
+  vars->items.resize(count);
+  u32 seen = 0;
+  bool bad = false;
+  for (SPortPartVarItem& item : vars->items) {
+    const u32 kind = in.ReadLong();
+    const u32 slot = in.ReadLong();
+    item.constAfterStart = in.ReadLong() != 0;
+    if (kind > 2) {
+      return nullptr;  // the item's body length is unknown: the stream cannot be resynced
+    }
+    // A bad slot or a duplicate (it would evaluate the variable twice) still reads its element,
+    // so the rest of the property is consumed and the stream stays in sync; the table is dropped.
+    if (slot >= (kind == 2 ? 4u : kind == 1 ? 9u : 8u) || (kind == 1 && slot != 8)) {
+      bad = true;
+    } else {
+      const u32 bit = 1u << (kind == 2 ? 9 + slot : slot);
+      bad = bad || (seen & bit) != 0;
+      seen |= bit;
+    }
+    item.kind = static_cast< EPortPartVarKind >(kind);
+    item.slot = slot;
+    if (kind == 1 && (item.real = CParticleDataFactory::GetRealElement(in)) == nullptr) {
+      return nullptr;
+    }
+    if (kind == 2 && (item.intE = CParticleDataFactory::GetIntElement(in)) == nullptr) {
+      return nullptr;
+    }
+  }
+  return bad ? nullptr : vars.release();
 }
 
 enum EPortKssmKind { kPKK_Real, kPKK_Vector, kPKK_Rotation };
@@ -351,7 +403,18 @@ CGenDescription* CParticleDataFactory::CreateGeneratorDescription(CInputStream& 
     return nullptr;
   }
   CGenDescription* desc = rs_new CGenDescription;
+#ifdef TARGET_PC
+  std::vector< const CREPortKeep* >* const outerKeeps = CPortKeepGlobals::sCollect;
+  CPortKeepGlobals::sCollect = &desc->xPortKeeps;
+  const u8 outerPemv = sPortPemv;
+  sPortPemv = 0;
+#endif
   CreateGPSM(desc, in, assets, pool);
+#ifdef TARGET_PC
+  CPortKeepGlobals::sCollect = outerKeeps;
+  desc->xPortPemv = sPortPemv;
+  sPortPemv = outerPemv;
+#endif
   LoadGPSMTokens(desc);
   return desc;
 }
@@ -470,7 +533,13 @@ bool CParticleDataFactory::CreateGPSM(CGenDescription* desc, CInputStream& in,
       delete GetVectorElement(in);
       break;
     case SBIG('EMTR'):
+#ifdef TARGET_PC
+      sPortCodeEmitter = false;
+#endif
       desc->x2c_EMTR = GetEmitterElement(in);
+#ifdef TARGET_PC
+      desc->xPortCodeSpawn = sPortCodeEmitter;
+#endif
       break;
     case SBIG('SIZE'):
       desc->x38_SIZE = GetRealElement(in);
@@ -557,6 +626,21 @@ bool CParticleDataFactory::CreateGPSM(CGenDescription* desc, CInputStream& in,
                             ? static_cast< u8 >(mode)
                             : static_cast< u8 >(kPortXfmdRetail);
     } break;
+    // Port-only Remastered INTS system scale (CGenDescription::xPortIntScale).
+    case SBIG('PINS'):
+      delete desc->xPortIntScale;
+      desc->xPortIntScale = GetVectorElement(in);
+      break;
+    // Port-only Remastered INTR/INTT system orientation and translation
+    // (CGenDescription::xPortIntRotation/xPortIntTranslation).
+    case SBIG('PINR'):
+      delete desc->xPortIntRotation;
+      desc->xPortIntRotation = GetVectorElement(in);
+      break;
+    case SBIG('PINT'):
+      delete desc->xPortIntTranslation;
+      desc->xPortIntTranslation = GetVectorElement(in);
+      break;
     // Port-only Remastered PMRB/PMCF model rotation frame (CGenDescription::xPortPmrqFrame).
     case SBIG('PMRF'): {
       GetClassID(in);
@@ -573,17 +657,62 @@ bool CParticleDataFactory::CreateGPSM(CGenDescription* desc, CInputStream& in,
       GetClassID(in);
       desc->xPortSys.reset(PortReadSys(in));
       break;
+    // Port-only PADO: the order ADV1..8 are evaluated in, a count and 0-based indices.
+    case SBIG('PADO'): {
+      GetClassID(in);
+      const u32 count = in.ReadLong();
+      desc->xPortAdvOrder.clear();
+      if (count > 8) {
+        break;
+      }
+      // Each index at most once: a duplicate would run one ADV twice and skip another.
+      u32 seen = 0;
+      for (u32 i = 0; i < count; ++i) {
+        const u32 n = in.ReadLong();
+        if (n < 8 && (seen & (1u << n)) == 0) {
+          seen |= 1u << n;
+          desc->xPortAdvOrder.push_back(static_cast< u8 >(n));
+        }
+      }
+      if (desc->xPortAdvOrder.size() != count) {
+        desc->xPortAdvOrder.clear();
+      }
+      break;
+    }
+    // Port-only PPVR: Remastered's variables ADV1..9 and IAV0..3 in SortVars order (PortReadPartVars).
+    case SBIG('PPVR'):
+      GetClassID(in);
+      desc->xPortPartVars.reset(PortReadPartVars(in));
+      if (!desc->xPortPartVars) {
+        PortLog::Write("particles: malformed PPVR, falling back to the retail ADV path\n");
+      }
+      break;
     // Port-only marker of a converted Remastered PART (xPortIrnd).
     case SBIG('PIRN'):
       GetClassID(in);
       desc->xPortIrnd = in.ReadLong() != 0;
       break;
+    // Port-only visor effect data of a converted Remastered PART: present, and the splat size
+    // range (VESN/VESM as float bits).
+    case SBIG('PVSD'):
+      GetClassID(in);
+      desc->xPortVisorData = in.ReadLong() != 0;
+      break;
+    case SBIG('PVSN'):
+    case SBIG('PVSM'): {
+      GetClassID(in);
+      const uint bits = in.ReadLong();
+      float value;
+      std::memcpy(&value, &bits, sizeof(value));
+      (clsId == SBIG('PVSN') ? desc->xPortVisorMinScale : desc->xPortVisorMaxScale) = value;
+      break;
+    }
     // Port-only first word of a converted Remastered PART's GUID (the child seed hashes it).
     case SBIG('PGID'):
       GetClassID(in);
       desc->xPortGuidWord = in.ReadLong();
       break;
-    // Port-only metadata for the one source-proven nested smooth point light.
+    // Port-only metadata for the one nested Remastered point light (any child generator).
     case SBIG('PHDR'):
       GetClassID(in);
       desc->xPortNestedHdrLight = in.ReadLong() != 0;
@@ -591,6 +720,14 @@ bool CParticleDataFactory::CreateGPSM(CGenDescription* desc, CInputStream& in,
     case SBIG('PIR0'):
       delete desc->xPortNestedLightInnerRadius;
       desc->xPortNestedLightInnerRadius = GetRealElement(in);
+      break;
+    case SBIG('PHFO'):
+      GetClassID(in);
+      desc->xPortNestedLightFalloff = static_cast< u8 >(in.ReadLong() & 3);
+      break;
+    case SBIG('PLIX'):
+      GetClassID(in);
+      desc->xPortNestedLightInverseExposure = in.ReadLong() != 0;
       break;
     case SBIG('POR0'):
       delete desc->xPortNestedLightOuterRadius;
@@ -717,9 +854,15 @@ bool CParticleDataFactory::CreateGPSM(CGenDescription* desc, CInputStream& in,
       GetClassID(in);
       desc->xPortBlend = u8(in.ReadLong());
       break;
+    // Port-only: Remastered's DFOG 1 (xPortUnfogged).
+    case SBIG('PDFG'):
+      GetClassID(in);
+      desc->xPortUnfogged = in.ReadLong() != 0;
+      break;
     // Port-only Remastered particle material (build/mpr/vfx/DESIGN.md section 1).
     case SBIG('VMAT'):
     case SBIG('VMSH'):
+    case SBIG('VPRM'):
     case SBIG('VTMT'):
     case SBIG('VPMT'):
     case SBIG('VSMT'):
@@ -1006,10 +1149,26 @@ CIntElement* CParticleDataFactory::GetIntElement(CInputStream& in) {
     const int offset = in.ReadLong();
     return rs_new CIEPortLifetimePercent(offset, GetIntElement(in));
   }
+  case SBIG('PAP0'):
+    return rs_new CIEPortParticleVar(0);
+  case SBIG('PAP1'):
+    return rs_new CIEPortParticleVar(1);
+  case SBIG('PAP2'):
+    return rs_new CIEPortParticleVar(2);
+  case SBIG('PAP3'):
+    return rs_new CIEPortParticleVar(3);
   case SBIG('PRAN'): {
     CIntElement* a = GetIntElement(in);
     CIntElement* b = GetIntElement(in);
     return rs_new CIEPortRandom(a, b);
+  }
+  // ABS_ (CIEAbsoluteValue 0x2a86b0): one int child.
+  case SBIG('ABS_'): {
+    CIntElement* value = GetIntElement(in);
+    if (value == nullptr) {
+      return nullptr;
+    }
+    return rs_new CIEPortAbs(value);
   }
   // Port-only PSYI: a PSYS int slot of the system being evaluated.
   case SBIG('PSYI'):
@@ -1058,6 +1217,64 @@ CRealElement* CParticleDataFactory::GetRealElement(CInputStream& in) {
   // Port-only PSYR: a PSYS real slot of the system being evaluated.
   case SBIG('PSYR'):
     return rs_new CREPortSysVar(in.ReadLong());
+  // Port-only PKPR: a per-particle KPIN latch (slot), then its element.
+  case SBIG('PKPR'): {
+    const u32 slot = in.ReadLong();
+    CRealElement* value = GetRealElement(in);
+    if (value == nullptr || slot >= SPortKeep::kMax) {
+      delete value;
+      return nullptr;
+    }
+    return rs_new CREPortKeep(slot, value);
+  }
+  // Port-only PIRS: Remastered's IRSN, a PKPR-counter slot (or kNoSlot), then its real.
+  case SBIG('PIRS'): {
+    const u32 slot = in.ReadLong();
+    CRealElement* value = GetRealElement(in);
+    if (value == nullptr) {
+      return nullptr;
+    }
+    return rs_new CREPortInitialRandomSign(slot, value);
+  }
+  // MPXV (MPT_CREExternalValue 0x29715c): the index, then the fallback real.
+  case SBIG('MPXV'): {
+    CIntElement* index = GetIntElement(in);
+    CRealElement* fallback = GetRealElement(in);
+    if (index == nullptr || fallback == nullptr) {
+      delete index;
+      delete fallback;
+      return nullptr;
+    }
+    return rs_new CREPortExternalVar(index, fallback);
+  }
+  // ABS_ (CREAbsoluteValue 0x295094), RSGN (CRERandomSign 0x299318): one real child.
+  case SBIG('ABS_'): {
+    CRealElement* value = GetRealElement(in);
+    if (value == nullptr) {
+      return nullptr;
+    }
+    return rs_new CREPortAbs(value);
+  }
+  case SBIG('RSGN'): {
+    CRealElement* value = GetRealElement(in);
+    if (value == nullptr) {
+      return nullptr;
+    }
+    return rs_new CREPortRandomSign(value);
+  }
+  // COSE (CRECosineWave 0x298788): frequency, amplitude, phase, as SINE.
+  case SBIG('COSE'): {
+    CRealElement* frequency = GetRealElement(in);
+    CRealElement* amplitude = GetRealElement(in);
+    CRealElement* phase = GetRealElement(in);
+    if (frequency == nullptr || amplitude == nullptr || phase == nullptr) {
+      delete frequency;
+      delete amplitude;
+      delete phase;
+      return nullptr;
+    }
+    return rs_new CREPortCosineWave(frequency, amplitude, phase);
+  }
   case SBIG('SPAF'):
     return PortReadParentVar< CREPortParentVar >(in, EPortParentRead::System, &GetRealElement);
   case SBIG('DPVF'):
@@ -1158,10 +1375,43 @@ CRealElement* CParticleDataFactory::GetRealElement(CInputStream& in) {
   case SBIG('KEWS'): {
     return rs_new CREPortSwooshNodeTime(GetRealElement(in));
   }
+  case SBIG('PKYF'): {
+    // Remastered's KEYF: the loop byte, the key count, the loop start, start and rate, the keys,
+    // then the input element.
+    const bool loop = in.ReadBool();
+    int count = static_cast< int >(in.ReadLong());
+    const float loopStart = in.ReadFloat();
+    const float start = in.ReadFloat();
+    const float rate = in.ReadFloat();
+    // A zero or implausible key count has no keys to read at the input (the original indexes
+    // key 0 regardless): the element evaluates to 0.
+    if (count <= 0 || count > 0x100000) {
+      PortLog::Write("particles: PKYF with key count %d, evaluating to 0\n", count);
+      count = 0;
+    }
+    std::vector< float > keys;
+    for (int i = 0; i < count; ++i) {
+      keys.push_back(in.ReadFloat());
+    }
+    return rs_new CREPortKeyframeInput(loop, count, loopStart, start, rate, std::move(keys),
+                                       GetRealElement(in));
+  }
+  case SBIG('PSLW'): {
+    CRealElement* a = GetRealElement(in);
+    CRealElement* b = GetRealElement(in);
+    return rs_new CREPortSystemTween(a, b);
+  }
   case SBIG('DIVD'): {
     CRealElement* a = GetRealElement(in);
     CRealElement* b = GetRealElement(in);
     return rs_new CREPortDivide(a, b);
+  }
+  case SBIG('T2S_'): {
+    CIntElement* a = GetIntElement(in);
+    if (a == nullptr) {
+      return nullptr;
+    }
+    return rs_new CREPortTicksToSeconds(a);
   }
 #endif
   case SBIG('PAP1'): {
@@ -1188,6 +1438,10 @@ CRealElement* CParticleDataFactory::GetRealElement(CInputStream& in) {
   case SBIG('PAP8'): {
     return rs_new CREParticleAccessParameter8();
   }
+#ifdef TARGET_PC
+  case SBIG('PAP9'):
+    return rs_new CREParticleAccessParameter9();
+#endif
   case SBIG('VXTR'): {
     CVectorElement* a = GetVectorElement(in);
     return rs_new CREVectorXToReal(a);
@@ -1273,6 +1527,12 @@ CVectorElement* CParticleDataFactory::GetVectorElement(CInputStream& in) {
   case SBIG('VARV'):
     ret = rs_new CVEPortVar(in.ReadLong());
     break;
+  // ABS_ (CVEAbsoluteValue 0x29e254): one vector child.
+  case SBIG('ABS_'): {
+    CVectorElement* value = GetVectorElement(in);
+    ret = value != nullptr ? rs_new CVEPortAbs(value) : nullptr;
+    break;
+  }
   case SBIG('SPAV'):
     return PortReadParentVar< CVEPortParentVar >(in, EPortParentRead::System, &GetVectorElement);
   case SBIG('DPVV'):
@@ -1284,6 +1544,46 @@ CVectorElement* CParticleDataFactory::GetVectorElement(CInputStream& in) {
   case SBIG('RNDV'):
     ret = rs_new CVEPortRandomVector(GetRealElement(in));
     break;
+  case SBIG('PCRN'): {
+    // CVECurlNoise_Perlin3d: P, F, A, then the optional field (NONE | CNST + asset id).
+    CVectorElement* pos = GetVectorElement(in);
+    CRealElement* freq = GetRealElement(in);
+    CVectorElement* amp = GetVectorElement(in);
+    CVEPortCurlNoise::FieldHandle* handle = nullptr;
+    if (GetClassID(in) == SBIG('CNST')) {
+      handle = CVEPortCurlNoise::MakeHandle(in.ReadLong());
+    }
+    ret = rs_new CVEPortCurlNoise(pos, freq, amp, handle);
+    break;
+  }
+  case SBIG('PCRO'): {
+    // CVECurlNoise_PerlinOctave3d: P, the frequency, the octave count, the gain, A.
+    CVectorElement* pos = GetVectorElement(in);
+    CRealElement* freq = GetRealElement(in);
+    CIntElement* octaves = GetIntElement(in);
+    CRealElement* gain = GetRealElement(in);
+    CVectorElement* amp = GetVectorElement(in);
+    ret = rs_new CVEPortCurlNoiseOctave(pos, freq, octaves, gain, amp);
+    break;
+  }
+  case SBIG('PRTV'): {
+    // Port-only ROTV: the vector, the rotation kind, and REUL's three angles.
+    CVectorElement* vec = GetVectorElement(in);
+    const FourCC kind = GetClassID(in);
+    CRealElement* x = nullptr;
+    CRealElement* y = nullptr;
+    CRealElement* z = nullptr;
+    if (kind == SBIG('REUL')) {
+      x = GetRealElement(in);
+      y = GetRealElement(in);
+      z = GetRealElement(in);
+    }
+    ret = rs_new CVEPortRotateVector(vec, kind, x, y, z);
+    break;
+  }
+  case SBIG('PNCV'):
+    ret = rs_new CVEPortNormalizedVelocity();
+    break;
   case SBIG('ANCR'): {
     CRealElement* rotateX = GetRealElement(in);
     CRealElement* rotateY = GetRealElement(in);
@@ -1292,6 +1592,90 @@ CVectorElement* CParticleDataFactory::GetVectorElement(CInputStream& in) {
     CRealElement* yRange = GetRealElement(in);
     CRealElement* magnitude = GetRealElement(in);
     ret = rs_new CVEPortAngleCone(rotateX, rotateY, rotateZ, xRange, yRange, magnitude);
+    break;
+  }
+  case SBIG('PANM'): {
+    CRealElement* rotateX = GetRealElement(in);
+    CRealElement* rotateY = GetRealElement(in);
+    CRealElement* rotateZ = GetRealElement(in);
+    CRealElement* minAngle = GetRealElement(in);
+    CRealElement* maxAngle = GetRealElement(in);
+    CRealElement* magnitude = GetRealElement(in);
+    if (rotateX == nullptr || rotateY == nullptr || rotateZ == nullptr || minAngle == nullptr || maxAngle == nullptr || magnitude == nullptr) {
+      delete rotateX;
+      delete rotateY;
+      delete rotateZ;
+      delete minAngle;
+      delete maxAngle;
+      delete magnitude;
+      return nullptr;
+    }
+    ret = rs_new CVEPortAngleConeMinMax(rotateX, rotateY, rotateZ, minAngle, maxAngle, magnitude);
+    break;
+  }
+  case SBIG('PMAC'): {
+    CRealElement* xCentre = GetRealElement(in);
+    CRealElement* yCentre = GetRealElement(in);
+    CRealElement* xRange = GetRealElement(in);
+    CRealElement* yRange = GetRealElement(in);
+    CRealElement* magnitude = GetRealElement(in);
+    if (xCentre == nullptr || yCentre == nullptr || xRange == nullptr || yRange == nullptr || magnitude == nullptr) {
+      delete xCentre;
+      delete yCentre;
+      delete xRange;
+      delete yRange;
+      delete magnitude;
+      return nullptr;
+    }
+    ret = rs_new CVEPortMpac(xCentre, yCentre, xRange, yRange, magnitude);
+    break;
+  }
+  case SBIG('PCRC'): {
+    CVectorElement* centre = GetVectorElement(in);
+    CVectorElement* axis = GetVectorElement(in);
+    CRealElement* start = GetRealElement(in);
+    CIntElement* count = GetIntElement(in);
+    CRealElement* variance = GetRealElement(in);
+    CRealElement* radius = GetRealElement(in);
+    const u8 shuffle = u8(in.ReadChar());
+    if (centre == nullptr || axis == nullptr || start == nullptr || count == nullptr || variance == nullptr ||
+        radius == nullptr) {
+      delete centre;
+      delete axis;
+      delete start;
+      delete count;
+      delete variance;
+      delete radius;
+      return nullptr;
+    }
+    ret = rs_new CVEPortCircle(centre, axis, start, count, variance, radius, shuffle);
+    break;
+  }
+  case SBIG('PLWV'): {
+    CVectorElement* start = GetVectorElement(in);
+    CVectorElement* end = GetVectorElement(in);
+    CIntElement* count = GetIntElement(in);
+    CRealElement* variance = GetRealElement(in);
+    const u8 shuffle = u8(in.ReadChar());
+    if (start == nullptr || end == nullptr || count == nullptr || variance == nullptr) {
+      delete start;
+      delete end;
+      delete count;
+      delete variance;
+      return nullptr;
+    }
+    ret = rs_new CVEPortLine(start, end, count, variance, shuffle);
+    break;
+  }
+  case SBIG('PMCN'): {
+    CVectorElement* direction = GetVectorElement(in);
+    CRealElement* radius = GetRealElement(in);
+    if (direction == nullptr || radius == nullptr) {
+      delete direction;
+      delete radius;
+      return nullptr;
+    }
+    ret = rs_new CVEPortCone(direction, radius);
     break;
   }
   case SBIG('NORM'):
@@ -1308,11 +1692,20 @@ CVectorElement* CParticleDataFactory::GetVectorElement(CInputStream& in) {
     ret = rs_new CVEPortRotationFromAxis(first, second, fallback);
     break;
   }
+  case SBIG('PEMV'): {
+    // The mode word: 0 the external translation, 1 the local one, 2 the local one plus the
+    // description's constant POFS (XFMD 5).
+    const u32 mode = in.ReadLong();
+    sPortPemv = u8(mode + 1);
+    ret = rs_new CVEPortEmitterVelocity();
+    break;
+  }
   case SBIG('CMPS'):
   case SBIG('CPSS'):
   case SBIG('EXTT'):
   case SBIG('EXTS'):
   case SBIG('EXTR'):
+  case SBIG('CMRT'):
     ret = rs_new CVEPortSystemVector(clsId);
     break;
 #endif
@@ -1475,6 +1868,13 @@ CEmitterElement* CParticleDataFactory::GetEmitterElement(CInputStream& in) {
   CEmitterElement* ret;
   FourCC clsId = GetClassID(in);
   switch (clsId) {
+#ifdef TARGET_PC
+  // CODE: a null emitter, and the generator spawns only from code (desc[0x2fa] bit 4).
+  case SBIG('CODE'):
+    sPortCodeEmitter = true;
+    ret = nullptr;
+    break;
+#endif
   case SBIG('NONE'):
     ret = nullptr;
     break;
@@ -1533,6 +1933,72 @@ CEmitterElement* CParticleDataFactory::GetEmitterElement(CInputStream& in) {
                                     speed);
     break;
   }
+  case SBIG('PASV'): {
+    CVectorElement* origin = GetVectorElement(in);
+    CRealElement* rotateX = GetRealElement(in);
+    CRealElement* rotateY = GetRealElement(in);
+    CRealElement* rotateZ = GetRealElement(in);
+    CRealElement* range1 = GetRealElement(in);
+    CRealElement* range2 = GetRealElement(in);
+    CIntElement* polarCount = GetIntElement(in);
+    CRealElement* polarVariance = GetRealElement(in);
+    CRealElement* azimuthRange = GetRealElement(in);
+    CIntElement* azimuthCount = GetIntElement(in);
+    CRealElement* azimuthVariance = GetRealElement(in);
+    CRealElement* radius = GetRealElement(in);
+    CRealElement* speed = GetRealElement(in);
+    const u8 shuffle = u8(in.ReadChar());
+    ret = rs_new CEEPortAngleSphereVariance(origin, rotateX, rotateY, rotateZ, range1, range2, polarCount,
+                                            polarVariance, azimuthRange, azimuthCount, azimuthVariance, radius, speed,
+                                            shuffle);
+    break;
+  }
+  case SBIG('PLNE'): {
+    CVectorElement* position = GetVectorElement(in);
+    CVectorElement* euler = GetVectorElement(in);
+    CVectorElement* velocity = GetVectorElement(in);
+    CRealElement* wx = GetRealElement(in);
+    CRealElement* wz = GetRealElement(in);
+    CRealElement* spread = GetRealElement(in);
+    ret = rs_new CEEPortPlane(position, euler, velocity, wx, wz, spread);
+    break;
+  }
+  case SBIG('PLNV'): {
+    CVectorElement* position = GetVectorElement(in);
+    CVectorElement* euler = GetVectorElement(in);
+    CRealElement* velocityY = GetRealElement(in);
+    CRealElement* wx = GetRealElement(in);
+    CRealElement* wz = GetRealElement(in);
+    CRealElement* spread = GetRealElement(in);
+    CIntElement* countX = GetIntElement(in);
+    CRealElement* varianceX = GetRealElement(in);
+    CIntElement* countZ = GetIntElement(in);
+    CRealElement* varianceZ = GetRealElement(in);
+    const u8 shuffle = u8(in.ReadChar());
+    ret = rs_new CEEPortPlaneVariance(position, euler, velocityY, wx, wz, spread, countX,
+                                      varianceX, countZ, varianceZ, shuffle);
+    break;
+  }
+  case SBIG('PSPV'): {
+    CVectorElement* position = GetVectorElement(in);
+    CRealElement* radius = GetRealElement(in);
+    CRealElement* speed = GetRealElement(in);
+    CIntElement* count1 = GetIntElement(in);
+    CRealElement* variance1 = GetRealElement(in);
+    CIntElement* count2 = GetIntElement(in);
+    CRealElement* variance2 = GetRealElement(in);
+    const u8 shuffle = u8(in.ReadChar());
+    ret = rs_new CEEPortSphereVariance(position, radius, speed, count1, variance1, count2, variance2, shuffle);
+    break;
+  }
+  case SBIG('PELP'): {
+    CVectorElement* centre = GetVectorElement(in);
+    CVectorElement* size = GetVectorElement(in);
+    CRealElement* speed = GetRealElement(in);
+    const bool surfaceOnly = in.ReadChar() != 0;
+    ret = rs_new CEEPortEllipsoid(centre, size, speed, surfaceOnly);
+    break;
+  }
 #endif
   default:
     ret = nullptr;
@@ -1574,6 +2040,16 @@ CModVectorElement* CParticleDataFactory::GetModVectorElement(CInputStream& in) {
     }
     break;
   }
+#ifdef TARGET_PC
+  case SBIG('PCRM'): {
+    // CMVECurlNoise: raw u32 mode, V, t.
+    const uint mode = in.ReadLong();
+    CVectorElement* v = GetVectorElement(in);
+    CRealElement* t = GetRealElement(in);
+    ret = rs_new CMVEPortCurlNoise(mode, v, t);
+    break;
+  }
+#endif
   case SBIG('GRAV'): {
     ret = rs_new CMVEGravity(GetVectorElement(in));
     break;

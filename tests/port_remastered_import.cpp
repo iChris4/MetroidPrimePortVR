@@ -1596,6 +1596,57 @@ void TestPlasmaBeamIndividualRoleFieldPresence() {
                            "a duplicate CRSM DEFS alone is rejected while the other three role links remain valid");
 }
 
+// A WPSC the disc gives no ASW field gets one (the plasma shots' Remastered swooshes), a NONE field
+// takes the id, and a WPSC that already links it, has no _END or reads back differently is refused.
+void TestAddRetailSwooshField() {
+  constexpr uint32_t kId = 0xFE123456;
+  std::vector<uint8_t> missing;
+  PutFourCC(missing, "WPSM");
+  PutRetailLink(missing, "COLR", 0x11223344);
+  PutRetailLink(missing, "APSM", 0x55667788);
+  PutFourCC(missing, "_END");
+  std::vector<uint8_t> out;
+  std::string error;
+  CHECK_MSG(AddRetailLink(missing, "ASW1", kId, out, &error), error.c_str());
+  uint32_t id = 0;
+  CHECK_MSG(PortRemastered::ReadRetailRoleAssetId(out.data(), out.size(), PortRemastered::EffectFourCC("WPSM"),
+                                                  PortRemastered::EffectFourCC("ASW1"), id) &&
+                id == kId,
+            "the added ASW1 reads back");
+  CHECK_MSG(PortRemastered::ReadRetailRoleAssetId(out.data(), out.size(), PortRemastered::EffectFourCC("WPSM"),
+                                                  PortRemastered::EffectFourCC("COLR"), id) &&
+                id == 0x11223344,
+            "the other fields stay");
+  CHECK_MSG(out.size() == missing.size() + 12, "a field is 12 bytes");
+  CHECK_MSG(std::memcmp(out.data() + out.size() - 4, "_END", 4) == 0, "_END stays last");
+  std::vector<uint8_t> twice;
+  CHECK_MSG(!AddRetailLink(out, "ASW1", kId + 1, twice), "a field the WPSC links is not changed");
+  CHECK_MSG(AddRetailLink(out, "ASW2", kId + 1, twice), "a second field is added");
+  CHECK_MSG(PortRemastered::ReadRetailRoleAssetId(twice.data(), twice.size(), PortRemastered::EffectFourCC("WPSM"),
+                                                  PortRemastered::EffectFourCC("ASW1"), id) &&
+                id == kId,
+            "the first added field stays");
+
+  std::vector<uint8_t> none;
+  PutFourCC(none, "WPSM");
+  PutFourCC(none, "ASW1");
+  PutFourCC(none, "NONE");
+  PutRetailLink(none, "COLR", 0x11223344);
+  PutFourCC(none, "_END");
+  CHECK_MSG(AddRetailLink(none, "ASW1", kId, out, &error), error.c_str());
+  CHECK_MSG(out.size() == none.size() + 4, "NONE becomes CNST and an id");
+  CHECK_MSG(PortRemastered::ReadRetailRoleAssetId(out.data(), out.size(), PortRemastered::EffectFourCC("WPSM"),
+                                                  PortRemastered::EffectFourCC("ASW1"), id) &&
+                id == kId,
+            "the NONE field's id reads back");
+
+  std::vector<uint8_t> noEnd(missing.begin(), missing.end() - 4);
+  CHECK_MSG(!AddRetailLink(noEnd, "ASW1", kId, out), "a WPSC without _END is refused");
+  std::vector<uint8_t> wrongClass = missing;
+  std::memcpy(wrongClass.data(), "CRSM", 4);
+  CHECK_MSG(!AddRetailLink(wrongClass, "ASW1", kId, out), "another class is refused");
+}
+
 void TestPlasmaBeamIdentityAndTypedGates() {
   const Fixture fixture = MakePlasmaBeamFixture();
   PlasmaBeamDefaultRoleInput input = PlasmaBeamInput(fixture);
@@ -1644,6 +1695,7 @@ int main() {
   TestPlasmaBeamWrongLinksAndMalformedResources();
   TestPlasmaBeamIndividualRoleFieldPresence();
   TestPlasmaBeamIdentityAndTypedGates();
+  TestAddRetailSwooshField();
   if (port_test::Failures() == 0) {
     std::puts("missile, PowerBall, and PlasmaBeam import pairing tests passed");
   }

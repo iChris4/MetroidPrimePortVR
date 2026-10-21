@@ -58,6 +58,10 @@ struct EffectImportIO {
   // Whether the texture's bytes are sRGB, which Remastered's VFX shaders see decoded to
   // linear. Optional: without it every texture is taken as data.
   std::function<bool(const EffectGuid& id)> textureSrgb;
+  // Whether the texture has red and green only (BC5), which `texture` and `layers` give as grey
+  // plus alpha while Remastered's VFX shaders read them as .x and .y. Optional: without it every
+  // texture is taken as having all four channels.
+  std::function<bool(const EffectGuid& id)> textureRg;
   // Every layer of a Remastered array texture as RGBA8, layer slowest (a TXFB's
   // frames). Optional: without it a flipbook does not convert.
   std::function<bool(const EffectGuid& id, int& width, int& height, int& layers, std::vector<uint8_t>& rgba,

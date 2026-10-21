@@ -155,6 +155,12 @@ void QueueCheck(const char* locationKey);
 // off too.
 bool OwnsPickup(uint32_t world, uint32_t area, uint32_t entity);
 bool OwnsMemo(uint32_t world, uint32_t area, uint32_t entity);
+// The jingle file for the StreamedAudio `entity` when it is an AP location's
+// pickup jingle and the item placed there is known (scouted), so the pickup
+// plays the placed item's jingle, not the retail item's. Without an AP
+// session, the item an offline seed (PortRandomizer) placed at the location's
+// pickup counts. False: leave it.
+bool PickupJingle(uint32_t world, uint32_t area, uint32_t entity, std::string& out);
 // Records an owned pickup in the game's save, so the check reaches the server
 // on a later connection if this one cannot send it. Call before QueueCheck.
 void RecordPickup(uint32_t world, uint32_t area, uint32_t entity);
@@ -178,6 +184,10 @@ bool PickupScanText(uint32_t world, uint32_t area, uint32_t entity, std::string&
 // The Artifact Temple totem text for an artifact item type (29-40): where the
 // multiworld put it. False when AP is off or not connected.
 bool ArtifactHint(int itemType, std::string& out);
+// The player finished scanning an artifact's totem: asks the server to hint
+// where the artifact is when it is in this slot's own world. Reading the text
+// (ArtifactHint) never does: that runs when the room loads.
+void ArtifactScanned(int itemType);
 
 // A spawn point's Reset message replaced the whole inventory. Any received items
 // the game held are gone, so the next Poll rewinds the session and the server

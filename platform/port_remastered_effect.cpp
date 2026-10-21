@@ -45,7 +45,8 @@ constexpr uint32_t kForms[] = {kGpsm,
 
 // Element signatures. Each letter is one argument: e an element, w four raw
 // bytes, b a raw byte, g a 16-byte id, k a keyframe block, K one with the
-// 30-byte header only (KEYF's, which is followed by its input element); '-'
+// 30-byte header only (KEYF's, which is followed by its input element); S a
+// string constant ("CNST", a word length, the characters: BNID's bone name); '-'
 // is no arguments. Alternatives are separated by spaces and tried in order. These are
 // retail's element arities (merged across the int/real/vector/colour/... slots,
 // since the file does not say which slot it is in) with Remastered's changes
@@ -55,11 +56,12 @@ struct ElementSig {
   const char* sigs;
 };
 constexpr ElementSig kElementSigs[] = {
+    {"ABS_", "e"},     {"COSE", "eee"},   {"MPXV", "ee"},        {"CODE", "-"},       {"IRSN", "e"},       {"RSGN", "e"},       {"NEGT", "e"},
     {"ADD_", "ee"},    {"ANCR", "eeee ebeee"}, {"ANGC", "eeeee"},   {"ASPH", "eeeeeee"},
     {"ASPR", "eeeeee"}, {"ATEX", "geeeeee geeeeeb"}, {"ATX2", "geeee"}, {"BNCE", "eeeeb"}, {"CCLU", "eeee"},
     {"CEQL", "eeee"},  {"CEXT", "e"},          {"CFDE", "eeee"},    {"CHAN", "eee"},
     {"CIRC", "eeeee"}, {"CLMP", "eee"},        {"CLTN", "eeee"},    {"CNST", "w eee eeee b g"},
-    {"CONE", "ee"},    {"CRCV", "eeeeeeb"},    {"CRLN", "bb eeeeeeebe eeeeeebe"},
+    {"CONE", "ee"},    {"CRCV", "eeeeeeb"},    {"DIVD", "ee"},    {"T2S_", "e"},    {"SCLE", "ee"},    {"SDTR", "-"},    {"CRLN", "bb eeeeeeebe eeeeeebe"},
     {"CRNG", "eeeee"}, {"CTVC", "e"},          {"DETH", "ee"},      {"DOTP", "ee"},
     {"DPVC", "ge"},    {"DPVF", "ge"},         {"DPVI", "ge"},      {"DPVV", "ge"},
     {"EMPL", "eeeeb"}, {"EXPL", "ee"},         {"EXTR", "-"},         {"EXTT", "-"},
@@ -72,7 +74,7 @@ constexpr ElementSig kElementSigs[] = {
     {"LMPL", "eeeeb"}, {"MMSI", "eg"},         {"MODU", "ee"},      {"MULT", "ee"},
     {"NONE", "-"},     {"PAP1", "-"},          {"PAP2", "-"},       {"PAP3", "-"},
     {"PAP4", "-"},     {"PAP5", "-"},          {"PAP6", "-"},       {"PAP7", "-"},
-    {"PAP8", "-"},     {"PCOL", "-"},          {"PEOD", "e"},       {"PLCO", "-"},
+    {"PAP0", "-"},     {"PAP9", "-"},     {"PAP8", "-"},     {"PCOL", "-"},          {"PEOD", "e"},       {"PLCO", "-"},
     {"PLOC", "-"},     {"PRLW", "-"},          {"PSLL", "-"},       {"PSOF", "-"},
     {"PSOR", "-"},     {"PSOU", "-"},          {"PSTR", "-"},       {"PULS", "eeee"},
     {"PVEL", "-"},     {"RADD", "ee"},         {"RAND", "ee"},      {"REUL", "eeeb"},
@@ -85,9 +87,9 @@ constexpr ElementSig kElementSigs[] = {
     {"VARF", "g"},     {"VARI", "g"},          {"VARV", "g"},       {"VECF", "g"},
     {"VMAG", "e"},     {"VXTR", "e"},          {"VYTR", "e"},       {"VZTR", "e"},
     {"WIND", "ee"},
-    // Pinned down against the shipped files: MPCB wraps a vector, or MPAC
-    // angles and a magnitude; MPRD is 2 or 4 elements; DFCP and DFCS 1 to 3.
-    {"MPCB", "e ee"},  {"MPAC", "eeee"},       {"MPRD", "ee eeee"}, {"DFCP", "ee eee e"},
+    // Pinned down against the shipped files: MPCB wraps a vector; MPAC is five
+    // reals, MPCN a vector and a radius; CREL a bool and two reals, LTHN two reals; MPRD is 2 or 4 elements; DFCP and DFCS 1 to 3.
+    {"MPCB", "e"},     {"MPAC", "eeeee"}, {"CREL", "eee"},   {"LTHN", "ee"},   {"MPCN", "ee"},       {"MPRD", "ee eeee"}, {"DFCP", "ee eee e"},
     {"DFCS", "ee eee e"},
     // EXTT, EXTR and EXTS are leaves; SMOV is CSimpleMoverElement's (position,
     // velocity, rotation, scale, modifier); ROTV a vector turned by a rotation;
@@ -98,6 +100,9 @@ constexpr ElementSig kElementSigs[] = {
     // ANTH is a property whose value is an ANTH element: an id, TRST, two keyframe
     // blocks and a real.
     {"ANTH", "eeeee"},  {"TXP2", "geee"},   {"TXFB", "ge gee geee geeee"},
+    // ATFB (CUVEAnimFlipBookTexture, ctor in GetTextureElement 0x266ba4): an id, the animation time as
+    // an int read as a real, a flag. BNID (CIEBoneIndex, GetIntElement 0x26a910): a bone name and a flag.
+    {"ATFB", "gee"},    {"BNID", "Se"},
 };
 
 // Elements by the type of value they are read as, with typed arguments: I an
@@ -111,31 +116,38 @@ constexpr ElementSig kElementSigs[] = {
 constexpr ElementSig kIntSigs[] = {
     {"CNST", "w"},   {"KEYE", "k"},   {"KEYP", "k"},   {"TSCL", "R"},    {"DETH", "II"},  {"CHAN", "III"},
     {"ADD_", "II"},  {"MULT", "II"},  {"MODU", "II"},  {"RAND", "II"},   {"IMPL", "I"},   {"ILPT", "I"},
-    {"SPAH", "III"}, {"IRND", "II"},  {"CLMP", "III"}, {"PULS", "IIII"}, {"NONE", "-"},   {"RTOI", "RR"},
+    {"ABS_", "I"},   {"SPAH", "III"}, {"IRND", "II"},  {"CLMP", "III"}, {"PULS", "IIII"}, {"NONE", "-"},   {"RTOI", "RR"},
     {"SUB_", "II"},  {"GTCP", "-"},   {"GAPC", "-"},   {"GEMT", "-"},    {"MPRD", "II eeee"},
-    {"TPVI", "gI"},  {"DPVI", "gI"},  {"SPAI", "bI"},
+    {"TPVI", "gI"},  {"DPVI", "gI"},  {"SPAI", "bI"},  {"PAP0", "-"},   {"PAP1", "-"},   {"PAP2", "-"},
+    {"PAP3", "-"},
 };
 constexpr ElementSig kRealSigs[] = {
     {"CNST", "w"},    {"NONE", "-"},    {"KEYE", "k"},    {"KEYP", "k"},     {"SCAL", "R"},    {"SINE", "RRR"},
     {"ADD_", "RR"},   {"MULT", "RR"},   {"DOTP", "VV"},   {"RAND", "RR"},    {"IRND", "RR"},   {"CHAN", "RRI"},
     {"CLMP", "RRR"},  {"PULS", "IIRR"}, {"RLPT", "R"},    {"LFTW", "RR"},    {"PRLW", "-"},    {"PSLL", "-"},
     {"PAP1", "-"},    {"PAP2", "-"},    {"PAP3", "-"},    {"PAP4", "-"},     {"PAP5", "-"},    {"PAP6", "-"},
-    {"PAP7", "-"},    {"PAP8", "-"},    {"VXTR", "V"},    {"VYTR", "V"},     {"VZTR", "V"},    {"VMAG", "V"},
+    {"PAP7", "-"},    {"PAP8", "-"},    {"PAP9", "-"},    {"VXTR", "V"},    {"VYTR", "V"},     {"VZTR", "V"},    {"VMAG", "V"},
     {"ISWT", "RR"},   {"CLTN", "RRRR"}, {"CEQL", "RRRR"}, {"CRNG", "RRRRR"}, {"CEXT", "I"},    {"ITRL", "IR"},
     {"SUB_", "RR"},   {"GTCR", "C"},    {"GTCG", "C"},    {"GTCB", "C"},     {"GTCA", "C"},    {"DFCP", "RR"},
-    {"DFCS", "RR"}, {"MPRD", "RR eeee"}, {"TPVF", "gR"}, {"DPVF", "gR"}, {"SPAF", "bR"}, {"KPIN", "R"},
-    {"SLCT", "Re"},   {"DIVD", "RR"},
+    {"CREL", "BRR"}, {"DFCS", "RR"}, {"MPRD", "RR eeee"}, {"TPVF", "gR"}, {"DPVF", "gR"}, {"SPAF", "bR"}, {"KPIN", "R"},
+    {"SLCT", "Re"},   {"DIVD", "RR"},   {"SLTW", "RR"},   {"ABS_", "R"},    {"MPXV", "IR"},   {"COSE", "RRR"},  {"RSGN", "R"},     {"IRSN", "R"},
+    {"NEGT", "R"},    {"T2S_", "I"},    {"SDTR", "-"},
 };
 constexpr ElementSig kVectorSigs[] = {
     {"NONE", "-"},   {"CNST", "RRR"},   {"KEYE", "k"},    {"KEYP", "k"},   {"ANGC", "RRRRR"}, {"CONE", "VR"},
     {"CIRC", "VVRRR"}, {"CCLU", "VVIR"}, {"ADD_", "VV"},  {"MULT", "VV"},  {"CHAN", "VVI"},   {"PULS", "IIVV"},
     {"RTOV", "R"},   {"PLOC", "-"},     {"PLCO", "-"},    {"PVEL", "-"},   {"PSOF", "-"},     {"PSOU", "-"},
-    {"PSOR", "-"},   {"PSTR", "-"},     {"SUB_", "VV"},   {"CTVC", "C"},   {"MPCB", "V VR"},  {"MPAC", "RRRR"},
+    {"PSOR", "-"},   {"PSTR", "-"},     {"SUB_", "VV"},   {"CTVC", "C"},   {"MPCB", "V"},     {"MPAC", "RRRRR"}, {"MPCN", "VR"},
+    {"CRCV", "VVRIRRb"},
     {"ANCR", "eRRR ebeee"}, {"ANCM", "eRRR"}, {"ANCV", "eRRRRRRRb"}, {"RNDV", "R"}, {"ROTV", "Ve"}, {"TPVV", "gV"}, {"DPVV", "gV"}, {"SPAV", "bV"},
     {"SLCT", "Re"},  {"NORM", "V"},     {"CMPS", "-"},    {"EXTT", "-"},   {"EXTS", "-"},
-    {"CPSS", "-"},
+    {"CPSS", "-"},  {"ABS_", "V"}, {"PNCV", "-"}, {"SCLE", "VR"},
     // MCBS is MPCB's scale form (MPT_CVEConvertScaleToXLeftYUpZForward 0x2a30f8).
     {"MCBS", "V"},
+    // LINV is CVELineWithVariance (GetVectorElement 0x251974): V V I R b.
+    {"LINV", "VVIRb"},
+    // CVEBonePosition (GetVectorElement 0x251974, GetValue 0x2a2690): the bone index element.
+    {"BNPS", "e"},
 };
 constexpr ElementSig kModVectorSigs[] = {
     {"NONE", "-"},     {"CNST", "RRR"},   {"GRAV", "V"},     {"WIND", "VR"},   {"EXPL", "RR"},
@@ -147,9 +159,15 @@ constexpr ElementSig kColorSigs[] = {
     {"PULS", "IICC"},     {"PCOL", "-"},   {"NONE", "-"},  {"TPVC", "gC"},  {"DPVC", "gC"},   {"SPAC", "bC"},
     {"MDAO", "CR"},       {"SLCT", "Re"},       {"MULT", "CC"},       {"MUL2", "CC"},
 };
+// Remastered's booleans (CBE...): LTHN is a bool of two reals. CREL (a real) picks
+// between two reals by one. A bool the table lacks reads untyped.
+constexpr ElementSig kBoolSigs[] = {{"LTHN", "RR"}};
+
 constexpr ElementSig kEmitterSigs[] = {
     {"NONE", "-"}, {"SEMR", "VV"}, {"SPHE", "VRR"}, {"ASPH", "VRRRRRR"}, {"ASPR", "VeRRRR"},
-    {"PLNE", "VVVRRR"}, {"ELPS", "VVVRe"}, {"PLNV", "VVRRRRRRRRb"}, {"SPEV", "VRRRRRRb"},
+    // ASPV is CVEAngleSphereWithVariance (GetEmitterElement 0x264bc4): V Q R R I R R I R R R b.
+    {"ASPV", "VQRRIRRIRRRb"},
+    {"CODE", "-"}, {"PLNE", "VVVRRR"}, {"ELPS", "VVVRe"}, {"PLNV", "VVRRRRIRIRb"}, {"SPEV", "VRRIRIRb"},
 };
 
 // Remastered's rotations (GetRotationElement); retail has none. CNST is a raw
@@ -164,8 +182,8 @@ constexpr ElementSig kRotationSigs[] = {
     {"SYAV", "b"},    {"SPAR", "bQ"},   {"VARR", "g"},    {"PEXT", "IQ"},   {"VEXT", "IQ"},   {"BNRT", "I"},
 };
 
-constexpr char kTypeLetters[] = "IRVMCEQ";
-constexpr int kTypeCount = 7;
+constexpr char kTypeLetters[] = "IRVMCEQB";
+constexpr int kTypeCount = 8;
 
 int TypeIndex(char letter) {
   for (int i = 0; i < kTypeCount; ++i) {
@@ -183,11 +201,11 @@ struct PropertyType {
   const char* fourccs;
 };
 constexpr PropertyType kPropertyTypes[] = {
-    {'I', "PSLT PSWT MBSP MAXP LTME LTM2 SEED NCSY CSSD NDSY PISY SISY SSSD SESD LTYP LFOT"},
-    {'R', "PSTS GRTE SIZE ROTA LENG WIDT LINT LFOR LSLA ADV1 ADV2 ADV3 ADV4 ADV5 ADV6 ADV7 ADV8"},
+    {'I', "PSLT PSWT MBSP MAXP LTME LTM2 SEED NCSY CSSD NDSY PISY SISY SSSD SESD LTYP LFOT IAV0 IAV1 IAV2 IAV3"},
+    {'R', "PSTS GRTE SIZE ROTA LENG WIDT LINT LFOR LSLA ADV1 ADV2 ADV3 ADV4 ADV5 ADV6 ADV7 ADV8 ADV9"},
     {'V', "PSIV PSOV ILOC IVEC POFS PMOP PMRT PMSC SSPO SEPO LOFF LDIR"},
     {'M', "PSVM VEL1 VEL2 VEL3 VEL4"},
-    {'C', "COLR PMCL LCLR"},
+    {'C', "COLR PMCL LCLR NCLR"},
     {'E', "EMTR"},
     {'Q', "PMRQ"},
 };
@@ -195,14 +213,14 @@ constexpr PropertyType kPropertyTypes[] = {
 // Elements seen in the files whose arity is not pinned down; they parse with
 // whatever arity fits, like any unknown FourCC, but they are never properties.
 constexpr const char* kLooseElements =
-    "ARRY CMPS CODE EMRV GPUA GRAD KEWS MDAO PAFM PLNE PSA0 PSA1 PSA2 PSA3 PSA4 PSA5 PSA6 PSA7 PSA8 PSA9 RNDV SLCT";
+    "ARRY CMPS EMRV GPUA GRAD KEWS MDAO PAFM PSA0 PSA1 PSA2 PSA3 PSA4 PSA5 PSA6 PSA7 PSA8 PSA9 RNDV SLCT";
 
 // Properties: retail's PART properties and the ones Remastered added. A FourCC
 // that is in neither list may still be a property (the grammar lets unknown
 // FourCCs be both), but one that is only an element never is.
 constexpr const char* kProperties =
-    "AAPH ANTH ADV1 ADV2 ADV3 ADV4 ADV5 ADV6 ADV7 ADV8 BLIT CIND COLR CSSD DBIS DFOG DVVN EMTR FRMD FXBM FXBR FXLL GRTE "
-    "ICTS IDTS IEXP IITS ILOC INTS ISVF ITEN IVEC KPAL KSSM LCLR LDIR LENG LFOR LFOT LINE LINT LIT_ LIXP LOFF LSLA "
+    "AAPH ANTH ADV1 ADV2 ADV3 ADV4 ADV5 ADV6 ADV7 ADV8 ADV9 BLIT CIND COLR CSSD DBIS DFOG DVVN EMTR FRMD FXBM FXBR FXLL GRTE "
+    "IAV0 IAV1 IAV2 IAV3 ICTS IDTS IEXP IITS ILOC INTS ISVF ITEN IVEC KPAL KSSM LCLR LDIR LENG LFOR LFOT LINE LINT LIT_ LIXP LOFF LSLA "
     "LTM2 LTME LTYP MAXP MBLR MBSP MTIN NCSY NDSY OPTS ORNT OSDM PBDM PISY PMAB PMCL PMDL PMOO PMOP PMRT PMSC PMTR "
     "PMUS POFS PSIV PSLT PSOV PSPS PSTS PSVM PSWT PVAR ROTA RSOP SCTR SEED SELC SEPO SESD SFTD SHTM SISY SIZE SMTR "
     "SMVR SNRA SNRD SORT SSPO SSSD SSWH SSZE SVC0 SVI0 SVR3 SVR4 SVR5 SVR6 SVV0 TEXR TIND TMTR VEL1 VEL2 VEL3 VEL4 "
@@ -474,6 +492,7 @@ struct Grammar {
     addTyped('C', kColorSigs, std::size(kColorSigs));
     addTyped('E', kEmitterSigs, std::size(kEmitterSigs));
     addTyped('Q', kRotationSigs, std::size(kRotationSigs));
+    addTyped('B', kBoolSigs, std::size(kBoolSigs));
     // A typed property is read as its type first, then any way an untyped one
     // can be (Remastered stores some as a byte).
     for (const PropertyType& property : kPropertyTypes) {
@@ -855,6 +874,11 @@ public:
           break;
         case 'e':
           AddEnds(next, Element(pos));
+          break;
+        case 'S':
+          if (const size_t end = StringConst(pos)) {
+            AddEnd(next, end);
+          }
           break;
         default:
           AddEnds(next, Typed(pos, TypeIndex(arg)));
@@ -1740,6 +1764,17 @@ private:
     out.push_back(std::move(raw));
   }
 
+  // A string constant as CIEBoneIndex reads one: "CNST", a word length, the characters. Returns the
+  // end, or 0 when it is not one.
+  size_t StringConst(size_t at) const {
+    if (at + 8 > m_size ||
+        (m_reversedFourCC ? ReadLE32(m_data + at) : port::ReadBE32(m_data + at)) != kCnst) {
+      return 0;
+    }
+    const size_t length = ReadLE32(m_data + at + 4);
+    return length < 256 && at + 8 + length <= m_size ? at + 8 + length : 0;
+  }
+
   // Splits [at, end) into the arguments sig[index...].
   bool BuildArgs(size_t at, const std::string& sig, size_t index, size_t end, std::vector<EffectValue>& out) {
     if (index == sig.size()) {
@@ -1765,6 +1800,11 @@ private:
       break;
     case 'e':
       options = Element(at);
+      break;
+    case 'S':
+      if (const size_t end = StringConst(at)) {
+        options = {end};
+      }
       break;
     default:
       options = Typed(at, TypeIndex(sig[index]));
@@ -1798,6 +1838,10 @@ private:
         if (!BuildElement(at, next, value)) {
           continue;
         }
+        break;
+      case 'S':
+        value.kind = EffectValue::Kind::Word;
+        value.word = ReadLE32(m_data + at + 4);
         break;
       default:
         if (!BuildTyped(at, next, TypeIndex(sig[index]), value)) {

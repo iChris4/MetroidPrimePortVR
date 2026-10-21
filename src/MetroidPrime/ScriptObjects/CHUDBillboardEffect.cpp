@@ -13,6 +13,15 @@
 
 #include "rstl/math.hpp"
 
+#ifdef TARGET_PC
+#include "Kyoto/Graphics/CGraphics.hpp"
+#include "Kyoto/Math/CMath.hpp"
+#include "Kyoto/Particles/CGenDescription.hpp"
+#include "MetroidPrime/TCastTo.hpp"
+
+#include <cmath>
+#endif
+
 #include "port_debug.h"
 #ifdef TARGET_PC
 #include "vr/vr_view.h"
@@ -86,9 +95,25 @@ void CHUDBillboardEffect::PreRender(CStateManager& mgr, const CFrustumPlanes& fr
     CTransform4f camXf = mgr.GetCameraManager()->GetCurrentCameraTransform(mgr);
 #ifdef TARGET_PC
     camXf = PortVr::VrHeadViewTransform(camXf);
+    if (xPortManagedType == 4) {
+      // Remastered places the goo manager's effect in HUD space (CHUDVisorEffectData): x right
+      // and y up on the plane D ahead of the eye, scaled per frame by GetHUDVisorEffectScale
+      // (D * tan(fov / 2), times the aspect across), so a splat at (x, y) with size s lands at
+      // (x, y) in normalized screen coordinates with half-extent s.
+      const CGameCamera& cam = mgr.GetCameraManager()->GetCurrentCamera(mgr);
+      const float d = xec_translation.GetY();
+      const float halfHeight = d * std::tan(cam.GetRenderFov() * (M_PIF / 180.f) * 0.5f);
+      const CTransform4f hudToCamera(1.f, 0.f, 0.f, 0.f, 0.f, 0.f, -1.f, 0.f, 0.f, 1.f, 0.f, 0.f);
+      xe8_generator->SetGlobalTranslation(camXf * CVector3f(0.f, d, 0.f));
+      xe8_generator->SetGlobalOrientation(camXf * hudToCamera);
+      xe8_generator->SetLocalScale(
+          CVector3f(cam.GetAspectRatio() * halfHeight, 1.f, halfHeight));
+    } else
 #endif
-    xe8_generator->SetGlobalTranslation(camXf * xec_translation);
-    xe8_generator->SetGlobalOrientation(camXf);
+    {
+      xe8_generator->SetGlobalTranslation(camXf * xec_translation);
+      xe8_generator->SetGlobalOrientation(camXf);
+    }
 #ifdef TARGET_PC
     // camXf is the presented camera: blending it again would trail a frame behind.
     if (x104_26_isElementGen)
@@ -125,5 +150,69 @@ void CHUDBillboardEffect::Think(float dt, CStateManager& mgr) {
       mgr.DeleteObjectRequest(GetUniqueId());
   }
 }
+
+#ifdef TARGET_PC
+void CHUDBillboardEffect::AcceptScriptMsg(EScriptObjectMessage msg, TUniqueId uid,
+                                          CStateManager& mgr) {
+  // CHUDBillboardEffectMP1: a managed effect going away resets its manager.
+  if (msg == kSM_Deleted && xPortManagedType == 4 &&
+      mgr.PortVisorGooManager().effect == GetUniqueId()) {
+    PortSetVisorGoo(mgr, kInvalidUniqueId, 0.f);
+  }
+  CEffect::AcceptScriptMsg(msg, uid, mgr);
+}
+
+bool CHUDBillboardEffect::PortHasVisorGoo(CStateManager& mgr) {
+  return TCastToPtr< CHUDBillboardEffect >(mgr.ObjectById(mgr.PortVisorGooManager().effect));
+}
+
+// SetManagedEffect(4, id): the old effect is unmanaged, the new one is updated once and its size
+// variable looked up; an invalid id resets the ring.
+void CHUDBillboardEffect::PortSetVisorGoo(CStateManager& mgr, TUniqueId uid, float dt) {
+  CStateManager::PortVisorGooState& goo = mgr.PortVisorGooManager();
+  if (CHUDBillboardEffect* old = TCastToPtr< CHUDBillboardEffect >(mgr.ObjectById(goo.effect))) {
+    old->xPortManagedType = -1;
+  }
+  goo.effect = uid;
+  CHUDBillboardEffect* fx = TCastToPtr< CHUDBillboardEffect >(mgr.ObjectById(uid));
+  if (!fx) {
+    goo.ring.Reset();
+    goo.sizeHandle = kPortNoVar;
+    return;
+  }
+  fx->xPortManagedType = 4;
+  fx->xe8_generator->Update(dt);
+  goo.sizeHandle = kPortNoVar;
+  if (fx->x104_26_isElementGen) {
+    // 0c7177e8-ec26-4794-b8f3-64e9517fa245, as stored (the first three fields little-endian).
+    PortGuid kSize;
+    kSize.bytes = {0xe8, 0x77, 0x71, 0x0c, 0x26, 0xec, 0x94, 0x47,
+                   0xb8, 0xf3, 0x64, 0xe9, 0x51, 0x7f, 0xa2, 0x45};
+    goo.sizeHandle =
+        static_cast< CElementGen& >(*fx->xe8_generator).PortGetRealHandle(kSize);
+  }
+}
+
+void CHUDBillboardEffect::PortAddVisorGooSplat(CStateManager& mgr) {
+  CStateManager::PortVisorGooState& goo = mgr.PortVisorGooManager();
+  CHUDBillboardEffect* fx = TCastToPtr< CHUDBillboardEffect >(mgr.ObjectById(goo.effect));
+  if (!fx || fx->xPortManagedType != 4 || !fx->x104_26_isElementGen || mgr.Random() == nullptr) {
+    return;
+  }
+  CElementGen& gen = static_cast< CElementGen& >(*fx->xe8_generator);
+  const CGenDescription* desc = gen.PortDesc();
+  PortVisorGoo::Splat splat;
+  if (!PortVisorGoo::Plan(goo.ring, *mgr.Random(), static_cast< int >(gen.GetParticleCountAll()),
+                          desc->xPortVisorData, desc->xPortVisorMinScale,
+                          desc->xPortVisorMaxScale,
+                          static_cast< float >(CGraphics::GetViewportWidth()),
+                          static_cast< float >(CGraphics::GetViewportHeight()), splat)) {
+    return;
+  }
+  gen.PortBindReal(goo.sizeHandle, splat.size);
+  gen.PortCreateParticlesAtPositionsIncludingChildren(1, &splat.pos);
+  PortVisorGoo::Push(goo.ring, splat.budget, splat.pos);
+}
+#endif
 
 ENTITY_ACCEPT_IMPL(CHUDBillboardEffect)

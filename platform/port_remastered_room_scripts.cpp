@@ -30,7 +30,8 @@ struct RemasteredScriptEvent {
 
 bool HintTakes(uint32_t action) {
   return action == kActionHintOn || action == kActionHintOff || action == kActionHintRemove ||
-         action == kActionHintDelete || action == kActionEntityActivate || action == kActionEntityDeactivate;
+         action == kActionHintDelete || action == kActionEntityActivate || action == kActionEntityDeactivate ||
+         action == kActionFogHintOn || action == kActionFogHintOff || action == kActionFogHintRemove;
 }
 uint8_t TransitionAct(uint32_t action) {
   switch (action) {
@@ -120,10 +121,11 @@ int RetailState(uint32_t type, uint32_t event) {
 // What a connection's action does to the geometry or hint it reaches.
 uint8_t LinkAct(uint32_t action) {
   return action == kActionActivate || action == kActionIncrement || action == kActionEntityActivate ||
-                 action == kActionHintOn
+                 action == kActionHintOn || action == kActionFogHintOn
              ? PortRoomGeo::kShow
          : action == kActionDeactivate || action == kActionDecrement || action == kActionEntityDeactivate ||
-                 action == kActionHintOff || action == kActionHintRemove || action == kActionHintDelete
+                 action == kActionHintOff || action == kActionHintRemove || action == kActionHintDelete ||
+                 action == kActionFogHintOff || action == kActionFogHintRemove
              ? PortRoomGeo::kHide
          : action == kActionToggleActive ? PortRoomGeo::kToggle
                                          : 0;
@@ -147,6 +149,64 @@ bool PassFires(int retailType, uint32_t action) {
   return false;
 }
 
+// A grade hint's sender that is no retail object: PortRoomEnv's kSenderPlayerFluid or
+// kSenderCameraWater, with the state (0: in, 1: out); 0 for any other. `incoming` is by
+// target entity.
+uint32_t FluidSender(const std::vector<Component>& comps,
+                     const std::map<int, std::vector<const Connection*>>& incoming, const Connection& c, int& state) {
+  const Component& sender = comps[c.sender];
+  if (sender.type == kProxyPlayer && (c.event == kEventPlayerFluidIn || c.event == kEventPlayerFluidOut)) {
+    state = c.event == kEventPlayerFluidIn ? 0 : 1;
+    return PortRoomEnv::kSenderPlayerFluid;
+  }
+  if (sender.type == kCameraWaterProxy && (c.event == kEventCameraWaterIn || c.event == kEventCameraWaterOut)) {
+    state = c.event == kEventCameraWaterIn ? 0 : 1;
+    return PortRoomEnv::kSenderCameraWater;
+  }
+  // A Counter fed only by camera water proxies is non-zero while the camera is in water.
+  if (sender.type != kCounter || sender.entity < 0) {
+    return 0;
+  }
+  const bool up = c.event == kEventCounterUp || c.event == kEventCounterNonZero;
+  if (!up && c.event != kEventCounterDown && c.event != kEventCounterZero) {
+    return 0;
+  }
+  const auto in = incoming.find(sender.entity);
+  if (in == incoming.end() || in->second.empty()) {
+    return 0;
+  }
+  for (const Connection* feed : in->second) {
+    if (comps[feed->sender].type != kCameraWaterProxy) {
+      return 0;
+    }
+  }
+  state = up ? 0 : 1;
+  return PortRoomEnv::kSenderCameraWater;
+}
+
+// A TriggerMP1's box: centred on the entity, `scale` across, turned Rz * Ry * Rx, in GameCube
+// axes (gc[i] = kSign[i] * remastered[kAxis[i]], MulR2G); axes[3 * i..] is the box's axis i.
+void CameraBox(const Vec3& pos, const Vec3& rot, const Vec3& scale, float centre[3], float half[3], float axes[9]) {
+  static const int kAxis[3] = {0, 2, 1};
+  static const double kSign[3] = {-1, 1, 1};
+  double s[3], k[3];
+  for (int i = 0; i < 3; ++i) {
+    s[i] = std::sin(rot[i] * (3.14159265358979323846 / 180.0));
+    k[i] = std::cos(rot[i] * (3.14159265358979323846 / 180.0));
+  }
+  const double m[3][3] = {
+      {k[2] * k[1], k[2] * s[1] * s[0] - s[2] * k[0], k[2] * s[1] * k[0] + s[2] * s[0]},
+      {s[2] * k[1], s[2] * s[1] * s[0] + k[2] * k[0], s[2] * s[1] * k[0] - k[2] * s[0]},
+      {-s[1], k[1] * s[0], k[1] * k[0]},
+  };
+  for (int col = 0; col < 3; ++col) {
+    centre[col] = float(kSign[col] * pos[kAxis[col]]);
+    half[col] = float(std::fabs(scale[kAxis[col]]) / 2);
+    for (int row = 0; row < 3; ++row) {
+      axes[3 * col + row] = float(kSign[row] * kSign[col] * m[kAxis[row]][kAxis[col]]);
+    }
+  }
+}
 
 // Component `i`'s outgoing connections, from its id data: guid, a block that may be
 // skipped, then the list. False when the list does not read; `end` is where it ends.
@@ -618,36 +678,7 @@ SceneryScripts MatchScripts(const Room& room, const Area& area) {
       lightEntities.insert(c.entity);
     }
   }
-  auto fluidSender = [&](const Connection& c, int& state) -> uint32_t {
-    const Component& sender = comps[c.sender];
-    if (sender.type == kProxyPlayer && (c.event == kEventPlayerFluidIn || c.event == kEventPlayerFluidOut)) {
-      state = c.event == kEventPlayerFluidIn ? 0 : 1;
-      return PortRoomEnv::kSenderPlayerFluid;
-    }
-    if (sender.type == kCameraWaterProxy && (c.event == kEventCameraWaterIn || c.event == kEventCameraWaterOut)) {
-      state = c.event == kEventCameraWaterIn ? 0 : 1;
-      return PortRoomEnv::kSenderCameraWater;
-    }
-    // A Counter fed only by camera water proxies is non-zero while the camera is in water.
-    if (sender.type != kCounter || sender.entity < 0) {
-      return 0;
-    }
-    const bool up = c.event == kEventCounterUp || c.event == kEventCounterNonZero;
-    if (!up && c.event != kEventCounterDown && c.event != kEventCounterZero) {
-      return 0;
-    }
-    const auto in = incoming.find(sender.entity);
-    if (in == incoming.end() || in->second.empty()) {
-      return 0;
-    }
-    for (const Connection* feed : in->second) {
-      if (comps[feed->sender].type != kCameraWaterProxy) {
-        return 0;
-      }
-    }
-    state = up ? 0 : 1;
-    return PortRoomEnv::kSenderCameraWater;
-  };
+  auto fluidSender = [&](const Connection& c, int& state) { return FluidSender(comps, incoming, c, state); };
   // A counter Remastered added for a grade hint that counts what a retail counter counts (a
   // fight's deaths, say) is that retail counter: the one every matched sender feeding it also targets.
   auto RetailCounterFor = [&](int entity) -> const ScriptObject* {
@@ -909,27 +940,8 @@ SceneryScripts MatchScripts(const Room& room, const Area& area) {
         half = -1.f;
       }
     } else if (kind == PortRoomGeo::kCameraVolume) {
-      // The box is the entity's: centred on it, `scale` across, turned Rz * Ry * Rx, here
-      // in area space (gc[i] = kSign[i] * remastered[kAxis[i]]) as the instances are.
-      static const int kAxis[3] = {0, 2, 1};
-      static const double kSign[3] = {-1, 1, 1};
-      double s[3], k[3];
-      for (int i = 0; i < 3; ++i) {
-        s[i] = std::sin(rot[i] * (3.14159265358979323846 / 180.0));
-        k[i] = std::cos(rot[i] * (3.14159265358979323846 / 180.0));
-      }
-      const double m[3][3] = {
-          {k[2] * k[1], k[2] * s[1] * s[0] - s[2] * k[0], k[2] * s[1] * k[0] + s[2] * s[0]},
-          {s[2] * k[1], s[2] * s[1] * s[0] + k[2] * k[0], s[2] * s[1] * k[0] - k[2] * s[0]},
-          {-s[1], k[1] * s[0], k[1] * k[0]},
-      };
-      for (int col = 0; col < 3; ++col) {
-        node.centre[col] = float(kSign[col] * pos[kAxis[col]]);
-        node.half[col] = float(std::fabs(scale[kAxis[col]]) / 2);
-        for (int row = 0; row < 3; ++row) {
-          node.axes[3 * col + row] = float(kSign[row] * kSign[col] * m[kAxis[row]][kAxis[col]]);
-        }
-      }
+      // The box is the entity's, here in area space as the instances are.
+      CameraBox(pos, rot, scale, node.centre, node.half, node.axes);
     }
     nodeOf[entity] = uint32_t(script.nodes.size());
     script.nodes.push_back(node);
@@ -1024,6 +1036,109 @@ SceneryScripts MatchScripts(const Room& room, const Area& area) {
   for (size_t i = 0; i < pending.size(); ++i) {
     const int entity = pending[i];
     inputs(entity, false, scriptObject.at(entity).first);
+  }
+  return result;
+}
+
+// The world master's hints (grade, backlight and fog hints that are not global) are turned on
+// and off by the master's own script objects, which match no retail object: camera-detecting
+// TriggerMP1s, through Relays, and the camera water proxies. Each trigger an active hint link
+// reaches becomes an entry of `volumes` (its box in retail world: GameCube axes plus `shift`,
+// the world's), and the link's sender kSenderWorldVolume + its index. What else drives them (a
+// SpecialFunction, say) stays unresolved and is counted in `unresolved` / `unresolvedHow`.
+SceneryScripts MasterScripts(const Room& room, const Vec3& shift, std::vector<PortRoomEnv::WorldVolume>& volumes) {
+  SceneryScripts result;
+  const std::vector<Component>& comps = room.Components();
+  const std::vector<Connection> conns = ReadConnections(room);
+  std::map<int, std::vector<const Connection*>> incoming;  // by target entity component
+  for (const Connection& c : conns) {
+    const int t = room.ByGuid(c.target);
+    const int entity = t < 0 ? -1 : comps[size_t(t)].type == kEntity ? t : comps[size_t(t)].entity;
+    if (entity >= 0) {
+      incoming[entity].push_back(&c);
+    }
+  }
+  std::set<int> hints;
+  for (const Component& c : comps) {
+    if ((c.type == kColorGradeHint || c.type == kBacklight || c.type == kVolumetricFogHint) && c.entity >= 0) {
+      hints.insert(c.entity);
+    }
+  }
+  std::map<size_t, int> volumeOf;  // trigger component -> index, -1: none to be in
+  auto volumeFor = [&](size_t comp) -> int {
+    const auto known = volumeOf.find(comp);
+    if (known != volumeOf.end()) {
+      return known->second;
+    }
+    const Component& c = comps[comp];
+    const auto f = room.Flat(c);
+    const auto flags = f.find(kPropTriggerFlags);
+    Vec3 pos, rot, scale;
+    int index = -1;
+    // Only an active trigger sees the camera, and nothing here activates one.
+    if (flags != f.end() && flags->second.size == 4 && (ReadLE32(room.Bytes(flags->second)) & kTriggerDetectCamera) != 0 &&
+        room.Active(c) && room.Xform(c, pos, rot, scale) && volumes.size() < PortRoomEnv::kMaxWorldVolumes) {
+      PortRoomEnv::WorldVolume v;
+      CameraBox(pos, rot, scale, v.centre, v.half, v.axes);
+      for (int i = 0; i < 3; ++i) {
+        v.centre[i] += float(shift[size_t(i)]);
+      }
+      index = int(volumes.size());
+      volumes.push_back(v);
+    }
+    volumeOf[comp] = index;
+    return index;
+  };
+  for (const int hint : hints) {
+    std::vector<PortRoomGeo::Link> links;
+    size_t bad = 0;
+    std::string how;
+    std::vector<int> seen{hint};
+    const auto miss = [&](const Connection& c, uint32_t first, int depth) {
+      ++bad;
+      char text[64];
+      std::snprintf(text, sizeof(text), " %08X/%08X/%08X->%08X@%d", comps[c.sender].type, c.event, c.action, first, depth);
+      how += text;
+    };
+    std::function<void(int, uint32_t, int)> walk = [&](int entity, uint32_t action, int depth) {
+      const auto in = incoming.find(entity);
+      if (in == incoming.end()) {
+        return;
+      }
+      for (const Connection* c : in->second) {
+        const Component& sender = comps[c->sender];
+        // A hint drops what it does not take; a Relay passes on only what fires it.
+        if (depth == 0 ? !HintTakes(c->action) : c->action != kActionRelayFire) {
+          continue;
+        }
+        const uint32_t first = depth == 0 ? c->action : action;
+        const uint8_t act = LinkAct(first);
+        int state = 0;
+        const uint32_t fluid = FluidSender(comps, incoming, *c, state);
+        if (fluid != 0 && act != 0) {
+          links.push_back({fluid, uint8_t(state), act});
+        } else if (sender.type == kTriggerMP1 && (c->event == kEventEntered || c->event == kEventExited) && act != 0 &&
+                   volumeFor(c->sender) >= 0) {
+          links.push_back({PortRoomEnv::kSenderWorldVolume + uint32_t(volumeFor(c->sender)),
+                           uint8_t(c->event == kEventEntered ? 0 : 1), act});
+        } else if (sender.type == kRelay && c->event == kEventRelayFired && sender.entity >= 0 && depth < 6 &&
+                   std::find(seen.begin(), seen.end(), sender.entity) == seen.end()) {
+          seen.push_back(sender.entity);
+          walk(sender.entity, first, depth + 1);
+          seen.pop_back();
+        } else {
+          miss(*c, first, depth);
+        }
+      }
+    };
+    walk(hint, 0, 0);
+    if (!links.empty()) {
+      result.links[hint] = std::move(links);
+    }
+    if (bad != 0) {
+      result.unresolved[hint] = bad;
+      result.unresolvedHow[hint] = how;
+    }
   }
   return result;
 }

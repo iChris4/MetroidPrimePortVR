@@ -5,6 +5,7 @@
 // CCEGradient::GetValue 0x2c8d48 and CVERandomVector::GetValue 0x29e954.
 #ifdef TARGET_PC
 
+#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -163,6 +164,24 @@ inline CVector3f RandomVector(float u0, float u1, float u2, float magnitude) {
   return CVector3f(x * scale, y * scale, z * scale);
 }
 
+// PNCV (CVENormalizedCompensatedVelocity::GetValue 0x2a2800) of a velocity in Remastered's
+// particle space: the velocity times one refined FRSQRTE of (x*x + y*y) + z*z when that is
+// above CParticleValues::skMinNormalizableMagSqd (2^-46), else the up vector (0, 1, 0).
+inline CVector3f NormalizedVelocity(const CVector3f& v) {
+  const float x = v.GetX(), y = v.GetY(), z = v.GetZ();
+  const float xx = x * x;
+  const float yy = y * y;
+  const float zz = z * z;
+  const float xy = xx + yy;
+  const float squared = xy + zz;
+  if (!(squared > 1.4210855e-14f)) {
+    return CVector3f(0.f, 1.f, 0.f);
+  }
+  float reciprocal = ReciprocalSqrtEstimate(squared);
+  reciprocal *= ReciprocalSqrtStep(squared, reciprocal * reciprocal);
+  return CVector3f(x * reciprocal, y * reciprocal, z * reciprocal);
+}
+
 // FRECPE as the Switch runs it: ARM RecipEstimate's 8-fraction-bit integer construction (no
 // FEAT_RPRES), round to nearest, denormals not flushed.
 inline float ReciprocalEstimate(float v) {
@@ -246,6 +265,49 @@ inline float InvSqrtF(float v) {
   float e = ReciprocalSqrtEstimate(m);
   e *= ReciprocalSqrtStep(m, e * e);
   return e * ReciprocalSqrtStep(m, e * e);
+}
+
+// The MAXP a CSectionedElementData::Compile1d/Compile2d (0x2a6ae4, 0x2a6b90) reads from the
+// generator that owns the element: (short) value, 128 from 128 up, 1 below 2.
+inline int SectionTotal(int32_t maxp) {
+  const int total = int16_t(maxp);
+  return total >= 128 ? 128 : total < 2 ? 1 : total;
+}
+
+// Compile2d's both-zero root: (uint)(total * rsqrt(total)), the rsqrt one FRSQRTS step from
+// FRSQRTE. The estimate is a little below 1/sqrt, so a perfect square truncates to one less.
+inline int SectionRoot(int total) {
+  if (total <= 0) {
+    return 0;
+  }
+  const float d = float(total);
+  const float e = ReciprocalSqrtEstimate(d);
+  const float r = e * ReciprocalSqrtStep(d * e, e);
+  return int(uint32_t(d * r));
+}
+
+struct SectionCounts {
+  int n1;
+  int n2;
+};
+
+// CSectionedElementData::Compile2d: `n1` and `n2` are the constant counts (0 when the count is a
+// constant 0), `total` is SectionTotal of the owning generator's MAXP. A count that is not a
+// constant 0 stands as it is when the other is not either (the caller does not call then).
+inline SectionCounts SectionCompile2d(int n1, int n2, bool n1Zero, bool n2Zero, int total) {
+  if (n2Zero && !n1Zero) {
+    n1 = n1 < 1 ? 1 : n1;
+    return {n1, (total & 0xff) / n1};
+  }
+  if (n1Zero && !n2Zero) {
+    n2 = n2 < 1 ? 1 : n2;
+    return {(total & 0xff) / n2, n2};
+  }
+  if (!n1Zero) {
+    return {n1, n2};
+  }
+  const int s = SectionRoot(total);
+  return (total & 0xffff) >= (s + 1) * s ? SectionCounts{s + 1, s} : SectionCounts{s, s};
 }
 
 // CParticleValues::skMinNormalizableMagSqd (0x21109c8).
@@ -451,7 +513,7 @@ inline Quat QuatFromMatrix(const float m[9]) {
 // REUL in axis order 0 (CERotationEuler::GetValue 0x29c944, QuatGeneric 0x29ca18): the angles in
 // degrees, each axis's FastSinR/FastCosR pair scaled by one refined FRSQRTE of s^2 + c^2, the
 // matrix Rz * Ry * Rx built term by term, then FromMatrix.
-inline Quat EulerQuat(float xDegrees, float yDegrees, float zDegrees) {
+inline void EulerMatrix(float xDegrees, float yDegrees, float zDegrees, float m[9]) {
   const float degrees = BitsFloat(0x3c8efa35);
   const float angles[3] = {xDegrees * degrees, yDegrees * degrees, zDegrees * degrees};
   float s[3], c[3];
@@ -472,7 +534,6 @@ inline Quat EulerQuat(float xDegrees, float yDegrees, float zDegrees) {
   const float cx = c[0], cy = c[1], cz = c[2];
   const float sxsy = sx * sy;
   const float cxsy = cx * sy;
-  float m[9];
   m[0] = cy * cz;
   const float sxsycz = sxsy * cz, cxsz = cx * sz;
   m[1] = sxsycz - cxsz;
@@ -486,6 +547,11 @@ inline Quat EulerQuat(float xDegrees, float yDegrees, float zDegrees) {
   m[6] = -sy;
   m[7] = sx * cy;
   m[8] = cx * cy;
+}
+
+inline Quat EulerQuat(float xDegrees, float yDegrees, float zDegrees) {
+  float m[9];
+  EulerMatrix(xDegrees, yDegrees, zDegrees, m);
   return QuatFromMatrix(m);
 }
 
@@ -554,6 +620,153 @@ inline CVector3f NormalizeInPlace(const CVector3f& v) {
                    MultiplyExtended(v.GetZ(), e));
 }
 
+// CVector3f::Magnitude 0x6b218: SqrtF of (x*x + y*y) + z*z.
+inline float VectorMagnitude(const CVector3f& v) {
+  const float xx = v.GetX() * v.GetX();
+  const float yy = v.GetY() * v.GetY();
+  const float zz = v.GetZ() * v.GetZ();
+  const float xy = xx + yy;
+  return SqrtF(xy + zz);
+}
+
+// M * v of the row-major EulerMatrix, each row (x*m0 + y*m1) + z*m2 (PLNE/PLNV).
+inline CVector3f MatrixTimes(const float m[9], const CVector3f& v) {
+  const float x = v.GetX(), y = v.GetY(), z = v.GetZ();
+  const float x0 = x * m[0], x1 = y * m[1], x2 = z * m[2];
+  const float y0 = x * m[3], y1 = y * m[4], y2 = z * m[5];
+  const float z0 = x * m[6], z1 = y * m[7], z2 = z * m[8];
+  return CVector3f((x0 + x1) + x2, (y0 + y1) + y2, (z0 + z1) + z2);
+}
+
+// The spread of PLNE/PLNV: sin and cos of the spread angle (degrees), identity when zero.
+struct PlaneSpread {
+  bool enabled = false;
+  float sin = 0.f;
+  float cos = 1.f;
+};
+
+// PLNE (0x2cc2ec): FastSinR/FastCosR of the angle in radians.
+inline PlaneSpread PlaneSpreadFast(float spreadDegrees) {
+  PlaneSpread s;
+  if (spreadDegrees != 0.f) {
+    const float rad = spreadDegrees * BitsFloat(0x3c8efa35);
+    s.cos = FastCosR(rad);
+    s.sin = FastSinR(rad);
+    s.enabled = true;
+  }
+  return s;
+}
+
+// PLNV: the parabolic law, the cosine as the sine of the wrapped angle plus pi/2.
+inline PlaneSpread PlaneSpreadParabolic(float spreadDegrees) {
+  PlaneSpread s;
+  if (spreadDegrees != 0.f) {
+    const float rad = spreadDegrees * BitsFloat(0x3c8efa35);
+    s.sin = ParabolicSin(WrapAngle(rad));
+    s.cos = ParabolicSin(WrapAngle(rad + BitsFloat(0x3fc90fdb)));
+    s.enabled = true;
+  }
+  return s;
+}
+
+// ModifyWithSpreadAngle 0x2cc490: the point's offset (local x, z) in the plane of half sizes
+// (wx, wz) lifts the velocity direction toward the plane's normal; the blend t grows with the
+// offset along the dominant axis. Only local.x and local.z are read.
+inline CVector3f PlaneModifyWithSpread(const CVector3f& local, const CVector3f& velIn, float wx,
+                                       float wz, const PlaneSpread& spread) {
+  const float x = local.GetX(), z = local.GetZ();
+  const float ax = std::fabs(x), az = std::fabs(z);
+  const bool selX = (wz - az) < (wx - ax);
+  const bool flagA = (wx == 0.f) || selX;
+  const bool useZ = wz != 0.f;
+  const bool c = useZ && flagA;
+  const float d = c ? wz : wx;
+  const float dimv = c ? az : ax;
+  if (spread.sin == 0.f || d == 0.f) {
+    return velIn;
+  }
+  const float len2 = x * x + z * z;
+  float r = 0.f;
+  if (len2 > 0.f) {
+    const float e = ReciprocalSqrtEstimate(len2);
+    r = e * ReciprocalSqrtStep(len2, e * e);
+  }
+  const float len = len2 * r;
+  if (len == 0.f) {
+    return velIn;
+  }
+  const float y = (len / spread.sin) * spread.cos;
+  CVector3f dir = NormalizeInPlace(CVector3f(x, y, z));
+  const float mag = VectorMagnitude(velIn);
+  float dx = mag * dir.GetX(), dy = mag * dir.GetY(), dz = mag * dir.GetZ();
+  if ((velIn.GetY() >= 0.f ? 1 : -1) != (dy >= 0.f ? 1 : -1)) {
+    dy = -dy;
+  }
+  float t;
+  if (wx == wz) {
+    t = dimv / d;
+  } else {
+    const float dd = std::fabs(wx - wz);
+    const float tA = (dimv - dd) / (d - dd);
+    const float tB = dimv / d;
+    t = ((wx > wz) != c) ? tA : tB;
+  }
+  const float u = 1.f - t;
+  return CVector3f(t * dx + u * velIn.GetX(), t * dy + u * velIn.GetY(), t * dz + u * velIn.GetZ());
+}
+
+// PLNV's index shuffler (a 255-bit used set): a random pick, moved to the next free index when
+// taken, the set cleared (its first ((N+31)>>3)&0x1c bytes) when none is.
+struct IndexShuffler {
+  uint8_t n = 0;
+  uint32_t bits[8] = {};
+
+  template <typename Draw>
+  int Next(int count, Draw&& draw) {
+    n = uint8_t(count);
+    const int N = n;
+    const int lastW = int(((N + 31) >> 5) & 7) - 1;
+    const int tail = N & 31;
+    const int r = int(draw() % uint32_t(N));
+    const int w = (r >> 5) & 7;
+    const uint32_t m = 1u << (r & 31);
+    if (!(bits[w] & m)) {
+      bits[w] |= m;
+      return r;
+    }
+    for (int k = w; k < 8; ++k) {
+      const uint32_t free = ~bits[k];
+      const int c = std::countr_zero(free);
+      if (k < lastW) {
+        if (c < 32) {
+          bits[k] |= 1u << c;
+          return k * 32 + c;
+        }
+        continue;
+      }
+      if (c < 32 && (tail == 0 || c < tail)) {
+        bits[k] |= 1u << c;
+        return k * 32 + c;
+      }
+      break;
+    }
+    for (int k = 0; k < w && k <= 6; ++k) {
+      const uint32_t free = ~bits[k];
+      const int c = std::countr_zero(free);
+      if (c < 32) {
+        bits[k] |= 1u << c;
+        return k * 32 + c;
+      }
+    }
+    const int words = (((N + 31) >> 3) & 0x1c) / 4;
+    for (int k = 0; k < words; ++k) {
+      bits[k] = 0;
+    }
+    bits[w] |= m;
+    return r;
+  }
+};
+
 // An ANCR/ASPR angle in radians: ((range/2 - range*u) + 0) in degrees, wrapped.
 inline float ConeAngle(float range, float u) {
   const float half = range * .5f;
@@ -589,6 +802,251 @@ inline CVector3f AngleSphereDirection(const Quat& q, float range1, float range2,
                                       float v) {
   return NormalizeInPlace(
       QuatTransform(q, ConeDirection(ConeAngle(range1, u), ConeAngle(range2, v))));
+}
+
+// MPAC (CVEAngleCone-like MPT element 0x29fec0): an angle in radians, ((range/2 - range*u) added
+// to the centre) in degrees, wrapped.
+inline float MpacAngle(float centre, float range, float u) {
+  const float half = range * .5f;
+  const float drawn = range * u;
+  const float spread = half - drawn;
+  const float biased = centre + spread;
+  return WrapAngle(biased * BitsFloat(0x3c8efa35));
+}
+
+// MPAC's direction for the angles ax, ay: (cos ax * -sin ay, sin ax, cos ay * cos ax), each lane
+// scaled by the magnitude as the asm orders it (mag * (cos ax * -sin ay), sin ax * mag,
+// mag * (cos ay * cos ax)).
+inline CVector3f MpacDirection(float ax, float ay, float magnitude) {
+  const float halfPi = BitsFloat(0x3fc90fdb);
+  const float sax = ParabolicSin(ax);
+  const float cax = ParabolicSin(WrapAngle(ax + halfPi));
+  const float say = ParabolicSin(ay);
+  const float cay = ParabolicSin(WrapAngle(ay + halfPi));
+  const float negSay = -say;
+  const float xl = cax * negSay;
+  const float zl = cay * cax;
+  return CVector3f(magnitude * xl, sax * magnitude, magnitude * zl);
+}
+
+// MPCN's cached frame (MPT_CVECone::GetValue 0x29eca0, first call at frame 0): u and v = n x u
+// for the direction d and its normalisation n (NormalizeInPlace). The zero multiplies are
+// literal, as the asm has them.
+struct ConeFrame {
+  CVector3f u;
+  CVector3f v;
+};
+inline ConeFrame MakeConeFrame(const CVector3f& d) {
+  const CVector3f n = NormalizeInPlace(d);
+  const float dx = d.GetX();
+  const float dy = d.GetY();
+  const float dz = d.GetZ();
+  float ux;
+  float uy;
+  float uz;
+  if (!(n.GetX() <= 0.8f)) {
+    const float a = dz * 0.f;
+    const float b = dx * 0.f;
+    const float c = dy * 0.f;
+    uy = a - b;
+    ux = c - dz;
+    uz = dx - c;
+  } else {
+    const float a = dz * 0.f;
+    const float b = dx * 0.f;
+    const float c = dy * 0.f;
+    uy = dz - b;
+    ux = c - a;
+    uz = b - dy;
+  }
+  const float vx0 = n.GetY() * uz;
+  const float vx1 = n.GetZ() * uy;
+  const float vy0 = n.GetZ() * ux;
+  const float vy1 = n.GetX() * uz;
+  const float vz0 = n.GetX() * uy;
+  const float vz1 = n.GetY() * ux;
+  return {CVector3f(ux, uy, uz), CVector3f(vx0 - vx1, vy0 - vy1, vz0 - vz1)};
+}
+
+// MPCN's point for the centre p, radius r (already at most 1) and the accepted draws a, b:
+// X = (r+r)*(a + -0.5), Y = (r+r)*(b + -0.5); lane k is (X*u.k + p.k) + Y*v.k.
+inline float ConeOffset(float r, float draw) {
+  const float twice = r + r;
+  return twice * (draw + -0.5f);
+}
+inline CVector3f ConePoint(const ConeFrame& frame, const CVector3f& p, float x, float y) {
+  const float px = x * frame.u.GetX();
+  const float py = x * frame.u.GetY();
+  const float pz = x * frame.u.GetZ();
+  const float qx = px + p.GetX();
+  const float qy = py + p.GetY();
+  const float qz = pz + p.GetZ();
+  return CVector3f(qx + y * frame.v.GetX(), qy + y * frame.v.GetY(), qz + y * frame.v.GetZ());
+}
+
+// ANCM (CVEAngleConeMinMax::GetValue 0x29f304): the cosine c between cos(A) and cos(B) by the
+// first draw, s = x * e (x = 1 - c*c) with e one FRSQRTS step from FRSQRTE (0 when x <= 0), the
+// azimuth phi by the second, the direction (s cos phi, s sin phi, c) turned by q and scaled.
+inline CVector3f AngleConeMinMax(const Quat& q, float aDegrees, float bDegrees, float magnitude,
+                                 float u0, float u1) {
+  const float deg = BitsFloat(0x3c8efa35);
+  const float cA = FastCosR(aDegrees * deg);
+  const float cB = FastCosR(bDegrees * deg);
+  const float diff = cB - cA;
+  const float scaled = diff * u0;
+  const float c = cA + scaled;
+  const float cc = c * c;
+  const float x = 1.f - cc;
+  const float e0 = ReciprocalSqrtEstimate(x);
+  const float step = ReciprocalSqrtStep(x, e0 * e0);
+  float e1 = e0 * step;
+  if (x <= 0.f) {
+    e1 = 0.f;
+  }
+  const float s = x * e1;
+  const float turn = u1 * BitsFloat(0x40c90fdb);
+  const float phi = turn + -BitsFloat(0x40490fdb);
+  const float halfPi = BitsFloat(0x3fc90fdb);
+  const float cosPhi = ParabolicSin(WrapAngle(phi + halfPi));
+  const float sinPhi = ParabolicSin(phi);
+  const CVector3f d = QuatTransform(q, CVector3f(s * cosPhi, s * sinPhi, c));
+  return CVector3f(d.GetX() * magnitude, d.GetY() * magnitude, d.GetZ() * magnitude);
+}
+
+// CRCV (CVECircleWithVariance ctor 0x2a0988): the unit axis's two in-plane vectors. u is
+// (-z, 0, x) when x > 0.8, else (0, z, -y), not renormalized; v is axis x u.
+struct CircleFrame {
+  CVector3f u;
+  CVector3f v;
+};
+
+inline CircleFrame MakeCircleFrame(const CVector3f& axis) {
+  const CVector3f n = NormalizeInPlace(axis);
+  const CVector3f u = n.GetX() > 0.8f ? CVector3f(-n.GetZ(), 0.f, n.GetX()) : CVector3f(0.f, n.GetZ(), -n.GetY());
+  const float vx = n.GetY() * u.GetZ() - n.GetZ() * u.GetY();
+  const float vy = n.GetZ() * u.GetX() - n.GetX() * u.GetZ();
+  const float vz = n.GetX() * u.GetY() - n.GetY() * u.GetX();
+  return CircleFrame{u, CVector3f(vx, vy, vz)};
+}
+
+// CRCV GetValue 0x2a0a7c: the angle in radians, wrapped. The step is 360 / n degrees, the
+// jitter (var * step / 2) spread over two halves by the draw d (Remastered's Float()).
+inline float CircleAngle(float startDegrees, int n, float variance, int index, float d) {
+  const float step = 360.f / float(n);
+  const float vs = variance * step;
+  const float h = vs * .5f;
+  const float placed = startDegrees + step * float(index);
+  const float jitter = (h + h) * d - h;
+  return WrapAngle((placed + jitter) * BitsFloat(0x3c8efa35));
+}
+
+// center + radius * (u cos + v sin), each lane as ((r u) cos) then ((sin r) v) added.
+inline CVector3f CirclePoint(const CVector3f& centre, const CircleFrame& frame, float radius, float angle) {
+  const float sn = ParabolicSin(angle);
+  const float cs = ParabolicSin(WrapAngle(angle + BitsFloat(0x3fc90fdb)));
+  const float sr = sn * radius;
+  return CVector3f(centre.GetX() + radius * frame.u.GetX() * cs + sr * frame.v.GetX(),
+                   centre.GetY() + radius * frame.u.GetY() * cs + sr * frame.v.GetY(),
+                   centre.GetZ() + radius * frame.u.GetZ() * cs + sr * frame.v.GetZ());
+}
+
+// SPEV GetValue 0x2ca1c4: a sphere of n1 polar bands by n2 azimuth sectors around p, the cell
+// `index` (index / n2 is the band) jittered by the two draws (d1 polar, d2 azimuth). The polar
+// bands start at FastCosR(pi), 0xbf7fff2e, not -1. All in Remastered's axes.
+struct SpherePoint {
+  CVector3f position;
+  CVector3f velocity;
+};
+
+inline SpherePoint SphereWithVariance(const CVector3f& p, float radius, float speed, int n1, float variance1,
+                                      int n2, float variance2, int index, float d1, float d2) {
+  const float cp = BitsFloat(0xbf7fff2e);
+  const int i1 = index / n2;
+  const int i2 = index - i1 * n2;
+  const float st1 = (1.f - cp) / float(n1);
+  const float h1 = variance1 * (st1 * .5f);
+  const float st2 = 360.f / float(n2);
+  const float h2 = variance2 * (st2 * .5f);
+  const float degrees = BitsFloat(0x3c8efa35);
+  const float a = WrapAngle(((st2 * float(i2) + st2 * .5f) + ((h2 + h2) * d2 - h2) + -180.f) * degrees);
+  const float c = ((st1 * .5f + cp) + st1 * float(i1)) + ((h1 + h1) * d1 - h1);
+  const float s = SqrtF(1.f - c * c);
+  const float dx = s * ParabolicSin(a);
+  const float dz = s * ParabolicSin(WrapAngle(a + BitsFloat(0x3fc90fdb)));
+  return SpherePoint{CVector3f(p.GetX() + dx * radius, c * radius + p.GetY(), p.GetZ() + radius * dz),
+                     CVector3f(dx * speed, c * speed, dz * speed)};
+}
+
+// ASPV GetValue 0x2cb6b0 (CVEAngleSphereWithVariance): `a` and `b` are the two polar angles in degrees;
+// the polar band of cell `index / nA` is the stratum of cos a .. cos b (FastCosR) split into nP
+// (step (cos a - cos b) / nP, starting at cos b), the azimuth the range `azRange` degrees centred on 0
+// split into nA, each jittered by its draw (d1 polar, d2 azimuth) times its variance. The direction
+// (sin az * s, c, cos az * s), s = sqrt(1 - c * c), is turned by q; the point is origin + radius * that
+// and the velocity speed * that. The origin is in the port's space, the direction is drawn in
+// Remastered's and turned by the basis (-x, z, y) (as ASPR's, CEEPortAngleSphere).
+inline SpherePoint AngleSphereWithVariance(const CVector3f& origin, const Quat& q, float a, float b, int nP,
+                                           float variance1, float azRange, int nA, float variance2, float radius,
+                                           float speed, int index, float d1, float d2) {
+  const float degrees = BitsFloat(0x3c8efa35);
+  const float cosA = FastCosR(a * degrees);
+  const float cosB = FastCosR(b * degrees);
+  const float st1 = (cosA - cosB) / float(nP);
+  const int i1 = index / nA;
+  const int i2 = index - i1 * nA;
+  const float h1 = variance1 * (st1 * .5f);
+  const float st2 = azRange / float(nA);
+  const float h2 = variance2 * (st2 * .5f);
+  const float az = WrapAngle(((st2 * float(i2) + st2 * .5f) + ((h2 + h2) * d2 - h2) - azRange * .5f) * degrees);
+  const float c = ((st1 * .5f + cosB) + st1 * float(i1)) + ((h1 + h1) * d1 - h1);
+  const float s = SqrtF(1.f - c * c);
+  const float sx = s * ParabolicSin(az);
+  const float sz = s * ParabolicSin(WrapAngle(az + BitsFloat(0x3fc90fdb)));
+  const CVector3f d = QuatTransform(q, CVector3f(sx, c, sz));
+  const float dx = -d.GetX();
+  const float dy = d.GetZ();
+  const float dz = d.GetY();
+  return SpherePoint{CVector3f(origin.GetX() + dx * radius, origin.GetY() + dy * radius, origin.GetZ() + dz * radius),
+                     CVector3f(dx * speed, dy * speed, dz * speed)};
+}
+
+// LINV GetValue 0x2a119c (CVELineWithVariance): the point of the segment start..end (length `len`) in
+// the cell `index % n` of n, jittered by the draw d times the variance: the fraction
+// (len / n * .5 + len / n * index + jitter) / len along the way.
+inline CVector3f LinePoint(const CVector3f& start, const CVector3f& end, int n, float variance, int index, float d,
+                           float len) {
+  const float step = len / float(n);
+  const float half = step * .5f;
+  const float g = variance * half;
+  const float t = ((half + step * float(index)) + ((g + g) * d - g)) / len;
+  return CVector3f(start.GetX() + (end.GetX() - start.GetX()) * t, start.GetY() + (end.GetY() - start.GetY()) * t,
+                   start.GetZ() + (end.GetZ() - start.GetZ()) * t);
+}
+
+// CVector3f::IsNormalizable 0x6b030: false when any lane is inf/NaN (exponent all ones), else
+// (x*x + y*y) + z*z >= 1e-28 (0x10fd87b5; not CParticleValues::skMinNormalizableMagSqd).
+inline bool IsNormalizableVec(const CVector3f& v) {
+  if (!std::isfinite(v.GetX()) || !std::isfinite(v.GetY()) || !std::isfinite(v.GetZ())) {
+    return false;
+  }
+  const float squared = (v.GetX() * v.GetX() + v.GetY() * v.GetY()) + v.GetZ() * v.GetZ();
+  return squared >= BitsFloat(0x10fd87b5);
+}
+
+// ELPS GetValue 0x2ca73c with a zero euler: d is the three draws mapped to (-1, 1) and
+// normalized (Normalize 0x6b0b0) when IsNormalizable, scaled by the size (itself scaled by three
+// more draws unless surface-only); the velocity is that point (the rotation is the identity)
+// through AsNormalized 0x6b238 (same math as Normalize) when IsNormalizable, else as is, times
+// the speed.
+inline SpherePoint EllipsoidPoint(const CVector3f& centre, const CVector3f& size, float speed, const float draw[3]) {
+  CVector3f d((draw[0] * 200.f + -100.f) * .01f, (draw[1] * 200.f + -100.f) * .01f,
+              (draw[2] * 200.f + -100.f) * .01f);
+  if (IsNormalizableVec(d)) {
+    d = NormalizeInPlace(d);
+  }
+  const CVector3f q(d.GetX() * size.GetX(), d.GetY() * size.GetY(), d.GetZ() * size.GetZ());
+  const CVector3f dir = IsNormalizableVec(q) ? NormalizeInPlace(q) : q;
+  return SpherePoint{CVector3f(q.GetX() + centre.GetX(), q.GetY() + centre.GetY(), q.GetZ() + centre.GetZ()),
+                     CVector3f(dir.GetX() * speed, dir.GetY() * speed, dir.GetZ() * speed)};
 }
 
 } // namespace PortParticleMath

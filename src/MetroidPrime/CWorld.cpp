@@ -954,6 +954,21 @@ TAreaId CWorld::GetAreaIdForSaveId(uint saveId) const {
 }
 
 void CWorld::SetLoadPauseState(bool paused) {
+#ifdef TARGET_PC
+  // Issue #170: retail resumes only the areas loading now. An area paused while
+  // loading that left the loading chain before the resume (its load withdrawn
+  // during a scan freeze, which keeps scripts and TravelToArea running) kept its
+  // pause, and every later load of it stalled at StartStreamIn: the door into it
+  // waited forever, until a pause screen paused and resumed it again. Resume
+  // every area.
+  if (!paused) {
+    for (int i = 0; i < x18_areas.size(); ++i) {
+      x18_areas[i]->SetLoadPauseState(false);
+    }
+    x70_25_loadPaused = false;
+    return;
+  }
+#endif
   for (CGameArea::CConstChainIterator it = GetChainHead(kC_Loading); skGlobalEnd != it; ++it) {
     const_cast< CGameArea& >(*it).SetLoadPauseState(paused);
   }

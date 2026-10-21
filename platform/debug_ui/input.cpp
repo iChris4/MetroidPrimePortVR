@@ -145,6 +145,14 @@ void SetGyroSensitivity(float scale) {
   }
 }
 
+void SetGyroSensitivityY(float scale) {
+  EnsureInitialized();
+  if (std::isfinite(scale)) {
+    sInput.gyroSensitivityY = std::clamp(scale, PortInput::kGyroSensitivityMin, PortInput::kGyroSensitivityMax);
+    MarkDirty();
+  }
+}
+
 void SetGyroSpace(int space) {
   EnsureInitialized();
   if (space < 0 || space >= PortGyro::kSpaceCount) {
@@ -162,8 +170,12 @@ void SetGyroAutoCalibrate(int mode) {
 
 namespace {
 constexpr double kRecalibrateSeconds = 5.0;
-// SDL_GetTicksNS() the pending recalibration fires at, or 0.
+// How long a manual calibration averages the still pad.
+constexpr double kManualCalibrationSeconds = 3.0;
+// SDL_GetTicksNS() the pending recalibration starts sampling at, or 0.
 uint64_t sRecalibrateAtNs = 0;
+// SDL_GetTicksNS() the running manual calibration ends at, or 0.
+uint64_t sManualCalibrationEndNs = 0;
 // Whether auto calibration ran on the last gyro sample.
 bool sGyroCalibrating = false;
 // Set by the "Reset aim" action, taken by the next aim tick.
@@ -172,16 +184,28 @@ std::atomic<bool> sResetAimRequested{false};
 // aim it moves the pointer, so the sticks turn the camera.
 bool sGyroDrivesAim = false;
 
+uint64_t NsFromSeconds(double seconds) { return static_cast<uint64_t>(seconds * 1e9); }
+
+// Countdown over: average the still pad for a while (auto calibration waits),
+// then keep that as the drift, whatever auto calibrate is set to.
 void FireRecalibration() {
-  if (sRecalibrateAtNs != 0 && SDL_GetTicksNS() >= sRecalibrateAtNs) {
+  const uint64_t now = SDL_GetTicksNS();
+  if (sRecalibrateAtNs != 0 && now >= sRecalibrateAtNs) {
     sRecalibrateAtNs = 0;
-    sGyroMotion.Reset();
+    sGyroMotion.BeginManualCalibration();
+    sManualCalibrationEndNs = now + NsFromSeconds(kManualCalibrationSeconds);
+  }
+  if (sManualCalibrationEndNs != 0 && now >= sManualCalibrationEndNs) {
+    sManualCalibrationEndNs = 0;
+    sGyroMotion.EndManualCalibration();
   }
 }
 } // namespace
 
 void StartGyroRecalibration() {
-  sRecalibrateAtNs = SDL_GetTicksNS() + static_cast<uint64_t>(kRecalibrateSeconds * 1e9);
+  sGyroMotion.EndManualCalibration();
+  sManualCalibrationEndNs = 0;
+  sRecalibrateAtNs = SDL_GetTicksNS() + NsFromSeconds(kRecalibrateSeconds);
 }
 
 void CancelGyroRecalibration() { sRecalibrateAtNs = 0; }
@@ -194,7 +218,16 @@ float GyroRecalibrationCountdown() {
   return static_cast<float>(double(sRecalibrateAtNs - SDL_GetTicksNS()) * 1e-9);
 }
 
-bool GyroCalibrating() { return sGyroCalibrating; }
+float GyroManualCalibrationProgress() {
+  FireRecalibration();
+  if (sManualCalibrationEndNs == 0 || !sGyroMotion.ManualCalibrating()) {
+    return -1.f;
+  }
+  const double left = double(sManualCalibrationEndNs - SDL_GetTicksNS()) * 1e-9;
+  return std::clamp(static_cast<float>(1.0 - left / kManualCalibrationSeconds), 0.f, 1.f);
+}
+
+bool GyroCalibrating() { return sGyroCalibrating || sGyroMotion.ManualCalibrating(); }
 
 void ResetGyroCalibration() { sGyroMotion.Reset(); }
 
@@ -332,8 +365,7 @@ bool ReadGyroRates(float& pitch, float& yaw, float dt) {
   const bool inMenus = Visible() || PausedMenuOpen() || !sMouseGameplayActive;
   const bool calibrate = sInput.gyroAutoCalibrate == 1 || (sInput.gyroAutoCalibrate == 2 && inMenus);
   sGyroCalibrating = haveAccel && calibrate;
-  sGyroMotion.Process(gyro, haveAccel ? accel : nullptr, dt, sInput.gyroSpace, calibrate, pitch, yaw,
-                      sInput.gyroAutoCalibrate == 2);
+  sGyroMotion.Process(gyro, haveAccel ? accel : nullptr, dt, sInput.gyroSpace, calibrate, pitch, yaw);
   sGyroFilter.Apply(pitch, yaw, dt, sInput.gyroSmoothing, sInput.gyroTightening);
   return true;
 }
@@ -368,6 +400,12 @@ void PollGyro() {
   float pitch = 0.f;
   if (!ReadGyroRates(pitch, yaw, dt)) {
     sGyroStatus = "no gyro found";
+    sSpringFlickArmed = true;
+    return;
+  }
+  if (sGyroMotion.ManualCalibrating()) {
+    // The pad is meant to lie still: nothing it reads now aims or flicks.
+    sGyroStatus = "calibrating, keep the pad still";
     sSpringFlickArmed = true;
     return;
   }
@@ -413,9 +451,11 @@ void PollGyro() {
   const float sx = MouseInvertX() ? -1.f : 1.f;
   const float sy = MouseInvertY() ? -1.f : 1.f;
   const float scale = sInput.gyroSensitivity * dt / perPixel;
+  const float ySense = sInput.gyroSplit ? sInput.gyroSensitivityY : sInput.gyroSensitivity;
+  const float scaleY = ySense * dt / perPixel;
   if (!PointerAim()) {
     sGyroPendingX += sx * yaw * scale;
-    sGyroPendingY -= sy * pitch * scale;
+    sGyroPendingY -= sy * pitch * scaleY;
     return;
   }
   // Pointer aim: gyro_cursor_angle degrees of pad turn sweep the pointer across
@@ -427,11 +467,11 @@ void PollGyro() {
   if (px > 0.f && sweep > 0.f) {
     const float cursor = 2.f / sweep * dt / px;
     sGyroPendingX += yaw * cursor;
-    sGyroPendingY -= pitch * cursor;
+    sGyroPendingY -= pitch * cursor * (ySense / sInput.gyroSensitivity);
   }
   if (sInput.gyroCursorCamera) {
     sGyroCameraPendingX += sx * yaw * scale;
-    sGyroCameraPendingY -= sy * pitch * scale;
+    sGyroCameraPendingY -= sy * pitch * scaleY;
   }
 }
 
@@ -472,6 +512,7 @@ bool MouseInvertX() { EnsureInitialized(); return sInput.mouseInvertX; }
 bool MouseInvertY() { EnsureInitialized(); return sInput.mouseInvertY; }
 bool MouseButtons() { EnsureInitialized(); return sInput.mouseButtons; }
 bool MouseCrosshair() { EnsureInitialized(); return sInput.mouseCrosshair; }
+bool LockKeepsPitch() { EnsureInitialized(); return sInput.lockKeepsPitch; }
 // Window travel (pixels) to pointer units (-1..1 of the half view). At the default
 // sensitivity the pointer follows the cursor's speed; the sensitivity slider scales it.
 static void PointerAimScale(float& sx, float& sy) {
@@ -559,10 +600,13 @@ bool UpdateMouseAim(bool active, bool locked, float x, float y, float z) {
   const PortMouse::AimState lastAim = sMouseAimState;
   const PortMouse::PointerAim lastPointer = sPointerAim;
   const bool pointer = PointerAim();
-  // Reset aim: recentre the pointer and look level (pitch 0). Yaw stays.
+  // Reset aim: under pointer aim recentre the pointer, otherwise look level
+  // (pitch 0; yaw stays). reset_aim_both does both either way.
   if (sResetAimRequested.exchange(false, std::memory_order_acq_rel)) {
-    sPointerAim.Center();
-    if (sMouseAimState.initialized) {
+    if (pointer || sInput.resetAimBoth) {
+      sPointerAim.Center();
+    }
+    if ((!pointer || sInput.resetAimBoth) && sMouseAimState.initialized) {
       sMouseAimState.pitch = 0.f;
       sMouseAimState.lagPitch = 0.f;
     }
@@ -624,10 +668,24 @@ void SetMouseSensitivity(float radiansPerPixel) {
   }
 }
 
+void SetMouseSensitivityY(float radiansPerPixel) {
+  EnsureInitialized();
+  if (std::isfinite(radiansPerPixel) && radiansPerPixel > 0.f) {
+    sInput.mouseSensitivityY = radiansPerPixel;
+  }
+}
+
 void AddMouseDelta(float dx, float dy) {
   if (!sMouseCaptured || !(MouseAim() || PortPhoto::Active()) || Visible() || !std::isfinite(dx) ||
       !std::isfinite(dy)) {
     return;
+  }
+  if (sInput.mouseSensitivitySplit) {
+    // Vertical counts become the horizontal-equivalent counts that turn at the Y sensitivity.
+    const float ratio = sInput.mouseSensitivityY / sInput.mouseSensitivity;
+    if (std::isfinite(ratio) && ratio > 0.f) {
+      dy *= ratio;
+    }
   }
   sMousePendingX += dx;
   sMousePendingY += dy;
@@ -931,6 +989,14 @@ void SetTouchAimSpeed(float pixelsPerDp) {
   }
 }
 
+void SetTouchAimSpeedY(float pixelsPerDp) {
+  EnsureInitialized();
+  if (std::isfinite(pixelsPerDp)) {
+    sInput.touchAimSpeedY = std::clamp(pixelsPerDp, 0.25f, 10.f);
+    MarkDirty();
+  }
+}
+
 // Called from the Android UI thread; the game thread drains it in
 // BeginFrameMouse.
 void AddTouchAim(float dxDp, float dyDp) {
@@ -940,7 +1006,7 @@ void AddTouchAim(float dxDp, float dyDp) {
   }
   std::lock_guard lock(sTouchAimMutex);
   sTouchAimPendingX += dxDp * sInput.touchAimSpeed;
-  sTouchAimPendingY += dyDp * sInput.touchAimSpeed;
+  sTouchAimPendingY += dyDp * (sInput.touchAimSplit ? sInput.touchAimSpeedY : sInput.touchAimSpeed);
 }
 
 void BeginFrameMouse() {

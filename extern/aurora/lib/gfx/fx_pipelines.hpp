@@ -39,10 +39,9 @@ wgpu::BlendState pipeline_blend(const PipelineConfig& config);
 std::string pipeline_source(const PipelineConfig& config);
 // Whether a draw's blend (BlendSceneHdr or not) fits the scene attachment it is drawn into.
 bool scene_format_matches(const RenderTargetLayout& layout, uint32_t blend) noexcept;
-// The features a draw's shader and pipeline key see: DepthSoften (ignored) and the AlreadyExposed
-// policy bit are not shader features.
+// The features a draw's shader and pipeline key see: the AlreadyExposed policy bit is not a shader feature.
 constexpr uint32_t shader_features(uint32_t features) noexcept {
-  return features & ~uint32_t(DepthSoften | AlreadyExposed);
+  return features & ~uint32_t(AlreadyExposed);
 }
 // The exposure a draw's uniform carries (tone[0][3], which the HDR tail multiplies by): the GX tone
 // row's, inherited from the last PBR draw, or 1 for an already-exposed material drawn into the HDR

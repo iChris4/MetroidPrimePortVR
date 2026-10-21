@@ -41,6 +41,9 @@ private:
   void StartStream(CStateManager& mgr);
   void TweakOverride(CStateManager& mgr);
 
+#ifdef TARGET_PC
+  void PortApplyPickupJingle(CStateManager& mgr);
+#endif
   void sub_8020c3f0(CStateManager& mgr);
   void sub_8020c414(CStateManager& mgr);
   void sub_8020be90();

@@ -190,11 +190,14 @@ private:
   void Exposure(const RoomData& r, float out[5], std::vector<PortRoomEnv::FluidHint>* fluid = nullptr) const;
   void ReadBloom(const RoomData& r, BloomData& out) const;
   // The room's global ColorGrades in component order; `area` gives their retail layers.
-  void ReadGrades(const RoomData& r, const Area* area, std::vector<GradeData>& out) const;
+  void ReadGrades(const RoomData& r, const Area* area, std::vector<GradeData>& out,
+                  const SceneryScripts* given = nullptr) const;
   // The room's Backlight hints, likewise.
-  void ReadBacklights(const RoomData& r, const Area* area, std::vector<BacklightData>& out) const;
+  void ReadBacklights(const RoomData& r, const Area* area, std::vector<BacklightData>& out,
+                      const SceneryScripts* given = nullptr) const;
   // The room's fog hints, heights in Remastered axes (the writer applies the room's shift).
-  void ReadFogs(const RoomData& r, const Area* area, std::vector<FogData>& out) const;
+  void ReadFogs(const RoomData& r, const Area* area, std::vector<FogData>& out,
+                const SceneryScripts* given = nullptr) const;
   // The room's fog regions, placed by the area's transform `xf`.
   void ReadFogRegions(const RoomData& r, const SceneryScripts& scripts, const Mat34& xf,
                       std::vector<FogRegionData>& out, std::vector<FogTransitionData>& transitions) const;
@@ -210,7 +213,8 @@ private:
   std::string WriteRoom(const RoomData& r, const std::map<std::string, Placement>& placed, const Vec3& shift,
                         const float tonemap[5], const BloomData& bloom, const std::vector<GradeData>& worldGrades,
                         const std::vector<BacklightData>& worldBacklights, const std::vector<FogData>& worldFogs,
-                        const Match& m, int& written, std::string& matched);
+                        const std::vector<PortRoomEnv::WorldVolume>& worldVolumes, const Match& m, int& written,
+                        std::string& matched);
 
   const RoomPak& m_master;
   const std::vector<RoomPak>& m_rooms;
@@ -494,7 +498,8 @@ void Writer::ReadBloom(const RoomData& r, BloomData& out) const {
   }
 }
 
-void Writer::ReadGrades(const RoomData& r, const Area* area, std::vector<GradeData>& out) const {
+void Writer::ReadGrades(const RoomData& r, const Area* area, std::vector<GradeData>& out,
+                        const SceneryScripts* given) const {
   const std::vector<const Component*> grades = r.room.Of(kColorGrade);
   if (grades.empty()) {
     return;
@@ -505,8 +510,11 @@ void Writer::ReadGrades(const RoomData& r, const Area* area, std::vector<GradeDa
       hints.emplace(c->entity, c);
     }
   }
+  // The master's are driven by its own script objects (MasterScripts), a room's by retail's.
   SceneryScripts scripts;
-  if (area != nullptr) {
+  if (given != nullptr) {
+    scripts = *given;
+  } else if (area != nullptr) {
     scripts = MatchScripts(r.room, *area);
   }
   const RoomPak home{r.name, r.pak};
@@ -528,7 +536,7 @@ void Writer::ReadGrades(const RoomData& r, const Area* area, std::vector<GradeDa
             link.action != PortRoomGeo::kToggle) {
           continue;
         }
-        if (link.sender != PortRoomEnv::kSenderPlayerFluid && link.sender != PortRoomEnv::kSenderCameraWater) {
+        if (!PortRoomEnv::PseudoSender(link.sender)) {
           link.sender &= 0x3ffffff;  // as CEntity sends it: no layer bits
         }
         links.push_back(link);
@@ -581,13 +589,17 @@ void Writer::ReadGrades(const RoomData& r, const Area* area, std::vector<GradeDa
   }
 }
 
-void Writer::ReadBacklights(const RoomData& r, const Area* area, std::vector<BacklightData>& out) const {
+void Writer::ReadBacklights(const RoomData& r, const Area* area, std::vector<BacklightData>& out,
+                            const SceneryScripts* given) const {
   const std::vector<const Component*> lights = r.room.Of(kBacklight);
   if (lights.empty()) {
     return;
   }
+  // The master's are driven by its own script objects (MasterScripts), a room's by retail's.
   SceneryScripts scripts;
-  if (area != nullptr) {
+  if (given != nullptr) {
+    scripts = *given;
+  } else if (area != nullptr) {
     scripts = MatchScripts(r.room, *area);
   }
   for (const Component* c : lights) {
@@ -605,7 +617,7 @@ void Writer::ReadBacklights(const RoomData& r, const Area* area, std::vector<Bac
             link.action != PortRoomGeo::kToggle) {
           continue;
         }
-        if (link.sender != PortRoomEnv::kSenderPlayerFluid && link.sender != PortRoomEnv::kSenderCameraWater) {
+        if (!PortRoomEnv::PseudoSender(link.sender)) {
           link.sender &= 0x3ffffff;  // as CEntity sends it: no layer bits
         }
         links.push_back(link);
@@ -643,7 +655,8 @@ void Writer::ReadBacklights(const RoomData& r, const Area* area, std::vector<Bac
   }
 }
 
-void Writer::ReadFogs(const RoomData& r, const Area* area, std::vector<FogData>& out) const {
+void Writer::ReadFogs(const RoomData& r, const Area* area, std::vector<FogData>& out,
+                      const SceneryScripts* given) const {
   const std::vector<const Component*> hints = r.room.Of(kVolumetricFogHint);
   if (hints.empty()) {
     return;
@@ -652,8 +665,11 @@ void Writer::ReadFogs(const RoomData& r, const Area* area, std::vector<FogData>&
   for (const Component* c : r.room.Of(kVolumetricFog)) {
     fogOf[c->entity] = c;
   }
+  // The master's are driven by its own script objects (MasterScripts), a room's by retail's.
   SceneryScripts scripts;
-  if (area != nullptr) {
+  if (given != nullptr) {
+    scripts = *given;
+  } else if (area != nullptr) {
     scripts = MatchScripts(r.room, *area);
   }
   for (const Component* h : hints) {
@@ -673,11 +689,18 @@ void Writer::ReadFogs(const RoomData& r, const Area* area, std::vector<FogData>&
             link.action != PortRoomGeo::kToggle) {
           continue;
         }
-        if (link.sender != PortRoomEnv::kSenderPlayerFluid && link.sender != PortRoomEnv::kSenderCameraWater) {
+        if (!PortRoomEnv::PseudoSender(link.sender)) {
           link.sender &= 0x3ffffff;
         }
         links.push_back(link);
       }
+    }
+    const auto unresolved = scripts.unresolved.find(h->entity);
+    if (unresolved != scripts.unresolved.end()) {
+      Log("  " + r.name + ": " + (isGlobal ? "global" : "local") + " fog hint with " +
+          std::to_string(unresolved->second) + " connection(s) not followed (sender type/event/action:" +
+          (scripts.unresolvedHow.count(h->entity) != 0 ? scripts.unresolvedHow.at(h->entity) : std::string()) + "), " +
+          std::to_string(links.size()) + " followed");
     }
     if (!isGlobal && links.empty()) {
       continue;
@@ -999,7 +1022,9 @@ void Writer::ReadPointLights(const RoomData& r, const SceneryScripts& scripts, c
             (link.action < PortRoomEnv::kLightStart || link.action > PortRoomEnv::kLightReverse)) {
           continue;
         }
-        link.sender &= 0x3ffffff;
+        if (!PortRoomEnv::PseudoSender(link.sender)) {
+          link.sender &= 0x3ffffff;
+        }
         l.links.push_back(link);
       }
     }
@@ -1175,7 +1200,7 @@ void Writer::ReadFogRegions(const RoomData& r, const SceneryScripts& scripts, co
             link.action != PortRoomGeo::kToggle) {
           continue;
         }
-        if (link.sender != PortRoomEnv::kSenderPlayerFluid && link.sender != PortRoomEnv::kSenderCameraWater) {
+        if (!PortRoomEnv::PseudoSender(link.sender)) {
           link.sender &= 0x3ffffff;
         }
         d.links.push_back(link);
@@ -1252,7 +1277,7 @@ void Writer::ReadFogRegions(const RoomData& r, const SceneryScripts& scripts, co
             (link.action < PortRoomEnv::kTransitionStart || link.action > PortRoomEnv::kTransitionDelete)) {
           continue;
         }
-        if (link.sender != PortRoomEnv::kSenderPlayerFluid && link.sender != PortRoomEnv::kSenderCameraWater) {
+        if (!PortRoomEnv::PseudoSender(link.sender)) {
           link.sender &= 0x3ffffff;
         }
         t.links.push_back(link);
@@ -2690,7 +2715,8 @@ std::string Writer::WriteRoom(const RoomData& r, const std::map<std::string, Pla
                               const float tonemap[5], const BloomData& worldBloom,
                               const std::vector<GradeData>& worldGrades,
                               const std::vector<BacklightData>& worldBacklights, const std::vector<FogData>& worldFogs,
-                              const Match& m, int& written, std::string& matched) {
+                              const std::vector<PortRoomEnv::WorldVolume>& worldVolumes, const Match& m, int& written,
+                              std::string& matched) {
   matched.clear();
   char head[96];
   WriteGeometry(r, m.mrea, *m.area);
@@ -2844,7 +2870,7 @@ std::string Writer::WriteRoom(const RoomData& r, const std::map<std::string, Pla
   }
 
   std::vector<uint8_t> out = {'M', 'P', 'E', 'V'};
-  AppendLE32(out, 21);
+  AppendLE32(out, 22);
   float tone[5];
   std::copy(tonemap, tonemap + 5, tone);
   Tonemap(r, tone);
@@ -3121,6 +3147,17 @@ std::string Writer::WriteRoom(const RoomData& r, const std::map<std::string, Pla
     AppendLEFloat(out, h.sigma);
     AppendLEFloat(out, h.staticLerp);
   }
+  AppendLE32(out, uint32_t(worldVolumes.size()));
+  for (const PortRoomEnv::WorldVolume& v : worldVolumes) {
+    for (const float* field : {v.centre, v.half}) {
+      for (int i = 0; i < 3; ++i) {
+        AppendLEFloat(out, field[i]);
+      }
+    }
+    for (float a : v.axes) {
+      AppendLEFloat(out, a);
+    }
+  }
   if (!fogs.empty() || !regions.empty()) {
     Log("  " + r.name + ": " + std::to_string(fogs.size()) + " fog hint(s), " + std::to_string(regions.size()) +
         " fog region(s), " + std::to_string(transitions.size()) + " transition(s)");
@@ -3243,12 +3280,38 @@ bool Writer::Run(uint32_t mlvl, int& written, std::string& error) {
   BloomData bloom;
   ReadBloom(master, bloom);
   // The world's global grade sits under the room's own (the last active one is drawn).
+  // Its hints that are not global follow its own camera volumes, which every room carries.
+  std::vector<PortRoomEnv::WorldVolume> volumes;
+  const SceneryScripts masterScripts = MasterScripts(master.room, shift, volumes);
+  for (size_t i = 0; i < volumes.size(); ++i) {
+    // The nearest retail door, to check the placement by.
+    const PortRoomEnv::WorldVolume& v = volumes[i];
+    double best = 1e300;
+    uint32_t bestArea = 0;
+    for (const Area& a : m_areas) {
+      for (const Vec3& d : a.doors) {
+        const double dist = Distance(d, {v.centre[0], v.centre[1], v.centre[2]});
+        if (dist < best) {
+          best = dist;
+          bestArea = a.mrea;
+        }
+      }
+    }
+    char line[192];
+    std::snprintf(line, sizeof line,
+                  "world volume %zu: centre (%.2f, %.2f, %.2f) half (%.2f, %.2f, %.2f), nearest door %.2f m (area %08X)", i,
+                  v.centre[0], v.centre[1], v.centre[2], v.half[0], v.half[1], v.half[2], best, bestArea);
+    Log(line);
+  }
   std::vector<GradeData> grades;
-  ReadGrades(master, nullptr, grades);
+  ReadGrades(master, nullptr, grades, &masterScripts);
   std::vector<BacklightData> backlights;
-  ReadBacklights(master, nullptr, backlights);
+  ReadBacklights(master, nullptr, backlights, &masterScripts);
   std::vector<FogData> fogs;
-  ReadFogs(master, nullptr, fogs);
+  ReadFogs(master, nullptr, fogs, &masterScripts);
+  Log("world: " + std::to_string(grades.size()) + " grade(s), " + std::to_string(backlights.size()) +
+      " backlight(s), " + std::to_string(fogs.size()) + " fog hint(s), " + std::to_string(volumes.size()) +
+      " camera volume(s)");
   // Every room is matched before any is written: two rooms matching one area
   // would write the same files, so only the closer match (the first, on a tie)
   // is written and the other is logged as a clash.
@@ -3292,7 +3355,7 @@ bool Writer::Run(uint32_t mlvl, int& written, std::string& error) {
       continue;
     }
     std::string matched;
-    Log(WriteRoom(r, placed, shift, tonemap, bloom, grades, backlights, fogs, m, written, matched));
+    Log(WriteRoom(r, placed, shift, tonemap, bloom, grades, backlights, fogs, volumes, m, written, matched));
     if (!matched.empty()) {
       seen[matched] = r.name;
     }

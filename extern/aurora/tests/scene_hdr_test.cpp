@@ -4,6 +4,7 @@
 
 #include "gfx/bloom.hpp"
 #include "gfx/frame.hpp"
+#include "frame_staging.hpp"
 #include "gfx/frame_packet.hpp"
 #include "gfx/fx_pipelines.hpp"
 #include "gfx/hdr_tone.hpp"
@@ -119,6 +120,10 @@ protected:
     make_efb(1);
     webgpu::release_scene_hdr_target();
     detail::testing::suppress_render_worker(true);
+    // The Null device reports no offset alignment (all ones), which no uniform push can honour.
+    savedUniformAlignment = detail::resources().limits.minUniformBufferOffsetAlignment;
+    detail::resources().limits.minUniformBufferOffsetAlignment = 256;
+    staging.attach(frame);
     detail::begin_recording(frame, 0);
     started = true;
     ASSERT_TRUE(bloom::ensure_task());
@@ -134,6 +139,7 @@ protected:
     }
     if (started) {
       detail::shutdown_recording();
+      detail::resources().limits.minUniformBufferOffsetAlignment = savedUniformAlignment;
     }
     bloom::shutdown();
     webgpu::release_scene_hdr_target();
@@ -177,14 +183,18 @@ protected:
       webgpu::release_scene_hdr_target();
     }
     frames.emplace_back();
+    staging.attach(frames.back());
     detail::begin_recording(frames.back(), 0);
   }
 
   static inline uint32_t sMaxDimension = 0;
+  // Declared before the packets, which wrap its memory.
+  detail::testing::StagingPool staging;
   std::deque<detail::FramePacket> frames = std::deque<detail::FramePacket>(1);
   detail::FramePacket& frame = frames.front();
   bool started = false;
   bool recording = true;
+  uint32_t savedUniformAlignment = 0;
 };
 
 TEST_F(SceneHdrTest, OffKeepsTheLdrLayoutAndKey) {
@@ -398,6 +408,7 @@ TEST_F(SceneHdrTest, ModeDoesNotLeakIntoTheNextFrame) {
   EXPECT_FALSE(scene_hdr_active());
 
   frames.emplace_back();
+  staging.attach(frames.back());
   detail::begin_recording(frames.back(), 0);
   EXPECT_FALSE(scene_hdr_active());
   EXPECT_EQ(current_pass().target_layout().key, ldr_layout(1).key);
@@ -803,6 +814,34 @@ TEST_F(SceneHdrTest, VfxWritersBuildHdrPipelines) {
       EXPECT_EQ(validation_error([&] { pipeline = vfx::create_pipeline(config); }), "");
       EXPECT_TRUE(pipeline);
     }
+  }
+  EXPECT_TRUE(g_uncapturedErrors.empty());
+}
+
+// VFX_IceChargeCollision_Lit's pipeline: the WGSL the clustered gather, the probe and the light loop add
+// has to build in both targets (the port draws particles into the HDR scene, and an LDR run of the same
+// material into the display EFB).
+TEST_F(SceneHdrTest, LitVfxPipelineBuildsInBothTargets) {
+  // The slots the Lit recipe carries: BCLR, NMAP, TCH0.
+  static constexpr int8_t Slots[] = {0, 7, 7, 7, 7, 7, 7, 1, 2};
+  uint32_t slotKey = 0;
+  for (uint32_t i = 0; i < std::size(Slots); ++i) {
+    slotKey |= uint32_t(Slots[i]) << (3 * i);
+  }
+  for (const bool hdr : {false, true}) {
+    SCOPED_TRACE(testing::Message() << "hdr " << hdr);
+    vfx::PipelineConfig config;
+    config.colorFormats[0] = hdr ? webgpu::SceneHdrFormat : ColorFormat;
+    config.depthStencilFormat = DepthFormat;
+    config.colorAttachmentCount = 1;
+    config.features = vfx::IceChargeCollision | vfx::IceChargeCollisionLit | vfx::Unfogged;
+    config.slotKey = slotKey;
+    config.blend = 2 | (hdr ? vfx::BlendSceneHdr : 0u); // PBDM 2: additive
+    config.compare = static_cast<uint32_t>(wgpu::CompareFunction::LessEqual);
+    EXPECT_EQ(module_error(vfx::pipeline_source(config)), "");
+    wgpu::RenderPipeline pipeline;
+    EXPECT_EQ(validation_error([&] { pipeline = vfx::create_pipeline(config); }), "");
+    EXPECT_TRUE(pipeline);
   }
   EXPECT_TRUE(g_uncapturedErrors.empty());
 }

@@ -46,7 +46,8 @@ void ARQPoll(void);
 
 
 #ifndef AUTO
-#if defined(__cplusplus) && __cplusplus >= 201103L
+// MSVC has no __typeof__, and without /Zc:__cplusplus says C++98.
+#if defined(__cplusplus) && (__cplusplus >= 201103L || defined(_MSC_VER))
 #define AUTO(name, val) auto name = val
 #define AUTO_REF(name, val) auto& name = val
 #define AUTO_CONST_REF(name, val) const auto& name = val

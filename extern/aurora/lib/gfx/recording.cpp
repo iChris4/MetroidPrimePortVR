@@ -1985,6 +1985,28 @@ bool create_pass(uint32_t width, uint32_t height) {
   return true;
 }
 
+bool resolve_scene_copy(TextureHandle color, const ResolveHdr* hdr, wgpu::TextureView& depth) {
+  depth = {};
+  if (!color || !g_recorder.active() || g_recorder.currentRenderPass == UINT32_MAX || g_recorder.inOffscreen) {
+    return false;
+  }
+  auto& pass = current_render_passes()[g_recorder.currentRenderPass];
+  const auto& attachment = pass.colorAttachments[SceneColorAttachmentIndex];
+  const uint32_t width = attachment.size.width;
+  const uint32_t height = attachment.size.height;
+  if (pass.hasDepth && tex_copy_conv::snapshot_depth_supported()) {
+    auto& entry = acquire_pass_snapshot(width, height, attachment.format, pass.msaaSamples, false, true);
+    pass.snapshotDepthDst = entry.depth.view;
+    depth = entry.depth.view;
+  }
+  const bool mips = color->mipCount > 1;
+  resolve_pass_into(std::move(color), ClipRect{0, 0, int32_t(width), int32_t(height)}, false, false, false, {}, 0.f,
+                    GX_TF_RGBA8, -1, mips, hdr);
+  return true;
+}
+
+size_t current_frame_slot() noexcept { return g_recorder.frameSlot; }
+
 bool resolve_pass(const ResolveDesc& desc, ResolvedTargets& out) {
   out = {};
   gx::fifo::drain();

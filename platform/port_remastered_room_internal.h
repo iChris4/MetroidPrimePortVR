@@ -622,6 +622,12 @@ constexpr uint32_t kActionHintOff = 0x332214ff;  // OffRequest
 // AcceptScriptMsg ignores every action but these, QueryHintState and (de)activation.
 constexpr uint32_t kActionHintRemove = 0x3580a822;
 constexpr uint32_t kActionHintDelete = 0x5844454c;  // 'DLEX'
+// What a VolumetricFogHint takes instead (CVolumetricFogHintGOC::AcceptScriptMsg 0x6b8c04):
+// AddHintRequest, RemoveHintRequest, and ReallyRemoveHint (as DLEX); also QueryHintState
+// (0x20c4c0f9) and (de)activation.
+constexpr uint32_t kActionFogHintOn = 0xb1766945;
+constexpr uint32_t kActionFogHintOff = 0xd8d934c6;
+constexpr uint32_t kActionFogHintRemove = 0x1c67758f;
 // What a VolumetricFogRegionTransition takes (its AcceptScriptMsg): Start, ResetAndStart,
 // Stop, DLEX and (de)activation, the entity's and the component's own.
 constexpr uint32_t kActionTransitionStart = 0x6c4d551c;
@@ -705,6 +711,10 @@ bool SingleDriverStart(const std::vector<PortRoomGeo::Link>& starts, PortRoomGeo
 int DriverSlot(const std::vector<PortRemastered::ModelMaterial>& materials, const SceneryScripts::Driver& d);
 std::map<int, std::vector<SceneryScripts::Driver>> FindMaterialDrivers(const Room& room, std::set<int>& driverStarts);
 SceneryScripts MatchScripts(const Room& room, const Area& area);
+uint32_t FluidSender(const std::vector<Component>& comps,
+                     const std::map<int, std::vector<const Connection*>>& incoming, const Connection& c, int& state);
+void CameraBox(const Vec3& pos, const Vec3& rot, const Vec3& scale, float centre[3], float half[3], float axes[9]);
+SceneryScripts MasterScripts(const Room& room, const Vec3& shift, std::vector<PortRoomEnv::WorldVolume>& volumes);
 
 }  // namespace RoomDetail
 }  // namespace PortRemastered

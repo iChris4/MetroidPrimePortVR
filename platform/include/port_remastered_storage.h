@@ -26,7 +26,10 @@
 // the same name never shadows it. A legacy <mods>/remastered-models from before this - or a first
 // private import - keeps standing in until a full import has written the private one: it is read
 // (a stage's files are hard-linked, or copied where the file system has no links, and it is never
-// modified), never moved or deleted, so nothing migrates or disappears on its own.
+// modified) and nothing migrates. Once the private import is installed, usable and not being
+// written, the legacy copy is a dead duplicate (the private one shadows it) and the app deletes it
+// at startup (ShouldDeleteLegacy); only a real folder is removed, never a symlink, and never the
+// private import itself. Desktop never deletes: there the import is <mods>/remastered-models.
 //
 // Header-only and free of platform calls, so the policy is tested on the host
 // (tests/port_remastered_storage.cpp).
@@ -199,6 +202,13 @@ inline std::string ReuseFolder(const std::string& installedFolder, bool installe
     return installedFolder;
   }
   return legacyUsable ? legacyFolder : std::string();
+}
+
+// Whether the legacy <mods>/remastered-models is deleted at startup: only with the private root, when
+// the private import is installed and usable (and not being written), and the legacy path is a real
+// folder (not a symlink) that is not the private import itself.
+inline bool ShouldDeleteLegacy(bool privateRoot, bool installedUsable, bool legacyIsRealDir, bool samePath) {
+  return privateRoot && installedUsable && legacyIsRealDir && !samePath;
 }
 
 // What a movies-only import writes into: the staged (finished but not yet installed) import is the

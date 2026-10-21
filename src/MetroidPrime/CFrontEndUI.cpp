@@ -1814,9 +1814,12 @@ bool PortResumePromptInput(const CFinalInput& input) {
   if (input.PDPLeft() || input.PDPRight() || input.PDPUp() || input.PDPDown()) {
     sResumeYes = !sResumeYes;
     sResumeSound = true;
-  } else if (input.PA() || input.PStart()) {
+  } else if ((input.PA() || input.PStart()) && PortDebug::MouseHeldButtons() == 0) {
     // Only an explicit choice answers; B (Android's back gesture, a stray
     // touch) does nothing. No keeps the state: the next play replaces it.
+    // A mouse button down is a click on the window, whose buttons answer
+    // (issue #166): one that also reaches the pad as A must not accept the
+    // highlighted Yes before the click on No lands.
     sResumeSound = true;
     AnswerResume(sResumeYes);
   }

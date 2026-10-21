@@ -411,6 +411,75 @@ bool DecodeDoorSaveState(const std::string& data, DoorSaveState& out) {
   return true;
 }
 
+bool JournalsScriptMsg(int msg) {
+  // EScriptObjectMessage values (CEntityInfo.hpp); this file stays free of game headers.
+  switch (msg) {
+  case 3:   // Close
+  case 5:   // Decrement
+  case 6:   // Follow
+  case 7:   // Increment
+  case 9:   // Open
+  case 10:  // Reset
+  case 11:  // ResetAndStart
+  case 12:  // SetToMax
+  case 13:  // SetToZero
+  case 14:  // Start
+  case 15:  // Stop
+  case 16:  // StopAndReset
+  case 18:  // UNKM18
+  case 19:  // Action
+  case 20:  // Play
+  case 21:  // Alert
+    return true;
+  default:
+    // Activate, Deactivate, ToggleActive: the saved active flag. Arrived, Next:
+    // waypoint traffic. 22 and up: engine notifications, not script commands.
+    return false;
+  }
+}
+
+bool AppendScriptMsg(std::vector< ScriptMsgEntry >& journal, const ScriptMsgEntry& entry) {
+  if (!journal.empty() && journal.back().msg == entry.msg && journal.back().sender == entry.sender)
+    return false;
+  if (journal.size() >= kMaxScriptMsgs)
+    return false;
+  journal.push_back(entry);
+  return true;
+}
+
+std::string EncodeScriptMsgs(const std::vector< ScriptMsgEntry >& journal) {
+  const size_t count = std::min(journal.size(), kMaxScriptMsgs);
+  std::string out;
+  out.push_back(static_cast< char >(count));
+  for (size_t i = 0; i < count; ++i) {
+    out.push_back(static_cast< char >(journal[i].msg));
+    AppendLE32(out, journal[i].sender);
+  }
+  return out;
+}
+
+bool DecodeScriptMsgs(const std::string& data, std::vector< ScriptMsgEntry >& out) {
+  if (data.empty())
+    return false;
+  const size_t count = static_cast< uint8_t >(data[0]);
+  if (count > kMaxScriptMsgs || data.size() != 1 + 5 * count)
+    return false;
+  std::vector< ScriptMsgEntry > parsed;
+  for (size_t i = 0; i < count; ++i) {
+    const size_t at = 1 + 5 * i;
+    ScriptMsgEntry e;
+    e.msg = static_cast< uint8_t >(data[at]);
+    if (!JournalsScriptMsg(e.msg))
+      return false;
+    e.sender = 0;
+    for (int b = 0; b < 4; ++b)
+      e.sender |= static_cast< uint32_t >(static_cast< uint8_t >(data[at + 1 + b])) << (8 * b);
+    parsed.push_back(e);
+  }
+  out = std::move(parsed);
+  return true;
+}
+
 uint64_t FingerprintScriptData(const uint8_t* data, size_t size) {
   if (data == nullptr || size == 0)
     return 0;

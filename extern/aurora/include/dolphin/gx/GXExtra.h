@@ -298,7 +298,9 @@ void GXPortVolumetricFogEnd(void);
 // Marks the draws up to the next call with false as particles' (inside the volumetric fog). As
 // Remastered's particle renderers, they fog themselves per vertex as colour T + in-scatter unless
 // their blend mode is additive or premultiplied (the static render state's "no fog" flag), when
-// they are not fogged at all and only add to the already fogged frame.
+// they are not fogged at all and only add to the already fogged frame. GX_PORT_PARTICLE_UNFOGGED
+// marks a generator with DFOG 1, which carries the same flag whatever its blend.
+#define GX_PORT_PARTICLE_UNFOGGED 2
 void GXPortSetParticleFog(GXBool on);
 // Port extension: one of Remastered's X-ray visor post passes (shader 00089f0) over the EFB as
 // drawn so far. `p` is the shader's constants p0..p7; p[0][2] == 1 runs the distortion after the

@@ -56,6 +56,11 @@ public:
 class CModVectorElement : public IElement {
 public:
   virtual bool GetValue(int frame, CVector3f& pVel, CVector3f& pPos) const = 0;
+#ifdef TARGET_PC
+  // port-only: Remastered's DoesNodeFinalizePosition (CParticleVelocity::Compile 0x291b90). A
+  // VEL source that finalizes the position replaces the generator's `pos += vel` step.
+  virtual bool PortFinalizesPosition() const { return false; }
+#endif
 };
 
 class CColorElement : public IElement {
