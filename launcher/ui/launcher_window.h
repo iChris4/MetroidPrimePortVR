@@ -36,6 +36,7 @@ protected:
   void closeEvent(QCloseEvent* event) override;
 
 private:
+  friend struct LauncherSettingsSyncTest;
   void BuildSetupTab(QTabWidget* tabs);
   void BuildFooter(QVBoxLayout* layout);
 
@@ -87,7 +88,7 @@ private:
   bool m_closeAfterStop = false;
 
   QFileSystemWatcher* m_watcher = nullptr;
-  std::string m_lastWritten; // what the launcher itself last wrote, to ignore its own change
+  std::string m_lastSettingsText; // most recently loaded or saved contents, for duplicate notifications
   bool m_changedOnDisk = false;
 };
 

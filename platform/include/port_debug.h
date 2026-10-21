@@ -840,6 +840,8 @@ bool Visible();
 // so a disc chosen during startup is remembered even if no frame is drawn yet.
 // It always writes, changed or not.
 void SaveSettingsNow();
+  // Refresh launcher edits before a VR menu click reads and publishes settings.
+  void PollSettingsFile(bool now);
 // Marks the settings file dirty from outside the overlay (the VR settings
 // store), so it is written on exit or by SaveSettingsNow like any other change.
 void MarkVrSettingsDirty();

@@ -265,6 +265,7 @@ void LauncherWindow::LoadSettings() {
                              .arg(QDir::toNativeSeparators(m_paths.settingsFile)));
   }
   m_model.Load(file);
+  m_lastSettingsText = file.Text();
   m_changedOnDisk = false;
   m_ctx.RefreshAll();
   UpdateFooter();
@@ -283,7 +284,7 @@ bool LauncherWindow::SaveSettings() {
   } else {
     m_model.ApplyChanges(file);
     if (file.Save(ToPath(m_paths.settingsFile), error)) {
-      m_lastWritten = file.Text();
+      m_lastSettingsText = file.Text();
       m_model.MarkSaved();
       m_changedOnDisk = false;
       WatchSettingsFile();
@@ -311,7 +312,7 @@ void LauncherWindow::SaveKeyNow(std::string_view key) {
       file.Set("cannon_textures_applied", std::to_string(QDateTime::currentMSecsSinceEpoch()));
     }
     if (file.Save(ToPath(m_paths.settingsFile), error)) {
-      m_lastWritten = file.Text();
+      m_lastSettingsText = file.Text();
       m_model.MarkSaved(key);
       WatchSettingsFile();
       UpdateFooter();
@@ -326,17 +327,15 @@ void LauncherWindow::SaveKeyNow(std::string_view key) {
 
 void LauncherWindow::WatchSettingsFile() {
   // A save replaces the file (temporary file + rename), which ends a watch on
-  // it, so the watch is renewed after every change; the folder is watched for
-  // a file that does not exist yet.
+  // it, so the watch is renewed after every change. Keep watching the folder
+  // too, so subsequent replacements cannot fall between file watches.
   if (!m_watcher->files().isEmpty()) {
     m_watcher->removePaths(m_watcher->files());
   }
   if (QFileInfo::exists(m_paths.settingsFile)) {
     m_watcher->addPath(m_paths.settingsFile);
-    if (!m_watcher->directories().isEmpty()) {
-      m_watcher->removePaths(m_watcher->directories());
-    }
-  } else if (m_watcher->directories().isEmpty() && QFileInfo::exists(m_paths.userFolder)) {
+  }
+  if (m_watcher->directories().isEmpty() && QFileInfo::exists(m_paths.userFolder)) {
     m_watcher->addPath(m_paths.userFolder);
   }
 }
@@ -344,7 +343,7 @@ void LauncherWindow::WatchSettingsFile() {
 void LauncherWindow::OnSettingsFileChanged() {
   WatchSettingsFile();
   PortSettingsFile file;
-  if (!file.Load(ToPath(m_paths.settingsFile)) || file.Text() == m_lastWritten) {
+  if (!file.Load(ToPath(m_paths.settingsFile)) || file.Text() == m_lastSettingsText) {
     return;
   }
   if (m_game != nullptr) {
@@ -366,6 +365,7 @@ void LauncherWindow::RefreshFromFile() {
     return;
   }
   m_model.Refresh(file);
+  m_lastSettingsText = file.Text();
   m_changedOnDisk = false;
   m_ctx.RefreshAll();
   UpdateFooter();

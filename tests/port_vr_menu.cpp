@@ -791,9 +791,37 @@ void TestCompileToast() {
   Check(!CompileToastFloating(head, floating), "no floating toast looking straight up");
 }
 
+void TestLiveSettings() {
+  RecordingActions actions;
+  PortVrSettings settings{};
+  State state{};
+  View view{};
+  int published = 0;
+  PortVrSettings runtime = settings;
+  const auto click = [&](float x, float y) {
+    ClickAndSave(state, settings, view, x, y, 100.0, actions, [&](const PortVrSettings& changed) {
+      Check(actions.saves == published, "settings publish before save request");
+      runtime = changed;
+      ++published;
+    });
+  };
+  click(TabX(kCalibrationTab), kTabY);
+  Check(actions.saves == 0 && published == 0, "navigation does not save settings");
+  click(kLabelX, RowY(kCalibrationTab, 0));
+  Check(!runtime.cinematic_screen_enabled && actions.saves == 1, "VR toggle publishes and saves live");
+  click(kLabelX, RowY(kCalibrationTab, 0));
+  Check(runtime.cinematic_screen_enabled && actions.saves == 2, "VR toggle back publishes and saves live");
+  settings.metroid_hud_size = 2.f;
+  click(400.f, 120.f);
+  Check(actions.saves == 2, "reset confirmation does not save");
+  click(400.f, 120.f);
+  Check(runtime.metroid_hud_size != 2.f && actions.saves == 3, "confirmed reset publishes and saves live");
+}
+
 } // namespace
 
 int main() {
+  TestLiveSettings();
   TestImage();
   TestRows();
   TestClicks();

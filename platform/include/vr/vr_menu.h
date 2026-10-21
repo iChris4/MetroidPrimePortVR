@@ -1829,6 +1829,19 @@ inline void Click(State& s, PortVrSettings& v, const View& view, float x, float 
     }
 }
 
+// Commit a setting before requesting a save, so the desktop sees the new value.
+// Tab/page navigation and the first press of a reset confirmation do not write.
+template <typename Publish>
+inline void ClickAndSave(State& s, PortVrSettings& v, const View& view, float x, float y,
+                         double now, Actions& actions, Publish publish) {
+    const PortVrSettings previous = v;
+    Click(s, v, view, x, y, now, actions);
+    if (v != previous) {
+        publish(v);
+        actions.SaveSettings();
+    }
+}
+
 // --- Where it hangs (OpenXR application space: metres, +Y up, -Z forward) ---
 
 using screen_math::Pose;

@@ -214,6 +214,8 @@ struct PortVrSettings {
     int vr_state_slot = 1;
     int cannon_texture_slot = 0;
 
+    bool operator==(const PortVrSettings&) const = default;
+
     bool CannonTargetingForVisor(bool scanVisor) const noexcept {
         return cannon_targeting && gun_targeting_enabled && !scanVisor;
     }
