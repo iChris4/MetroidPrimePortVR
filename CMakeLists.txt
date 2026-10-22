@@ -794,6 +794,11 @@ if(MP_BUILD_TESTS)
         INCLUDES platform/include extern/aurora/include extern/aurora/lib)
     mp_port_test(port_vr_menu_tests SOURCES tests/port_vr_menu.cpp
         INCLUDES platform/include extern/aurora/include extern/aurora/lib)
+    if(MP_ENABLE_OPENXR AND MP_OPENXR_TARGET)
+        mp_port_test(port_vr_panel_pose_tests SOURCES tests/port_vr_panel_pose.cpp
+            INCLUDES platform/include DEFINITIONS MP_ENABLE_OPENXR)
+        target_link_libraries(port_vr_panel_pose_tests PRIVATE ${MP_OPENXR_TARGET})
+    endif()
     mp_port_test(port_vr_snap_turn_tests SOURCES tests/port_vr_snap_turn.cpp
         INCLUDES platform/include extern/aurora/include extern/aurora/lib)
     mp_port_test(port_vr_wrist_visor_tests SOURCES tests/port_vr_wrist_visor.cpp

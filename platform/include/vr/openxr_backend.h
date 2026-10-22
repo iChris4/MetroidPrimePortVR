@@ -94,7 +94,14 @@ inline constexpr uint32_t kOpenXRRetiredSwapchainCycles = 8;
 // `quads` it filled.
 inline uint32_t OpenXRPanelQuadLayers(const OpenXRPanelLayer& panel, XrSpace space, XrSwapchain swapchain,
                                       std::array<XrCompositionLayerQuad, kOpenXRPanelMaxLayers>& quads) noexcept {
-    const auto make = [&](const XrPosef& pose, const VrMenu::Rect& rect, XrExtent2Df size) {
+    uint32_t count = 0;
+    const auto append = [&](const XrPosef& pose, const VrMenu::Rect& rect, XrExtent2Df size) {
+        screen_math::Pose normalized{{pose.position.x, pose.position.y, pose.position.z},
+                                    {pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w}};
+        if (!screen_math::NormalizePose(normalized) || !std::isfinite(size.width) ||
+            !std::isfinite(size.height) || !(size.width > 0.f) || !(size.height > 0.f)) {
+            return false;
+        }
         XrCompositionLayerQuad quad{XR_TYPE_COMPOSITION_LAYER_QUAD};
         // PrimedGun's menu image holds straight (unpremultiplied) alpha.
         quad.layerFlags =
@@ -104,18 +111,22 @@ inline uint32_t OpenXRPanelQuadLayers(const OpenXRPanelLayer& panel, XrSpace spa
         quad.subImage.swapchain = swapchain;
         quad.subImage.imageRect = {{rect.x, rect.y}, {rect.w, rect.h}};
         quad.subImage.imageArrayIndex = 0;
-        quad.pose = pose;
+        quad.pose.position = {normalized.position[0], normalized.position[1], normalized.position[2]};
+        quad.pose.orientation = {normalized.orientation[0], normalized.orientation[1],
+                                 normalized.orientation[2], normalized.orientation[3]};
         quad.size = size;
-        return quad;
+        quads[count++] = quad;
+        return true;
     };
-    uint32_t count = 0;
-    quads[count++] = make(panel.pose, {0, 0, VrMenu::kWidth, panel.image_rows},
-                          {panel.width_meters, panel.height_meters});
+    // Never let bad menu tracking tear down the whole VR session. A bad menu
+    // is omitted for this frame; a bad laser/dot is omitted independently.
+    if (!append(panel.pose, {0, 0, VrMenu::kWidth, panel.image_rows},
+                {panel.width_meters, panel.height_meters})) return 0;
     if (panel.laser) {
-        quads[count++] = make(panel.laser_pose, VrMenu::kLaserRect, {VrMenu::kLaserWidth, panel.laser_length_meters});
+        append(panel.laser_pose, VrMenu::kLaserRect, {VrMenu::kLaserWidth, panel.laser_length_meters});
     }
     if (panel.dot) {
-        quads[count++] = make(panel.dot_pose, VrMenu::kDotRect, {VrMenu::kDotSize, VrMenu::kDotSize});
+        append(panel.dot_pose, VrMenu::kDotRect, {VrMenu::kDotSize, VrMenu::kDotSize});
     }
     return count;
 }

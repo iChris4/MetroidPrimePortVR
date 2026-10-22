@@ -24,6 +24,25 @@ struct Pose {
     Quat orientation{0.0f, 0.0f, 0.0f, 1.0f};
 };
 
+// Tracking flags alone do not guarantee finite data or a unit quaternion.
+// OpenXR rejects an entire frame if any submitted layer has an invalid pose.
+inline bool NormalizePose(Pose& pose) noexcept {
+    for (float component : pose.position) {
+        if (!std::isfinite(component)) return false;
+    }
+    double length_squared = 0.0;
+    for (float component : pose.orientation) {
+        if (!std::isfinite(component)) return false;
+        length_squared += double(component) * double(component);
+    }
+    if (length_squared < 1.0e-12) return false;
+    const double inverse_length = 1.0 / std::sqrt(length_squared);
+    for (float& component : pose.orientation) {
+        component = static_cast<float>(double(component) * inverse_length);
+    }
+    return true;
+}
+
 // The pointer keeps tracking this far past the picture's centre, in half-widths
 // and half-heights, like a real remote's camera past the sensor bar.
 inline constexpr float kPointerMarginU = 1.9f;

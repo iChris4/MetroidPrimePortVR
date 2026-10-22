@@ -1022,7 +1022,7 @@ bool OpenXRInput::Locate(XrSpace space, XrTime time, screen_math::Pose& pose) co
         return false;
     }
     pose = ToPose(location.pose);
-    return true;
+    return screen_math::NormalizePose(pose);
 }
 
 // PrimedGun's menu placement (UpdateVrMenu): on the off hand's grip, or, when
