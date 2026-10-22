@@ -57,13 +57,19 @@ public:
     OpenXRBeginStatus BeginFrameForPacket(const OpenXRBackendFrame& packet, OpenXRBackendFrame& frame);
     OpenXRSubmissionStatus CopyRenderedEyes(const OpenXRBackendFrame& frame);
     OpenXRBeginStatus KeepAliveCycle();
-    // Pipelined pacing (openxr_d3d12.h): not supported yet, LocatePacket prepares the
-    // packet whole and ArmPacket is a no-op.
+    // Pipelined pacing (openxr_integration.cpp PipelinedCycle), as openxr_d3d12.h's: a packet's
+    // poses first, located `periods_ahead` display periods past the last compositor frame, its
+    // images and Aurora targets later (ArmPacket), once the pending packet's eyes were submitted.
+    // It then queues behind that packet on the other swapchain pair and becomes the pending one
+    // when that packet's compositor frame ends. PreparePacket is both at once. Supported while
+    // every eye and panel swapchain has two images or more: the queued packet's image comes from
+    // the pair on display.
     OpenXRBeginStatus LocatePacket(const OpenXRPresentation& presentation, OpenXRBackendFrame& packet,
                                    uint32_t periods_ahead);
     OpenXRBeginStatus ArmPacket(OpenXRBackendFrame& packet);
     bool SupportsPipelining() const;
-    // No pipelining here: every cycle may rebuild a pair (openxr_d3d12.h).
+    // A new render resolution still waits for one of the two eye swapchain pairs, which is only
+    // rebuilt with no packet in flight: pipelined pacing waits (vr/openxr_eye_resize.h).
     bool EyesResizing() const;
 
     // Call on the XR owner thread after Aurora's worker is idle and before aurora_shutdown().
@@ -110,13 +116,12 @@ public:
     OpenXRBeginStatus BeginFrameForPacket(const OpenXRBackendFrame& packet, OpenXRBackendFrame& frame);
     OpenXRSubmissionStatus CopyRenderedEyes(const OpenXRBackendFrame& frame);
     OpenXRBeginStatus KeepAliveCycle();
-    // Pipelined pacing (openxr_d3d12.h): not supported yet, LocatePacket prepares the
-    // packet whole and ArmPacket is a no-op.
+    // Pipelined pacing: direct presentation's (above); the AHardwareBuffer bridge runs
+    // render-first without it.
     OpenXRBeginStatus LocatePacket(const OpenXRPresentation& presentation, OpenXRBackendFrame& packet,
                                    uint32_t periods_ahead);
     OpenXRBeginStatus ArmPacket(OpenXRBackendFrame& packet);
     bool SupportsPipelining() const;
-    // No pipelining here: every cycle may rebuild a pair (openxr_d3d12.h).
     bool EyesResizing() const;
     bool Shutdown();
 

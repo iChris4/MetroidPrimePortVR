@@ -60,7 +60,8 @@ struct PortVrSettings {
     bool direct_present = true;
     // Render-first pacing with one packet of overlap: the game records the next frame
     // while Aurora encodes this one, for more throughput at one frame of latency.
-    // Only the D3D12 backend pipelines so far; the others run render-first.
+    // The D3D12 backend and the Quest's direct presentation pipeline; the others (PC Vulkan,
+    // the Quest's AHardwareBuffer bridge) run render-first.
 #if defined(__ANDROID__)
     bool pipelined_rendering = true;
 #else

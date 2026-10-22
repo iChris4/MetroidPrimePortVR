@@ -14,6 +14,8 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
+#include <condition_variable>
 #include <memory>
 #include <mutex>
 #include <vector>
@@ -276,6 +278,7 @@ public:
     m_images = count + (m_panel ? 1u : 0u);
     m_encoded = false;
     m_token = token;
+    m_targetsSet.notify_all();
     return true;
   }
 
@@ -286,6 +289,7 @@ public:
       return false;
     }
     m_token = 0;
+    m_cancelled = token;
     return true;
   }
 
@@ -310,6 +314,7 @@ public:
   void Clear() noexcept {
     std::lock_guard lock(m_mutex);
     m_token = 0;
+    m_cancelled = 0;
     m_encoded = false;
     m_active = {};
     m_activeViews = {};
@@ -317,7 +322,13 @@ public:
   }
 
   bool Encode(wgpu::CommandEncoder& encoder, const stereo::SinkFrame& frame) noexcept {
-    std::lock_guard lock(m_mutex);
+    std::unique_lock lock(m_mutex);
+    if (m_token == 0 && frame.frameToken != m_cancelled) {
+      // Pipelined pacing sets a packet's targets once the previous packet's eyes were
+      // submitted, which can be moments before its own encode reaches this point. Any
+      // targets end the wait: another packet's mean this one's were withdrawn.
+      m_targetsSet.wait_for(lock, std::chrono::milliseconds(20), [&] { return m_token != 0; });
+    }
     if (m_token == 0 || m_encoded || frame.frameToken != m_token) {
       return false;
     }
@@ -428,6 +439,8 @@ private:
   }
 
   std::mutex m_mutex;
+  // SetTargets wakes an Encode waiting for its packet's targets.
+  std::condition_variable m_targetsSet;
   std::vector<Wrap> m_wraps;
   std::array<AuroraVulkanDirectTarget, kMaxImages> m_targets{};
   std::array<wgpu::Texture, kMaxImages> m_active{};
@@ -436,6 +449,8 @@ private:
   AuroraVulkanDirectSubmittedCallback m_callback = nullptr;
   void* m_userdata = nullptr;
   uint64_t m_token = 0;
+  // The last token withdrawn before its encode: a frame already carrying it waits for nothing.
+  uint64_t m_cancelled = 0;
   uint32_t m_count = 0;
   uint32_t m_images = 0;
   uint32_t m_declines = 0;

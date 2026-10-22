@@ -1,3 +1,55 @@
+## VR: pipelined rendering on the Quest (2026-10-22)
+
+`vr_pipelined_rendering` has been on by default on Android since 5e3ebaa87,
+but it did nothing there: `PipelinedCycle` only runs on a backend whose
+`SupportsPipelining()` is true, and only the D3D12 one was. The Quest's direct
+presentation backend now implements the same contract (`openxr_d3d12.h`): the
+next packet is located and published as soon as the game picks up this one,
+so the game records frame N+1 while Aurora encodes N, for one frame of
+latency. The AHardwareBuffer bridge (Direct to headset off) and PC Vulkan
+still run render-first.
+
+Quest 3, Chozo Ruins plaza (save state slot 1, 702 draws), render scale 0.85,
+multiview, `MP_FRAME_STATS=1` in every run, 28 s of the game's VrApi lines:
+
+| Refresh | Render-first | Pipelined |
+|---|---|---|
+| 72 Hz | not measured | 72 FPS, 0 stale/s, GPU 4.8 ms |
+| 90 Hz | 74 FPS, 17 stale/s, GPU 5.8 ms | 90 FPS, 0 stale/s, GPU 5.2 ms |
+| 120 Hz | 71 FPS, 50 stale/s, GPU 5.0 ms | 120 FPS, 4 stale/s, GPU 5.1 ms |
+
+- `platform/vr/openxr_vulkan_direct.cpp`: D3D12's packet states (pending, one
+  queued behind it on the retained swapchain pair, active), two submission
+  results by token, `LocatePacket` / `ArmPacket`, and `EyesResizing`. Where it
+  differs from D3D12:
+  - Each packet carries the session run and reference-space change its poses
+    were located in (`PoseOrigin`). D3D12 still overwrites
+    `render_session_serial_` at `LocatePacket(N+1)`, before `FinishFrame(N)`
+    reads it.
+  - Retired eye pairs are reaped in `ArmPacket` behind a submitted packet, the
+    only moment of a pipelined cycle when Aurora holds no targets
+    (`aurora_vulkan_direct_forget_targets` refuses otherwise). D3D12 never
+    reaps while pipelined.
+  - `SupportsPipelining` needs two images or more per swapchain: a queued
+    packet's image comes from the pair on display.
+  - A session that stops with a packet queued waits up to 100 ms for that
+    packet's submission when it cannot be cancelled, instead of abandoning its
+    images, which would also keep that pair from ever being resized.
+- `extern/aurora/lib/webgpu/vulkan_direct_interop.cpp`: `Encode` waits up to
+  20 ms for its packet's targets, as the D3D12 bridge does, since `ArmPacket`
+  runs right after the previous packet's submission. A cancelled token skips
+  the wait.
+
+Checked on the Quest 3 at the desk (proximity automated): the log reads
+`OpenXR Vulkan pacing: render-first, pipelined`; three save-state reloads at
+90 Hz, the virtual screen and immersive switches around them, and a console
+`quit` (the session stops with packets in flight, then Shutdown) ran with no
+skipped eye copy, no unarmed packet, no fault, and flat memory. The desk could
+not reach a render scale change from the VR menu while pipelined (the resize
+and retire path), the VR menu's panel, or taking the headset off (`prox_far`
+does not stop the session); the user then played the build in the headset
+before the commit.
+
 ## VR: an empty multiview eye pass faults the Quest 3's GPU (2026-10-19)
 
 beta.1 (upstream port 0.30.0) crashed on the Quest 3 with Multiview eyes on: a
