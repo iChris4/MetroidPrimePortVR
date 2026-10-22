@@ -696,8 +696,8 @@ listener heading) about three times a second, and `MP_MUTE_SMP=65535,93` silence
 voices by sample id so a persistent one can be identified by ear. Streamed
 voices report sample id 65535. `MP_LOG_3D=1` logs any 3D emitter whose Doppler
 factor is not 1. The overlay's Debug > Audio > **Sounds playing** list shows the live voices (loudest
-first) with a per-sample mute checkbox and an "Unmute all" button; the muted ids
-are saved to `voices_muted` in the settings file.
+first) with a per-sample mute checkbox and an "Unmute all" button, which also
+turns both audio paths back on. Mutes are not saved: a relaunch has full sound.
 
 A main-loop iteration that takes longer than 250 ms logs `MP stall: frame N took
 … ms (events, input, tick, draw)`, at most one line every two seconds, and a run

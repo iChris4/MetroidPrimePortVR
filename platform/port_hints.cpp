@@ -103,6 +103,15 @@ bool PickupScan(uint32_t world, uint32_t area, uint32_t entity, int itemType, bo
   return true;
 }
 
+void ScanCompleted(uint32_t strgId) {
+  for (int i = 0; i < 12; ++i) {
+    if (kTotemStrings[i] == strgId) {
+      PortAp::ArtifactScanned(Prime::kArtifactTruth + i);
+      return;
+    }
+  }
+}
+
 bool IsWatched(uint32_t strgId) {
   if (IsTotem(strgId))
     return true;

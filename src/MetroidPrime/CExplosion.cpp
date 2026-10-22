@@ -94,74 +94,22 @@ void CExplosion::Think(float dt, CStateManager& mgr) {
 
   if (xf8_time > 15.f) {
 #ifdef TARGET_PC
-    PortDeleteNestedLights(mgr);
+    xPortNestedLights.Delete(mgr, GetUniqueId());
 #endif
     mgr.DeleteObjectRequest(GetUniqueId());
   } else if (xe8_particleGen->IsSystemDeletable()) {
 #ifdef TARGET_PC
-    PortDeleteNestedLights(mgr);
+    xPortNestedLights.Delete(mgr, GetUniqueId());
 #endif
     mgr.DeleteObjectRequest(GetUniqueId());
   }
 }
 
 #ifdef TARGET_PC
-void CExplosion::PortDeleteNestedLights(CStateManager& mgr) {
-  for (const PortNestedLightProxy& proxy : xPortNestedLights) {
-    mgr.SendScriptMsgAlways(proxy.light, GetUniqueId(), kSM_Deactivate);
-    mgr.DeleteObjectRequest(proxy.light);
-  }
-  xPortNestedLights.clear();
-}
-
 void CExplosion::PortUpdateNestedLights(CStateManager& mgr) {
-  CElementGen* root = xe8_particleGen->Get4CharId() == 'PART'
-                          ? static_cast< CElementGen* >(xe8_particleGen.get())
-                          : nullptr;
-  if (!GetActive() || root == nullptr) {
-    PortDeleteNestedLights(mgr);
-    return;
-  }
-
-  std::vector< CElementGen::CPortNestedLightSnapshot > snapshots;
-  root->PortCollectNestedLightSnapshots(snapshots);
-  for (size_t i = 0; i < xPortNestedLights.size();) {
-    const bool present = CElementGen::PortHasNestedLightSnapshotFor(
-        snapshots, xPortNestedLights[i].generator);
-    if (!present || mgr.ObjectById(xPortNestedLights[i].light) == nullptr) {
-      const TUniqueId lightId = xPortNestedLights[i].light;
-      mgr.SendScriptMsgAlways(lightId, GetUniqueId(), kSM_Deactivate);
-      mgr.DeleteObjectRequest(lightId);
-      xPortNestedLights.erase(xPortNestedLights.begin() + i);
-    } else {
-      ++i;
-    }
-  }
-
-  for (const CElementGen::CPortNestedLightSnapshot& snapshot : snapshots) {
-    PortNestedLightProxy* proxy = nullptr;
-    for (PortNestedLightProxy& candidate : xPortNestedLights) {
-      if (candidate.generator == snapshot.generator) {
-        proxy = &candidate;
-        break;
-      }
-    }
-    const CTransform4f transform = CTransform4f::Translate(snapshot.origin);
-    if (proxy == nullptr) {
-      const TUniqueId lightId = mgr.AllocateUniqueId();
-      const uint lightSource = PortNestedLightSourceId(GetSourceId());
-      mgr.AddObject(rs_new CGameLight(
-          lightId, GetCurrentAreaId(), GetActive(), rstl::string_l("ExplodePHDR_") + GetDebugName(),
-          transform, GetUniqueId(), snapshot.light, lightSource, 1, 0.f));
-      xPortNestedLights.push_back({snapshot.generator, lightId});
-    } else {
-      CGameLight* light = TCastToPtr< CGameLight >(mgr.ObjectById(proxy->light));
-      if (light != nullptr) {
-        light->SetTransform(transform);
-        light->SetLight(snapshot.light);
-      }
-    }
-  }
+  xPortNestedLights.Update(mgr, xe8_particleGen.get(), GetActive(), GetUniqueId(),
+                           GetCurrentAreaId(), rstl::string_l("ExplodePHDR_") + GetDebugName(),
+                           PortNestedLightSourceId(GetSourceId()), 1);
 }
 #endif
 
@@ -169,16 +117,7 @@ ENTITY_ACCEPT_IMPL(CExplosion)
 
 void CExplosion::AcceptScriptMsg(EScriptObjectMessage msg, TUniqueId sender, CStateManager& mgr) {
 #ifdef TARGET_PC
-  if (msg == kSM_Deleted || msg == kSM_Deactivate || msg == kSM_Activate) {
-    for (const PortNestedLightProxy& proxy : xPortNestedLights) {
-      mgr.SendScriptMsgAlways(proxy.light, sender, msg);
-    }
-    PortDeleteNestedLights(mgr);
-  } else {
-    for (const PortNestedLightProxy& proxy : xPortNestedLights) {
-      mgr.SendScriptMsgAlways(proxy.light, sender, msg);
-    }
-  }
+  xPortNestedLights.Forward(msg, sender, GetUniqueId(), mgr);
 #endif
   switch (msg) {
   case kSM_Registered:

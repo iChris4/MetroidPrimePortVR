@@ -6,6 +6,9 @@
 
 #include "Kyoto/Math/CVector3f.hpp"
 #include "Kyoto/Particles/IElement.hpp"
+#ifdef TARGET_PC
+#include "Kyoto/Particles/PortParticleMath.hpp"
+#endif
 
 #include "rstl/single_ptr.hpp"
 
@@ -281,6 +284,100 @@ private:
   CRealElement* mMagnitude;
 };
 
+// Remastered MPAC (0x29fec0): the angle cone of a centre and a spread per axis, five reals
+// (x centre, y centre, x range, y range, magnitude), drawing u for x and v for y.
+class CVEPortMpac : public CVectorElement {
+public:
+  CVEPortMpac(CRealElement* xCentre, CRealElement* yCentre, CRealElement* xRange, CRealElement* yRange,
+              CRealElement* magnitude);
+  ~CVEPortMpac() override;
+
+  bool GetValue(int frame, CVector3f& valOut) const override;
+
+private:
+  CRealElement* mXCentre;
+  CRealElement* mYCentre;
+  CRealElement* mXRange;
+  CRealElement* mYRange;
+  CRealElement* mMagnitude;
+};
+
+// Remastered MPCN (MPT_CVECone::GetValue 0x29eca0): a point of the disc of the given radius
+// (at most 1) around the position, in the plane perpendicular to the direction, whose frame is
+// cached on the first call at frame 0 (zero until then).
+class CVEPortCone : public CVectorElement {
+public:
+  CVEPortCone(CVectorElement* direction, CRealElement* radius);
+  ~CVEPortCone() override;
+
+  bool GetValue(int frame, CVector3f& valOut) const override;
+
+private:
+  CVectorElement* mDirection;
+  CRealElement* mRadius;
+  mutable bool mCached = false;
+  mutable CVector3f mU;
+  mutable CVector3f mV;
+};
+
+// Remastered ANCM (CVEAngleConeMinMax::GetValue 0x29f304) with its REUL rotation (axis order 0)
+// given as the three angles: a direction between two cone angles in Remastered's space.
+class CVEPortAngleConeMinMax : public CVectorElement {
+public:
+  CVEPortAngleConeMinMax(CRealElement* rotateX, CRealElement* rotateY, CRealElement* rotateZ, CRealElement* minAngle,
+                         CRealElement* maxAngle, CRealElement* magnitude);
+  ~CVEPortAngleConeMinMax() override;
+
+  bool GetValue(int frame, CVector3f& valOut) const override;
+
+private:
+  CRealElement* mRotate[3];
+  CRealElement* mMinAngle;
+  CRealElement* mMaxAngle;
+  CRealElement* mMagnitude;
+};
+
+// Remastered CRCV (CVECircleWithVariance::GetValue 0x2a0a7c), in Remastered's numbers: a point of
+// the circle around the centre in the plane of the axis (constant, read at frame 0), the ring
+// divided into n steps visited in creation order or, with a shuffler of n cells, a random one.
+class CVEPortCircle : public CVectorElement {
+public:
+  CVEPortCircle(CVectorElement* centre, CVectorElement* axis, CRealElement* startDegrees, CIntElement* count,
+                CRealElement* variance, CRealElement* radius, u8 shuffle);
+  ~CVEPortCircle() override;
+
+  bool GetValue(int frame, CVector3f& valOut) const override;
+
+private:
+  CVectorElement* mCentre;
+  CVectorElement* mAxis;
+  CRealElement* mStartDegrees;
+  CIntElement* mCount;
+  CRealElement* mVariance;
+  CRealElement* mRadius;
+  u8 mShuffle; // the size of Remastered's index shuffler, 0 for none
+  mutable PortParticleMath::IndexShuffler mFallbackShuffler;
+};
+
+// Remastered LINV (CVELineWithVariance::GetValue 0x2a119c), in Remastered's numbers: a point of the
+// segment start..end divided into n steps, visited in creation order or, with a shuffler of n cells, a
+// random one, jittered by one draw. A segment shorter than 1e-5 gives the start and takes no draw.
+class CVEPortLine : public CVectorElement {
+public:
+  CVEPortLine(CVectorElement* start, CVectorElement* end, CIntElement* count, CRealElement* variance, u8 shuffle);
+  ~CVEPortLine() override;
+
+  bool GetValue(int frame, CVector3f& valOut) const override;
+
+private:
+  CVectorElement* mStart;
+  CVectorElement* mEnd;
+  CIntElement* mCount;
+  CRealElement* mVariance;
+  u8 mShuffle; // the size of Remastered's index shuffler, 0 for none
+  mutable PortParticleMath::IndexShuffler mFallbackShuffler;
+};
+
 // Remastered NORM (CVENormalizeVector::GetValue 0x29e620): the child scaled to unit length,
 // unchanged when its length is at most 2^-23.
 class CVEPortNormalize : public CVectorElement {
@@ -327,10 +424,17 @@ private:
   CVectorElement* mFallback;
 };
 
+// Port-only PEMV: Remastered's EMRV, the generator's per-tick change of its translation over its
+// scale (CElementGen::PortStepPemv), in the port's axes. Zero outside a generator.
+class CVEPortEmitterVelocity : public CVectorElement {
+public:
+  bool GetValue(int frame, CVector3f& valOut) const override;
+};
+
 // Remastered system vectors of the generator being evaluated: CMPS (the camera position in world
 // space, CVECameraPositionInWorldSpace 0x2a23ec), CPSS (the camera position in the system's global
 // frame, CVECameraPositionInSystemSpace 0x2a24fc), EXTT and EXTS (the external translation and
-// scale, CVEExternalValue 0x2a2774). Zero outside a generator evaluation (swooshes).
+// scale, CVEExternalValue 0x2a2774), and CMRT (the camera's rotation as EXTR's Euler vector). Zero outside a generator evaluation (swooshes).
 class CVEPortSystemVector : public CVectorElement {
 public:
   explicit CVEPortSystemVector(FourCC kind) : mKind(kind) {}
@@ -339,6 +443,31 @@ public:
 
 private:
   FourCC mKind;
+};
+
+// Port-only PRTV: Remastered's ROTV (CVERotateVector::GetValue 0x2a0328) outside a component
+// tree: the rotation first, then the vector, then CQuaternion::Transform, all in Remastered's
+// particle space. The rotation is EXTR (the system orientation), CMRT (the camera's rotation,
+// CERotationFromCamera 0x29d180) or REUL(x, y, z) in degrees, order 0.
+class CVEPortRotateVector : public CVectorElement {
+public:
+  CVEPortRotateVector(CVectorElement* vector, FourCC rotation, CRealElement* x, CRealElement* y,
+                      CRealElement* z);
+  ~CVEPortRotateVector() override;
+
+  bool GetValue(int frame, CVector3f& valOut) const override;
+
+private:
+  CVectorElement* mVector;
+  FourCC mRotation;
+  CRealElement* mAngles[3];
+};
+
+// Port-only PNCV: Remastered's PNCV (0x2a2800), the particle's velocity normalised by one
+// refined FRSQRTE step (PortParticleMath::NormalizedVelocity), in Remastered's particle space.
+class CVEPortNormalizedVelocity : public CVectorElement {
+public:
+  bool GetValue(int frame, CVector3f& valOut) const override;
 };
 #endif
 #endif // _CVECTORELEMENT

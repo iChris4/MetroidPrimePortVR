@@ -1,0 +1,72 @@
+name: windows-msvc
+
+# Plain MSVC (cl.exe), which a Windows contributor building from Visual Studio
+# gets by default (issue #170). The supported Windows compiler is clang-cl
+# (windows.yml); this job only finds what cl.exe rejects. It keeps going past
+# errors so one run lists them all (errors.txt in the artifact), and fails if
+# there are any. No tests, no package. A manual start needs the workflow on the
+# default branch, which is not port, so it also runs on a push to ci-msvc:
+# `git push -f user port:ci-msvc`.
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - ci-msvc
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+        with:
+          arch: x64
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            build-msvc/_deps/*-src
+            build-msvc/_deps/*-subbuild
+          key: deps-windows-msvc-${{ hashFiles('CMakeLists.txt', 'extern/aurora/**/CMakeLists.txt', 'extern/aurora/**/*.cmake') }}
+
+      - name: Configure
+        run: >
+          cmake -S . -B build-msvc -G Ninja
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DCMAKE_C_COMPILER=cl
+          -DCMAKE_CXX_COMPILER=cl
+          -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON
+          -DAURORA_ENABLE_TESTS=OFF
+          -DMP_BUILD_TESTS=OFF
+          -DBUILD_SHARED_LIBS=OFF
+          -DAURORA_SDL3_PROVIDER=vendor
+          -DAURORA_SDL3_LINKAGE=static
+          -DAURORA_NOD_LINKAGE=static
+          -DOPENSSL_USE_STATIC_LIBS=TRUE
+
+      # -k 0: build every target that can be built, so the log has every error.
+      - name: Build
+        shell: pwsh
+        run: |
+          cmake --build build-msvc -- -k 0 2>&1 | Tee-Object -FilePath build.log
+          $code = $LASTEXITCODE
+          # With no errors the pipeline is empty and Set-Content writes no
+          # file, so collect into an array and always write errors.txt.
+          $errors = @(Select-String -Path build.log -Pattern ': (fatal )?error [A-Z]+[0-9]+' |
+            ForEach-Object { $_.Line.Trim() } | Sort-Object -Unique)
+          [IO.File]::WriteAllLines("$PWD/errors.txt", [string[]]$errors)
+          $count = $errors.Count
+          "$count distinct errors" | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          if ($code -ne 0) { exit $code }
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: windows-msvc-log
+          path: |
+            build.log
+            errors.txt

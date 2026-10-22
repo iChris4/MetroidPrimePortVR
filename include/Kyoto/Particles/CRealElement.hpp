@@ -204,6 +204,15 @@ public:
   bool GetValue(int frame, float& valOut) const override;
 };
 
+#ifdef TARGET_PC
+// port-only: Remastered's PAP9, the ninth real variable (ADV9).
+class CREParticleAccessParameter9 : public CRealElement {
+public:
+  ~CREParticleAccessParameter9() override {}
+  bool GetValue(int frame, float& valOut) const override;
+};
+#endif
+
 class CREParticleSizeOrLineLength : public CRealElement {
 public:
   ~CREParticleSizeOrLineLength() override {}
@@ -253,6 +262,18 @@ class CREPortDivide : public CRealElement {
 public:
   CREPortDivide(CRealElement* a, CRealElement* b);
   ~CREPortDivide() override;
+  bool GetValue(int frame, float& valOut) const override;
+};
+
+// Port-only T2S_ (CRETicksToSeconds::GetValue 0x299910): (float)(1/60 * (double)n) for the int
+// child n, the double product narrowed once (not n / 60.f).
+class CIntElement;
+class CREPortTicksToSeconds : public CRealElement {
+  CIntElement* x4_a;
+
+public:
+  explicit CREPortTicksToSeconds(CIntElement* a);
+  ~CREPortTicksToSeconds() override;
   bool GetValue(int frame, float& valOut) const override;
 };
 #endif

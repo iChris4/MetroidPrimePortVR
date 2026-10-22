@@ -38,6 +38,7 @@
 #include "port_importers.h"
 #include "port_remastered_import.h"
 #include "port_gci.h"
+#include "port_storage_report.h"
 #include "port_gpu_driver.h"
 
 #include <SDL3/SDL_dialog.h>
@@ -1492,6 +1493,8 @@ int main(int argc, char** argv) {
                            PortGci::PathString(user / "primedgun" / "pending_import").c_str());
         }
     }
+    PortRemastered::RemoveLegacyImport();
+    PortStorageReport::StartLogging();
     PortMods::Initialize();
     // Video-relevant settings in one line, so GPU-driver triage (issues #7,
     // #8) needs nothing but the log.

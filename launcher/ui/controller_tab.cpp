@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// PrimedGun's Controller tab (DolphinQt/MainWindow.cpp ConnectStack): the
-// control scheme's behaviour; the bindings themselves are fixed, as in
-// PrimedGun (platform/vr/vr_pad.cpp).
+// Controller bindings are configured in Customize controller layout.
+// This tab retains handedness, feedback, gesture tuning and movement behaviour.
 
 #include "tabs.h"
 
@@ -16,25 +15,27 @@
 #include <QVBoxLayout>
 
 namespace PrimedGunLauncher {
+void ShowControllerLayout(TabContext& ctx);
 
 void BuildControllerTab(TabContext& ctx, QTabWidget* tabs) {
   QVBoxLayout* layout = ctx.MakeScrollTab(tabs, QObject::tr("Controller"));
+  auto* customize = new QPushButton(QObject::tr("Customize controller layout"));
+  layout->addWidget(customize);
+  QObject::connect(customize, &QPushButton::clicked, customize, [&ctx] { ShowControllerLayout(ctx); });
+  ctx.Check(layout, QObject::tr("Use custom controller layout"), "vr_custom_layout_enabled",
+            QObject::tr("Overrides standard VR bindings and other input remaps. Configure the layout with the button above."));
   layout->addWidget(ctx.Section(QObject::tr("Controller Mapping")));
   auto* resetController = new QPushButton(QObject::tr("Reset Controller"));
   layout->addWidget(resetController);
   ctx.RadioPair(layout, QObject::tr("Right hand"), QObject::tr("Left hand"), "vr_use_right_hand",
                 true);
-  ctx.Check(layout, QObject::tr("Longer held press for VR menu"), "vr_vr_menu_hold_left_stick");
-  ctx.Check(layout, QObject::tr("VR menu requires controller near head to activate"),
-            "vr_vr_menu_requires_head_zone");
-  ctx.Check(layout, QObject::tr("Use A button for jump"), "vr_combat_jump_use_primary_button");
   ctx.Check(layout, QObject::tr("Beam wheel lights the HUD beam box"),
             "vr_beam_wheel_hud_highlight",
-            QObject::tr("While B holds the beam wheel open, the beam the cannon points at has its "
+            QObject::tr("While the beam selector is held, the beam the cannon points at has its "
                         "box on the HUD lit."));
 
   ctx.Separator(layout);
-  layout->addWidget(ctx.Section(QObject::tr("Rumble / Grip Inputs")));
+  layout->addWidget(ctx.Section(QObject::tr("Rumble")));
   ctx.Check(layout, QObject::tr("Rumble"), "vr_rumble_enabled");
   ctx.Combo(layout, QObject::tr("Rumble target"), "vr_rumble_hand",
             {{QObject::tr("Split (cannon on gun hand)"), QStringLiteral("split")},
@@ -47,16 +48,12 @@ void BuildControllerTab(TabContext& ctx, QTabWidget* tabs) {
   rumbleNote->setWordWrap(true);
   rumbleNote->setObjectName(QStringLiteral("PrimedGunMuted"));
   layout->addWidget(rumbleNote);
-  ctx.Check(layout, QObject::tr("Use grip input"), "vr_grip_inputs_enabled");
-  ctx.Check(layout, QObject::tr("Use touchpad for PrimedGun grip inputs (Index users)"),
-            "vr_grip_inputs_use_trackpad",
-            QObject::tr("Use Index touchpad pressure for map and missiles. When off, squeeze the "
-                        "grips. Other controller types use their normal grips."));
   ctx.Float(layout, QObject::tr("Rumble intensity"), "vr_rumble_intensity");
 
   ctx.Separator(layout);
-  layout->addWidget(ctx.Section(QObject::tr("D-pad")));
-  ctx.Check(layout, QObject::tr("Enable visor gesture input"), "vr_xr_dpad_enabled");
+  layout->addWidget(ctx.Section(QObject::tr("Visor selection")));
+  ctx.Check(layout, QObject::tr("Off-hand visor wristband"), "vr_wrist_visor_enabled",
+            QObject::tr("Move the main controller near a visor icon on your off-hand wrist and press A or right trigger in right-hand mode, or X or left trigger in left-hand mode."));
   ctx.Float(layout, QObject::tr("Head radius"), "vr_xr_dpad_head_radius");
   ctx.Float(layout, QObject::tr("Below head"), "vr_xr_dpad_head_y_below");
   ctx.Float(layout, QObject::tr("Stick deadzone"), "vr_xr_dpad_deadzone");
@@ -64,8 +61,6 @@ void BuildControllerTab(TabContext& ctx, QTabWidget* tabs) {
   ctx.Separator(layout);
   layout->addWidget(ctx.Section(QObject::tr("Directional Movement")));
   ctx.Check(layout, QObject::tr("Left stick strafe movement"), "vr_directional_movement_enabled");
-  ctx.RadioPair(layout, QObject::tr("Left stick"), QObject::tr("Right stick"),
-                "vr_directional_movement_use_right_stick", false);
   ctx.RadioPair(layout, QObject::tr("Controller direction"), QObject::tr("HMD direction"),
                 "vr_directional_movement_use_hmd_direction", false);
   ctx.Float(layout, QObject::tr("Movement deadzone"), "vr_directional_movement_deadzone");
@@ -83,6 +78,25 @@ void BuildControllerTab(TabContext& ctx, QTabWidget* tabs) {
   layout->addStretch();
 
   QObject::connect(resetController, &QPushButton::clicked, resetController, [&ctx] {
+    ctx.model.ResetToDefault("vr_wrist_visor_enabled");
+    ctx.model.ResetToDefault("vr_wrist_offset_x");
+    ctx.model.ResetToDefault("vr_wrist_offset_y");
+    ctx.model.ResetToDefault("vr_wrist_offset_z");
+    ctx.model.ResetToDefault("vr_wrist_pitch");
+    ctx.model.ResetToDefault("vr_wrist_yaw");
+    ctx.model.ResetToDefault("vr_wrist_roll");
+
+    ctx.model.ResetToDefault("vr_custom_layout_enabled");
+    ctx.model.ResetToDefault("vr_custom_trigger_threshold");
+    ctx.model.ResetToDefault("vr_custom_grip_threshold");
+    ctx.model.ResetToDefault("vr_custom_touchpad_threshold");
+    ctx.model.ResetToDefault("vr_custom_stick_threshold");
+    ctx.model.ResetToDefault("vr_custom_label_profile");
+    ctx.model.ResetToDefault("vr_custom_move_hand"); ctx.model.ResetToDefault("vr_custom_look_hand");
+    ctx.model.ResetToDefault("vr_custom_visor_hand"); ctx.model.ResetToDefault("vr_custom_visor_mode");
+#define VR_BIND(name, initial, group, label) ctx.model.ResetToDefault("vr_custom_" #name);
+#include "vr/vr_controller_bindings.inc"
+#undef VR_BIND
     // PrimedGun's Reset Controller: every one of these back to its default.
     for (const char* key :
          {"vr_use_right_hand", "vr_vr_overlays_enabled", "vr_vr_menu_hold_left_stick",

@@ -88,16 +88,24 @@ CAABox CParticleElectric2Port::Bounds() const {
   return CAABox(CVector3f(lo.x - rad, lo.y - rad, lo.z - rad), CVector3f(hi.x + rad, hi.y + rad, hi.z + rad));
 }
 
-void CParticleElectric2Port::UpdateBolt(Bolt& bolt, int frame) {
+void CParticleElectric2Port::UpdateBolt(Bolt& bolt, int systemFrame) {
   // UpdateBolt 0xb77638: radii (LLRD copies LRAD to RRAD), colour, material point values.
+  // The material point values (desc+0x140) are the bolt's own: they are evaluated once before the
+  // node loop. RADS/LRAD/RRAD (desc+0x138/0x128/0x130) and COLR (desc+0x148) are inside it, so the
+  // original evaluates them once per node, with the context time (ctx+0x68) and life (ctx+0x6c,
+  // ctx+0x70 = end - start) of the bolt and the node's own tween (ctx+0x80, i = node) alongside.
+  // The port keeps one pair of radii and one colour per bolt, from a single evaluation per element
+  // at the bolt's age (this[0x2c] - start) and lifetime, which is exact for the shipped data whose
+  // elements read only the bolt's context (a slot-2 read or a per-node RAND would differ).
+  // CreateNewParticles 0xb76508 calls it right after the bolt starts, so the age is 0 there.
+  const int frame = systemFrame - bolt.startFrame;
   const float rads = RealOr(mDesc->xPortRADS, frame, 1.f);
   const float lrad = RealOr(mDesc->xPortLRAD, frame, 0.1f);
-  float rrad = RealOr(mDesc->xPortRRAD, frame, 0.1f);
-  if (mDesc->xPortLLRD) {
-    rrad = lrad;
-  }
-  bolt.leftRad = rads * lrad;
-  bolt.rightRad = rads * rrad;
+  const float rrad = RealOr(mDesc->xPortRRAD, frame, 0.1f);
+  const PortElectric2::BoltRadii radii = PortElectric2::ComputeBoltRadii(rads, lrad, rrad, mDesc->xPortLLRD);
+  bolt.leftRad = radii.left;
+  bolt.rightRad = radii.right;
+
   float color[4] = {1.f, 1.f, 1.f, 1.f};
   if (mDesc->x14_COLR != nullptr) {
     mDesc->x14_COLR->GetValueHdr(frame, color);

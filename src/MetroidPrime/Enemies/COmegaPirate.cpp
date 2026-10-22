@@ -108,7 +108,11 @@ COmegaPirate::COmegaPirate(TUniqueId uid, const rstl::string& name, const CEntit
 , xb6e_armorPieceActivated(false)
 , xb70_thermalSpot(gpSimplePool->GetObj("Thermal_Spot_2"))
 , xb78_codeTrigger(false)
-, xb79_bossPhaseActive(0) {
+, xb79_bossPhaseActive(0)
+#ifdef TARGET_PC
+, mPortResetInDetach(false)
+#endif
+{
   x9a4_scriptWaypointPlatforms.reserve(3);
   x9b8_scriptEffects.reserve(24);
   x9dc_scriptPlatforms.reserve(4);
@@ -1081,6 +1085,12 @@ void COmegaPirate::WallDetach(CStateManager& mgr, EStateMsg msg, float) {
     case kState_One:
       break;
     case kState_Two:
+#ifdef TARGET_PC
+      if (mPortResetInDetach) {
+        mPortResetInDetach = false;
+        AcceptScriptMsg(kSM_Reset, kInvalidUniqueId, mgr);
+      }
+#endif
       if (x450_bodyController->GetCurrentStateId() != pas::kAS_Step) {
         x568_state = kState_Over;
       }
@@ -1093,6 +1103,27 @@ void COmegaPirate::WallDetach(CStateManager& mgr, EStateMsg msg, float) {
     break;
   }
 }
+
+#ifdef TARGET_PC
+// After a save-state load has replayed the script messages the pirate was sent and set its
+// saved health (port_savestate_room.cpp).
+// - The replay delivers SetToMax and Reset at once, before the state machine has started.
+//   The room sends Reset while WallDetach steps off the wall, where it ends the step
+//   (NextState) and sets the code trigger; WallHang tests CodeTrigger ahead of HearPlayer,
+//   so a replayed Reset skipped WallDetach (no boss parameters, no xb79 phase flag, no step
+//   off the wall). Its handling waits for the step now.
+// - Think copies the health of the heart collision actor over the pirate's every frame, and
+//   the heart was made from the pirate's spawn health, so the saved health is copied to it.
+void COmegaPirate::PortRestoredFromSave(CStateManager& mgr) {
+  if (xb78_codeTrigger && xa3c_hearPlayer && !xb79_bossPhaseActive) {
+    xb78_codeTrigger = false;
+    mPortResetInDetach = true;
+  }
+  if (CActor* heart = TCastToPtr< CActor >(mgr.ObjectById(xa46_))) {
+    *heart->HealthInfo(mgr) = *HealthInfo(mgr);
+  }
+}
+#endif
 
 void COmegaPirate::UpdateTeleportEffect(CStateManager& mgr, float dt) {
   CVector3f scale = GetModelData()->GetScale();

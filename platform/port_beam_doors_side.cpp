@@ -75,6 +75,27 @@ bool WriteSide(const fs::path& path, uint64_t fingerprint, const uint32_t* bits)
   return true;
 }
 
+// Reads and decodes one side file for the fingerprint; warn tells a problem
+// with it (once), as the file of the current key is expected to be good.
+bool ReadSide(const fs::path& path, uint64_t fingerprint, uint32_t* decoded, bool warn) {
+  std::ifstream in(path, std::ios::binary);
+  if (!in) {
+    if (warn)
+      WarnOnce("couldn't open the unlock file", path);
+    return false;
+  }
+  // One byte past the longest valid file, so a longer one is rejected unread.
+  std::vector< uint8_t > bytes(kSideMaxBytes + 1);
+  in.read(reinterpret_cast< char* >(bytes.data()), static_cast< std::streamsize >(bytes.size()));
+  bytes.resize(static_cast< size_t >(in.gcount()));
+  if (!Decode(bytes.data(), bytes.size(), fingerprint, decoded)) {
+    if (warn)
+      WarnOnce("the unlock file is damaged, of another version, or belongs to another save", path);
+    return false;
+  }
+  return true;
+}
+
 } // namespace
 
 std::string SidePath(const std::string& userFolder, const std::string& identity, int slot) {
@@ -133,23 +154,28 @@ bool Apply(int slot, const uint8_t* slotBytes, size_t size, uint32_t* bits) {
   const fs::path path = SidePath(userFolder, identity, slot);
   if (path.empty())
     return false;
-  std::error_code ec;
-  if (!fs::exists(path, ec))
-    return false;
-  std::ifstream in(path, std::ios::binary);
-  if (!in) {
-    WarnOnce("couldn't open the unlock file", path);
-    return false;
-  }
-  // One byte past the longest valid file, so a longer one is rejected unread.
-  std::vector< uint8_t > bytes(kSideMaxBytes + 1);
-  in.read(reinterpret_cast< char* >(bytes.data()), static_cast< std::streamsize >(bytes.size()));
-  bytes.resize(static_cast< size_t >(in.gcount()));
+  const uint64_t fingerprint = PortMapSide::Fingerprint(slotBytes, size);
   uint32_t decoded[kWords] = {};
-  if (!Decode(bytes.data(), bytes.size(), PortMapSide::Fingerprint(slotBytes, size), decoded)) {
-    WarnOnce("the unlock file is damaged, of another version, or belongs to another save", path);
-    return false;
+  std::error_code ec;
+  bool found = false;
+  if (fs::exists(path, ec)) {
+    found = ReadSide(path, fingerprint, decoded, true);
   }
+  if (!found) {
+    // The user folder may have moved, which changes the card key: take a file of
+    // this slot left under another key when it is for these slot bytes.
+    const std::string suffix = "-slot" + std::to_string(slot) + ".bin";
+    for (const fs::path& other : PortMapSide::KeyedFiles(path.parent_path(), "beam-doors-", suffix, path)) {
+      if (ReadSide(other, fingerprint, decoded, false)) {
+        PortLog::Write("beam doors: slot %d takes its unlocks from %s (another card path)\n", slot,
+                       PortMapSide::PathToUtf8(other).c_str());
+        found = true;
+        break;
+      }
+    }
+  }
+  if (!found)
+    return false;
   for (int i = 0; i < kWords; ++i)
     bits[i] = decoded[i];
   return true;

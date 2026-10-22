@@ -162,6 +162,15 @@ const Location* FindMemo(uint32_t world, uint32_t area, uint32_t entity) {
   return nullptr;
 }
 
+const Location* FindAudio(uint32_t world, uint32_t area, uint32_t entity) {
+  entity &= kEntityMask;
+  for (const Location& location : kLocations) {
+    if (location.world == world && location.area == area && location.audio == entity)
+      return &location;
+  }
+  return nullptr;
+}
+
 const Location* FindLocation(int64_t id) {
   for (const Location& location : kLocations) {
     if (location.id == id)
@@ -291,6 +300,42 @@ int OtherGameModelKey(int64_t flags) {
   if ((flags & 2) != 0)
     return kModelOtherUseful;
   return kModelOtherGame;
+}
+
+const char* JingleFile(int64_t itemId, bool sameGame) {
+  constexpr const char* kShort = "/audio/itm_x_short_02.dsp";
+  constexpr const char* kItem = "audio/jin_itemattain.dsp";
+  constexpr const char* kArtifact = "audio/jin_artifact.dsp";
+  // Another game's item is the AP world's "Nothing" pickup: the short jingle.
+  if (!sameGame)
+    return kShort;
+  const int64_t local = itemId - kItemBase;
+  if (local >= kArtifactTruth && local <= kArtifactNewborn)
+    return kArtifact;
+  switch (local) {
+  case 0:  // Power Beam
+  case kMissileExpansion:
+  case kPowerBombExpansion:
+  case 20: // Power Suit
+  case kEnergyTank:
+  case 25: // UnknownItem1
+  case 26: // HealthRefill
+  case 27: // UnknownItem2
+  case kUnlimitedMissiles:
+  case kUnlimitedPowerBombs:
+  case 46: // Nothing
+    return kShort;
+  default:
+    // The launchers, Spring Ball, the progressive items and every other
+    // upgrade.
+    return kItem;
+  }
+}
+
+const char* JingleForItemType(int itemType) {
+  if (itemType < 0 || itemType > kArtifactNewborn)
+    return nullptr;
+  return JingleFile(kItemBase + itemType, true);
 }
 
 bool IsAmmoItem(int64_t itemId, bool& missiles) {

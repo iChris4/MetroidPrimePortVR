@@ -83,6 +83,9 @@ int sVolFog = -1;
 bool sFogRegions = true;
 bool sPlayerFluid = false;
 bool sCameraWater = false;
+std::vector<WorldVolume> sWorldVolumes;
+WorldVolumeState sWorldVolumeState;
+float sCameraPoint[3] = {};
 // LUTs handed to Aurora already; they are kept there for the run.
 std::unordered_set<uint32_t> sGradeLuts;
 // Model draws come in runs at one position; the last answer is kept until the frame or a
@@ -864,6 +867,18 @@ float GlowGain(bool frameExposed) {
   return std::isfinite(gain) && gain > 0.f ? gain : kFallback;
 }
 
+float ParticleLightGain(bool inverseExposed) {
+  // MP_PARTICLE_LIGHT_SCALE multiplies it (debug).
+  static const float sScale = std::max(port::EnvFloat("MP_PARTICLE_LIGHT_SCALE", 1.f), 0.f);
+  const float invPi = sScale / 3.14159265f;
+  const float exposure = Enabled() && RoomExposed() ? sFrame.exposure : 0.f;
+  if (!(exposure > 0.f) || !std::isfinite(exposure)) {
+    return invPi;
+  }
+  // GlowScale is E / E_static, or 1 where the static exposure is off (the frame's stands in).
+  return (inverseExposed ? GlowScale() : exposure) * LightGain() * invPi;
+}
+
 float UnlitGain(bool frameExposed) {
   // Outside an exposed room Remastered's static default (exposure 1) applies: nothing to add.
   if (!sFrame.hasTone || !Enabled() || !RoomExposed()) {
@@ -1224,6 +1239,34 @@ LightNow EvalLight(const PointLight& l, const Area::Light& state) {
 }
 } // namespace
 
+namespace {
+// The walk both RoomLights forms take: a light that is active, on an active layer and not black, with its
+// timeline evaluated. `fn(l, n)` gets the file's light and its state now (n.color is colour x intensity).
+template <typename F>
+void ForEachRoomLight(F&& fn) {
+  for (const auto& [mrea, area] : sAreas) {
+    if (!area.hasFile) {
+      continue;
+    }
+    for (size_t i = 0; i < area.lights.size() && i < area.file.lights.size(); ++i) {
+      const PointLight& l = area.file.lights[i];
+      if (!area.lights[i].active || (l.layer >= 0 && l.layer < 64 && (area.layers >> l.layer & 1) == 0)) {
+        continue;
+      }
+      const LightNow n = EvalLight(l, area.lights[i]);
+      bool lit = false;
+      for (int c = 0; c < 3; ++c) {
+        lit = lit || (std::isfinite(n.color[c]) && n.color[c] > 0.f);
+      }
+      if (!lit) {
+        continue;
+      }
+      fn(l, n);
+    }
+  }
+}
+} // namespace
+
 void RoomLights(const float worldToView[3][4], std::vector<float>& out) {
   static const bool sOn = port::EnvFlag("MP_ROOM_LIGHTS", true);
   if (!sOn || !Enabled()) {
@@ -1240,68 +1283,92 @@ void RoomLights(const float worldToView[3][4], std::vector<float>& out) {
   // As the sun's (see Sun).
   const float scale = exposure * LightGain() / 3.14159265f;
   constexpr float kDegrees = 3.14159265f / 180.f;
-  for (const auto& [mrea, area] : sAreas) {
-    if (!area.hasFile) {
-      continue;
+  ForEachRoomLight([&](const PointLight& l, const LightNow& n) {
+    float color[3];
+    for (int c = 0; c < 3; ++c) {
+      color[c] = std::isfinite(n.color[c]) ? std::max(n.color[c], 0.f) * scale : 0.f;
     }
-    for (size_t i = 0; i < area.lights.size() && i < area.file.lights.size(); ++i) {
-      const PointLight& l = area.file.lights[i];
-      if (!area.lights[i].active || (l.layer >= 0 && l.layer < 64 && (area.layers >> l.layer & 1) == 0)) {
-        continue;
-      }
-      const LightNow n = EvalLight(l, area.lights[i]);
-      float color[3];
-      bool lit = false;
-      for (int c = 0; c < 3; ++c) {
-        color[c] = std::isfinite(n.color[c]) ? std::max(n.color[c], 0.f) * scale : 0.f;
-        lit = lit || color[c] > 0.f;
-      }
-      if (!lit) {
-        continue;
-      }
-      // FromValues: far <= near moves far just past near.
-      const float near = std::max(n.nearFar[0], 0.f);
-      float far = std::max(n.nearFar[1], 0.f);
-      if (!(far > near)) {
-        far = near + 0.001f;
-      }
-      const float a = 1.f / (far - near);
-      const float b = -near * a;
-      float coneScale = 0.f;
-      float coneBias = 1.f;
-      if (l.spot) {
-        const float cosIn = std::cos(n.cone[0] * 0.5f * kDegrees);
-        const float cosOut = std::cos(n.cone[1] * 0.5f * kDegrees);
-        const float span = cosIn - cosOut;
-        if (std::fabs(span) > 1e-6f) {
-          coneScale = 1.f / span;
-          coneBias = -cosOut / span;
-        } else {
-          coneScale = 0.f;
-          coneBias = 0.f;
-        }
-      }
-      float pos[3];
-      float axis[3];
-      for (int r = 0; r < 3; ++r) {
-        const float* m = worldToView[r];
-        pos[r] = m[0] * l.pos[0] + m[1] * l.pos[1] + m[2] * l.pos[2] + m[3];
-        axis[r] = m[0] * l.toLight[0] + m[1] * l.toLight[1] + m[2] * l.toLight[2];
-      }
-      const float record[16] = {pos[0],  pos[1],  pos[2],  a,         color[0],       color[1],
-                                color[2], b,      axis[0], axis[1],   axis[2],        coneScale,
-                                coneBias, float(n.falloff), l.spot ? 1.f : 0.f, 0.f};
-      if (!std::all_of(std::begin(record), std::end(record), [](float v) { return std::isfinite(v); })) {
-        continue;
-      }
-      // The game's fullest room (the frigate hangar) has 16; the cap only bounds a hostile file's FIFO write and shader loop.
-      constexpr size_t kMaxRoomLights = 64;
-      if (out.size() >= kMaxRoomLights * 16) {
-        return;
-      }
-      out.insert(out.end(), std::begin(record), std::end(record));
+    // FromValues: far <= near moves far just past near.
+    const float near = std::max(n.nearFar[0], 0.f);
+    float far = std::max(n.nearFar[1], 0.f);
+    if (!(far > near)) {
+      far = near + 0.001f;
     }
+    const float a = 1.f / (far - near);
+    const float b = -near * a;
+    float coneScale = 0.f;
+    float coneBias = 1.f;
+    if (l.spot) {
+      const float cosIn = std::cos(n.cone[0] * 0.5f * kDegrees);
+      const float cosOut = std::cos(n.cone[1] * 0.5f * kDegrees);
+      const float span = cosIn - cosOut;
+      if (std::fabs(span) > 1e-6f) {
+        coneScale = 1.f / span;
+        coneBias = -cosOut / span;
+      } else {
+        coneScale = 0.f;
+        coneBias = 0.f;
+      }
+    }
+    float pos[3];
+    float axis[3];
+    for (int r = 0; r < 3; ++r) {
+      const float* m = worldToView[r];
+      pos[r] = m[0] * l.pos[0] + m[1] * l.pos[1] + m[2] * l.pos[2] + m[3];
+      axis[r] = m[0] * l.toLight[0] + m[1] * l.toLight[1] + m[2] * l.toLight[2];
+    }
+    const float record[16] = {pos[0],  pos[1],  pos[2],  a,         color[0],       color[1],
+                              color[2], b,      axis[0], axis[1],   axis[2],        coneScale,
+                              coneBias, float(n.falloff), l.spot ? 1.f : 0.f, 0.f};
+    if (!std::all_of(std::begin(record), std::end(record), [](float v) { return std::isfinite(v); })) {
+      return;
+    }
+    // The game's fullest room (the frigate hangar) has 16; the cap only bounds a hostile file's FIFO write and shader loop.
+    constexpr size_t kMaxRoomLights = 64;
+    if (out.size() >= kMaxRoomLights * 16) {
+      return;
+    }
+    out.insert(out.end(), std::begin(record), std::end(record));
+  });
+}
+
+void RoomLights(std::vector< PortClusteredLights::LightSource >& out) {
+  static const bool sOn = port::EnvFlag("MP_ROOM_LIGHTS", true);
+  if (!sOn || !Enabled()) {
+    return;
   }
+  const auto view = sAreas.find(sViewArea);
+  if (view == sAreas.end() || !view->second.hasFile) {
+    return;
+  }
+  // The same gate as the PBR form: without the room's exposure there is no Remastered lighting to gather
+  // (the probe's AmbientAt is empty then too), and the port's own room lighting is what the effect sees.
+  if (!RoomExposed() || FrameExposure(view->second) <= 0.f) {
+    return;
+  }
+  // The clustered gather's own cap; it reads the first kMaxLights records, so more would never be seen.
+  ForEachRoomLight([&](const PointLight& l, const LightNow& n) {
+    if (out.size() >= size_t(PortClusteredLights::kMaxLights)) {
+      return;
+    }
+    PortClusteredLights::LightSource source;
+    for (int c = 0; c < 3; ++c) {
+      source.color[c] = std::isfinite(n.color[c]) ? std::max(n.color[c], 0.f) : 0.f;
+    }
+    std::memcpy(source.pos, l.pos, sizeof(source.pos));
+    std::memcpy(source.toLight, l.toLight, sizeof(source.toLight));
+    // FromValues: far <= near moves far just past near (as the PBR form and MakeLight do).
+    source.nearD = std::max(n.nearFar[0], 0.f);
+    source.farD = std::max(n.nearFar[1], 0.f);
+    if (!(source.farD > source.nearD)) {
+      source.farD = source.nearD + 0.001f;
+    }
+    source.spot = l.spot;
+    source.innerDeg = n.cone[0];
+    source.outerDeg = n.cone[1];
+    source.falloff = n.falloff;
+    out.push_back(source);
+  });
 }
 
 std::string RoomLightInfo() {
@@ -1645,6 +1712,20 @@ std::string FogInfo() {
   }
   std::snprintf(line, sizeof(line), "regions on in loaded areas: %zu\n", on.size());
   out += line;
+  if (!sWorldVolumes.empty()) {
+    std::snprintf(line, sizeof(line), "world volumes: %zu, camera %.1f %.1f %.1f\n", sWorldVolumes.size(),
+                  sCameraPoint[0], sCameraPoint[1], sCameraPoint[2]);
+    out += line;
+  }
+  for (size_t i = 0; i < sWorldVolumes.size(); ++i) {
+    const WorldVolume& v = sWorldVolumes[i];
+    const bool inside = i < sWorldVolumeState.inside.size() && sWorldVolumeState.inside[i] != 0;
+    const uint64_t entered = i < sWorldVolumeState.entered.size() ? sWorldVolumeState.entered[i] : 0;
+    std::snprintf(line, sizeof(line), "world volume %zu: %s centre %.1f %.1f %.1f half %.1f %.1f %.1f entered #%llu\n",
+                  i, inside ? "inside " : "outside", v.centre[0], v.centre[1], v.centre[2], v.half[0], v.half[1],
+                  v.half[2], (unsigned long long)entered);
+    out += line;
+  }
   return out;
 }
 
@@ -1693,9 +1774,30 @@ void SetFluid(bool player, bool camera) {
   }
 }
 
+void SetCameraPoint(const float pos[3]) {
+  if (!std::isfinite(pos[0]) || !std::isfinite(pos[1]) || !std::isfinite(pos[2])) {
+    return;
+  }
+  std::memcpy(sCameraPoint, pos, sizeof(sCameraPoint));
+  static std::vector<WorldVolumeState::Event> events;
+  events.clear();
+  sWorldVolumeState.Update(sWorldVolumes, pos, events);
+  for (const WorldVolumeState::Event& e : events) {
+    PortLog::Write("room env: camera %s world volume %u at %.1f %.1f %.1f\n", e.state == 0 ? "entered" : "left",
+                   e.volume, pos[0], pos[1], pos[2]);
+    for (auto& [mrea, area] : sAreas) {
+      // One still loading hears the state so far when it finishes (ReplayWorldVolumes).
+      if (!area.pending.valid()) {
+        DriveGrades(mrea, area, kSenderWorldVolume + e.volume, e.state);
+      }
+    }
+  }
+}
+
 void ResetGrades() {
   sPlayerFluid = false;
   sCameraWater = false;
+  sWorldVolumeState.Clear();
   sGradeIndex = -1;
   sBacklight = {};
   sFog = {};
@@ -2017,6 +2119,8 @@ void Reset() {
   sGradeIndex = -1;
   sBacklight = {};
   sFog = {};
+  sWorldVolumes.clear();
+  sWorldVolumeState.Clear();
 }
 
 void SetLoadedAreas(const uint32_t* mreas, size_t count) {
@@ -2407,6 +2511,31 @@ bool Select(const float origin[3], Selection& out) {
   sLastFound = Compose(*located, sLast);
   out = sLast;
   return AddLightmap(out) || sLastFound;
+}
+
+bool AmbientAt(const float pos[3], Ambient& out) {
+  if (!Enabled() || AmbientScale() <= 0.f) {
+    return false;
+  }
+  // One entry: a particle batch asks for one point, and the same point again on the next frame while it
+  // lives, and Locate walks every loaded area's grids.
+  static float sLastPos[3];
+  static Ambient sLastAmbient;
+  static bool sLastHit = false;
+  if (sLastHit && std::memcmp(sLastPos, pos, sizeof(sLastPos)) == 0) {
+    out = sLastAmbient;
+    return true;
+  }
+  Located located;
+  Locate(pos, located);
+  std::memcpy(sLastPos, pos, sizeof(sLastPos));
+  sLastHit = located.ambientArea != nullptr;
+  if (!sLastHit) {
+    return false;
+  }
+  sLastAmbient = located.sample;
+  out = sLastAmbient;
+  return true;
 }
 
 void Stats(int& areas, int& probes, int& cubes, int& grids) {

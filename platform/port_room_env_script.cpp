@@ -321,5 +321,21 @@ void StartGrades(uint32_t mrea, Area& area, bool playerFluid, bool cameraWater) 
   }
 }
 
+// A file that loads takes the world volume table from its file (a new one, from another world,
+// starts the camera outside every volume), then hears the volumes entered and left so far.
+void ReplayWorldVolumes(uint32_t mrea, Area& area) {
+  // A file before version 22 has none: an old room of another world still drops this one's.
+  if (!SameWorldVolumes(area.file.worldVolumes, sWorldVolumes)) {
+    sWorldVolumes = area.file.worldVolumes;
+    sWorldVolumeState.Clear();
+    return;
+  }
+  std::vector<WorldVolumeState::Event> events;
+  sWorldVolumeState.Replay(events);
+  for (const WorldVolumeState::Event& e : events) {
+    DriveGrades(mrea, area, kSenderWorldVolume + e.volume, e.state);
+  }
+}
+
 }  // namespace EnvDetail
 }  // namespace PortRoomEnv

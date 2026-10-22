@@ -378,6 +378,8 @@ extern int sVolFog;
 extern bool sFogRegions;
 extern bool sPlayerFluid;
 extern bool sCameraWater;
+extern std::vector<WorldVolume> sWorldVolumes; // the world's camera volumes (SetCameraPoint)
+extern WorldVolumeState sWorldVolumeState;
 extern std::unordered_set<uint32_t> sGradeLuts;
 extern bool sLastValid;
 extern bool sLastFound;
@@ -405,6 +407,7 @@ void DriveLights(uint32_t mrea, Area& area, uint32_t sender, int state);
 void StepLights(uint32_t mrea, Area& area, float dt);
 void DriveGrades(uint32_t mrea, Area& area, uint32_t sender, int state);
 void StartGrades(uint32_t mrea, Area& area, bool playerFluid, bool cameraWater);
+void ReplayWorldVolumes(uint32_t mrea, Area& area);
 bool LoadTiming();
 double MsSince(std::chrono::steady_clock::time_point t);
 Loaded ReadRoomFile(const std::string& path);

@@ -3,6 +3,10 @@
 
 #include "MetroidPrime/CParticleGenInfo.hpp"
 
+#ifdef TARGET_PC
+#include "MetroidPrime/CPortNestedLights.hpp"
+#endif
+
 class CParticleGen;
 
 class CParticleGenInfoGeneric : public CParticleGenInfo {
@@ -37,6 +41,14 @@ public:
 private:
   rstl::ncrc_ptr< CParticleGen > x84_system;
   TUniqueId x88_lightId;
+#ifdef TARGET_PC
+  // Scene lights of the system's nested PHDR children (see CPortNestedLights); the root light
+  // above is separate and exists only when the root generator has one.
+  CPortNestedLights xPortNestedLights;
+  TAreaId xPortAreaId;
+  uint xPortLightSource;
+  bool xPortHasLightSource;
+#endif
 };
 
 #endif // _CPARTICLEGENINFOGENERIC

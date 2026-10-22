@@ -114,6 +114,17 @@ int main() {
   CHECK_MSG(Near(theta0.y, 20.1f) && Near(theta180.y, 19.75f),
             "SIDE=2 theta 0 uses RRAD and theta 180 uses LRAD");
 
+  // One bolt's half-widths: RADS scales both sides, and LLRD copies LRAD over RRAD (UpdateBolt
+  // 0xb77638). The port evaluates the four elements once per bolt, so both sides come from that
+  // single pair, never from a node of their own.
+  const BoltRadii radii = ComputeBoltRadii(0.5f, 0.2f, 0.1f, false);
+  CHECK_MSG(Near(radii.left, 0.1f) && Near(radii.right, 0.05f), "RADS scales LRAD and RRAD");
+  const BoltRadii copied = ComputeBoltRadii(0.5f, 0.2f, 0.1f, true);
+  CHECK_MSG(Near(copied.left, 0.1f) && Near(copied.right, 0.1f), "LLRD copies LRAD over RRAD");
+  const BoltRadii defaults = ComputeBoltRadii(1.f, 0.1f, 0.1f, false);
+  CHECK_MSG(Near(defaults.left, 0.1f) && Near(defaults.right, 0.1f),
+            "a bolt with no RADS/LRAD/RRAD is RADS 1 x 0.1 on both sides");
+
   constexpr float rawIntensity = 0.37f;
   bool cancels = true;
   for (float exposure : {0.25f, 0.5f, 1.f, 2.f, 4.f}) {

@@ -54,12 +54,17 @@ public:
 
   // accel may be null (a source without an accelerometer): then the raw local
   // rates are used, with no calibration or gravity (player/world act as local yaw).
-  // keepOffset: when calibration is off, keep the drift it learned instead of
-  // dropping it (auto calibrate "only in menus" pauses it outside them).
+  // Turning autoCalibrate off stops the learning but keeps the drift learned so far.
   void Process(const float gyro[3], const float* accel, float dt, int space, bool autoCalibrate,
-               float& pitch, float& yaw, bool keepOffset = false);
-  // Forget orientation and calibration (a new source, or calibration turned off).
+               float& pitch, float& yaw);
+  // Forget orientation and calibration (a new source, or a debug reset).
   void Reset();
+  // Manual calibration: Begin drops the learned drift and averages every sample
+  // until End, with auto calibration paused in between; End keeps the average
+  // (at full confidence) and lets auto calibration carry on from it.
+  void BeginManualCalibration();
+  void EndManualCalibration();
+  bool ManualCalibrating() const { return mManual; }
   // How sure the drift calibration is, 0..1, and whether the pad was last seen still.
   float Confidence() const;
   bool Steady() const;
@@ -68,6 +73,8 @@ private:
   std::unique_ptr< GamepadMotion > mMotion;
   bool mAutoCalibrate = false;
   bool mHasMode = false;
+  bool mManual = false;
+  int mManualSamples = 0;
 };
 
 // Soft tiered smoothing and tightening (as in JoyShockMapper): slow turns,

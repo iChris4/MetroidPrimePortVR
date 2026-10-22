@@ -17,7 +17,14 @@ CParticleGenInfoGeneric::CParticleGenInfoGeneric(const SObjectTag& part,
 : CParticleGenInfo(part, frames, boneName, scale, parentMode, flags, state)
 , x84_system(system)
 , x88_lightId(lightId == 0xffffffff ? kInvalidUniqueId
-                                    : _initializeLight(system, stateMgr, areaId, lightId)) {}
+                                    : _initializeLight(system, stateMgr, areaId, lightId))
+#ifdef TARGET_PC
+, xPortAreaId(areaId)
+, xPortLightSource(part.GetId())
+, xPortHasLightSource(true)
+#endif
+{
+}
 
 CParticleGenInfoGeneric::~CParticleGenInfoGeneric() {}
 
@@ -27,6 +34,11 @@ void CParticleGenInfoGeneric::Render() { x84_system->Render(); }
 
 void CParticleGenInfoGeneric::Update(float dt, CStateManager& stateMgr) {
   x84_system->Update(dt);
+
+#ifdef TARGET_PC
+  xPortNestedLights.Update(stateMgr, x84_system.GetPtr(), GetIsActive(), kInvalidUniqueId,
+                           xPortAreaId, rstl::string_l("ParticlePHDR"), xPortLightSource, 0);
+#endif
 
   if (x88_lightId == kInvalidUniqueId) {
     return;
@@ -104,6 +116,9 @@ void CParticleGenInfoGeneric::SetParticleEmission(bool isActive, CStateManager& 
 }
 
 void CParticleGenInfoGeneric::DeleteLight(CStateManager& stateMgr) {
+#ifdef TARGET_PC
+  xPortNestedLights.Delete(stateMgr, kInvalidUniqueId);
+#endif
   if (x88_lightId == kInvalidUniqueId) {
     return;
   }

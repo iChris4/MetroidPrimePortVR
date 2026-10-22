@@ -778,10 +778,24 @@ void CGraphics::SetScissor(int left, int bottom, int width, int height) {
   GXSetScissor(left, mRenderModeObj.efbHeight - (bottom + height), width, height);
 }
 
+
+#ifdef TARGET_PC
+namespace {
+CColor sPortAmbientColor(0.f, 0.f, 0.f, 1.f);
+} // namespace
+#endif
+
 void CGraphics::SetAmbientColor(const CColor& color) {
+#ifdef TARGET_PC
+  sPortAmbientColor = color;
+#endif
   CGX::SetChanAmbColor(CGX::Channel0, color.GetGXColor());
   CGX::SetChanAmbColor(CGX::Channel1, color.GetGXColor());
 }
+
+#ifdef TARGET_PC
+CColor CGraphics::GetAmbientColor() { return sPortAmbientColor; }
+#endif
 
 void CGraphics::SetCopyClear(const CColor& color, float depth) {
   mClearColor = color;

@@ -16,8 +16,6 @@
 #include "port_gci.h"
 #include "port_discord.h"
 
-#include <musyx/port_voices.h>
-
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -465,33 +463,6 @@ const SettingKey kSettingKeys[] = {
      [](std::ostream& out) { out << sRemasteredKeysPath; }, true, "/keys/prod.keys", "/k/p.keys"},
     {"remastered_skip", [](const std::string& value) { sRemasteredSkip = value; },
      [](std::ostream& out) { out << sRemasteredSkip; }, true, "geometry,movies", "hud"},
-    BoolKey< &sAiAudioEnabled >("ai_audio"),
-    BoolKey< &sMusyxAudioEnabled >("musyx_audio"),
-    {"voices_muted",
-     [](const std::string& value) {
-       MusyxPortClearSampleMutes();
-       const char* cursor = value.c_str();
-       while (*cursor != '\0') {
-         char* end = nullptr;
-         const unsigned long id = std::strtoul(cursor, &end, 10);
-         if (end == cursor) {
-           break;
-         }
-         MusyxPortSetSampleMuted(static_cast< unsigned >(id), 1);
-         cursor = end;
-         while (*cursor == ',' || *cursor == ' ') {
-           ++cursor;
-         }
-       }
-     },
-     [](std::ostream& out) {
-       unsigned muted[64];
-       const int mutedCount = MusyxPortGetMutedSamples(muted, 64);
-       for (int i = 0; i < mutedCount; ++i) {
-         out << (i == 0 ? "" : ",") << muted[i];
-       }
-     },
-     true, "3,7", "12"},
 };
 
 // False for a key nothing reads.

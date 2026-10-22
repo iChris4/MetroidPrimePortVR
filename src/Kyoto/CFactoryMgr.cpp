@@ -9,6 +9,11 @@ static const uint sTypeTable[] = {
     'MADF', 'MLVL', 'MREA', 'MAPW', 'MAPA', 'SAVW', 'SAVA', 'PART', 'WPSC', 'SWHC',
     'DPSC', 'ELSC', 'CRSC', 'AFSM', 'DCLN', 'AGSC', 'ATBL', 'CSNG', 'STRG', 'SCAN',
     'PATH', 'DGRP', 'HMAP', 'CTWK', 'FRME', 'HINT', 'MAPU', 'DUMB',
+#ifdef TARGET_PC
+    // Port-only curl noise vector field (CVectorField). A type missing here packs as index -1,
+    // which SResInfo reads as a compressed resource.
+    'VECF',
+#endif
 };
 
 CFactoryMgr::CFactoryMgr() {}

@@ -46,6 +46,34 @@ int main() {
   ApplySetting("stick_aim_rate_y", "20000");
   REQUIRE_MSG(Get().stickAimRateY == 450.f, "stick_aim_rate_y above range");
   ApplySetting("stick_aim_split", "0");
+  REQUIRE_MSG(!Get().mouseSensitivitySplit && !Get().touchAimSplit && !Get().gyroSplit, "vertical splits default off");
+  REQUIRE_MSG(ApplySetting("mouse_sensitivity_split", "1") && Get().mouseSensitivitySplit, "mouse_sensitivity_split");
+  REQUIRE_MSG(ApplySetting("mouse_sensitivity_y", "0.002") && Get().mouseSensitivityY == 0.002f, "mouse_sensitivity_y");
+  ApplySetting("mouse_sensitivity_y", "5");
+  ApplySetting("mouse_sensitivity_y", "0");
+  REQUIRE_MSG(Get().mouseSensitivityY == 0.002f, "mouse_sensitivity_y range");
+  REQUIRE_MSG(ApplySetting("touch_aim_split", "1") && Get().touchAimSplit, "touch_aim_split");
+  REQUIRE_MSG(ApplySetting("touch_aim_speed_y", "1.5") && Get().touchAimSpeedY == 1.5f, "touch_aim_speed_y");
+  ApplySetting("touch_aim_speed_y", "50");
+  ApplySetting("touch_aim_speed_y", "0.1");
+  REQUIRE_MSG(Get().touchAimSpeedY == 1.5f, "touch_aim_speed_y range");
+  REQUIRE_MSG(ApplySetting("gyro_split", "1") && Get().gyroSplit, "gyro_split");
+  REQUIRE_MSG(ApplySetting("gyro_sensitivity_y", "0.5") && Get().gyroSensitivityY == 0.5f, "gyro_sensitivity_y");
+  ApplySetting("gyro_sensitivity_y", "50");
+  REQUIRE_MSG(Get().gyroSensitivityY == 0.5f, "gyro_sensitivity_y range");
+  {
+    const std::string text = Text();
+    REQUIRE_MSG(text.find("mouse_sensitivity_split=1") != std::string::npos &&
+                    text.find("mouse_sensitivity_y=0.002") != std::string::npos &&
+                    text.find("touch_aim_split=1") != std::string::npos &&
+                    text.find("touch_aim_speed_y=1.5") != std::string::npos &&
+                    text.find("gyro_split=1") != std::string::npos &&
+                    text.find("gyro_sensitivity_y=0.5") != std::string::npos,
+                "vertical split keys written");
+  }
+  ApplySetting("mouse_sensitivity_split", "0");
+  ApplySetting("touch_aim_split", "0");
+  ApplySetting("gyro_split", "0");
   ApplySetting("crosshair_size", "80");
   REQUIRE_MSG(Get().crosshairSize == 80, "crosshair_size");
   ApplySetting("crosshair_size", "5");
@@ -122,6 +150,14 @@ int main() {
   REQUIRE_MSG(Text().find("gyro_cursor_angle=60\n") != std::string::npos &&
                   Text().find("gyro_cursor_camera=1\n") != std::string::npos,
               "gyro cursor written");
+  REQUIRE_MSG(!Get().resetAimBoth, "reset_aim_both default off");
+  ApplySetting("reset_aim_both", "1");
+  REQUIRE_MSG(Get().resetAimBoth && Text().find("reset_aim_both=1\n") != std::string::npos,
+              "reset_aim_both");
+  REQUIRE_MSG(!Get().lockKeepsPitch, "lock_keeps_pitch default off");
+  ApplySetting("lock_keeps_pitch", "1");
+  REQUIRE_MSG(Get().lockKeepsPitch && Text().find("lock_keeps_pitch=1\n") != std::string::npos,
+              "lock_keeps_pitch");
   ApplySetting("shift_key_alt", "44");
   ApplySetting("turbo_pad", "3");
   REQUIRE_MSG(Get().shiftBindings[1] == 44 && Get().turboBindings[2] == 3, "bindings");

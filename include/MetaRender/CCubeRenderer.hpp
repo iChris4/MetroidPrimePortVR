@@ -95,6 +95,17 @@ public:
   void RemoveStaticGeometry(const rstl::vector< CMetroidModelInstance >* geometry) override;
   void DrawUnsortedGeometry(int areaIdx, uint mask, uint targetMask) override;
   void DrawSortedGeometry(int areaIdx, uint mask, uint targetMask) override;
+#ifdef TARGET_PC
+  // Port: an area's sorted pass held back until every area's opaque draws are done
+  // (CStateManager::DrawWorld). Stash moves the queued drawables but the decals and simple
+  // shadows into slot (0..kPortBucketStashSlots-1); Restore puts them back into empty buckets.
+  // The drawables keep their sort distances; the buckets keep the distance range of the whole.
+  static const int kPortBucketStashSlots = 10;
+  void PortStashBuckets(int slot);
+  void PortRestoreBuckets(int slot);
+  // DrawSortedGeometry for the queued drawables only, without the area's world surfaces.
+  void PortDrawSortedDrawables(int areaIdx);
+#endif
   void DrawStaticGeometry(int areaIdx, uint mask, uint targetMask) override;
   void DrawAreaGeometry(int areaIdx, uint mask, uint targetMask) override;
   void PostRenderFogs() override;

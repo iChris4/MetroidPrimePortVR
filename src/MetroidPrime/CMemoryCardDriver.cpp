@@ -935,6 +935,7 @@ void SGameFileSlot::LoadGameState(int idx) {
   PortMapSide::Apply(idx, x0_saveBuffer.data(), x0_saveBuffer.size(), gpGameState->PortSeenPickups(),
                      gpGameState->PortMapMarkList());
   PortBeamDoors::Apply(idx, x0_saveBuffer.data(), x0_saveBuffer.size(), gpGameState->PortBeamDoorBits());
+  gpGameState->PortBackUpBeamDoors();
 #endif
 }
 

@@ -2611,7 +2611,10 @@ void handle_aurora(ByteReader& reader) noexcept {
     }
     g_gxState.copySceneLinear = value == 1;
   } else if (subCmd == GX_AURORA_PORT_PARTICLE_FOG) {
-    const bool on = reader.read<u8>() != 0;
+    const u8 on = reader.read<u8>();
+    if (on > GXState::kParticleUnfogged) {
+      Log.warn("GX_AURORA_PORT_PARTICLE_FOG: invalid value {}", on);
+    }
     if (g_gxState.particleFog != on) {
       g_gxState.particleFog = on;
       g_gxState.dirty |= DirtyPipeline;

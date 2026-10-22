@@ -109,12 +109,18 @@ void CScriptEffect::Think(float dt, CStateManager& mgr) {
   }
   if (!x110_25_noTimerUnlessAreaOccluded) {
     if (x12c_remTime <= 0.f) {
+#ifdef TARGET_PC
+      xPortNestedLights.Delete(mgr, GetUniqueId());
+#endif
       return;
     }
   } else {
     if (mgr.GetWorld()->GetAreaAlways(GetCurrentAreaId()).GetOcclusionState() ==
             CGameArea::kOS_Occluded &&
         x12c_remTime <= 0.f) {
+#ifdef TARGET_PC
+      xPortNestedLights.Delete(mgr, GetUniqueId());
+#endif
       return;
     }
   }
@@ -135,6 +141,11 @@ void CScriptEffect::Think(float dt, CStateManager& mgr) {
         }
       }
     }
+#ifdef TARGET_PC
+    xPortNestedLights.Update(mgr, x104_particleSystem.get(), GetActive(), GetUniqueId(),
+                             GetCurrentAreaId(), rstl::string_l("EffectPHDR_") + GetDebugName(),
+                             x10c_partId, 1);
+#endif
     if (x111_25_dieWhenSystemsDone) {
       x140_destroyDelayTimer += dt;
       if (x140_destroyDelayTimer > 15.f) {
@@ -158,6 +169,9 @@ void CScriptEffect::Think(float dt, CStateManager& mgr) {
 
 void CScriptEffect::AcceptScriptMsg(EScriptObjectMessage msg, TUniqueId uid, CStateManager& mgr) {
   bool oldActive = GetActive();
+#ifdef TARGET_PC
+  xPortNestedLights.Forward(msg, uid, GetUniqueId(), mgr);
+#endif
   switch (msg) {
   case kSM_InitializedInArea:
     for (AUTO(conn, GetConnectionList().begin()); conn != GetConnectionList().end(); ++conn) {

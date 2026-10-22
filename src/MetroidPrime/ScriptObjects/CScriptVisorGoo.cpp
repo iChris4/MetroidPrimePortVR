@@ -40,7 +40,7 @@ CScriptVisorGoo::CScriptVisorGoo(TUniqueId uid, const rstl::string& name, const 
 
 CScriptVisorGoo::~CScriptVisorGoo() {}
 
-void CScriptVisorGoo::Think(float, CStateManager& mgr) {
+void CScriptVisorGoo::Think(float dt, CStateManager& mgr) {
   if (GetActive()) {
     bool loaded = false;
     // MPR has IsElectricLoaded()/IsElectricValid(),
@@ -89,6 +89,31 @@ void CScriptVisorGoo::Think(float, CStateManager& mgr) {
           if (showGoo) {
             const float t = (GetMaxRange() - eyeToGooDist) / (GetMaxRange() - GetMinRange());
             float prob = t * GetChanceMinRange() + (1.0f - t) * GetChanceMaxRange();
+#ifdef TARGET_PC
+            if (xfc_particleId != kInvalidAssetId && xe8_particleDesc->xPortIrnd) {
+              // Remastered (CScriptVisorGooMP1::Think 0xed3fec): one persistent goo billboard,
+              // managed by the visor effect manager, that every VisorGoo splats a particle into.
+              if (mgr.Random()->PortFloat28() * 100.f <= prob) {
+                if (!CHUDBillboardEffect::PortHasVisorGoo(mgr)) {
+                  const TUniqueId uid = mgr.AllocateUniqueId();
+                  mgr.AddObject(rs_new CHUDBillboardEffect(
+                      rstl::optional_object< TToken< CGenDescription > >(GetParticleDesc()),
+                      x100_electricId != kInvalidAssetId
+                          ? rstl::optional_object< TToken< CElectricDescription > >(
+                                GetElectricDesc())
+                          : rstl::optional_object_null(),
+                      uid, true, rstl::string_l("VisorGoo"),
+                      CHUDBillboardEffect::GetNearClipDistance(mgr),
+                      CHUDBillboardEffect::GetScaleForPOV(mgr), GetColor(),
+                      CVector3f(1.f, 1.f, 1.f), CVector3f(0.f, 0.f, 0.f)));
+                  CHUDBillboardEffect::PortSetVisorGoo(mgr, uid, dt);
+                }
+                CHUDBillboardEffect::PortAddVisorGooSplat(mgr);
+                CSfxManager::SfxStart(CCast::ToUint16(xf8_sfx), 0x7f, 0x40, false,
+                                      CSfxManager::kMedPriority);
+              }
+            } else
+#endif
             if (mgr.Random()->Float() * 100.f <= prob) {
               mgr.AddObject(rs_new CHUDBillboardEffect(
                   xfc_particleId != kInvalidAssetId

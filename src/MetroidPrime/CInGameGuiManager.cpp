@@ -511,6 +511,9 @@ void CInGameGuiManager::Draw(const CStateManager& mgr) const {
 #ifdef TARGET_PC
     drawsHud = drawsSince();
     AuroraSetStereoDrawRoute(AURORA_STEREO_ROUTE_WORLD);
+    // Match HUD ordering: visor palettes/blur have finished. Keep world-space
+    // tracking, but do not feed the wrist through the scene's visor filters.
+    PortVr::VrWristVisorDraw(mgr);
 #endif
   }
 

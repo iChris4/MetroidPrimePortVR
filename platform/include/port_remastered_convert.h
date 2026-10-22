@@ -81,9 +81,13 @@ struct ConvertOptions {
   std::string textureSuffix;
   // Optional: receives the converted level of detail as one plain mesh (the VMSH blob a
   // model particle draws, see build/mpr/vfx/DESIGN.md), in the written CMDL's model space:
-  // big-endian u32 version (1), vertex count, triangle count; per vertex position[3],
-  // normal[3], uv[2] as f32; then the indices, u16 up to 65535 vertices, else u32. Back-face
-  // copies are left out. Cleared when the model has no usable mesh.
+  // big-endian u32 version (2), vertex count, triangle count, flags (bit 0 every vertex has a
+  // tangent, bit 1 a colour), orient[3][3] and offset[3] as f32; per vertex position[3],
+  // normal[3] (orient x Remastered's, unnormalised), uv[2], tangent[4] (likewise, w the
+  // handedness with orient's mirror folded in; zero without one), colour[4] (Remastered's float
+  // COLOR, else 1) as f32; then the indices, u16 up to 65535 vertices, else u32. Back-face
+  // copies are left out. Cleared when the model has no usable mesh. Readers take v1 too (no
+  // flags, orient or offset; position, normal, uv only).
   std::vector<uint8_t>* vmsh = nullptr;
 };
 

@@ -178,7 +178,7 @@ void TestDefaultsMatchGame() {
            : f == PortVr::FoveationLevel::High   ? "high"
                                                  : "off";
   };
-  const std::pair<const char*, std::string> expected[] = {
+  std::vector<std::pair<const char*, std::string>> expected = {
       {"vr_enabled", FormatBool(s.enabled)},
       {"vr_controller_mode", mode(s.controller_mode)},
       {"vr_mirror_view", mirror(s.mirror_view)},
@@ -260,6 +260,26 @@ void TestDefaultsMatchGame() {
       {"vr_rot_offset_z", FormatFloat(s.rot_offset_z)},
       {"vr_cannon_texture_slot", FormatInt(s.cannon_texture_slot)},
   };
+  expected.emplace_back("vr_wrist_offset_x", FormatFloat(s.wrist_offset_x));
+  expected.emplace_back("vr_wrist_offset_y", FormatFloat(s.wrist_offset_y));
+  expected.emplace_back("vr_wrist_offset_z", FormatFloat(s.wrist_offset_z));
+  expected.emplace_back("vr_wrist_pitch", FormatFloat(s.wrist_pitch));
+  expected.emplace_back("vr_wrist_yaw", FormatFloat(s.wrist_yaw));
+  expected.emplace_back("vr_wrist_roll", FormatFloat(s.wrist_roll));
+  expected.emplace_back("vr_wrist_visor_enabled", FormatBool(s.wrist_visor_enabled));
+  expected.emplace_back("vr_custom_layout_enabled", FormatBool(s.custom_layout_enabled));
+  expected.emplace_back("vr_custom_trigger_threshold", FormatFloat(s.custom_trigger_threshold));
+  expected.emplace_back("vr_custom_grip_threshold", FormatFloat(s.custom_grip_threshold));
+  expected.emplace_back("vr_custom_touchpad_threshold", FormatFloat(s.custom_touchpad_threshold));
+  expected.emplace_back("vr_custom_stick_threshold", FormatFloat(s.custom_stick_threshold));
+  expected.emplace_back("vr_custom_label_profile", FormatInt(s.custom_label_profile));
+  expected.emplace_back("vr_custom_move_hand", FormatInt(s.custom_move_hand));
+  expected.emplace_back("vr_custom_look_hand", FormatInt(s.custom_look_hand));
+  expected.emplace_back("vr_custom_visor_hand", FormatInt(s.custom_visor_hand));
+  expected.emplace_back("vr_custom_visor_mode", FormatInt(s.custom_visor_mode));
+#define VR_BIND(name, initial, group, label) expected.emplace_back("vr_custom_" #name, FormatInt(s.custom_##name));
+#include "vr/vr_controller_bindings.inc"
+#undef VR_BIND
   std::set<std::string> checked;
   for (const auto& [key, value] : expected) {
     const KeyInfo* info = FindKey(key);
@@ -297,6 +317,23 @@ void TestRangesInsideGameClamps() {
     float low, high;
   };
   const Clamp clamps[] = {
+      {"vr_custom_trigger_threshold", 0.05f, 0.95f},
+      {"vr_custom_grip_threshold", 0.05f, 0.95f},
+      {"vr_custom_touchpad_threshold", 0.05f, 0.95f},
+      {"vr_custom_stick_threshold", 0.05f, 0.95f},
+      {"vr_wrist_offset_x", -0.50f, 0.50f},
+      {"vr_wrist_offset_y", -0.50f, 0.50f},
+      {"vr_wrist_offset_z", -0.50f, 0.50f},
+      {"vr_wrist_pitch", -180.00f, 180.00f},
+      {"vr_wrist_yaw", -180.00f, 180.00f},
+      {"vr_wrist_roll", -180.00f, 180.00f},
+      {"vr_custom_label_profile", 0.f, 6.f},
+      {"vr_custom_move_hand", 0.f, 1.f}, {"vr_custom_look_hand", 0.f, 1.f},
+      {"vr_custom_visor_hand", 0.f, 1.f}, {"vr_custom_visor_mode", 0.f, 2.f},
+#define VR_BIND(name, initial, group, label) {"vr_custom_" #name, 0.f, 36.f},
+#include "vr/vr_controller_bindings.inc"
+#undef VR_BIND
+
       {"vr_render_scale", 0.25f, 2.0f},
       {"vr_world_scale", 0.1f, 50.0f},
       {"vr_screen_distance_meters", 0.25f, 10.0f},

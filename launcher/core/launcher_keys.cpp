@@ -19,6 +19,28 @@ using K = KeyKind;
 // tests/port_launcher.cpp checks the defaults against PortVrSettings{} and the
 // ranges against the game's clamps.
 constexpr KeyInfo kKeys[] = {
+    {"vr_wrist_visor_enabled", K::Bool, "0"},
+    {"vr_wrist_offset_x", K::Float, "0", -0.50f, 0.50f, 0.005f},
+    {"vr_wrist_offset_y", K::Float, "0", -0.50f, 0.50f, 0.005f},
+    {"vr_wrist_offset_z", K::Float, "0", -0.50f, 0.50f, 0.005f},
+    {"vr_wrist_pitch", K::Float, "40", -180.00f, 180.00f, 1.000f},
+    {"vr_wrist_yaw", K::Float, "-40", -180.00f, 180.00f, 1.000f},
+    {"vr_wrist_roll", K::Float, "50", -180.00f, 180.00f, 1.000f},
+
+    {"vr_custom_layout_enabled", K::Bool, "0"},
+    {"vr_custom_trigger_threshold", K::Float, "0.55", 0.05f, 0.95f, 0.01f},
+    {"vr_custom_grip_threshold", K::Float, "0.55", 0.05f, 0.95f, 0.01f},
+    {"vr_custom_touchpad_threshold", K::Float, "0.55", 0.05f, 0.95f, 0.01f},
+    {"vr_custom_stick_threshold", K::Float, "0.55", 0.05f, 0.95f, 0.01f},
+    {"vr_custom_label_profile", K::Int, "0", 0, 6, 1},
+    {"vr_custom_move_hand", K::Int, "0", 0, 1, 1},
+    {"vr_custom_look_hand", K::Int, "1", 0, 1, 1},
+    {"vr_custom_visor_hand", K::Int, "0", 0, 1, 1},
+    {"vr_custom_visor_mode", K::Int, "0", 0, 2, 1},
+#define VR_BIND(name, initial, group, label) {"vr_custom_" #name, K::Int, #initial, 0, 36, 1},
+#include "vr/vr_controller_bindings.inc"
+#undef VR_BIND
+
     // Port Config: headset
     {"vr_enabled", K::Bool, "1"},
     {"vr_controller_mode", K::Choice, "primedgun", 0, 0, 0, true, true, "primedgun,gamepad,none"},

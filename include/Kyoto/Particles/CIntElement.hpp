@@ -137,6 +137,16 @@ public:
   bool GetValue(int frame, int& valOut) const override;
 };
 
+// port-only: Remastered's PAP0..3, the per-particle int variables IAV0..3.
+class CIEPortParticleVar : public CIntElement {
+  int x4_slot;
+
+public:
+  explicit CIEPortParticleVar(int slot) : x4_slot(slot) {}
+  ~CIEPortParticleVar() override {}
+  bool GetValue(int frame, int& valOut) const override;
+};
+
 // port-only PRAN(min, max): Remastered's int RAND (CIERandom 0x2a88a8, CIERandomConstant
 // 0x2a895c) and constant IRND (CIEInitialRandomConstant 0x2a8c40): min + Next() % (max - min + 1),
 // unsigned (min + Next() when the range wraps to 0), whatever min's sign. Retail's RAND takes Next() for min <= 0.

@@ -42,7 +42,11 @@ add_library(musyx STATIC
 
 target_include_directories(musyx PUBLIC include)
 if (CMAKE_SYSTEM_NAME STREQUAL Linux)
-target_compile_options(musyx PRIVATE -Wno-stringop-overflow -Wno-pointer-to-int-cast -gdwarf-4)
+target_compile_options(musyx PRIVATE -Wno-pointer-to-int-cast -gdwarf-4)
+# GCC only: clang has no -Wstringop-overflow and warns about the unknown option.
+if (CMAKE_C_COMPILER_ID STREQUAL GNU)
+target_compile_options(musyx PRIVATE -Wno-stringop-overflow)
+endif ()
 else ()
 target_compile_options(musyx PRIVATE)
 endif ()

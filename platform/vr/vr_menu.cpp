@@ -131,13 +131,16 @@ public:
     void SetStreamedAudio(bool on) override {
         PortDebug::SetAiAudioEnabled(on);
         PortDebug::MarkVrSettingsDirty();
+        m_save = true;
     }
     void SetMusyxAudio(bool on) override {
         PortDebug::SetMusyxAudioEnabled(on);
         PortDebug::MarkVrSettingsDirty();
+        m_save = true;
     }
     void SetLogFile(bool on) override {
         PortDebug::SetLogFile(on);
+        m_save = true;
         if (on) {
             PortLogFile::Start();
         }
@@ -305,18 +308,21 @@ void VrMenuUpdate() noexcept {
         VrMenu::Open(menu.state);
     }
 
+    const OpenXRSettingsPanelPointer pointer = OpenXRTakeSettingsPanelPointer();
+    if (pointer.clicks > 0 && pointer.click_valid) {
+        PortDebug::PollSettingsFile(true);
+    }
     PortVrSettings settings = GetVrSettings();
     VrMenu::View view = BuildView(menu, settings, now);
-    const OpenXRSettingsPanelPointer pointer = OpenXRTakeSettingsPanelPointer();
     VrMenu::Refresh(menu.state, now);
     if (pointer.valid) {
         VrMenu::Hover(menu.state, view, pointer.y);
     }
     if (pointer.clicks > 0 && pointer.click_valid) {
-        VrMenu::Click(menu.state, settings, view, pointer.click_x, pointer.click_y, now, menu.actions);
-        // Live, as in PrimedGun; the file is written by SAVE SETTINGS, EXIT
-        // GAME, or whenever the port next saves its settings.
-        SetVrSettings(settings);
+        // Publish changed settings immediately so the desktop reflects the VR
+        // menu without Save Settings or exit. Navigation alone does not write.
+        VrMenu::ClickAndSave(menu.state, settings, view, pointer.click_x, pointer.click_y, now,
+                            menu.actions, [](const PortVrSettings& changed) { SetVrSettings(changed); });
         menu.actions.Flush();
         // What the click changed outside the settings (a cheat, a switch, the slot).
         view = BuildView(menu, settings, now);

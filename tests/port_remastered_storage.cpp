@@ -201,6 +201,16 @@ int main(int argc, char** argv) {
               "nothing to reuse converts everything");
   }
 
+  // The legacy copy in the mods folder goes only on the private root, behind a usable private import.
+  {
+    using PortRemasteredStorage::ShouldDeleteLegacy;
+    CHECK_MSG(ShouldDeleteLegacy(true, true, true, false), "a dead legacy duplicate is deleted");
+    CHECK_MSG(!ShouldDeleteLegacy(false, true, true, false), "desktop never deletes");
+    CHECK_MSG(!ShouldDeleteLegacy(true, false, true, false), "no usable private import keeps the legacy one");
+    CHECK_MSG(!ShouldDeleteLegacy(true, true, false, false), "a symlink or missing folder is left alone");
+    CHECK_MSG(!ShouldDeleteLegacy(true, true, true, true), "the private import itself is never deleted");
+  }
+
   // The movies-only import: the staged import is the newer one, and on Android it never writes into
   // a legacy import in the shared mods folder.
   {

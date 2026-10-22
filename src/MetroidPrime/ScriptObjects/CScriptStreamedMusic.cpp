@@ -9,6 +9,10 @@
 
 #include "rstl/StringExtras.hpp"
 
+#ifdef TARGET_PC
+#include "port_apclient.h"
+#endif
+
 extern "C" void nullsub_42(CScriptStreamedMusic*);
 
 CStreamAudioManager::ESoftwareChannel CScriptStreamedMusic::IsOneShot(bool loop) {
@@ -45,6 +49,9 @@ void CScriptStreamedMusic::AcceptScriptMsg(EScriptObjectMessage msg, TUniqueId o
   switch (msg) {
   case kSM_Play:
     if (GetActive()) {
+#ifdef TARGET_PC
+      PortApplyPickupJingle(stateMgr);
+#endif
       Play(stateMgr);
     }
     break;
@@ -83,6 +90,24 @@ void CScriptStreamedMusic::AcceptScriptMsg(EScriptObjectMessage msg, TUniqueId o
 }
 
 ENTITY_ACCEPT_IMPL(CScriptStreamedMusic)
+
+#ifdef TARGET_PC
+// An Archipelago location's pickup jingle is the retail item's; it plays the
+// placed item's, as randomprime's update_attainment_audio sets it.
+void CScriptStreamedMusic::PortApplyPickupJingle(CStateManager& mgr) {
+  const CWorld* wld = mgr.GetWorld();
+  if (wld == nullptr || GetCurrentAreaId() == kInvalidAreaId)
+    return;
+  std::string file;
+  if (!PortAp::PickupJingle(static_cast< uint32_t >(wld->IGetWorldAssetId()),
+                            static_cast< uint32_t >(
+                                wld->IGetAreaAlways(GetCurrentAreaId())->IGetAreaAssetId()),
+                            static_cast< uint32_t >(GetEditorId().Value()), file))
+    return;
+  x34_fileName = rstl::string(file.c_str());
+  x45_fileIsDsp = IsAudioTrackNameSoftware(x34_fileName);
+}
+#endif
 
 void CScriptStreamedMusic::Play(CStateManager& mgr) {
   TweakOverride(mgr);

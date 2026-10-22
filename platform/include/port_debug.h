@@ -643,6 +643,8 @@ void SetStickAimRate(float pixelsPerSecond);
 void SetGyroMode(int mode);
 void SetGyroSource(int source);
 void SetGyroSensitivity(float scale);
+// Vertical (pitch) sensitivity, used instead of the above for pitch while the split is on.
+void SetGyroSensitivityY(float scale);
 // Gyro space: 0 local (the pad's own yaw axis), 1 player, 2 world (the turn
 // about gravity). Auto calibration learns the gyro's drift while the pad is
 // still; the confidence is 0..1, or negative when the source has no
@@ -654,6 +656,7 @@ void SetGyroAutoCalibrate(int mode); // 0 off, 1 always, 2 only in menus
 void StartGyroRecalibration();
 void CancelGyroRecalibration();
 float GyroRecalibrationCountdown(); // seconds left, or negative when none pending
+float GyroManualCalibrationProgress(); // 0..1 while Recalibrate samples, or negative
 bool GyroCalibrating();             // auto calibration is learning right now
 void ResetGyroCalibration();
 float GyroCalibrationConfidence();
@@ -676,6 +679,8 @@ bool MouseInvertX();
 bool MouseInvertY();
 bool MouseButtons();
 bool MouseCrosshair();
+// Direct aim: an empty lock-on keeps the camera pitch instead of levelling it.
+bool LockKeepsPitch();
 // The free-aim crosshair under direct aim: the setting, or always with pointer aim.
 bool AimCrosshair();
 // Pointer aim (Trilogy style, any direct aim): the mouse, right stick, gyro or a
@@ -730,6 +735,8 @@ void TurnMouseAim(float dyaw);
 void ResetMouseAim();
 float MouseSensitivity();
 void SetMouseSensitivity(float radiansPerPixel);
+// Vertical mouse sensitivity, used for up and down while the split is on.
+void SetMouseSensitivityY(float radiansPerPixel);
 // Called from the input event loop as relative motion arrives.
 void AddMouseDelta(float dx, float dy);
 // Called once per simulated frame to latch the deltas for that frame.
@@ -739,6 +746,7 @@ void BeginFrameMouse();
 bool TouchAim();
 void SetTouchAim(bool on);
 void SetTouchAimSpeed(float pixelsPerDp);
+void SetTouchAimSpeedY(float pixelsPerDp);
 void AddTouchAim(float dxDp, float dyDp);
 // A quick swipe up on the touch aim area (the overlay detects it): requests the
 // Spring Ball when "Spring Ball on swipe up" is on. Thread-safe.
@@ -832,6 +840,8 @@ bool Visible();
 // so a disc chosen during startup is remembered even if no frame is drawn yet.
 // It always writes, changed or not.
 void SaveSettingsNow();
+  // Refresh launcher edits before a VR menu click reads and publishes settings.
+  void PollSettingsFile(bool now);
 // Marks the settings file dirty from outside the overlay (the VR settings
 // store), so it is written on exit or by SaveSettingsNow like any other change.
 void MarkVrSettingsDirty();

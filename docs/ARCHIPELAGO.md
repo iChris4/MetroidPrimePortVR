@@ -68,6 +68,14 @@ With the built-in tables, the client does what the AP ISO patch would:
   `pickup_meta.rs.in`) remove the script objects tied to each pickup's retail
   item (its cutscene, and the artifact special functions), and move what the cutscene's end did onto a relay that
   the pickup fires, so a pickup no longer plays its retail item's cutscene.
+- A pickup plays the jingle of the item placed there, as randomprime's
+  `PickupType::attainment_audio_file_name` does: the artifact jingle for
+  artifacts, the item jingle for upgrades and launchers, the short one for
+  expansions, Energy Tanks, refills and another game's items. The location
+  table names each pickup's jingle StreamedAudio (`attainment_audio`);
+  `CScriptStreamedMusic` swaps its file on Play once the item is scouted.
+  Before the scout arrives, the retail jingle plays. The offline randomizer
+  shares this path.
 - Slot data sets the Missile Launcher and main Power Bomb requirements (ammo
   capacity follows the world's rules: up to 999 missiles and 99 power bombs
   in a seed's game, 250 and 8 anywhere else), DeathLink, and `non_varia_heat_damage`
@@ -497,7 +505,11 @@ Without Archipelago, a seed's pickups log `randomizer: picked up <key>: <item>, 
 ## Not done yet
 
 - **Hints.** `!hint <name>` on the Archipelago page's Chat sub-tab asks the server, and the Artifact
-  Temple totems name each artifact's location (from `artifact_locations` slot
-  data, stored hints or scouts). There is no hint list beyond that.
+  Temple totems name each artifact's location (from `artifact_locations` slot data, stored hints or
+  scouts). Finishing a totem scan (not the text refresh at room load) also asks the server to hint
+  that artifact (`LocationScouts` with `create_as_hint` 2, once per location) when it is in this
+  slot's own world; one in another player's world is not hinted by the scan (the AP world's
+  `artifact_hints` option already makes every artifact a start hint). There is no hint list beyond
+  that.
 - **Pickup models.** Models come from the connect-time scouts, which are not
   saved, so an offline session shows retail models.

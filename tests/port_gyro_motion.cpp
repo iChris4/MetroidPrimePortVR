@@ -106,9 +106,34 @@ int main() {
     PortGyro::Motion raw;
     Run(raw, drift, flat, 8.f, PortGyro::kLocal, false, pitch, yaw);
     CHECK_MSG(std::fabs(yaw - 0.03f) < 0.001f, "no calibration keeps drift");
-    // Turning calibration off forgets the learned offset.
+    // Turning calibration off keeps the learned offset.
     Run(cal, drift, flat, 0.1f, PortGyro::kLocal, false, pitch, yaw);
-    CHECK_MSG(std::fabs(yaw - 0.03f) < 0.001f, "calibration off resets offset");
+    CHECK_MSG(std::fabs(yaw) < 0.003f, "calibration off keeps offset");
+    cal.Reset();
+    Run(cal, drift, flat, 0.1f, PortGyro::kLocal, false, pitch, yaw);
+    CHECK_MSG(std::fabs(yaw - 0.03f) < 0.001f, "reset forgets offset");
+  }
+
+  // Manual calibration averages the still pad, with auto calibration off or
+  // paused, and keeps the result at full confidence.
+  {
+    const float drift[3] = {0.f, -0.03f, 0.f};
+    const float flat[3] = {0.f, kG, 0.f};
+    for (const bool autoCalibrate : {false, true}) {
+      PortGyro::Motion m;
+      m.BeginManualCalibration();
+      CHECK_MSG(m.ManualCalibrating(), "manual calibration running");
+      Run(m, drift, flat, 1.f, PortGyro::kLocal, autoCalibrate, pitch, yaw);
+      CHECK_MSG(m.Confidence() < 0.01f, "auto calibration paused while manual samples");
+      m.EndManualCalibration();
+      CHECK_MSG(!m.ManualCalibrating() && m.Confidence() > 0.99f, "manual calibration done, confident");
+      Run(m, drift, flat, 0.1f, PortGyro::kLocal, autoCalibrate, pitch, yaw);
+      CHECK_MSG(std::fabs(yaw) < 0.001f, "manual calibration removes drift");
+    }
+    PortGyro::Motion idle;
+    idle.BeginManualCalibration();
+    idle.EndManualCalibration();
+    CHECK_MSG(idle.Confidence() < 0.01f, "manual calibration without samples isn't trusted");
   }
 
   // Without an accelerometer the local spaces still apply, player/world act as

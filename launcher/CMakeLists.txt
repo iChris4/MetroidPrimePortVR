@@ -2,17 +2,17 @@
 # DolphinQt/MainWindow.cpp) beside metroid_prime_port.exe. It edits the game's
 # port_settings.ini and starts the game. Built with -DMP_BUILD_LAUNCHER=ON and
 # Qt 6.5 or later on CMAKE_PREFIX_PATH.
-set(PRIMEDGUN_LAUNCHER_VERSION "2.0.0-beta.2")
+set(PRIMEDGUN_LAUNCHER_VERSION "2.0.0-beta.3")
 
 find_package(Qt6 6.5 REQUIRED COMPONENTS Widgets)
 
-qt_add_executable(PrimedGun WIN32
-    main.cpp
+set(PRIMEDGUN_LAUNCHER_UI_SOURCES
     ui/about_tab.cpp
     ui/aurora_host.cpp
     ui/calibration_tab.cpp
     ui/cannon_tab.cpp
     ui/controller_tab.cpp
+    ui/controller_layout_dialog.cpp
     ui/launcher_window.cpp
     ui/layout_tab.cpp
     ui/port_config_tab.cpp
@@ -21,6 +21,7 @@ qt_add_executable(PrimedGun WIN32
     # The memory-card transfer uses the game's own Dolphin card import.
     ${PROJECT_SOURCE_DIR}/platform/port_gci.cpp
     ${PROJECT_SOURCE_DIR}/platform/port_save_convert.cpp)
+qt_add_executable(PrimedGun WIN32 main.cpp ${PRIMEDGUN_LAUNCHER_UI_SOURCES})
 qt_add_resources(PrimedGun "primedgun_assets"
     PREFIX "/"
     BASE assets
@@ -85,3 +86,40 @@ qt_generate_deploy_app_script(
     NO_TRANSLATIONS
     NO_UNSUPPORTED_PLATFORM_ERROR)
 install(SCRIPT ${primedgun_deploy_script})
+
+if(MP_BUILD_TESTS)
+    add_executable(port_launcher_settings_sync_tests
+        ${PROJECT_SOURCE_DIR}/tests/port_launcher_settings_sync.cpp
+        ${PRIMEDGUN_LAUNCHER_UI_SOURCES}
+        "${PROJECT_BINARY_DIR}/generated/port_build_info.cpp")
+    add_dependencies(port_launcher_settings_sync_tests port_build_info)
+    target_include_directories(port_launcher_settings_sync_tests PRIVATE ui ${PROJECT_SOURCE_DIR}/platform/include)
+    target_compile_definitions(port_launcher_settings_sync_tests PRIVATE
+        PRIMEDGUN_LAUNCHER_VERSION="${PRIMEDGUN_LAUNCHER_VERSION}")
+    target_link_libraries(port_launcher_settings_sync_tests PRIVATE
+        primedgun_launcher_core Qt6::Widgets aurora::card ${AURORA_SDL3_TARGET})
+    if(WIN32)
+        target_link_libraries(port_launcher_settings_sync_tests PRIVATE shell32 ole32 advapi32)
+    endif()
+    set_target_properties(port_launcher_settings_sync_tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}")
+    add_test(NAME port_launcher_settings_sync_tests COMMAND port_launcher_settings_sync_tests)
+    if(WIN32)
+        set_tests_properties(port_launcher_settings_sync_tests PROPERTIES LABELS port
+            ENVIRONMENT "QT_QPA_PLATFORM=windows" TIMEOUT 20)
+    else()
+        set_tests_properties(port_launcher_settings_sync_tests PROPERTIES LABELS port
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 20)
+    endif()
+    add_executable(port_controller_layout_ui_tests
+        ${PROJECT_SOURCE_DIR}/tests/port_controller_layout_ui.cpp
+        ui/controller_layout_dialog.cpp ui/tab_context.cpp ui/widgets.cpp)
+    target_include_directories(port_controller_layout_ui_tests PRIVATE ui ${PROJECT_SOURCE_DIR}/platform/include)
+    target_link_libraries(port_controller_layout_ui_tests PRIVATE primedgun_launcher_core Qt6::Widgets ${AURORA_SDL3_TARGET})
+    set_target_properties(port_controller_layout_ui_tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}")
+    add_test(NAME port_controller_layout_ui_tests COMMAND port_controller_layout_ui_tests)
+    if(WIN32)
+        set_tests_properties(port_controller_layout_ui_tests PROPERTIES LABELS port ENVIRONMENT "QT_QPA_PLATFORM=windows;PRIMEDGUN_LAYOUT_TEST=1" TIMEOUT 20)
+    else()
+        set_tests_properties(port_controller_layout_ui_tests PROPERTIES LABELS port ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PRIMEDGUN_LAYOUT_TEST=1" TIMEOUT 20)
+    endif()
+endif()

@@ -43,7 +43,7 @@ object PrimedGunTabs {
 
     // PrimedGun's Reset Controller (launcher/ui/controller_tab.cpp).
     private val CONTROLLER_KEYS = arrayOf(
-        "vr_use_right_hand", "vr_vr_overlays_enabled", "vr_vr_menu_hold_left_stick",
+        "vr_wrist_offset_x", "vr_wrist_offset_y", "vr_wrist_offset_z", "vr_wrist_pitch", "vr_wrist_yaw", "vr_wrist_roll", "vr_wrist_visor_enabled", "vr_use_right_hand", "vr_vr_overlays_enabled", "vr_vr_menu_hold_left_stick",
         "vr_vr_menu_requires_head_zone", "vr_vr_menu_floating", "vr_cinematic_screen_enabled",
         "vr_game_menu_screen_enabled", "vr_message_box_immersive", "vr_floating_hud",
         "vr_rumble_enabled",
@@ -72,9 +72,14 @@ object PrimedGunTabs {
     )
 
     private fun controllerItems(context: Context): List<PrimedGunItem> = buildList {
+        add(PrimedGunItem.Action("Customize controller layout") { ControllerLayoutDialog.show(context) })
+        add(PrimedGunItem.Switch("Use custom controller layout", refreshes = true,
+            get = { LauncherSettings.bool("vr_custom_layout_enabled") },
+            set = { LauncherSettings.setBool("vr_custom_layout_enabled", it) }))
         add(header(context, R.string.primedgun_section_controller_mapping))
         add(PrimedGunItem.Action(context.getString(R.string.primedgun_reset_controller)) {
             LauncherSettings.reset(*CONTROLLER_KEYS)
+            LauncherNative.keyTable().map { it.substringBefore('\t') }.filter { it.startsWith("vr_custom_") }.forEach { LauncherSettings.reset(it) }
         })
         // Stored as use_right_hand, so the "left hand" option is the inverted case.
         add(
@@ -86,9 +91,6 @@ object PrimedGunTabs {
                 set = { LauncherSettings.setBool("vr_use_right_hand", !it) }
             )
         )
-        add(switch(context, R.string.primedgun_vr_menu_hold_left_stick, "vr_vr_menu_hold_left_stick"))
-        add(switch(context, R.string.primedgun_vr_menu_requires_head_zone, "vr_vr_menu_requires_head_zone"))
-        add(switch(context, R.string.primedgun_combat_jump_use_primary_button, "vr_combat_jump_use_primary_button"))
         add(
             switch(
                 context, R.string.primedgun_beam_wheel_hud_highlight, "vr_beam_wheel_hud_highlight",
@@ -96,7 +98,7 @@ object PrimedGunTabs {
             )
         )
 
-        add(header(context, R.string.primedgun_section_rumble_grip))
+        add(PrimedGunItem.Header("Rumble"))
         add(switch(context, R.string.primedgun_rumble, "vr_rumble_enabled"))
         add(
             choice(
@@ -110,28 +112,19 @@ object PrimedGunTabs {
             )
         )
         add(PrimedGunItem.Note(context.getString(R.string.primedgun_rumble_split_note)))
-        add(switch(context, R.string.primedgun_grip_inputs_enabled, "vr_grip_inputs_enabled"))
-        add(switch(context, R.string.primedgun_grip_inputs_use_trackpad, "vr_grip_inputs_use_trackpad"))
-        add(PrimedGunItem.Note(context.getString(R.string.primedgun_grip_inputs_use_trackpad_note)))
         add(slider(context, R.string.primedgun_rumble_intensity, "vr_rumble_intensity"))
 
-        add(header(context, R.string.primedgun_section_dpad))
-        add(switch(context, R.string.primedgun_dpad_enabled, "vr_xr_dpad_enabled"))
+        add(PrimedGunItem.Header("Visor selection"))
+        add(PrimedGunItem.Switch("Off-hand visor wristband",
+            get = { LauncherSettings.bool("vr_wrist_visor_enabled") },
+            set = { LauncherSettings.setBool("vr_wrist_visor_enabled", it) }))
+        add(PrimedGunItem.Note("Move the main controller near a visor icon on your off-hand wrist and press A or right trigger in right-hand mode, or X or left trigger in left-hand mode."))
         add(slider(context, R.string.primedgun_dpad_head_radius, "vr_xr_dpad_head_radius"))
         add(slider(context, R.string.primedgun_dpad_head_y_below, "vr_xr_dpad_head_y_below"))
         add(slider(context, R.string.primedgun_dpad_deadzone, "vr_xr_dpad_deadzone"))
 
         add(header(context, R.string.primedgun_section_directional_movement))
         add(switch(context, R.string.primedgun_movement_enabled, "vr_directional_movement_enabled"))
-        add(
-            PrimedGunItem.Toggle2(
-                labelA = context.getString(R.string.primedgun_left_stick),
-                labelB = context.getString(R.string.primedgun_right_stick),
-                inactive = inactive("vr_directional_movement_use_right_stick"),
-                get = { LauncherSettings.bool("vr_directional_movement_use_right_stick") },
-                set = { LauncherSettings.setBool("vr_directional_movement_use_right_stick", it) }
-            )
-        )
         add(
             PrimedGunItem.Toggle2(
                 labelA = context.getString(R.string.primedgun_controller_direction),

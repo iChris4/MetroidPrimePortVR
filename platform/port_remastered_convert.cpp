@@ -812,7 +812,8 @@ void Converter::State::Convert(const Model& model, const ConvertOptions& opt) {
   std::vector<bool> finest(model.meshes.size(), false);
   bool anyFinest = false;
   std::unordered_map<uint64_t, uint32_t> vmshIndex;  // (buffer, vertex) -> its place in vmshV
-  std::vector<float> vmshV;                          // pos, nrm, uv per vertex
+  std::vector<float> vmshV;                          // pos, nrm, uv, tan, colour per vertex (VMSH v2)
+  uint32_t vmshFlags = 3;                            // bit 0 every vertex has a tangent, bit 1 a colour
   std::vector<uint32_t> vmshI;
   const size_t lodBase = size_t(std::max(opt.lod, 0)) * 5;
   if (opt.lod > 0 && lodBase >= model.lods.size()) {
@@ -966,16 +967,37 @@ void Converter::State::Convert(const Model& model, const ConvertOptions& opt) {
       // The front faces only, before the back copy below adds vertices.
       for (uint32_t i : p.I) {
         const uint64_t key = uint64_t(mesh.vertexBuffer) << 32 | i;
-        auto [at, fresh] = vmshIndex.try_emplace(key, uint32_t(vmshV.size() / 8));
+        auto [at, fresh] = vmshIndex.try_emplace(key, uint32_t(vmshV.size() / 16));
         if (fresh) {
           for (int r = 0; r < 3; ++r) {
             vmshV.push_back(float(b.P[size_t(i) * 3 + r]));
           }
+          // The normal and tangent raw (orient x the buffer's, unnormalised), as Remastered's
+          // vertex shader takes them; the colour as its float attribute.
+          const ModelVertexBuffer& src = *b.src;
           for (int r = 0; r < 3; ++r) {
-            vmshV.push_back(float(b.N[size_t(i) * 3 + r]));
+            double q = 0.0;
+            for (int c = 0; c < 3; ++c) {
+              q += double(src.normals[size_t(i) * 3 + c]) * M[r][c];
+            }
+            vmshV.push_back(float(q));
           }
           vmshV.push_back(float(b.uv[0][size_t(i) * 2]));
           vmshV.push_back(float(b.uv[0][size_t(i) * 2 + 1]));
+          const bool tangent = src.tangents.size() == b.n * 4;
+          for (int r = 0; r < 3; ++r) {
+            double t = 0.0;
+            for (int c = 0; tangent && c < 3; ++c) {
+              t += double(src.tangents[size_t(i) * 4 + c]) * M[r][c];
+            }
+            vmshV.push_back(float(t));
+          }
+          vmshV.push_back(!tangent ? 0.0f : (src.tangents[size_t(i) * 4 + 3] < 0.0f) != (det < 0.0) ? -1.0f : 1.0f);
+          const bool colored = src.colors.size() == b.n * 4;
+          for (int c = 0; c < 4; ++c) {
+            vmshV.push_back(colored ? src.colors[size_t(i) * 4 + c] : 1.0f);
+          }
+          vmshFlags &= (tangent ? 1u : 0u) | (colored ? 2u : 0u);
         }
         vmshI.push_back(at->second);
       }
@@ -1056,20 +1078,32 @@ void Converter::State::Convert(const Model& model, const ConvertOptions& opt) {
   if (opt.vmsh != nullptr) {
     opt.vmsh->clear();
     if (!vmshI.empty()) {
-      const uint32_t nv = uint32_t(vmshV.size() / 8);
+      const uint32_t nv = uint32_t(vmshV.size() / 16);
       const bool wide = nv > 65535;
       auto put = [&](uint32_t v, int bytes) {
         for (int k = bytes - 1; k >= 0; --k) {
           opt.vmsh->push_back(uint8_t(v >> (8 * k)));
         }
       };
-      put(1, 4);
-      put(nv, 4);
-      put(uint32_t(vmshI.size() / 3), 4);
-      for (float f : vmshV) {
+      auto putFloat = [&](float f) {
         uint32_t bits;
         std::memcpy(&bits, &f, 4);
         put(bits, 4);
+      };
+      put(2, 4);
+      put(nv, 4);
+      put(uint32_t(vmshI.size() / 3), 4);
+      put(vmshFlags, 4);
+      for (int r = 0; r < 3; ++r) {
+        for (int c = 0; c < 3; ++c) {
+          putFloat(float(M[r][c]));
+        }
+      }
+      for (int r = 0; r < 3; ++r) {
+        putFloat(float(opt.offset[r]));
+      }
+      for (float f : vmshV) {
+        putFloat(f);
       }
       for (uint32_t i : vmshI) {
         put(i, wide ? 4 : 2);

@@ -483,8 +483,9 @@ struct GXState {
   std::array<Vec4<float>, 3> volFogTone{};
   // GX_AURORA_PORT_SHADOW_*: the following draws are the world's (they cast and receive the sun's
   // shadow), and this frame's sun (shadowActive) with its uniform (gfx/shadow.hpp's Uniform).
-  // GX_AURORA_PORT_PARTICLE_FOG: the draws are particles (vol_fog_mode)
-  bool particleFog = false;
+  // GX_AURORA_PORT_PARTICLE_FOG: the draws are particles, kParticleUnfogged unfogged ones (vol_fog_mode)
+  static constexpr u8 kParticleUnfogged = 2; // GX_PORT_PARTICLE_UNFOGGED
+  u8 particleFog = 0;
   bool shadowCaster = false;
   bool shadowCasterOnly = false; // they cast but aren't drawn (GXPortSetShadowCasterOnly)
   bool shadowActive = false;

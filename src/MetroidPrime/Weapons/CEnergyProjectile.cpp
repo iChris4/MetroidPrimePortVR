@@ -56,6 +56,9 @@ CEnergyProjectile::CEnergyProjectile(
 
 void CEnergyProjectile::StopProjectile(CStateManager& mgr) {
   DeleteProjectileLight(mgr);
+#ifdef TARGET_PC
+  xPortNestedLights.Delete(mgr, GetUniqueId());
+#endif
   mgr.RemoveWeaponId(GetOwnerId(), GetType());
   x2e4_24_active = false;
   SetMaterial(CMaterialList());
@@ -290,6 +293,11 @@ void CEnergyProjectile::Think(float dt, CStateManager& mgr) {
       }
     }
   }
+#ifdef TARGET_PC
+  xPortNestedLights.Update(mgr, projectile.GetAttachedPS1(), GetActive() && x2e4_24_active,
+                           GetUniqueId(), GetCurrentAreaId(),
+                           rstl::string_l("ProjectilePHDR_GameProjectile"), x2cc_wpscId, 0);
+#endif
   if (x2e8_sfx) {
     CSfxManager::UpdateEmitter(x2e8_sfx, projectile.GetTranslation(), projectile.GetVelocity(),
                                255);
@@ -343,6 +351,9 @@ ENTITY_ACCEPT_IMPL(CEnergyProjectile)
 
 void CEnergyProjectile::AcceptScriptMsg(EScriptObjectMessage msg, TUniqueId uid,
                                         CStateManager& mgr) {
+#ifdef TARGET_PC
+  xPortNestedLights.Forward(msg, uid, GetUniqueId(), mgr);
+#endif
   switch (msg) {
   case kSM_Deleted:
     if (x2e4_24_active) {

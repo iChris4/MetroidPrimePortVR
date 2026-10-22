@@ -22,7 +22,31 @@ Motion::~Motion() = default;
 
 void Motion::Reset() {
   mMotion->Reset();
+  mMotion->PauseContinuousCalibration();
   mHasMode = false;
+  mManual = false;
+}
+
+void Motion::BeginManualCalibration() {
+  // While it samples, GamepadMotionHelpers skips its auto calibration.
+  mMotion->ResetContinuousCalibration();
+  mMotion->StartContinuousCalibration();
+  mManual = true;
+  mManualSamples = 0;
+}
+
+void Motion::EndManualCalibration() {
+  if (!mManual) {
+    return;
+  }
+  mMotion->PauseContinuousCalibration();
+  // Full confidence, so auto calibration refines the average instead of
+  // replacing it with its first still moment. No samples (the gyro was not
+  // read meanwhile) leaves nothing to trust.
+  if (mManualSamples > 0) {
+    mMotion->SetAutoCalibrationConfidence(1.f);
+  }
+  mManual = false;
 }
 
 float Motion::Confidence() const { return mMotion->GetAutoCalibrationConfidence(); }
@@ -30,7 +54,7 @@ float Motion::Confidence() const { return mMotion->GetAutoCalibrationConfidence(
 bool Motion::Steady() const { return mMotion->GetAutoCalibrationIsSteady(); }
 
 void Motion::Process(const float gyro[3], const float* accel, float dt, int space, bool autoCalibrate,
-                     float& pitch, float& yaw, bool keepOffset) {
+                     float& pitch, float& yaw) {
   // SDL's rates are counter-clockwise positive, so a turn right of a flat pad
   // is a negative y, and of an upright one (its -z up) a positive z;
   // GamepadMotionHelpers uses the same Y-up axes. Without an accelerometer the
@@ -40,17 +64,15 @@ void Motion::Process(const float gyro[3], const float* accel, float dt, int spac
   float z = gyro[2] * kDegPerRad;
   if (accel != nullptr) {
     if (!mHasMode || autoCalibrate != mAutoCalibrate) {
-      // Turning calibration off drops what it learned, so a bad estimate can be
-      // got rid of.
-      if (mHasMode && !autoCalibrate && !keepOffset) {
-        mMotion->ResetContinuousCalibration();
-      }
+      // Only the mode changes: turning calibration off keeps the drift learned
+      // so far (Recalibrate or a source change replaces it).
       mMotion->SetCalibrationMode(autoCalibrate ? GamepadMotionHelpers::Stillness | GamepadMotionHelpers::SensorFusion
                                                 : GamepadMotionHelpers::Manual);
       mAutoCalibrate = autoCalibrate;
       mHasMode = true;
     }
     if (dt > 0.f) {
+      mManualSamples += mManual ? 1 : 0;
       mMotion->ProcessMotion(x, y, z, accel[0] / kStandardGravity, accel[1] / kStandardGravity,
                              accel[2] / kStandardGravity, dt);
     }

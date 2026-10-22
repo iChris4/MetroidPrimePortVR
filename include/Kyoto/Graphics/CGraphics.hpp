@@ -405,6 +405,11 @@ public:
   static void DisableAllLights();
 
   static void SetAmbientColor(const CColor&);
+#ifdef TARGET_PC
+  // The last ambient colour the game set (GX channel 0's), which is the port's analogue of Remastered's
+  // AMBS (the flat ambient light colour a clustered-lit particle material adds to its probes and lights).
+  static CColor GetAmbientColor();
+#endif
   static void SetFog(ERglFogMode mode, float startz, float endz, const CColor& color);
 
   static void SetModelMatrix(const CTransform4f& xf);

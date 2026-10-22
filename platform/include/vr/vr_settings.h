@@ -25,6 +25,28 @@ enum class RumbleHand : uint8_t { Both, Left, Right, Split };
 enum class FoveationLevel : uint8_t { Off, Low, Medium, High };
 
 struct PortVrSettings {
+    bool wrist_visor_enabled = false;
+    float wrist_offset_x = 0.f;
+    float wrist_offset_y = 0.f;
+    float wrist_offset_z = 0.f;
+    float wrist_pitch = 40.f;
+    float wrist_yaw = -40.f;
+    float wrist_roll = 50.f;
+
+    bool custom_layout_enabled = false;
+    float custom_trigger_threshold = 0.55f;
+    float custom_grip_threshold = 0.55f;
+    float custom_touchpad_threshold = 0.55f;
+    float custom_stick_threshold = 0.55f;
+    int custom_label_profile = 0;
+    int custom_move_hand = 0;
+    int custom_look_hand = 1;
+    int custom_visor_hand = 0;
+    int custom_visor_mode = 0; // 0 near-head gesture; 1 hold selector; 2 physical buttons only
+#define VR_BIND(name, initial, group, label) int custom_##name = initial;
+#include "vr/vr_controller_bindings.inc"
+#undef VR_BIND
+
     // --- headset renderer (Wiicompiled [vr]) ---
     bool enabled = true;
     bool required = false;             // a failed headset start stops the game instead of falling back
@@ -192,6 +214,8 @@ struct PortVrSettings {
     int snap_turn_degrees = 45;
     int vr_state_slot = 1;
     int cannon_texture_slot = 0;
+
+    bool operator==(const PortVrSettings&) const = default;
 
     bool CannonTargetingForVisor(bool scanVisor) const noexcept {
         return cannon_targeting && gun_targeting_enabled && !scanVisor;

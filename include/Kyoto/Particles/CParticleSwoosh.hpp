@@ -54,6 +54,9 @@ public:
     CColor mColor;             // Updated by COLR
     int mStartFrame;
     CVector3f mVelocity;
+#ifdef TARGET_PC
+    SPortKeep mPortKeep{}; // KPIN values latched at the point's birth (CREPortKeep)
+#endif
   };
   CParticleSwoosh(TToken< CSwooshDescription > desc, int i);
   ~CParticleSwoosh();

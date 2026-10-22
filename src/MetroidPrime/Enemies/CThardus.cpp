@@ -325,7 +325,15 @@ void CThardus::AcceptScriptMsg(EScriptObjectMessage msg, TUniqueId uid, CStateMa
           CDamageVulnerability(kVN_Normal, kVN_Deflect, kVN_Normal, kVN_Normal, kVN_Normal,
                                kVN_Normal, kVN_Normal, kVN_Deflect, kVN_Deflect, kVN_Deflect,
                                kVN_Deflect, kVN_Deflect, kVN_Deflect, kVN_Deflect, kVN_Deflect,
-                               kDT_Ricochet),
+                               kDT_Ricochet)
+#ifdef TARGET_PC
+              // The 16-argument ctor leaves x60/x64 unset, so retail's rock gets whatever was on
+              // the stack (sp+932/936 are never written in this function); anything but 0/2/3
+              // takes Explode's default case and ricochets charged and combo Ice shots. Pin the
+              // port's otherwise indeterminate value to that (#134).
+              .PortSetChargedComboDeflect(kDT_Ricochet)
+#endif
+              ,
           GetMaterialList(), x630_,
           CActorParameters(
               CLightParameters(false, 0.f, CLightParameters::kST_Invalid, 0.f, 0.f,

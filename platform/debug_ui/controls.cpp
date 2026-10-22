@@ -102,6 +102,21 @@ void DrawControlsOptions() {
   }
   ImGui::SetItemTooltip("The turn speed with the crosshair at the screen edge.");
   ImGui::EndDisabled();
+  bool resetAimBoth = sInput.resetAimBoth;
+  if (ImGui::Checkbox("Reset aim resets pointer and camera", &resetAimBoth)) {
+    sInput.resetAimBoth = resetAimBoth;
+    MarkDirty();
+  }
+  ItemHelp("The Reset aim action (unbound by default; Remap, Gyro group) recentres the crosshair "
+           "when pointer aim is on and levels the camera when it is off. On, it does both every time.");
+  bool lockKeepsPitch = sInput.lockKeepsPitch;
+  if (ImGui::Checkbox("Empty lock-on keeps pitch", &lockKeepsPitch)) {
+    sInput.lockKeepsPitch = lockKeepsPitch;
+    MarkDirty();
+  }
+  ItemHelp("Direct aim only (mouse look, twin stick, touch aim). Pressing lock-on with no target "
+           "holds the camera pitch it had instead of levelling the view. Off = retail "
+           "levelling.");
 
   ImGui::SeparatorText("Morph ball");
   bool fastMorph = sInput.fastMorph;
@@ -164,6 +179,20 @@ void DrawControlsKeyboardMouse() {
   }
   ImGui::SetItemTooltip("The scale of Quake, Source and Apex Legends games (0.022 degrees a count "
                         "per unit): the same number turns the same. Ctrl+click to type a value.");
+  if (ImGui::Checkbox("Separate vertical speed##mouse", &sInput.mouseSensitivitySplit)) {
+    if (sInput.mouseSensitivitySplit) sInput.mouseSensitivityY = sInput.mouseSensitivity;
+    MarkDirty();
+  }
+  ItemHelp("Gives looking up and down its own sensitivity; Sensitivity then sets only left and right.");
+  if (sInput.mouseSensitivitySplit) {
+    float sourceSensitivityY = PortMouse::SourceFromRadians(sInput.mouseSensitivityY);
+    if (ImGui::SliderFloat("Vertical sensitivity", &sourceSensitivityY, 0.05f, 30.f, "%.3f",
+                           ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_NoRoundToFormat)) {
+      SetMouseSensitivityY(PortMouse::RadiansFromSource(sourceSensitivityY));
+      MarkDirty();
+    }
+    ItemHelp("How fast the mouse turns the camera up and down, on the same scale as Sensitivity.");
+  }
   ImGui::SetNextItemWidth(ImGui::GetFontSize() * 6.f);
   if (ImGui::InputInt("Mouse DPI", &sInput.mouseDpi, 0, 0)) {
     sInput.mouseDpi = std::clamp(sInput.mouseDpi, 100, 64000);
@@ -237,6 +266,8 @@ void DrawControlsController() {
     bool split = sInput.stickAimSplit;
     if (ImGui::Checkbox("Separate vertical speed", &split)) {
       sInput.stickAimSplit = split;
+      // Start vertical where the shared speed was, so turning the split on changes nothing yet.
+      if (split) sInput.stickAimRateY = sInput.stickAimRate;
       MarkDirty();
     }
     ItemHelp("Gives looking up and down its own speed; Stick aim speed then sets only left and "
@@ -366,6 +397,19 @@ void DrawControlsTouchGyro() {
   }
   ItemHelp("How far the view turns per dp of finger travel. The default turns about 180 degrees "
            "over a 400 dp drag at the default mouse sensitivity.");
+  if (ImGui::Checkbox("Separate vertical speed##touch", &sInput.touchAimSplit)) {
+    if (sInput.touchAimSplit) sInput.touchAimSpeedY = sInput.touchAimSpeed;
+    MarkDirty();
+  }
+  ItemHelp("Gives looking up and down its own speed; Touch aim speed then sets only left and right.");
+  if (sInput.touchAimSplit) {
+    float touchAimSpeedY = sInput.touchAimSpeedY;
+    if (ImGui::SliderFloat("Vertical touch aim speed", &touchAimSpeedY, 0.5f, 6.f, "%.2f px/dp",
+                           ImGuiSliderFlags_Logarithmic)) {
+      SetTouchAimSpeedY(touchAimSpeedY);
+    }
+    ItemHelp("How far the view turns up and down per dp of finger travel.");
+  }
   ImGui::EndDisabled();
   bool springSwipe = sInput.springSwipe;
   if (ImGui::Checkbox("Spring Ball on swipe up", &springSwipe)) {
@@ -472,6 +516,21 @@ void DrawControlsTouchGyro() {
   ItemHelp("How far the camera turns per turn of the pad: at 1.00x turning the pad 90 degrees turns "
            "the camera 90 degrees, at 2.00x 180. Independent of the mouse sensitivity and invert. "
            "With pointer aim it applies only if the gyro also turns the camera.");
+  if (ImGui::Checkbox("Separate vertical speed##gyro", &sInput.gyroSplit)) {
+    if (sInput.gyroSplit) sInput.gyroSensitivityY = sInput.gyroSensitivity;
+    MarkDirty();
+  }
+  ItemHelp("Gives tilting the pad up and down its own sensitivity; Sensitivity then sets only turning "
+           "left and right. With pointer aim it also scales the pointer's vertical travel.");
+  if (sInput.gyroSplit) {
+    float gyroSensitivityY = sInput.gyroSensitivityY;
+    if (ImGui::SliderFloat("Vertical sensitivity##gyro", &gyroSensitivityY, PortInput::kGyroSensitivityMin,
+                           PortInput::kGyroSensitivityMax, "%.2fx", ImGuiSliderFlags_Logarithmic)) {
+      SetGyroSensitivityY(gyroSensitivityY);
+    }
+    ItemHelp("How far the camera turns up and down per tilt of the pad, as Sensitivity does for left and "
+             "right.");
+  }
   ImGui::EndDisabled();
   // Listed by how common they are; the setting keeps PortGyro::Space's numbers.
   static constexpr int kSpaceOrder[] = {PortGyro::kPlayer, PortGyro::kWorld, PortGyro::kLocal, PortGyro::kLocalRoll,
@@ -502,7 +561,12 @@ void DrawControlsTouchGyro() {
            "accelerometer. Only in menus learns while the game is paused, on a menu screen or "
            "with this overlay open, and keeps what it learned while you play.");
   const float countdown = GyroRecalibrationCountdown();
-  if (countdown >= 0.f) {
+  const float manual = GyroManualCalibrationProgress();
+  if (manual >= 0.f) {
+    ImGui::BeginDisabled();
+    ImGui::Button(("Calibrating, keep the pad still... " + std::to_string(int(manual * 100.f)) + "%").c_str());
+    ImGui::EndDisabled();
+  } else if (countdown >= 0.f) {
     ImGui::BeginDisabled();
     ImGui::Button(("Calibrating in " + std::to_string(int(std::ceil(countdown))) + "...").c_str());
     ImGui::EndDisabled();
@@ -513,8 +577,9 @@ void DrawControlsTouchGyro() {
   } else if (ImGui::Button("Recalibrate")) {
     StartGyroRecalibration();
   }
-  ItemHelp("Waits 5 seconds so you can put the pad down, then clears the gyro's drift "
-           "measurement and learns it again.");
+  ItemHelp("Waits 5 seconds so you can put the pad down, then measures the gyro's drift for 3 "
+           "seconds and removes it. Auto calibration waits meanwhile, then refines the result. "
+           "Works with auto calibrate off too; the gyro must be in use (a mode other than off).");
   const float confidence = GyroCalibrationConfidence();
   if (confidence >= 0.f) {
     ImGui::Text("Calibration: %d%%%s", int(confidence * 100.f + 0.5f),

@@ -169,6 +169,26 @@ struct Field {
           [](const PortVrSettings& s, std::ostream& o) { o << s.name; }}
 
 const Field kFields[] = {
+    VR_BOOL(custom_layout_enabled),
+    VR_FLOAT(custom_trigger_threshold, 0.05f, 0.95f),
+    VR_FLOAT(custom_grip_threshold, 0.05f, 0.95f),
+    VR_FLOAT(custom_touchpad_threshold, 0.05f, 0.95f),
+    VR_FLOAT(custom_stick_threshold, 0.05f, 0.95f),
+    VR_BOOL(wrist_visor_enabled),
+    VR_FLOAT(wrist_offset_x, -0.50f, 0.50f),
+    VR_FLOAT(wrist_offset_y, -0.50f, 0.50f),
+    VR_FLOAT(wrist_offset_z, -0.50f, 0.50f),
+    VR_FLOAT(wrist_pitch, -180.00f, 180.00f),
+    VR_FLOAT(wrist_yaw, -180.00f, 180.00f),
+    VR_FLOAT(wrist_roll, -180.00f, 180.00f),
+
+    VR_INT(custom_label_profile, 0, 6),
+    VR_INT(custom_move_hand, 0, 1), VR_INT(custom_look_hand, 0, 1),
+    VR_INT(custom_visor_hand, 0, 1), VR_INT(custom_visor_mode, 0, 2),
+#define VR_BIND(name, initial, group, label) VR_INT(custom_##name, 0, 36),
+#include "vr/vr_controller_bindings.inc"
+#undef VR_BIND
+
     // headset renderer
     VR_BOOL(enabled),
     VR_BOOL(required),

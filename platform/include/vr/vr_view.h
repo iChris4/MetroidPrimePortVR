@@ -15,6 +15,7 @@
 #pragma once
 
 #include "Kyoto/Math/CMatrix3f.hpp"
+#include <array>
 #include "Kyoto/Math/CTransform4f.hpp"
 #include "Kyoto/Math/CVector3f.hpp"
 #include "MetroidPrime/TGameTypes.hpp"
@@ -24,6 +25,8 @@ class CPlayer;
 class CStateManager;
 
 namespace PortSurfaceCulling { struct StereoVolume; }
+class CGuiModel;
+
 namespace PortVr {
 
 // The headset is running and this frame is shown immersively (the world per
@@ -170,6 +173,12 @@ private:
 // vr_beam_wheel_hud_highlight setting is off. The menu lights that beam's box,
 // where PrimedGun drew its own panel with a frame around the hovered icon.
 int VrBeamWheelHoverBeam() noexcept;
+
+// Uncalibrated tracking-space point to world space, shared by wrist UI geometry.
+CTransform4f VrTrackingToWorldTransform(const CPlayer& player, const CTransform4f& cameraXf) noexcept;
+void VrWristVisorDraw(const CStateManager& mgr) noexcept;
+void VrWristCaptureModels(CGuiModel* const* icons, CGuiModel* const* frames) noexcept;
+void VrWristForgetModel(const CGuiModel* widget) noexcept;
 
 // The 6DOF cannon. Once per simulation tick from CPlayer::UpdateGunTransform:
 // when the tracked controller drives the cannon, replaces `gunXf` (world) and

@@ -2,6 +2,7 @@
 
 #include "port_console.h"
 #include "port_debug.h"
+#include "port_hints.h"
 #include "port_mouse.h"
 #include "port_freecam.h"
 #ifdef TARGET_PC
@@ -918,6 +919,10 @@ bool CPlayer::MouseLookIsFree(const CStateManager& mgr) const {
   return MouseControlsAllowed(mgr) && (x304_orbitState == kOS_NoOrbit || x304_orbitState == kOS_Grapple);
 }
 
+bool CPlayer::PortEmptyLockKeepsPitch(const CStateManager& mgr) const {
+  return MouseControlsAllowed(mgr) && PortDebug::LockKeepsPitch() && x304_orbitState == kOS_OrbitPoint;
+}
+
 void CPlayer::UpdateMouseAim(CStateManager& mgr) {
   const bool active = MouseControlsAllowed(mgr);
   if (!active && PortDebug::MouseAim() && PortDebug::MouseGameplayActive()) {
@@ -1222,8 +1227,13 @@ void CPlayer::UpdateVisorState(const CFinalInput& input, float dt, CStateManager
   if (morphState == kMS_Unmorphed && !playerState->GetIsVisorTransitioning() &&
       x3a8_scanState == kSS_NotScanning) {
 
+#ifdef TARGET_PC
+    const int wristVisor = PortVr::VrTakeWristVisorRequest();
+#else
+    const int wristVisor = -1;
+#endif
     const CPlayerState::EPlayerVisor currentVisor = playerState->GetTransitioningVisor();
-    if (currentVisor == CPlayerState::kPV_Scan &&
+    if (wristVisor < 0 && currentVisor == CPlayerState::kPV_Scan &&
         (ControlMapper::GetPressInput(ControlMapper::kC_FireOrBomb, input) ||
          ControlMapper::GetPressInput(ControlMapper::kC_MissileOrPowerBomb, input)) &&
         playerState->HasPowerUp(CPlayerState::kIT_CombatVisor)) {
@@ -1235,7 +1245,8 @@ void CPlayer::UpdateVisorState(const CFinalInput& input, float dt, CStateManager
       const TVisorToItemMapping& mapping = skVisorToItemMapping[i];
       const ControlMapper::ECommands command = mapping.second;
 
-      if (playerState->HasPowerUp(mapping.first) && ControlMapper::GetPressInput(command, input)) {
+      if (playerState->HasPowerUp(mapping.first) &&
+          (wristVisor == i || (wristVisor < 0 && ControlMapper::GetPressInput(command, input)))) {
         x9c4_24_visorChangeRequested = true;
 
         CPlayerState::EPlayerVisor visor = static_cast< CPlayerState::EPlayerVisor >(i);
@@ -2891,6 +2902,7 @@ void CPlayer::UpdateScanningState(const CFinalInput& input, CStateManager& mgr, 
                                          x3ac_scanningTime / totalTime);
           if (x3ac_scanningTime >= totalTime &&
               x3b0_curScanTime >= gpTweakGui->GetScanSidesStartTime()) {
+            PortHints::ScanCompleted(static_cast< uint32_t >(scanInfo->GetStringTableId()));
             SetScanningState(kSS_ScanComplete, mgr);
           }
         }

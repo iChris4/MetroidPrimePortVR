@@ -105,7 +105,7 @@ typedef int BOOL;
 #endif
 #endif
 
-#if (defined(__cplusplus) && __cplusplus >= 201103L) || defined(__clang__)
+#if (defined(__cplusplus) && (__cplusplus >= 201103L || defined(_MSC_VER))) || defined(__clang__)
 // Use C++11 auto keyword
 #define AUTO(name, val) auto name = val
 #define AUTO_REF(name, val) auto& name = val

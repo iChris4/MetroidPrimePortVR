@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -26,6 +27,11 @@
 // therefore different cards here and keep their own files; the data never goes
 // into the card's folder (or the emulator's), and it follows the port's own
 // user folder.
+//
+// A file left under another card key (a user folder copied to a new install
+// folder, so the card's directory differs) is still used when its fingerprint
+// matches this slot: Apply scans the folder for that slot's name with any key,
+// and the next save writes it under the current one.
 //
 // Layout, little endian: "MPMD", version 1, a 64-bit fingerprint, the seen
 // word count and the words, the mark count and the 16-bit packed marks. The
@@ -105,6 +111,43 @@ inline std::string CardIdentity(const std::string& directory, const std::string&
 // The file name part of a card: the hash of its identity, 16 hex digits.
 inline uint64_t CardKey(const std::string& identity) {
   return Fingerprint(reinterpret_cast< const uint8_t* >(identity.data()), identity.size());
+}
+
+// Whether name is prefix, a 16 lowercase hex digit card key and suffix.
+inline bool HasKeyedName(const std::string& name, const std::string& prefix, const std::string& suffix) {
+  if (name.size() != prefix.size() + 16 + suffix.size() || name.compare(0, prefix.size(), prefix) != 0 ||
+      name.compare(prefix.size() + 16, std::string::npos, suffix) != 0) {
+    return false;
+  }
+  for (size_t i = prefix.size(); i < prefix.size() + 16; ++i) {
+    const char c = name[i];
+    if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// The regular files of the folder (not recursive) named prefix, any card key and
+// suffix, in name order, except skip. Errors give a shorter list, never a throw.
+inline std::vector< std::filesystem::path > KeyedFiles(const std::filesystem::path& folder,
+                                                       const std::string& prefix, const std::string& suffix,
+                                                       const std::filesystem::path& skip) {
+  std::vector< std::filesystem::path > found;
+  std::error_code error;
+  std::filesystem::directory_iterator it(folder, error);
+  const std::filesystem::directory_iterator end;
+  while (!error && it != end) {
+    const std::filesystem::path path = it->path();
+    std::error_code fileError;
+    if (path != skip && it->is_regular_file(fileError) && !fileError &&
+        HasKeyedName(PathToUtf8(path.filename()), prefix, suffix)) {
+      found.push_back(path);
+    }
+    it.increment(error);
+  }
+  std::sort(found.begin(), found.end());
+  return found;
 }
 
 inline void PutU32(std::vector< uint8_t >& out, uint32_t v) {

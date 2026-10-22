@@ -6,10 +6,14 @@
 #include "types.h"
 
 #include "Kyoto/Graphics/CColor.hpp"
+#include "Kyoto/CRandom16.hpp"
 #include "Kyoto/Math/CVector3f.hpp"
 #include "Kyoto/Particles/IElement.hpp"
+#include "Kyoto/Particles/PortParticleMath.hpp"
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstring>
 #include <utility>
 #include <vector>
@@ -77,6 +81,61 @@ public:
       delete items[i].intE;
       delete items[i].color;
       delete items[i].vec;
+    }
+  }
+};
+
+// Remastered's particle variables (GPSM ADV1..9 and IAV0..3), in its SortVars order: one is
+// evaluated after those it reads. At spawn every variable runs; on later frames only those that are
+// not constant after start (CVarContext IsConstantAfterStart), so the one RNG sequence is the same
+// as Remastered's. A kind 0 item runs the generator's own ADVn element.
+enum class EPortPartVarKind : u32 { RealAdv = 0, RealOwn = 1, Int = 2 };
+
+struct SPortPartVarItem {
+  EPortPartVarKind kind = EPortPartVarKind::RealAdv;
+  u32 slot = 0;
+  bool constAfterStart = false;
+  CRealElement* real = nullptr;  // kind 1: ADV9
+  CIntElement* intE = nullptr;   // kind 2: IAV<slot>
+};
+
+class CPortPartVars {
+public:
+  std::vector< SPortPartVarItem > items;
+
+  CPortPartVars() = default;
+  CPortPartVars(const CPortPartVars&) = delete;
+  CPortPartVars& operator=(const CPortPartVars&) = delete;
+  ~CPortPartVars() {
+    for (size_t i = 0; i < items.size(); ++i) {
+      delete items[i].real;
+      delete items[i].intE;
+    }
+  }
+
+  // values: ADV1..9 at 0..8, then the bits of IAV0..3 (CAdvancedValues). advs: the generator's
+  // ADV1..8 elements.
+  void Eval(CRealElement* const advs[8], bool spawn, int frame, float* values) const {
+    for (const SPortPartVarItem& item : items) {
+      if (!spawn && item.constAfterStart) {
+        continue;
+      }
+      switch (item.kind) {
+      case EPortPartVarKind::RealAdv:
+        if (advs[item.slot] != nullptr) {
+          advs[item.slot]->GetValue(frame, values[item.slot]);
+        }
+        break;
+      case EPortPartVarKind::RealOwn:
+        item.real->GetValue(frame, values[item.slot]);
+        break;
+      case EPortPartVarKind::Int: {
+        int v = 0;
+        item.intE->GetValue(frame, v);
+        std::memcpy(&values[9 + item.slot], &v, sizeof(v));
+        break;
+      }
+      }
     }
   }
 };
@@ -287,6 +346,226 @@ public:
   ~CIEPortSysVar() override {}
   bool GetValue(int, int& out) const override {
     out = CPortVarGlobals::sCurrent != nullptr ? CPortVarGlobals::sCurrent->SysInt(x4_slot) : 0;
+    return false;
+  }
+};
+
+// A Remastered KPIN outside a system variable becomes a hidden per-particle variable
+// (CComplexKeepInitial::RebaseComplexOp 0x2d8fac): evaluated once when the particle or swoosh
+// point is born (_Init_Particle 0x2784b8, which CreateNewParticles 0x24a4cc runs before EMTR and
+// the properties) and read unchanged after. These are the latched values of one particle or point.
+struct SPortKeep {
+  static constexpr u32 kMax = 8;
+  float values[kMax];
+  u32 latched; // a bit per slot
+};
+
+class CREPortKeep;
+
+struct CPortKeepGlobals {
+  // The particle or swoosh point being evaluated, or null (a KPIN then reads its child).
+  static SPortKeep* sCurrent;
+  // While a description is read: where its PKPR elements are listed.
+  static std::vector< const CREPortKeep* >* sCollect;
+};
+
+// Sets the latches being evaluated for its lifetime.
+struct CPortKeepScope {
+  SPortKeep* prev;
+  explicit CPortKeepScope(SPortKeep* keep) : prev(CPortKeepGlobals::sCurrent) {
+    CPortKeepGlobals::sCurrent = keep;
+  }
+  ~CPortKeepScope() { CPortKeepGlobals::sCurrent = prev; }
+};
+
+// PKPR (port-only): slot, then the KPIN's element. The first read for a particle or point latches
+// the element's value; the description latches every slot at birth (Latch), in reading order.
+class CREPortKeep : public CRealElement {
+  u32 x4_slot;
+  CRealElement* x8_value;
+
+public:
+  CREPortKeep(u32 slot, CRealElement* value) : x4_slot(slot), x8_value(value) {
+    if (CPortKeepGlobals::sCollect != nullptr) {
+      CPortKeepGlobals::sCollect->push_back(this);
+    }
+  }
+  ~CREPortKeep() override {
+    // A parse that fails after this element was built deletes it while still collecting.
+    if (std::vector< const CREPortKeep* >* list = CPortKeepGlobals::sCollect) {
+      list->erase(std::remove(list->begin(), list->end(), this), list->end());
+    }
+    delete x8_value;
+  }
+  bool GetValue(int frame, float& out) const override {
+    SPortKeep* keep = CPortKeepGlobals::sCurrent;
+    if (keep == nullptr) {
+      return x8_value->GetValue(frame, out);
+    }
+    const u32 bit = 1u << x4_slot;
+    if ((keep->latched & bit) == 0) {
+      x8_value->GetValue(frame, keep->values[x4_slot]);
+      keep->latched |= bit;
+    }
+    out = keep->values[x4_slot];
+    return false;
+  }
+  void Latch(int frame) const {
+    float value;
+    GetValue(frame, value);
+  }
+};
+
+// ABS_ (Remastered CREAbsoluteValue GetValue 0x295094, CIEAbsoluteValue 0x2a86b0,
+// CVEAbsoluteValue 0x29e254): the child evaluated into a zeroed local, then its absolute value.
+// The int one negates unsigned, so INT_MIN stays INT_MIN.
+class CREPortAbs : public CRealElement {
+  CRealElement* x4_value;
+
+public:
+  explicit CREPortAbs(CRealElement* value) : x4_value(value) {}
+  ~CREPortAbs() override { delete x4_value; }
+  bool GetValue(int frame, float& out) const override {
+    float local = 0.f;
+    x4_value->GetValue(frame, local);
+    out = std::fabs(local);
+    return false;
+  }
+};
+
+class CIEPortAbs : public CIntElement {
+  CIntElement* x4_value;
+
+public:
+  explicit CIEPortAbs(CIntElement* value) : x4_value(value) {}
+  ~CIEPortAbs() override { delete x4_value; }
+  bool GetValue(int frame, int& out) const override {
+    int local = 0;
+    x4_value->GetValue(frame, local);
+    out = local >= 0 ? local : static_cast< int >(0u - static_cast< u32 >(local));
+    return false;
+  }
+};
+
+class CVEPortAbs : public CVectorElement {
+  CVectorElement* x4_value;
+
+public:
+  explicit CVEPortAbs(CVectorElement* value) : x4_value(value) {}
+  ~CVEPortAbs() override { delete x4_value; }
+  bool GetValue(int frame, CVector3f& out) const override {
+    CVector3f local(0.f, 0.f, 0.f);
+    x4_value->GetValue(frame, local);
+    out = CVector3f(std::fabs(local.GetX()), std::fabs(local.GetY()), std::fabs(local.GetZ()));
+    return false;
+  }
+};
+
+// COSE (CRECosineWave::GetValue 0x298788), in file order frequency, amplitude, phase:
+// amplitude * FastCosR((phase + frequency * frame) * pi/180). Phase is evaluated first, then
+// frequency, then amplitude; each local starts at 0.
+class CREPortCosineWave : public CRealElement {
+  CRealElement* x4_frequency;
+  CRealElement* x8_amplitude;
+  CRealElement* xc_phase;
+
+public:
+  CREPortCosineWave(CRealElement* frequency, CRealElement* amplitude, CRealElement* phase)
+  : x4_frequency(frequency), x8_amplitude(amplitude), xc_phase(phase) {}
+  ~CREPortCosineWave() override {
+    delete x4_frequency;
+    delete x8_amplitude;
+    delete xc_phase;
+  }
+  bool GetValue(int frame, float& out) const override {
+    float phase = 0.f, frequency = 0.f, amplitude = 0.f;
+    xc_phase->GetValue(frame, phase);
+    x4_frequency->GetValue(frame, frequency);
+    x8_amplitude->GetValue(frame, amplitude);
+    out = amplitude * PortParticleMath::FastCosR(
+                          (phase + frequency * static_cast< float >(frame)) *
+                          PortParticleMath::BitsFloat(0x3c8efa35));
+    return false;
+  }
+};
+
+// The sign of a random draw in Remastered's generator: the seed bit 0x10000 is bit 0 of
+// CRandom16::Next (the draw is the seed's upper half). Set is positive.
+inline bool PortRandomSignPositive() {
+  return (CRandom16::GetRandomNumber()->Next() & 1) != 0;
+}
+
+// RSGN (CRERandomSign::GetValue 0x299318): the child, negated when the draw's bit is clear. A draw
+// on every evaluation.
+class CREPortRandomSign : public CRealElement {
+  CRealElement* x4_value;
+
+public:
+  explicit CREPortRandomSign(CRealElement* value) : x4_value(value) {}
+  ~CREPortRandomSign() override { delete x4_value; }
+  bool GetValue(int frame, float& out) const override {
+    x4_value->GetValue(frame, out);
+    if (!PortRandomSignPositive()) {
+      out = -out;
+    }
+    return false;
+  }
+};
+
+// The external variables of the generator being updated (CElementGen::x9c_externalVars), or null
+// while none was ever set: Remastered's effects spawned without a character have no external data
+// block (gen+0x48 == 0). Defined by CElementGen.cpp.
+const float* PortCurrentExternalVars();
+
+// PMXV (port-only MPXV, MPT_CREExternalValue::GetValue 0x29715c): the index, then the fallback.
+// With an external block: i = max(index, 0) % 12, out = vars[i], the fallback is not evaluated.
+// Without one: the fallback's value.
+class CREPortExternalVar : public CRealElement {
+  CIntElement* x4_index;
+  CRealElement* x8_fallback;
+
+public:
+  CREPortExternalVar(CIntElement* index, CRealElement* fallback) : x4_index(index), x8_fallback(fallback) {}
+  ~CREPortExternalVar() override {
+    delete x4_index;
+    delete x8_fallback;
+  }
+  bool GetValue(int frame, float& out) const override {
+    const float* vars = PortCurrentExternalVars();
+    if (vars == nullptr) {
+      return x8_fallback->GetValue(frame, out);
+    }
+    int i = 0;
+    x4_index->GetValue(frame, i);
+    i = i > 0 ? i : 0;
+    out = vars[static_cast< u32 >(i) % 12];
+    return false;
+  }
+};
+
+// PIRS (port-only IRSN, CREInitialRandomSign::GetValue 0x299678): slot, then the real. At frame 0
+// one draw sets the particle's sign (+1 for a set bit, else -1), kept in its SPortKeep slot (PKPR's
+// counter; not listed in sCollect, as it draws only at frame 0); the result is that sign times the
+// child. A slot never stored reads 0 (Remastered's variable memory starts zeroed). Outside a
+// particle or point, or with slot kNoSlot, the sign is the element's own.
+class CREPortInitialRandomSign : public CRealElement {
+  u32 x4_slot;
+  CRealElement* x8_value;
+  mutable float xc_sign = 0.f;
+
+public:
+  static constexpr u32 kNoSlot = 0xffffffffu;
+  CREPortInitialRandomSign(u32 slot, CRealElement* value) : x4_slot(slot), x8_value(value) {}
+  ~CREPortInitialRandomSign() override { delete x8_value; }
+  bool GetValue(int frame, float& out) const override {
+    SPortKeep* keep = CPortKeepGlobals::sCurrent;
+    float* sign = keep != nullptr && x4_slot < SPortKeep::kMax ? &keep->values[x4_slot] : &xc_sign;
+    if (frame == 0) {
+      *sign = PortRandomSignPositive() ? 1.f : -1.f;
+    }
+    float local = 0.f;
+    x8_value->GetValue(frame, local);
+    out = *sign * local;
     return false;
   }
 };

@@ -83,6 +83,18 @@ struct CPortVfxData {
   std::vector< float > meshV;
   std::vector< u16 > meshIdx16;
   std::vector< u32 > meshIdx32;
+  // VMSH v2: 16 floats per vertex (pos, normal, uv, tangent, colour; normal and tangent raw, the
+  // tangent's w the handedness with the conversion's mirror folded in), meshFlags bit 0 a real
+  // tangent, bit 1 a real colour, and the conversion port = meshOrient x Remastered + meshOffset.
+  u32 meshStride = 8, meshFlags = 0;
+  float meshOrient[9] = {1.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f};
+  float meshOffset[3] = {0.f, 0.f, 0.f};
+  // VPRM: the shader's NMAP slot (v2: and TCH0 env slot) and its CCHn uniforms (the MATI's), which
+  // VSMT targets kPortVfxParamTarget.. override.
+  s32 normalSlot = -1;
+  s32 envSlot = -1;
+  u32 paramCount = 0;
+  float params[7][4] = {};
   CPortVfxData() = default;
   CPortVfxData(const CPortVfxData&) = delete;
   CPortVfxData& operator=(const CPortVfxData&) = delete;
@@ -141,17 +153,48 @@ public:
   // port-only PMRF: Remastered PMRB/PMCF. 0 = retail (orientation * PMRT, PMOP turned by the
   // orientation), 1 = PMRT alone, 2 = orientation * PMRT; for 1 and 2 PMOP turns with the model.
   u8 xPortPmrqFrame = 0;
+  // port-only PEMV (Remastered EMRV, var 0x16): the description reads the per-tick system
+  // velocity. 0 none, 1 the external (global + local) translation, 2 the local translation.
+  u8 xPortPemv = 0;
   // port-only PIRN: a converted Remastered effect, whose nested IRND elements are stable per particle
   bool xPortIrnd = false;
+  // port-only PVSD/PVSN/PVSM: Remastered's visor effect data (any VE* property) and its splat
+  // size range VESN/VESM, read by the VisorGoo splat manager (PortVisorGoo).
+  bool xPortVisorData = false;
+  float xPortVisorMinScale = 1.4f;
+  float xPortVisorMaxScale = 2.1f;
   // port-only PGID: the first word of a converted Remastered PART's GUID (CElementGen::PortChildSeed)
   u32 xPortGuidWord = 0;
-  // Exact-source nested Remastered point-light metadata (PHDR/PIR0/POR0). The
+  // Nested Remastered point-light metadata (PHDR/PIR0/POR0/PHFO). The
   // radius elements are owned here and evaluated by the live generator.
   bool xPortNestedHdrLight = false;
   CRealElement* xPortNestedLightInnerRadius = nullptr;
   CRealElement* xPortNestedLightOuterRadius = nullptr;
+  // port-only PHFO: the authored LFOT (CLight::EPortHdrFalloff 0..3); absent = smooth
+  u8 xPortNestedLightFalloff = 3;
+  // port-only PLIX: Remastered's LIXP, LINT at the static inverse exposure (PortRoomEnv::ParticleLightGain)
+  bool xPortNestedLightInverseExposure = false;
+  // port-only PINS: Remastered's INTS, the system scale in place of the external one (EXTS still
+  // reads the external scale; CElementGen::PortSystemScale). Owned here; null = the external scale.
+  CVectorElement* xPortIntScale = nullptr;
+  // port-only PINR/PINT: Remastered's INTR/INTT, the system orientation (an Euler vector in the
+  // port's space, as PMRT's) and translation in place of the external ones (EXTR/EXTT still read
+  // the external ones; CElementGen::PortApplyIntFrame). Owned here; null = the external one.
+  CVectorElement* xPortIntRotation = nullptr;
+  CVectorElement* xPortIntTranslation = nullptr;
   // port-only PVRT: Remastered particle variables (names, types, defaults)
   std::unique_ptr< CPortVarTable > xPortVars;
+  // port-only: the PKPR elements (per-particle KPIN latches), latched at birth in this order;
+  // owned by the element trees
+  std::vector< const CREPortKeep* > xPortKeeps;
+  // port-only: an EMTR CODE (desc[0x2fa] bit 4): the rate-driven spawn (GRTE) is skipped, particles
+  // come only from code (CElementGen::TickSystem_Node 0x24a16c)
+  bool xPortCodeSpawn = false;
+  // port-only PADO: the order ADV1..8 are evaluated in (0-based), when it is not 1..8
+  std::vector< u8 > xPortAdvOrder;
+  // port-only PPVR: ADV1..9 and IAV0..3 in Remastered's sorted order with constant-after-start
+  // flags; supersedes PADO (CElementGen::UpdateAdvanceAccessParameters).
+  std::unique_ptr< CPortPartVars > xPortPartVars;
   // Port-only PSYS: the system variables (CElementGen::PortEvalSys).
   std::unique_ptr< CPortSys > xPortSys;
   // port-only PSHP: Remastered SSHP sprite mesh (0 quad; 3 triangle, 4 pentagon, 5 hexagon, 6 octagon)
@@ -159,6 +202,9 @@ public:
   // port-only PBDM: Remastered's blend row where the alpha blend stands in for it
   // (CElementGen::PortBlendSrc/Dst). 0 = retail alpha, 1 premultiplied, 3 opaque; 2 is AAPH.
   u8 xPortBlend = 0;
+  // port-only PDFG: Remastered's DFOG 1, the static render state's "no fog" flag (0x8000): the
+  // particles are not volumetric-fogged whatever their blend (PortFx::RenderScope)
+  bool xPortUnfogged = false;
   // port-only PSWX: swooshes started beyond SSWH's one, each with its start frame
   struct PortExtraSwoosh {
     TCachedToken< CSwooshDescription > swoosh;

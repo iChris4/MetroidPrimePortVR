@@ -3,6 +3,10 @@
 #include "widgets.h"
 
 #include <QComboBox>
+#include <QAbstractSpinBox>
+#include <QAbstractScrollArea>
+#include <QApplication>
+#include <QWheelEvent>
 #include <QDoubleSpinBox>
 #include <QEvent>
 #include <QHBoxLayout>
@@ -22,8 +26,23 @@ WheelBlocker* WheelBlocker::Instance() {
 bool WheelBlocker::eventFilter(QObject* watched, QEvent* event) {
   if (event->type() == QEvent::Wheel &&
       (qobject_cast<QSlider*>(watched) != nullptr ||
-       qobject_cast<QDoubleSpinBox*>(watched) != nullptr ||
+       qobject_cast<QAbstractSpinBox*>(watched) != nullptr ||
        qobject_cast<QComboBox*>(watched) != nullptr)) {
+    // Forward directly to the containing page, including when a control has focus.
+    // Ignoring alone is not sufficient on every platform or editable combo box.
+    auto* widget = qobject_cast<QWidget*>(watched);
+    for (auto* parent = widget->parentWidget(); parent; parent = parent->parentWidget()) {
+      if (auto* scroll = qobject_cast<QAbstractScrollArea*>(parent)) {
+        auto* wheel = static_cast<QWheelEvent*>(event);
+        QWheelEvent forwarded(scroll->viewport()->mapFromGlobal(wheel->globalPosition().toPoint()),
+                              wheel->globalPosition(), wheel->pixelDelta(), wheel->angleDelta(),
+                              wheel->buttons(), wheel->modifiers(), wheel->phase(), wheel->inverted(),
+                              wheel->source());
+        QApplication::sendEvent(scroll->viewport(), &forwarded);
+        event->accept();
+        return true;
+      }
+    }
     event->ignore();
     return true;
   }

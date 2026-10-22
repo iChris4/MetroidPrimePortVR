@@ -355,8 +355,8 @@ it has to be imported again. The mod scan loads the mods folder's own folders an
 `remastered-models` together, in one name order (a later name still wins over an earlier one), and a
 `mods/remastered-models` never shadows the app's copy. A `mods/remastered-models` from an older
 version - or from a player who has only ever imported there - keeps loading as the fallback for as
-long as there is no app copy: nothing migrates or deletes it on its own, and it can be removed by
-hand once the app's own import is good. A full import reuses that folder's files while it is there,
+long as there is no app copy: nothing migrates it, and once the app's own import is installed and
+usable the app deletes the old folder at startup (a dead duplicate; a symlink is left alone). A full import reuses that folder's files while it is there,
 read only (hard links, or copies where the card and the app's storage are different file systems),
 so it is left exactly as it was. The movies-only import writes into the app's copy too, and with
 only the shared one it refuses and asks for a full import rather than writing the movies there.

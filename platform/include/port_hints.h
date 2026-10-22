@@ -14,6 +14,10 @@ namespace PortHints {
 bool PickupScan(uint32_t world, uint32_t area, uint32_t entity, int itemType, bool randomized,
                 uint32_t& scanId);
 
+// The player finished scanning an object whose scan text is strgId. A totem
+// asks the Archipelago server to hint its artifact; anything else is ignored.
+void ScanCompleted(uint32_t strgId);
+
 // Whether strgId's last string follows the randomizer: one of the twelve
 // Artifact Temple totems, or a pickup scan from PickupScan. Its text can
 // arrive (or change) after the table loaded, so tables re-ask WatchedText.

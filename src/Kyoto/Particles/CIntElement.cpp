@@ -250,6 +250,11 @@ bool CIEFrameIndexFromAnimationTime::GetValue(int frame, int& valOut) const {
   return false;
 }
 
+bool CIEPortParticleVar::GetValue(int, int& valOut) const {
+  valOut = CParticleGlobals::GetParticleAccessInt(x4_slot);
+  return false;
+}
+
 CIEPortRandom::CIEPortRandom(CIntElement* min, CIntElement* max) : x4_min(min), x8_max(max) {}
 
 CIEPortRandom::~CIEPortRandom() {

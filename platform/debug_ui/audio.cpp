@@ -25,12 +25,10 @@ void DrawAudio() {
   bool ai = AiAudioEnabled();
   if (ImGui::Checkbox("Streamed audio (music/movies)", &ai)) {
     SetAiAudioEnabled(ai);
-    MarkDirty();
   }
   bool musyx = sMusyxAudioEnabled;
   if (ImGui::Checkbox("MusyX audio (effects/streams)", &musyx)) {
     SetMusyxAudioEnabled(musyx);
-    MarkDirty();
   }
 }
 
@@ -155,7 +153,6 @@ void DrawVoices() {
     bool muted = MusyxPortIsSampleMuted(agg.voice.smpId) != 0;
     if (ImGui::Checkbox("##mute", &muted)) {
       MusyxPortSetSampleMuted(agg.voice.smpId, muted ? 1 : 0);
-      MarkDirty();
     }
     ImGui::SameLine();
     ImGui::Text("smp %u  %s  len %u  pitch %u  rms %d  vol %u/%u  x%d", agg.voice.smpId,
@@ -164,10 +161,12 @@ void DrawVoices() {
     ImGui::PopID();
   }
   // Deliberately not behind the empty-list case above: with nothing playing
-  // there is still a mute set to clear.
+  // there is still a mute set to clear. Also turns both audio paths back on, so
+  // nothing stays silent. None of these mutes is saved: a relaunch has sound.
   if (ImGui::Button("Unmute all")) {
     MusyxPortClearSampleMutes();
-    MarkDirty();
+    SetAiAudioEnabled(true);
+    SetMusyxAudioEnabled(true);
   }
 }
 

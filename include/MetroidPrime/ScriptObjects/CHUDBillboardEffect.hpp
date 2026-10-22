@@ -27,6 +27,14 @@ public:
 
   static float GetNearClipDistance(const CStateManager& mgr);
   static const CVector3f& GetScaleForPOV(const CStateManager& mgr);
+#ifdef TARGET_PC
+  void AcceptScriptMsg(EScriptObjectMessage msg, TUniqueId uid, CStateManager& mgr) override;
+  // Remastered's visor goo splat manager (CVisorEffectManagerMP1, managed effect type 4).
+  // HasActiveManagedEffect(4) / SetManagedEffect(4, id) / AddVisorGooSplat 0xd1078c.
+  static bool PortHasVisorGoo(CStateManager& mgr);
+  static void PortSetVisorGoo(CStateManager& mgr, TUniqueId uid, float dt);
+  static void PortAddVisorGooSplat(CStateManager& mgr);
+#endif
 
 private:
   rstl::single_ptr< CParticleGen > xe8_generator;
@@ -37,6 +45,10 @@ private:
   bool x104_26_isElementGen : 1l; // = false;
   bool x104_27_runIndefinitely : 1l; // = false;
   float x108_timeoutTimer; // = 0.f;
+#ifdef TARGET_PC
+  // Remastered's managed effect type: 4 = the visor goo manager's billboard, -1 none.
+  int xPortManagedType = -1;
+#endif
 
   static int g_IndirectTexturedBillboardCount;
   static int g_BillboardCount;

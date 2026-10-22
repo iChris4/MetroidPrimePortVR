@@ -49,6 +49,7 @@ struct Location {
   uint32_t pickup; // pickup editor id, layer bits cleared
   uint32_t memo;   // the pickup's "acquired" HUD memo
   uint32_t relay;  // the memory relay the AP world reads the check from
+  uint32_t audio;  // the StreamedAudio that plays the pickup's jingle
   const char* name;
 };
 
@@ -58,6 +59,8 @@ const Location* Locations(size_t& count);
 const Location* FindPickup(uint32_t world, uint32_t area, uint32_t entity);
 // The location whose pickup memo is `entity`, or null.
 const Location* FindMemo(uint32_t world, uint32_t area, uint32_t entity);
+// The location whose attainment-jingle StreamedAudio is `entity`, or null.
+const Location* FindAudio(uint32_t world, uint32_t area, uint32_t entity);
 const Location* FindLocation(int64_t id);
 
 // The AP name of an item id (with the base), or null when the world has none.
@@ -98,6 +101,15 @@ enum : int {
 int PickupModelKey(int64_t itemId);
 // The model key for another game's item with these AP classification flags.
 int OtherGameModelKey(int64_t flags);
+
+// The jingle a pickup plays, as randomprime's PickupType::attainment_audio_file_name
+// picks it: the artifact jingle for artifacts, the item jingle for upgrades,
+// the short one for expansions, Energy Tanks, refills and anything that isn't
+// an item of this game; `sameGame` is false for another game's item.
+const char* JingleFile(int64_t itemId, bool sameGame);
+// The same for a player-state item type an offline seed placed (0-40, the AP
+// item ids' own range); null for anything else.
+const char* JingleForItemType(int itemType);
 
 } // namespace MetroidPrime
 } // namespace PortAp

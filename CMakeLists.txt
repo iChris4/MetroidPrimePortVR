@@ -99,6 +99,9 @@ endfunction()
 # /vmg uses the general representation everywhere, as Itanium's fixed one does.
 if(MSVC)
     add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/vmg>)
+    # cl.exe reports __cplusplus as 199711L without this whatever the standard,
+    # so the SDK's AUTO fell back to __typeof__, which it lacks (issue #170).
+    add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/Zc:__cplusplus>)
 endif()
 
 if(MP_ANDROID_NOD_STUB)
@@ -122,6 +125,13 @@ endif()
 add_subdirectory(extern/aurora EXCLUDE_FROM_ALL)
 if(TARGET aurora_mtx)
     target_compile_definitions(aurora_mtx PRIVATE MTX_USE_PS=1)
+endif()
+# EXCLUDE_FROM_ALL also keeps Aurora's tests out of the default build, but ctest still runs them,
+# so a stale binary from an older build passed or failed in place of the current code.
+if(AURORA_ENABLE_TESTS)
+    get_property(aurora_test_targets DIRECTORY extern/aurora/tests PROPERTY BUILDSYSTEM_TARGETS)
+    add_custom_target(aurora_tests ALL)
+    add_dependencies(aurora_tests ${aurora_test_targets})
 endif()
 
 # MusyX is the game's audio engine; the vendored fork is portable.
@@ -152,7 +162,8 @@ list(APPEND MP_GAME_SOURCES
     platform/port_morph_ball.cpp
     platform/port_automapper.cpp
     platform/port_particle_vfx_read.cpp
-    platform/port_element_gen.cpp)
+    platform/port_element_gen.cpp
+    src/MetroidPrime/CPortNestedLights.cpp)
 # The port has an explicit source manifest, including registration-only and
 # shim-dependent translation units. Link those objects directly on both ELF and
 # COFF rather than relying on archive extraction or suppressing duplicate symbols.
@@ -172,6 +183,12 @@ target_link_libraries(mp_game PUBLIC
 if(MSVC)
     target_compile_options(mp_game PRIVATE /W3
         /FI${CMAKE_CURRENT_SOURCE_DIR}/platform/compat.h)
+    # C++20 makes cl.exe /permissive-, which rejects a string literal bound to
+    # char* (C2440, CZipSupport.cpp); the decomp does that, as -Wno-write-strings
+    # allows elsewhere (issue #170). clang-cl only warns.
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+        target_compile_options(mp_game PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/Zc:strictStrings->)
+    endif()
 else()
     target_compile_options(mp_game PRIVATE
         -Wformat -Werror=return-type -Wno-narrowing -Wno-multichar -Wno-write-strings
@@ -234,6 +251,7 @@ set(MP_PORT_SOURCES
     platform/vr/openxr_integration.cpp
     platform/vr/vr_pad.cpp
     platform/vr/vr_view.cpp
+    platform/vr/vr_wrist_visor.cpp
     platform/vr/vr_look_scan.cpp
     platform/vr/vr_menu.cpp
     platform/vr/vr_debug_tab.cpp
@@ -349,6 +367,7 @@ set(MP_PORT_SOURCES
     platform/port_remastered_map.cpp
     platform/port_remastered_movie.cpp
     platform/port_room_env.cpp
+    platform/port_clustered_lights.cpp
     platform/port_room_env_script.cpp
     platform/port_room_env_load.cpp
     platform/port_room_env_file.cpp
@@ -376,6 +395,7 @@ set(MP_PORT_SOURCES
     platform/port_remastered_effect_import.cpp
     platform/port_remastered_report.cpp
     platform/port_remastered_import.cpp
+    platform/port_storage_report.cpp
     platform/port_remastered_import_retail.cpp
     platform/port_remastered_import_remastered.cpp
     platform/port_remastered_jpeg.cpp
@@ -408,11 +428,15 @@ endif()
 # FourCC constants. -Wno-unused-parameter and -Wno-ignored-qualifiers: every hit
 # is inside decompiled headers (include/) that platform sources include and that
 # must not be edited (named-but-unused params and const-qualified return types
-# are the decomp style); platform sources themselves have none. MSVC gets nothing
-# here (its own flags live elsewhere).
-if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+# are the decomp style); platform sources themselves have none. clang-cl reads
+# -Wall as -Weverything (540k warnings per Windows CI run), so it gets /W4, its
+# spelling of -Wall -Wextra. cl.exe gets nothing here (its own flags live elsewhere).
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang" AND NOT MSVC)
     set_source_files_properties(${MP_PORT_SOURCES} platform/smoke.cpp PROPERTIES
         COMPILE_OPTIONS "-Wall;-Wextra;-Wno-multichar;-Wno-unused-parameter;-Wno-ignored-qualifiers")
+elseif(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    set_source_files_properties(${MP_PORT_SOURCES} platform/smoke.cpp PROPERTIES
+        COMPILE_OPTIONS "/W4;-Wno-multichar;-Wno-unused-parameter;-Wno-ignored-qualifiers")
 endif()
 if(ANDROID)
     add_library(metroid_prime_port SHARED ${MP_PORT_SOURCES})
@@ -490,7 +514,8 @@ if(NOT ANDROID)
         platform/port_remastered_convert_retail.cpp platform/port_remastered_convert_material.cpp
         platform/port_remastered_convert_pbr.cpp platform/port_remastered_convert_skin.cpp
         platform/port_remastered_report.cpp)
-    target_include_directories(remastered_effect_tool PRIVATE platform/include include)
+    target_include_directories(remastered_effect_tool PRIVATE platform/include include extern/aurora/include)
+    target_compile_definitions(remastered_effect_tool PRIVATE TARGET_PC VERSION=0)
     target_link_libraries(remastered_effect_tool PRIVATE astcenc ${CMAKE_THREAD_LIBS_INIT})
     set_target_properties(remastered_effect_tool PROPERTIES EXCLUDE_FROM_ALL ON)
 endif()
@@ -696,6 +721,10 @@ install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/LICENSE
               ${CMAKE_CURRENT_SOURCE_DIR}/NOTICE
     DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/metroid-prime-port)
 
+if(MP_BUILD_TESTS)
+    enable_testing()
+endif()
+
 # The launcher's Qt-free core is also what port_launcher_tests checks.
 if(MP_BUILD_TESTS OR MP_BUILD_LAUNCHER OR MP_BUILD_QUEST_LAUNCHER)
     add_subdirectory(launcher/core)
@@ -754,7 +783,6 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 
 if(MP_BUILD_TESTS)
-    enable_testing()
     include(cmake/PortTests.cmake)
     mp_port_test(port_vr_stereo_tests SOURCES tests/port_vr_stereo.cpp
         INCLUDES platform/include extern/aurora/include extern/aurora/lib)
@@ -768,6 +796,10 @@ if(MP_BUILD_TESTS)
         INCLUDES platform/include extern/aurora/include extern/aurora/lib)
     mp_port_test(port_vr_snap_turn_tests SOURCES tests/port_vr_snap_turn.cpp
         INCLUDES platform/include extern/aurora/include extern/aurora/lib)
+    mp_port_test(port_vr_wrist_visor_tests SOURCES tests/port_vr_wrist_visor.cpp
+        INCLUDES platform/include)
+    mp_port_test(port_vr_controller_layout_tests SOURCES tests/port_vr_controller_layout.cpp
+        INCLUDES platform/include)
     mp_port_test(port_vr_smooth_turn_tests SOURCES tests/port_vr_smooth_turn.cpp
         INCLUDES platform/include)
     mp_port_test(port_vr_action_view_tests SOURCES tests/port_vr_action_view.cpp
@@ -972,9 +1004,173 @@ if(MP_BUILD_TESTS)
         INCLUDES platform/include include extern/aurora/include
         DEFINITIONS TARGET_PC VERSION=0
         GC_SECTIONS)
+    # Element batch 2 (NEGT, PLNV counts, CRCV, SPEV, ELPS): converter output.
+    mp_port_test(port_elem2_convert_tests
+        SOURCES tests/port_elem2_convert.cpp
+            platform/port_remastered_effect_convert.cpp platform/port_remastered_effect.cpp
+            src/Kyoto/Particles/CVectorElement.cpp src/Kyoto/Math/CQuaternion.cpp
+            src/Kyoto/Math/CVector3f.cpp src/Kyoto/Math/CMatrix3f.cpp
+        INCLUDES platform/include include extern/aurora/include
+        DEFINITIONS TARGET_PC VERSION=0
+        GC_SECTIONS)
+    # Element batch 3 (T2S_, SCLE, NFOM, DIVD, swoosh SUST): converter output.
+    mp_port_test(port_elem3_convert_tests
+        SOURCES tests/port_elem3_convert.cpp
+            platform/port_remastered_effect_convert.cpp platform/port_remastered_effect.cpp
+            src/Kyoto/Particles/CVectorElement.cpp src/Kyoto/Particles/CRealElement.cpp
+            src/Kyoto/Particles/CIntElement.cpp src/Kyoto/Math/CQuaternion.cpp
+            src/Kyoto/Math/CVector3f.cpp src/Kyoto/Math/CMatrix3f.cpp
+        INCLUDES platform/include include extern/aurora/include
+        DEFINITIONS TARGET_PC VERSION=0
+        GC_SECTIONS)
+    mp_port_test(port_remastered_effect_convert_vars_tests
+        SOURCES tests/port_remastered_effect_convert_vars.cpp
+            platform/port_remastered_effect_convert.cpp platform/port_remastered_effect.cpp
+            src/Kyoto/Particles/CVectorElement.cpp src/Kyoto/Math/CQuaternion.cpp
+            src/Kyoto/Math/CVector3f.cpp src/Kyoto/Math/CMatrix3f.cpp
+        INCLUDES platform/include include extern/aurora/include
+        DEFINITIONS TARGET_PC VERSION=0
+        GC_SECTIONS)
+    # ADV9 / IAV0..3 / PAP0 / PAP9 converter output (PPVR).
+    mp_port_test(port_remastered_effect_convert_pap_tests
+        SOURCES tests/port_remastered_effect_convert_pap.cpp
+            platform/port_remastered_effect_convert.cpp platform/port_remastered_effect.cpp
+            src/Kyoto/Particles/CVectorElement.cpp src/Kyoto/Math/CQuaternion.cpp
+            src/Kyoto/Math/CVector3f.cpp src/Kyoto/Math/CMatrix3f.cpp
+        INCLUDES platform/include include extern/aurora/include
+        DEFINITIONS TARGET_PC VERSION=0
+        GC_SECTIONS)
+
     mp_port_test(port_electric2_bolt_tests
         SOURCES tests/port_electric2_bolt.cpp
         INCLUDES platform/include)
+    # Remastered's clustered light gather on the CPU: the grid, the 80-byte records and the mask.
+    mp_port_test(port_clustered_lights_tests
+        SOURCES tests/port_clustered_lights.cpp platform/port_clustered_lights.cpp
+        INCLUDES platform/include)
+    # Curl noise math, the VECF field and PCRM; the token half (CPortCurlNoiseField.cpp) is
+    # left out and GC_SECTIONS drops what refers to it.
+    mp_port_test(port_curl_noise_tests
+        SOURCES tests/port_curl_noise.cpp src/Kyoto/Particles/CPortCurlNoise.cpp
+            src/Kyoto/Streams/CInputStream.cpp src/Kyoto/Streams/CMemoryInStream.cpp
+            src/Kyoto/Math/CVector3f.cpp
+        INCLUDES include extern/aurora/include
+        DEFINITIONS TARGET_PC VERSION=0
+        GC_SECTIONS)
+    mp_port_test(port_curl_noise_octave_tests
+        SOURCES tests/port_curl_noise_octave.cpp src/Kyoto/Particles/CPortCurlNoise.cpp
+            src/Kyoto/Streams/CInputStream.cpp src/Kyoto/Streams/CMemoryInStream.cpp
+            src/Kyoto/Math/CVector3f.cpp
+        INCLUDES include extern/aurora/include
+        DEFINITIONS TARGET_PC VERSION=0
+        GC_SECTIONS)
+    mp_port_test(port_remastered_effect_convert_crlnoct_tests
+        SOURCES tests/port_remastered_effect_convert_crlnoct.cpp
+            platform/port_remastered_effect_convert.cpp platform/port_remastered_effect.cpp
+            src/Kyoto/Particles/CVectorElement.cpp src/Kyoto/Math/CQuaternion.cpp
+            src/Kyoto/Math/CVector3f.cpp src/Kyoto/Math/CMatrix3f.cpp
+        INCLUDES platform/include include extern/aurora/include
+        DEFINITIONS TARGET_PC VERSION=0
+        GC_SECTIONS)
+    # ABS_, COSE, RSGN and PIRS: header-only elements (CPortParticleVars.hpp).
+    mp_port_test(port_scalar_elements_tests
+        SOURCES tests/port_scalar_elements.cpp src/Kyoto/Particles/CParticleGlobals.cpp src/Kyoto/CRandom16.cpp src/Kyoto/Math/CVector3f.cpp
+        INCLUDES include extern/aurora/include
+        DEFINITIONS TARGET_PC VERSION=0
+        GC_SECTIONS)
+    # ADV9, IAV0..3 and the constant-after-start rule (CPortPartVars).
+    mp_port_test(port_part_vars_tests
+        SOURCES tests/port_part_vars.cpp src/Kyoto/Particles/CParticleGlobals.cpp src/Kyoto/CRandom16.cpp src/Kyoto/Math/CVector3f.cpp
+        INCLUDES include extern/aurora/include
+        DEFINITIONS TARGET_PC VERSION=0
+        GC_SECTIONS)
+    # MPAC, MPCN and ANCM (Remastered's vector elements).
+    mp_port_test(port_vector_elements_tests
+        SOURCES tests/port_vector_elements.cpp src/Kyoto/Particles/CParticleGlobals.cpp src/Kyoto/CRandom16.cpp
+            src/Kyoto/Particles/CVectorElement.cpp src/Kyoto/Math/CQuaternion.cpp
+            src/Kyoto/Math/CVector3f.cpp src/Kyoto/Math/CMatrix3f.cpp
+        INCLUDES include extern/aurora/include
+        DEFINITIONS TARGET_PC VERSION=0
+        GC_SECTIONS)
+    # PNCV and ROTV outside a component tree (Remastered's CVENormalizedCompensatedVelocity and
+    # CVERotateVector).
+    mp_port_test(port_rotv_pncv_tests
+        SOURCES tests/port_rotv_pncv.cpp src/Kyoto/Particles/CParticleGlobals.cpp src/Kyoto/CRandom16.cpp
+            src/Kyoto/Math/CTransform4f.cpp
+            src/Kyoto/Particles/CVectorElement.cpp src/Kyoto/Math/CQuaternion.cpp
+            src/Kyoto/Math/CVector3f.cpp src/Kyoto/Math/CMatrix3f.cpp
+        INCLUDES include extern/aurora/include
+        DEFINITIONS TARGET_PC VERSION=0
+        GC_SECTIONS)
+    mp_port_test(port_remastered_effect_convert_rotv_tests
+        SOURCES tests/port_remastered_effect_convert_rotv.cpp
+            platform/port_remastered_effect_convert.cpp platform/port_remastered_effect.cpp
+            src/Kyoto/Particles/CVectorElement.cpp src/Kyoto/Math/CQuaternion.cpp
+            src/Kyoto/Math/CVector3f.cpp src/Kyoto/Math/CMatrix3f.cpp
+        INCLUDES platform/include include extern/aurora/include
+        DEFINITIONS TARGET_PC VERSION=0
+        GC_SECTIONS)
+    # KEYF (Remastered's CREKeyframeInput): header-only, and its converter output.
+    mp_port_test(port_keyf_tests
+        SOURCES tests/port_keyf.cpp
+        INCLUDES include extern/aurora/include
+        DEFINITIONS TARGET_PC VERSION=0
+        GC_SECTIONS)
+    mp_port_test(port_remastered_effect_convert_keyf_tests
+        SOURCES tests/port_remastered_effect_convert_keyf.cpp
+            platform/port_remastered_effect_convert.cpp platform/port_remastered_effect.cpp
+            src/Kyoto/Particles/CVectorElement.cpp src/Kyoto/Math/CQuaternion.cpp
+            src/Kyoto/Math/CVector3f.cpp src/Kyoto/Math/CMatrix3f.cpp
+        INCLUDES platform/include include extern/aurora/include
+        DEFINITIONS TARGET_PC VERSION=0
+        GC_SECTIONS)
+    # SLTW (Remastered's lifetime tween on the system slot): the element and its converter output.
+    mp_port_test(port_system_tween_tests
+        SOURCES tests/port_system_tween.cpp src/Kyoto/Particles/CParticleGlobals.cpp src/Kyoto/CRandom16.cpp
+            src/Kyoto/Math/CVector3f.cpp
+        INCLUDES include extern/aurora/include
+        DEFINITIONS TARGET_PC VERSION=0
+        GC_SECTIONS)
+    mp_port_test(port_remastered_effect_convert_sltw_tests
+        SOURCES tests/port_remastered_effect_convert_sltw.cpp
+            platform/port_remastered_effect_convert.cpp platform/port_remastered_effect.cpp
+            src/Kyoto/Particles/CVectorElement.cpp src/Kyoto/Math/CQuaternion.cpp
+            src/Kyoto/Math/CVector3f.cpp src/Kyoto/Math/CMatrix3f.cpp
+        INCLUDES platform/include include extern/aurora/include
+        DEFINITIONS TARGET_PC VERSION=0
+        GC_SECTIONS)
+    # PLNE and PLNV (Remastered's plane emitters), their spread and PLNV's shuffler.
+    mp_port_test(port_plane_emitters_tests
+        SOURCES tests/port_plane_emitters.cpp src/Kyoto/Particles/CParticleGlobals.cpp src/Kyoto/CRandom16.cpp
+            src/Kyoto/Particles/CEmitterElement.cpp
+            src/Kyoto/Math/CVector3f.cpp src/Kyoto/Math/CMatrix3f.cpp
+        INCLUDES include extern/aurora/include
+        DEFINITIONS TARGET_PC VERSION=0
+        GC_SECTIONS)
+    # SPEV and ELPS (Remastered's sphere with variance and ellipsoid, the port-only PSPV and PELP).
+    mp_port_test(port_sphere_emitters_tests
+        SOURCES tests/port_sphere_emitters.cpp src/Kyoto/Particles/CParticleGlobals.cpp src/Kyoto/CRandom16.cpp
+            src/Kyoto/Particles/CEmitterElement.cpp
+            src/Kyoto/Math/CVector3f.cpp src/Kyoto/Math/CMatrix3f.cpp
+        INCLUDES include extern/aurora/include
+        DEFINITIONS TARGET_PC VERSION=0
+        GC_SECTIONS)
+    # ASPV and LINV (Remastered's angle sphere and line with variance, the port-only PASV and PLWV).
+    mp_port_test(port_variance_emitters_tests
+        SOURCES tests/port_variance_emitters.cpp src/Kyoto/Particles/CParticleGlobals.cpp src/Kyoto/CRandom16.cpp
+            src/Kyoto/Particles/CEmitterElement.cpp src/Kyoto/Particles/CVectorElement.cpp
+            src/Kyoto/Math/CQuaternion.cpp src/Kyoto/Math/CVector3f.cpp src/Kyoto/Math/CMatrix3f.cpp
+        INCLUDES include extern/aurora/include
+        DEFINITIONS TARGET_PC VERSION=0
+        GC_SECTIONS)
+    # CRCV (Remastered's circle with variance, the port-only PCRC).
+    mp_port_test(port_circle_variance_tests
+        SOURCES tests/port_circle_variance.cpp src/Kyoto/Particles/CParticleGlobals.cpp src/Kyoto/CRandom16.cpp
+            src/Kyoto/Particles/CVectorElement.cpp src/Kyoto/Math/CQuaternion.cpp
+            src/Kyoto/Math/CVector3f.cpp src/Kyoto/Math/CMatrix3f.cpp
+        INCLUDES include extern/aurora/include
+        DEFINITIONS TARGET_PC VERSION=0
+        GC_SECTIONS)
     mp_port_test(port_ice_rotation_element_tests
         SOURCES tests/port_ice_rotation_element.cpp
             src/Kyoto/Particles/CVectorElement.cpp src/Kyoto/Math/CQuaternion.cpp
@@ -996,7 +1192,8 @@ if(MP_BUILD_TESTS)
         SOURCES tests/port_remastered_effect_import.cpp
             platform/port_remastered_effect_import.cpp platform/port_remastered_effect_convert.cpp
             platform/port_remastered_effect.cpp platform/port_remastered_image.cpp
-        INCLUDES platform/include include
+        INCLUDES platform/include include extern/aurora/include
+        DEFINITIONS TARGET_PC VERSION=0
         LIBRARIES astcenc)
     mp_port_test(port_remastered_import_tests
         SOURCES tests/port_remastered_import.cpp platform/port_remastered_effect.cpp
@@ -1278,6 +1475,12 @@ if(MP_BUILD_TESTS)
         DEFINITIONS TARGET_PC VERSION=0
         GC_SECTIONS)
     mp_port_test(port_swoosh_ring_tests SOURCES tests/port_swoosh_ring.cpp INCLUDES platform/include)
+    # Remastered's visor goo splat manager maths (include/MetroidPrime/PortVisorGoo.hpp).
+    mp_port_test(port_visor_goo_tests
+        SOURCES tests/port_visor_goo_tests.cpp src/Kyoto/CRandom16.cpp src/Kyoto/Math/CVector3f.cpp
+        INCLUDES include extern/aurora/include
+        DEFINITIONS TARGET_PC VERSION=0
+        GC_SECTIONS)
     # Every port_settings.ini key reads back as written (platform/debug_ui/settings.cpp,
     # kSettingKeys); the game binary checks itself and exits before starting.
     add_test(NAME port_settings_roundtrip COMMAND metroid_prime_port --settings-selftest)
@@ -1328,6 +1531,23 @@ if(MP_BUILD_TESTS)
             COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_CURRENT_SOURCE_DIR}/tests/port_door_save_wiring.py
                     ${CMAKE_CURRENT_SOURCE_DIR})
         set_tests_properties(port_door_save_wiring PROPERTIES TIMEOUT 15 LABELS port)
+        # A state saved in a boss fight restores the fight: delivered activation,
+        # regenerated generator copies and the replayed script message journal.
+        add_test(NAME port_boss_save_wiring
+            COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_CURRENT_SOURCE_DIR}/tests/port_boss_save_wiring.py
+                    ${CMAKE_CURRENT_SOURCE_DIR})
+        set_tests_properties(port_boss_save_wiring PROPERTIES TIMEOUT 15 LABELS port)
+        # A totem scan, not the text refresh at room load, asks the AP server for
+        # the artifact hint (issue #170).
+        add_test(NAME port_ap_scan_hint_wiring
+            COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_CURRENT_SOURCE_DIR}/tests/port_ap_scan_hint_wiring.py
+                    ${CMAKE_CURRENT_SOURCE_DIR})
+        set_tests_properties(port_ap_scan_hint_wiring PROPERTIES TIMEOUT 15 LABELS port)
+        # No raw string literal piece grows past MSVC's 16 KB limit (issue #170).
+        add_test(NAME port_msvc_string_limit
+            COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_CURRENT_SOURCE_DIR}/tests/port_msvc_string_limit.py
+                    ${CMAKE_CURRENT_SOURCE_DIR})
+        set_tests_properties(port_msvc_string_limit PROPERTIES TIMEOUT 30 LABELS port)
         # The map side file reaches its staging, its flush and its load from the
         # card driver, and the save state carries the same data in its blob.
         add_test(NAME port_map_side_wiring

@@ -116,6 +116,7 @@ constexpr uint32_t kCRSM = 0x4352534D;  // a projectile collision response
 constexpr uint32_t kELSM = 0x454C534D;  // a standalone electric effect (retail ELSC)
 constexpr uint32_t kELC2 = 0x454C4332;  // the same, in the newer form
 constexpr uint32_t kMATI = 0x4D415449;  // a material instance
+constexpr uint32_t kVECF = 0x56454346;  // a vector field (curl noise)
 constexpr uint32_t kWPSM = 0x5750534D;  // a projectile weapon (Remastered's WPSC)
 constexpr uint32_t kWPSC = 0x57505343;  // the disc's projectile weapon
 constexpr uint32_t kCRSC = 0x43525343;  // the disc's projectile collision response
@@ -288,6 +289,7 @@ private:
   Index m_electrics;  // standalone ELSM and ELC2 effects
   std::unordered_map<ModelUuid, uint32_t, PakIdHash> m_electricTypes;
   Index m_materials;
+  Index m_vectorFields;
   Index m_collisions;
   std::unordered_set<ModelUuid, PakIdHash> m_collisionDuplicates;
   std::unordered_map<std::string, Where> m_projectiles;  // WPSM, by FrameKey

@@ -289,6 +289,9 @@ struct Runtime {
   std::deque<ChatLine> chat;
   uint64_t chatSerial = 0;
   std::deque<std::string> pendingSay;
+  // Own-world artifact locations the player scanned a totem for, to be
+  // scouted as server hints by the socket thread.
+  std::deque<int64_t> pendingHintScouts;
   int itemCount = 0;
   int checkCount = 0;
   // Locations collected in game that the table has no id for. Counted and

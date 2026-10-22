@@ -17,6 +17,7 @@
 #include "vr/vr_menu.h"
 #include "vr/vr_settings.h"
 #include "vr/vr_visor_dpad.h"
+#include "vr/vr_controller_layout.h"
 
 #include <SDL3/SDL_gamepad.h>
 #include <SDL3/SDL_joystick.h>
@@ -320,7 +321,9 @@ constexpr XrSpaceLocationFlags kPoseValidFlags =
 } // namespace
 
 OpenXRControllerMode OpenXRGetControllerMode() noexcept {
-    switch (GetVrSettings().controller_mode) {
+    const auto settings = GetVrSettings();
+    if (settings.custom_layout_enabled) return OpenXRControllerMode::PrimedGun;
+    switch (settings.controller_mode) {
     case ControllerModeSetting::Gamepad:
         return OpenXRControllerMode::Gamepad;
     case ControllerModeSetting::None:
@@ -400,7 +403,14 @@ bool OpenXRInput::CreateActions() {
         const char* localized;
         XrActionType type;
     };
-    const std::array<Spec, 16> specs{{
+    const std::array<Spec, 23> specs{{
+        {&m_dpad_up, "dpad_up", "D-pad Up", XR_ACTION_TYPE_BOOLEAN_INPUT},
+        {&m_dpad_down, "dpad_down", "D-pad Down", XR_ACTION_TYPE_BOOLEAN_INPUT},
+        {&m_dpad_left, "dpad_left", "D-pad Left", XR_ACTION_TYPE_BOOLEAN_INPUT},
+        {&m_dpad_right, "dpad_right", "D-pad Right", XR_ACTION_TYPE_BOOLEAN_INPUT},
+        {&m_shoulder, "shoulder", "Shoulder", XR_ACTION_TYPE_BOOLEAN_INPUT},
+        {&m_button_tertiary, "button_tertiary", "X Button", XR_ACTION_TYPE_BOOLEAN_INPUT},
+        {&m_button_quaternary, "button_quaternary", "Y Button", XR_ACTION_TYPE_BOOLEAN_INPUT},
         {&m_thumbstick, "thumbstick", "Thumbstick", XR_ACTION_TYPE_VECTOR2F_INPUT},
         {&m_thumbstick_click, "thumbstick_click", "Thumbstick Click", XR_ACTION_TYPE_BOOLEAN_INPUT},
         {&m_thumbstick_touch, "thumbstick_touch", "Thumbstick Touch", XR_ACTION_TYPE_BOOLEAN_INPUT},
@@ -495,9 +505,14 @@ bool OpenXRInput::SuggestBindings() {
         {&m_menu, "/user/hand/left/input/menu/click"},
     };
     common(touch);
-    if (!suggest("/interaction_profiles/oculus/touch_controller", touch, true)) {
+    if (!suggest("/interaction_profiles/oculus/touch_controller", touch, false)) {
         return false;
     }
+
+    // Optional native PICO profiles share the same button/axis paths as Touch.
+    // A runtime need not emulate the Oculus profile to use these controllers.
+    suggest("/interaction_profiles/bytedance/pico4_controller", touch, false);
+    suggest("/interaction_profiles/bytedance/pico_neo3_controller", touch, false);
 
     // Valve Index: grips and trackpads report force; A / B on both hands.
     std::vector<Binding> index{
@@ -564,6 +579,40 @@ bool OpenXRInput::SuggestBindings() {
     };
     common(vive);
     suggest("/interaction_profiles/htc/vive_controller", vive, false);
+
+    // Native Steam Frame profile: retain the real D-pad and all four right face buttons.
+    if (std::find(m_runtime->EnabledExtensions().begin(), m_runtime->EnabledExtensions().end(),
+                  "XR_VALVE_frame_controller_interaction") != m_runtime->EnabledExtensions().end()) {
+        std::vector<Binding> frame;
+        common(frame);
+        std::vector<std::string> framePaths;
+        framePaths.reserve(32);
+        const auto add = [&](XrAction* action, const std::string& path) {
+            framePaths.push_back(path);
+            frame.push_back({action, framePaths.back().c_str()});
+        };
+        for (const char* hand : {"left", "right"}) {
+            const std::string base = std::string("/user/hand/") + hand + "/input/";
+            add(&m_thumbstick, base + "thumbstick");
+            add(&m_thumbstick_click, base + "thumbstick/click");
+            add(&m_trigger, base + "trigger/value");
+            add(&m_squeeze, base + "squeeze/value");
+            add(&m_shoulder, base + "shoulder/click");
+        }
+        add(&m_menu, "/user/hand/left/input/view/click");
+        add(&m_menu, "/user/hand/right/input/menu/click");
+        add(&m_dpad_up, "/user/hand/left/input/dpad_up/click");
+        add(&m_dpad_down, "/user/hand/left/input/dpad_down/click");
+        add(&m_dpad_left, "/user/hand/left/input/dpad_left/click");
+        add(&m_dpad_right, "/user/hand/left/input/dpad_right/click");
+        add(&m_button_primary, "/user/hand/left/input/dpad_down/click");
+        add(&m_button_secondary, "/user/hand/left/input/dpad_up/click");
+        add(&m_button_primary, "/user/hand/right/input/a/click");
+        add(&m_button_secondary, "/user/hand/right/input/b/click");
+        add(&m_button_tertiary, "/user/hand/right/input/x/click");
+        add(&m_button_quaternary, "/user/hand/right/input/y/click");
+        suggest("/interaction_profiles/valve/frame_controller_valve", frame, false);
+    }
 
     // Minimal fallback so an unfamiliar runtime still offers a select, a menu
     // and something to point with.
@@ -711,6 +760,8 @@ void OpenXRInput::Destroy() {
     m_trigger = m_trigger_click = m_squeeze = m_squeeze_click = m_squeeze_force = XR_NULL_HANDLE;
     m_trackpad_click = m_trackpad_force = XR_NULL_HANDLE;
     m_button_primary = m_button_secondary = m_menu = m_haptic = XR_NULL_HANDLE;
+    m_dpad_up = m_dpad_down = m_dpad_left = m_dpad_right = XR_NULL_HANDLE;
+    m_shoulder = m_button_tertiary = m_button_quaternary = XR_NULL_HANDLE;
     m_aim_pose = m_grip_pose = XR_NULL_HANDLE;
     m_hand_paths[0] = m_hand_paths[1] = XR_NULL_PATH;
     m_convert_now_to_xr_time = nullptr;
@@ -810,22 +861,35 @@ void OpenXRInput::Sync(XrTime predicted_display_time, const OpenXRPointerScreen&
     for (uint32_t hand = 0; hand < kHands; ++hand) {
         HandInputs& inputs = hands[hand];
         bool trigger_active = false, squeeze_active = false, primary_active = false;
+        bool secondary_active = false, menu_active = false;
         inputs.primary = boolean(m_button_primary, hand, &primary_active);
-        inputs.secondary = boolean(m_button_secondary, hand);
-        inputs.menu = boolean(m_menu, hand);
+        inputs.secondary = boolean(m_button_secondary, hand, &secondary_active);
+        inputs.menu = boolean(m_menu, hand, &menu_active);
         inputs.thumbstick_click = boolean(m_thumbstick_click, hand);
         inputs.trigger = scalar(m_trigger, hand, &trigger_active);
         inputs.squeeze = scalar(m_squeeze, hand, &squeeze_active);
         const XrVector2f stick = vector(m_thumbstick, hand);
         inputs.stick_x = stick.x;
         inputs.stick_y = stick.y;
-        connected[hand] = trigger_active || squeeze_active || primary_active;
+        connected[hand] = trigger_active || squeeze_active || primary_active || secondary_active || menu_active;
         extra[hand].thumbstick_touch = boolean(m_thumbstick_touch, hand);
         extra[hand].trigger_click = boolean(m_trigger_click, hand);
         extra[hand].squeeze_click = boolean(m_squeeze_click, hand);
-        extra[hand].squeeze_force = scalar(m_squeeze_force, hand);
+        bool squeeze_force_active = false;
+        extra[hand].squeeze_force = scalar(m_squeeze_force, hand, &squeeze_force_active);
+        extra[hand].trigger_analog = trigger_active;
+        extra[hand].grip_analog = squeeze_active || squeeze_force_active;
         extra[hand].trackpad_click = boolean(m_trackpad_click, hand);
-        extra[hand].trackpad_force = scalar(m_trackpad_force, hand);
+        extra[hand].trackpad_force = scalar(m_trackpad_force, hand, &extra[hand].touchpad_analog);
+        extra[hand].dpad_up = boolean(m_dpad_up, hand);
+        extra[hand].dpad_down = boolean(m_dpad_down, hand);
+        extra[hand].dpad_left = boolean(m_dpad_left, hand);
+        extra[hand].dpad_right = boolean(m_dpad_right, hand);
+        extra[hand].shoulder = boolean(m_shoulder, hand);
+        extra[hand].tertiary = boolean(m_button_tertiary, hand);
+        extra[hand].quaternary = boolean(m_button_quaternary, hand);
+        connected[hand] = connected[hand] || extra[hand].shoulder ||
+                          extra[hand].dpad_up || extra[hand].dpad_down;
     }
 
     PollInjection();
@@ -868,8 +932,20 @@ void OpenXRInput::Sync(XrTime predicted_display_time, const OpenXRPointerScreen&
     settings_panel::ToggleOptions options;
     options.allowed = panel_available && settings.vr_overlays_enabled;
     options.pointing_hand = settings.use_right_hand ? 1u : 0u;
-    options.long_press = settings.vr_menu_hold_left_stick;
-    options.needs_head_zone = settings.vr_menu_requires_head_zone;
+    if (settings.custom_layout_enabled) {
+        std::array<OpenXRControllerState, 2> controls = extra;
+        for (uint32_t h = 0; h < kHands; ++h) {
+            controls[h].connected = connected[h];
+            controls[h].primary = hands[h].primary; controls[h].secondary = hands[h].secondary;
+            controls[h].menu = hands[h].menu; controls[h].thumbstick_click = hands[h].thumbstick_click;
+            controls[h].trigger_value = hands[h].trigger; controls[h].squeeze_value = hands[h].squeeze;
+            controls[h].thumbstick_x = hands[h].stick_x; controls[h].thumbstick_y = hands[h].stick_y;
+        }
+        panel_hands = ControllerLayout::PanelInputs(controls, settings.custom_menu, settings.custom_confirm,
+                                                    settings.custom_back, was_open, options.pointing_hand, ControllerLayout::Thresholds(settings));
+    }
+    options.long_press = !settings.custom_layout_enabled && settings.vr_menu_hold_left_stick;
+    options.needs_head_zone = !settings.custom_layout_enabled && settings.vr_menu_requires_head_zone;
     if (options.needs_head_zone && !was_open) {
         // PrimedGun's LeftControllerNearHead: the physical left hand's aim pose in the
         // visor gesture's zone.
@@ -1052,6 +1128,8 @@ void OpenXRInput::PublishSnapshot(XrTime input_time, const std::array<HandInputs
             // The panel has the controllers: poses still track, nothing is held.
             state.thumbstick_touch = state.trigger_click = state.squeeze_click = state.trackpad_click = false;
             state.squeeze_force = state.trackpad_force = 0.0f;
+            state.dpad_up = state.dpad_down = state.dpad_left = state.dpad_right = false;
+            state.shoulder = state.tertiary = state.quaternary = false;
         }
         if (m_aim_spaces[hand] != XR_NULL_HANDLE) {
             XrSpaceLocation location{XR_TYPE_SPACE_LOCATION};

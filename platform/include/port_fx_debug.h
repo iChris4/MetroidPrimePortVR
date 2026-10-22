@@ -106,11 +106,15 @@ private:
   std::chrono::steady_clock::time_point t0;
 };
 
+// Around a generator's render: its draws are particles' (GXPortSetParticleFog), and unfogged ones
+// when it has DFOG 1. Nested scopes (child generators) restore the parent's state on exit.
 struct RenderScope {
-  RenderScope() {
+  explicit RenderScope(bool unfogged = false) {
     top = depth()++ == 0;
-    if (top) {
-      GXPortSetParticleFog(GX_TRUE);
+    prevFog = fog();
+    fog() = unfogged ? GXBool(GX_PORT_PARTICLE_UNFOGGED) : GXBool(GX_TRUE);
+    if (fog() != prevFog) {
+      GXPortSetParticleFog(fog());
     }
     if (top && gTiming) {
       t0 = std::chrono::steady_clock::now();
@@ -118,8 +122,9 @@ struct RenderScope {
   }
   ~RenderScope() {
     --depth();
-    if (top) {
-      GXPortSetParticleFog(GX_FALSE);
+    if (fog() != prevFog) {
+      fog() = prevFog;
+      GXPortSetParticleFog(prevFog);
     }
     if (top && gTiming) {
       gRenderNs += std::chrono::duration_cast< std::chrono::nanoseconds >(
@@ -135,7 +140,12 @@ private:
     static thread_local int d = 0;
     return d;
   }
+  static GXBool& fog() {
+    static thread_local GXBool f = GX_FALSE;
+    return f;
+  }
   bool top = false;
+  GXBool prevFog = GX_FALSE;
   std::chrono::steady_clock::time_point t0;
 };
 } // namespace PortFx

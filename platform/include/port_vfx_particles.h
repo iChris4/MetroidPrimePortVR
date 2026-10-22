@@ -30,6 +30,11 @@ void PortVfxSetLaunchDir(CElementGen::CParticle& particle);
 // PART's VMAT. A PART with PMDV variants keeps the retail model path (VMSH holds one model).
 struct CPortVfxMeshBatch {
   std::vector< aurora::gfx::vfx::Vertex > verts;
+  // Where the batch's clustered lighting looks: the Lit material (IceChargeCollisionLit) samples the
+  // room's baked probe at the first particle's model origin, as the stand-in for Remastered's per-instance
+  // BLPD record. The cluster grid and its light list need nothing per batch (they are per camera).
+  float probePos[3] = {};
+  bool probePosSet = false;
 
   // True when adding `vfx`'s mesh would take the batch past one aurora draw (the size
   // draw_triangles splits at); the caller draws and clears it first, so it stays bounded.
@@ -64,6 +69,22 @@ struct CPortVfxUvXf {
   void Apply(float qx, float qy, float uv[3][3]) const;
 };
 
-inline bool PortVfxHasMesh(const CGenDescription& desc) {
-  return PortVfxActive(desc) && desc.xPortVfx->meshTris != 0 && desc.xPortPMDV.empty();
+// IceChargeBeam's feed needs VMSH v2 with a real tangent and colour, and VPRM's NMAP slot and
+// CCH0..2; IceChargeCollision's a real tangent, VPRM v2's NMAP and TCH0 slots and CCH0..6. Without
+// them the PART keeps the retail model path.
+inline bool PortVfxIceReady(const CPortVfxData& vfx) {
+  if ((vfx.mat.features & aurora::gfx::vfx::IceChargeCollision) != 0) {
+    return vfx.meshStride == 16 && (vfx.meshFlags & 1) == 1 && vfx.normalSlot >= 0 && vfx.envSlot >= 0 &&
+           vfx.paramCount >= 7;
+  }
+  return (vfx.mat.features & aurora::gfx::vfx::IceChargeBeam) == 0 ||
+         (vfx.meshStride == 16 && (vfx.meshFlags & 3) == 3 && vfx.normalSlot >= 0 && vfx.paramCount >= 3);
 }
+
+inline bool PortVfxHasMesh(const CGenDescription& desc) {
+  return PortVfxActive(desc) && desc.xPortVfx->meshTris != 0 && desc.xPortPMDV.empty() &&
+         PortVfxIceReady(*desc.xPortVfx);
+}
+
+// VPRM's CCHn rows with the VSMT overrides (targets kPortVfxParamTarget..) at `frame`.
+void PortVfxEvalParams(const CPortVfxData& vfx, int frame, float params[7][4]);

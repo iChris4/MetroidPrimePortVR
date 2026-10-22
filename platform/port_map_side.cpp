@@ -204,9 +204,24 @@ bool Apply(int slot, const uint8_t* slotBytes, size_t size, uint32_t* seen,
   if (path.empty()) {
     return false;
   }
+  const uint64_t fingerprint = Fingerprint(slotBytes, size);
   Data data;
-  if (!ReadFile(path, Fingerprint(slotBytes, size), data)) {
-    return false;
+  if (!ReadFile(path, fingerprint, data)) {
+    // The user folder may have moved, which changes the card key: take a file of
+    // this slot left under another key when it is for these slot bytes.
+    bool adopted = false;
+    for (const fs::path& other :
+         KeyedFiles(path.parent_path(), "", "-" + std::to_string(slot) + ".bin", path)) {
+      if (ReadFile(other, fingerprint, data)) {
+        PortLog::Write("map data: slot %d takes its data from %s (another card path)\n", slot,
+                       PathToUtf8(other).c_str());
+        adopted = true;
+        break;
+      }
+    }
+    if (!adopted) {
+      return false;
+    }
   }
   for (size_t i = 0; i < kSeenWords; ++i) {
     seen[i] = data.seen[i];

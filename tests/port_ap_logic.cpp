@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <initializer_list>
 
 namespace {
 
@@ -236,6 +237,38 @@ int main() {
   REQUIRE(a == b);
   b.trickDeny = {"Alcove Escape"};
   REQUIRE(a != b);
+
+  // A pickup plays the jingle of the item placed there (randomprime's
+  // attainment_audio_file_name): artifacts, upgrades, small items, other games.
+  {
+    namespace Mp = PortAp::MetroidPrime;
+    constexpr const char* kShort = "/audio/itm_x_short_02.dsp";
+    constexpr const char* kItem = "audio/jin_itemattain.dsp";
+    constexpr const char* kArtifact = "audio/jin_artifact.dsp";
+    for (int64_t local = Mp::kArtifactTruth; local <= Mp::kArtifactNewborn; ++local)
+      REQUIRE(std::strcmp(Mp::JingleFile(kBase + local, true), kArtifact) == 0);
+    for (int64_t local : std::initializer_list< int64_t >{
+             0, Mp::kMissileExpansion, Mp::kPowerBombExpansion, Mp::kEnergyTank,
+             Mp::kUnlimitedMissiles, Mp::kUnlimitedPowerBombs, 46})
+      REQUIRE(std::strcmp(Mp::JingleFile(kBase + local, true), kShort) == 0);
+    for (int64_t local : std::initializer_list< int64_t >{
+             1, 6, 16, 22, Mp::kMissileLauncher, Mp::kMainPowerBomb, Mp::kSpringBall, 49, 54})
+      REQUIRE(std::strcmp(Mp::JingleFile(kBase + local, true), kItem) == 0);
+    // Another game's item, whatever its id, is the short jingle.
+    REQUIRE(std::strcmp(Mp::JingleFile(kBase + 29, false), kShort) == 0);
+    REQUIRE(std::strcmp(Mp::JingleFile(123, false), kShort) == 0);
+    // An offline seed's item type picks the same jingle as the AP item id.
+    REQUIRE(std::strcmp(Mp::JingleForItemType(29), kArtifact) == 0);
+    REQUIRE(std::strcmp(Mp::JingleForItemType(4), kShort) == 0);
+    REQUIRE(std::strcmp(Mp::JingleForItemType(22), kItem) == 0);
+    REQUIRE(Mp::JingleForItemType(-1) == nullptr && Mp::JingleForItemType(41) == nullptr);
+    // Every location names its jingle object, and the two sides find each other.
+    for (size_t i = 0; i < locationCount; ++i) {
+      REQUIRE(locations[i].audio != 0 && locations[i].audio != locations[i].pickup);
+      REQUIRE(Mp::FindAudio(locations[i].world, locations[i].area, locations[i].audio) ==
+              &locations[i]);
+    }
+  }
 
   std::puts("AP logic tests passed");
   return 0;

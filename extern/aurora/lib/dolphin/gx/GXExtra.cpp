@@ -202,8 +202,9 @@ GXBool GXPortVolumetricFog(const GXPortFogParams* fog) {
 void GXPortVolumetricFogEnd() { GX_WRITE_AURORA(GX_AURORA_PORT_VOLUMETRIC_FOG_END); }
 
 void GXPortSetParticleFog(GXBool on) {
+  static_assert(GX_PORT_PARTICLE_UNFOGGED == aurora::gx::GXState::kParticleUnfogged);
   GX_WRITE_AURORA(GX_AURORA_PORT_PARTICLE_FOG);
-  GX_WRITE_U8(on ? 1 : 0);
+  GX_WRITE_U8(on > GX_PORT_PARTICLE_UNFOGGED ? 1 : on);
 }
 
 GXBool GXPortXRayPass(const f32 p[8][4], const f32 tone[3][4], const f32 depthRange[3]) {

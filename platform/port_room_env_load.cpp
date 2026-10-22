@@ -169,6 +169,7 @@ void Finish(uint32_t mrea, Area& area) {
   }
   area.volumes.resize(area.file.tiles != nullptr ? 1 : area.file.grids.size());
   StartGrades(mrea, area, area.pendingFluid, area.pendingWater);
+  ReplayWorldVolumes(mrea, area);
   area.hintSnap = area.hints.Load(area.file.fluidHints, area.pendingWater);
   area.exposure = RoomExposure(area);
   if (LoadTiming()) {

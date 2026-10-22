@@ -232,6 +232,7 @@ void PADRestoreDefaultMapping(u32 port);
 void PADBlockInput(bool block);
 
 void PADSetVirtualStatus(u32 port, const PADStatus* status);
+void PADSetVirtualExclusive(u32 port, BOOL exclusive);
 void PADClearVirtualStatus(u32 port);
 void PADClearAllVirtualStatus();
 

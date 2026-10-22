@@ -76,6 +76,24 @@ inline void Electric2RibbonSidePoints(const V3& center, const V3& width, float l
   theta180 = center - width * leftRad;
 }
 
+// The half-widths one bolt is drawn with (UpdateBolt 0xb77638): node+0x28 = LRAD, node+0x2c = RRAD
+// (LLRD copies LRAD over it) and both scaled by node+0x1c = RADS. One pair per bolt: the port
+// evaluates the four elements once per bolt, at the bolt's own age, against the bolt's lifetime
+// (slot 1), and every node is drawn with that pair. Remastered evaluates them inside its per-node
+// loop, so an element that reads the node's own context (slot 2) or draws a random per call gives
+// per-node values there; see the residual on CParticleElectric2Port::UpdateBolt.
+struct BoltRadii {
+  float left = 0.f;
+  float right = 0.f;
+};
+
+inline BoltRadii ComputeBoltRadii(float rads, float lrad, float rrad, bool llrd) {
+  BoltRadii radii;
+  radii.left = rads * lrad;
+  radii.right = rads * (llrd ? lrad : rrad);
+  return radii;
+}
+
 // ELC2's vertex AddVar is multiplied by inverse exposure before the VFX shader applies
 // the room exposure. A missing/nonpositive exposure means no exposed-room factor is active.
 inline float ExposureCompensatedIntensity(float intensity, float exposure) {

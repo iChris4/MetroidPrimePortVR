@@ -1057,6 +1057,16 @@ int main() {
       CHECK_MSG(Contains(session.ArtifactHint(elder), "has not been collected."),
                 "an unknown artifact keeps the AP world's fallback text");
       CHECK_MSG(session.ArtifactHint(10).empty(), "only this game's items get a totem hint");
+      int64_t scanned = 0;
+      CHECK_MSG(!session.TakeArtifactScanHint(truth, scanned),
+                "an artifact in another world is not scouted as a hint");
+      CHECK_MSG(!session.TakeArtifactScanHint(elder, scanned), "an unknown artifact is not scouted as a hint");
+      CHECK_MSG(session.TakeArtifactScanHint(strength, scanned) && scanned == 5031102,
+                "scanning an own-world artifact scouts its location");
+      CHECK_MSG(!session.TakeArtifactScanHint(strength, scanned), "the hint is asked for once per location");
+      CHECK_MSG(Session::BuildLocationScouts({scanned}, 2) ==
+                    "{\"cmd\":\"LocationScouts\",\"locations\":[5031102],\"create_as_hint\":2}",
+                "the scan hint announces only new hints");
     }
     {
       using namespace PortAp::MetroidPrime;

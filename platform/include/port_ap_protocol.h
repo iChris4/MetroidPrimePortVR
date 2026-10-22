@@ -239,8 +239,9 @@ public:
   static std::string BuildGoal();
   // Say: chat text, or a server command such as "!hint Missile Launcher".
   static std::string BuildSay(const std::string& text);
-  // LocationScouts for `ids`, without creating hints.
-  static std::string BuildLocationScouts(const std::vector< int64_t >& ids);
+  // LocationScouts for `ids`. createAsHint is the AP value: 0 creates no hints,
+  // 2 announces only the hints that are new.
+  static std::string BuildLocationScouts(const std::vector< int64_t >& ids, int createAsHint = 0);
 
   // Name of an item id in the game of the slot that receives it: the server's
   // DataPackage, else the configured or built-in names for this game, else
@@ -269,6 +270,11 @@ public:
   // with the base), in the AP world's words: where it is when a hint or a
   // scout says, else that it has not been collected.
   std::string ArtifactHint(int64_t itemId) const;
+  // The player scanned this artifact's totem. Gives true once per location,
+  // with the location to scout as a server hint, when the artifact is in this
+  // slot's own world (LocationScouts only covers a slot's own locations; a
+  // hint for another world's location is the AP world's to make).
+  bool TakeArtifactScanHint(int64_t itemId, int64_t& location);
 
   // slot_data from Connected, for built-in tables; defaults before it arrives.
   const SlotData& GetSlotData() const { return mSlotData; }
@@ -394,6 +400,8 @@ private:
     int64_t player = 0;
   };
   std::map< int64_t, HintedLocation > mArtifactHints;
+  // Locations already scouted as hints after a totem scan.
+  std::set< int64_t > mScanHinted;
   int64_t mTeam = 0;
   void ReadHints(const PortJson::Value& hints);
   // Locations whose text the HUD showed when they were collected, so the

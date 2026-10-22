@@ -804,6 +804,16 @@ bool BeamLockName(const std::string& type) {
          type == "Power Beam Only";
 }
 
+// A door's lock on the disc. The table has the apworld's, which a seed's
+// colours and logic go by; it lists Fungal Hall Access's doors Blue, but the
+// disc has Plasma Beam doors there (#174; every other door agrees with the
+// disc's shield models and force field textures, bar Security Access B's two,
+// which are Wave and Ice the other way round, both beam locks).
+int DiscLock(int door) {
+  return kRooms[kDoors[door].room].mrea == 0xDE9D71F5u ? NameIndex(kLocks, "Plasma Beam")
+                                                       : kDoors[door].defaultLock;
+}
+
 // Per door, the bit of its doorway in the unlock set, -1 for a door that
 // isn't a beam door on the disc. The two sides of a doorway share a bit, and
 // bits count up in table order, so they're stable for a build.
@@ -816,7 +826,7 @@ const UnlockTable& Unlocks() {
     UnlockTable t;
     t.bit.assign(kDoorCount, -1);
     for (int i = 0; i < kDoorCount; ++i) {
-      if (!BeamLock(kDoors[i].defaultLock))
+      if (!BeamLock(DiscLock(i)))
         continue;
       const int pair = PairedDoor(i);
       t.bit[i] = pair >= 0 && pair < i && t.bit[pair] >= 0 ? t.bit[pair] : t.count++;
@@ -954,7 +964,7 @@ std::vector< DoorChange > Doors(const Layout& layout, uint32_t mrea, const uint3
     // sits on it or the seed gave it a lock that isn't a beam's.
     if (UnlockSet(unlocked, Unlocks().bit[i]) &&
         (change.shield.empty() || change.shield == "None") &&
-        BeamLockName(change.type.empty() ? kLocks[d.defaultLock] : change.type))
+        BeamLockName(change.type.empty() ? kLocks[DiscLock(i)] : change.type))
       change.type = "Blue";
     if (change.type.empty() && change.shield.empty())
       continue;
@@ -1116,7 +1126,7 @@ bool LockedDoorStyle(const Layout& layout, int door, const uint32_t* broken, Doo
     return false;
   // The type the room patch gives the door with nothing unlocked: the seed's,
   // else the disc's lock.
-  std::string name = kLocks[kDoors[door].defaultLock];
+  std::string name = kLocks[DiscLock(door)];
   for (const DoorChange& change : Doors(layout, kRooms[kDoors[door].room].mrea, broken, nullptr)) {
     if (change.index == door) {
       if (!change.type.empty())

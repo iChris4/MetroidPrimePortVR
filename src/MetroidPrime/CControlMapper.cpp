@@ -268,10 +268,12 @@ const char* ControlMapper::GetDescriptionForCommand(ECommands command) {
 
 #ifdef TARGET_PC
 #include "port_debug.h"
+#include "vr/vr_pad.h"
 
 // The touch wheels' pick, mapping-independent: the command (not its button) is
 // what the visor and beam code read, so Swap Scan/X-Ray does not apply.
 static bool VisorCommandRequested(ControlMapper::ECommands command) {
+  if (PortVr::VrCustomLayoutActive()) return false;
   switch (command) {
   case ControlMapper::kC_NoVisor:
     return PortDebug::VisorRequested(0);
@@ -287,6 +289,7 @@ static bool VisorCommandRequested(ControlMapper::ECommands command) {
 }
 
 static bool BeamCommandRequested(ControlMapper::ECommands command) {
+  if (PortVr::VrCustomLayoutActive()) return false;
   switch (command) {
   case ControlMapper::kC_PowerBeam:
     return PortDebug::BeamRequested(0);

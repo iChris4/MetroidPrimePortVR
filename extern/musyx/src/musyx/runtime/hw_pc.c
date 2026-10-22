@@ -122,7 +122,12 @@ void MusyxPortSetSampleMuted(unsigned smpId, int muted) {
   }
 }
 
-void MusyxPortClearSampleMutes(void) { sMutedSampleCount = 0; }
+// Also drops MP_MUTE_SMP's ids for good: marking the list initialised keeps a later
+// lookup from reading them back in.
+void MusyxPortClearSampleMutes(void) {
+  sMuteListInitialized = 1;
+  sMutedSampleCount = 0;
+}
 
 int MusyxPortGetMutedSamples(unsigned* out, int maxIds) {
   salInitMuteList();

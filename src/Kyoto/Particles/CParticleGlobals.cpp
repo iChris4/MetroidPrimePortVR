@@ -5,6 +5,8 @@
 #include "Kyoto/Streams/CInputStream.hpp"
 
 const CPortVarMemory* CPortVarGlobals::sCurrent = nullptr;
+SPortKeep* CPortKeepGlobals::sCurrent = nullptr;
+std::vector< const CREPortKeep* >* CPortKeepGlobals::sCollect = nullptr;
 
 CPortVarTable* PortReadVarTable(CInputStream& in) {
   const u32 count = in.ReadLong();
@@ -43,6 +45,28 @@ CParticleGlobals::SParticleSystem* CParticleGlobals::mCurrentParticleSystem = nu
 CElementGen::CParticle* CParticleGlobals::xPortUVParticle = nullptr;
 const CElementGen::CParticle* CParticleGlobals::xPortIrndParticle = nullptr;
 const CParticleGlobals::SPortSwooshEval* CParticleGlobals::xPortSwooshEval = nullptr;
+float CParticleGlobals::xPortSystemTween = 0.f;
+
+void CParticleGlobals::PortSetSystemTime(int frame, int lifetime) {
+  // Only the 0x1000000 cap (PSLT is min(0x1000000, ..), the no-PSLT default) gives 0; every other
+  // lifetime, 0x7FFFFF included, is divided through like the shipped code.
+  if (lifetime >= 0x1000000) {
+    xPortSystemTween = 0.f;
+    return;
+  }
+  // UpdateLifetimeTweenValues 0x24ef38: the reciprocal of the lifetime is FRECPE refined by two
+  // FRECPS steps (InverseScale), frame * that, then the two fcsel clamps (0 - t >= 0 gives 0,
+  // t - 1 >= 0 gives 1; a NaN fails both and stays).
+  const float lifeF = lifetime != 0 ? static_cast< float >(lifetime) : 1.f;
+  float tween = static_cast< float >(frame) * PortParticleMath::InverseScale(lifeF);
+  if (0.f - tween >= 0.f) {
+    tween = 0.f;
+  }
+  if (tween + -1.f >= 0.f) {
+    tween = 1.f;
+  }
+  xPortSystemTween = tween;
+}
 
 // splitmix64 of (seed, element address): the same pair always gives the same bits.
 u32 CParticleGlobals::PortIrndBits(const CElementGen::CParticle* particle, const void* element) {

@@ -332,7 +332,8 @@ u8 AuroraSetCullMirrored(u8 mirrored);
 // Payload: u32 count, then count records of 16 f32 (see GXPortSetRoomLights). Lasts until the
 // end of the frame.
 #define GX_AURORA_PORT_ROOM_LIGHTS 0x0069
-// Port extension: the draws that follow are particles (GXPortSetParticleFog). Payload: u8 on.
+// Port extension: the draws that follow are particles (GXPortSetParticleFog). Payload: u8 on
+// (0 off, 1 particles, 2 unfogged particles).
 #define GX_AURORA_PORT_PARTICLE_FOG 0x006A
 // Port extension: Remastered's X-ray visor post passes (GXPortXRayPass). Payload: 48 u32 words.
 #define GX_AURORA_PORT_XRAY 0x006B

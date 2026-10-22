@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <ctime>
 
 namespace {
 
@@ -57,6 +58,33 @@ TEST(OSTimeTest, CalendarConversionRoundTripsLocalTime) {
   EXPECT_EQ(output.msec, input.msec);
   EXPECT_EQ(output.usec, input.usec);
   EXPECT_EQ(output.yday, 59);
+}
+
+TEST(OSTimeTest, SaveTimestampMatchesCrtLocalTime) {
+  // Check both seasons and UTC date boundaries, including subsecond precision.
+  for (const std::time_t wallClock : {1704067200, 1719791999}) {
+    std::tm expected{};
+#if defined(_WIN32)
+    ASSERT_EQ(localtime_s(&expected, &wallClock), 0);
+#else
+    ASSERT_NE(localtime_r(&wallClock, &expected), nullptr);
+#endif
+    constexpr std::time_t gcnEpoch = 946684800;
+    const OSTime ticks = OSSecondsToTicks(wallClock - gcnEpoch) + OSMicrosecondsToTicks(123456);
+    OSCalendarTime actual{};
+    OSTicksToCalendarTime(ticks, &actual);
+    EXPECT_EQ(actual.year, expected.tm_year + 1900);
+    EXPECT_EQ(actual.mon, expected.tm_mon);
+    EXPECT_EQ(actual.mday, expected.tm_mday);
+    EXPECT_EQ(actual.hour, expected.tm_hour);
+    EXPECT_EQ(actual.min, expected.tm_min);
+    EXPECT_EQ(actual.sec, expected.tm_sec);
+    EXPECT_EQ(actual.wday, expected.tm_wday);
+    EXPECT_EQ(actual.yday, expected.tm_yday);
+    EXPECT_EQ(actual.msec, 123);
+    EXPECT_EQ(actual.usec, 456);
+    EXPECT_EQ(OSCalendarTimeToTicks(&actual), ticks);
+  }
 }
 
 TEST_F(GameOSTimeTest, StopsWhilePausedAndRespectsScale) {

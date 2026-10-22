@@ -99,6 +99,8 @@ void CFirstPersonCamera::UpdateTransform(CStateManager& mgr, float dt) {
   cosPitch = CMath::Limit(cosPitch, 1.f);
   CVector3f lookDir = playerXf.Rotate(CVector3f(0.f, cosPitch, sinPitch));
   const bool mouseLook = player->MouseLookIsFree(mgr) && PortDebug::AimInitialized();
+  // port: an empty lock-on that keeps the camera pitch (yaw stays on the orbit point).
+  const bool lockPitch = player->PortEmptyLockKeepsPitch(mgr) && PortDebug::AimInitialized();
   if (mouseLook) {
     // Free mouse aim is immediate; target lock-on still owns its native camera.
     const float yaw = PortDebug::AimYaw();
@@ -160,6 +162,15 @@ void CFirstPersonCamera::UpdateTransform(CStateManager& mgr, float dt) {
   case CPlayer::kOS_OrbitCarcass:
     if (!player->IsLookButtonHeld()) {
       lookDir = player->GetOrbitPoint() - eyePos;
+      if (lockPitch && player->GetOrbitState() == CPlayer::kOS_OrbitPoint) {
+        CVector3f flatDir = lookDir;
+        flatDir[kDZ] = 0.f;
+        if (flatDir.CanBeNormalized()) {
+          flatDir.Normalize();
+          const float pitch = PortDebug::AimPitch();
+          lookDir = CVector3f(flatDir.GetX() * cosf(pitch), flatDir.GetY() * cosf(pitch), sinf(pitch));
+        }
+      }
     }
     break;
   case CPlayer::kOS_NoOrbit:
@@ -228,7 +239,7 @@ void CFirstPersonCamera::UpdateTransform(CStateManager& mgr, float dt) {
   float angularStep = dt;
   CQuaternion gunRotation = CQuaternion::NoRotation();
   CTransform4f gunXf = x190_gunFollowXf;
-  if (mouseLook) {
+  if (mouseLook || lockPitch) {
     // Do not apply controller pitch easing to pixel deltas. Keep the gun-follow
     // basis in the same tick as the camera and hence the projectile aim.
     gunXf = CTransform4f::LookAt(CVector3f::Zero(), lookDir);

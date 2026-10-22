@@ -29,6 +29,7 @@ constexpr uint32_t kSwsh = EffectFourCC("SWSH");
 constexpr uint32_t kSwhc = EffectFourCC("SWHC");
 constexpr uint32_t kTxtr = EffectFourCC("TXTR");
 constexpr uint32_t kCmdl = EffectFourCC("CMDL");
+constexpr uint32_t kVecf = EffectFourCC("VECF");
 constexpr uint32_t kExternalSwooshSalt = 0x53535748u;
 constexpr size_t kMaxExternalSwooshes = 16;
 
@@ -905,11 +906,36 @@ public:
            m_io.write(Hex8(id) + ".TXTR", EncodeTxtrRgba8(stub));
   }
 
+  // Whether a VFX material's copy of the texture differs from the legacy one: sRGB bytes decode
+  // to linear, and a BC5's grey plus alpha go back to (R, G, 0, 1), the channels a GPU gives
+  // the shader (VFX_DualModColorRamp_Unlit's ramps and the indirect maps read .x and .y).
+  bool VfxCopy(const EffectGuid& id, bool& linear, bool& rg) const {
+    linear = m_io.textureSrgb && m_io.textureSrgb(id);
+    rg = m_io.textureRg && m_io.textureRg(id);
+    return linear || rg;
+  }
+
+  static void ToVfx(std::vector<uint8_t>& rgba, bool linear, bool rg) {
+    for (size_t i = 0; i + 3 < rgba.size(); i += 4) {
+      if (rg) {
+        rgba[i + 1] = rgba[i + 3];
+        rgba[i + 2] = 0;
+        rgba[i + 3] = 0xFF;
+      } else if (linear) {
+        for (size_t c = 0; c < 3; ++c) {
+          rgba[i + c] = SrgbToLinearByte(rgba[i + c]);
+        }
+      }
+    }
+  }
+
   // `vfx`: the texture is sampled by a VFX material, whose shader reads it raw. Remastered's
   // sRGB textures reach its shaders decoded, so those are written as linear values (under an
-  // id of their own, the legacy path wants the sRGB bytes) and filtered as data.
+  // id of their own, the legacy path wants the sRGB bytes) and filtered as data; a BC5 gets
+  // its red and green back (VfxCopy).
   uint32_t Texture(const EffectGuid& id, bool vfx = false) {
-    vfx = vfx && m_io.textureSrgb && m_io.textureSrgb(id);
+    bool linear = false, rg = false;
+    vfx = vfx && VfxCopy(id, linear, rg);
     auto& cache = vfx ? m_vfxTextures : m_textures;
     const auto known = cache.find(id);
     if (known != cache.end()) {
@@ -933,11 +959,7 @@ public:
         image = Resize(image, width, height);
       }
       if (vfx) {
-        for (size_t i = 0; i + 3 < image.rgba.size(); i += 4) {
-          for (size_t c = 0; c < 3; ++c) {
-            image.rgba[i + c] = SrgbToLinearByte(image.rgba[i + c]);
-          }
-        }
+        ToVfx(image.rgba, linear, rg);
       }
       out = m_io.freshId(Hash(id, vfx ? kTxtr ^ 0x5F1Du : kTxtr));
       if (WriteTexture(out, image, vfx ? MapKind::Data : MapKind::Colour)) {
@@ -955,7 +977,8 @@ public:
   // over kMaxAtlasSide. Id 0 when it cannot be.
   // `vfx`: as for Texture(), a linear-light copy (under an id of its own) for a VFX material.
   FlipbookAtlas Flipbook(const EffectGuid& id, bool vfx = false) {
-    vfx = vfx && m_io.textureSrgb && m_io.textureSrgb(id);
+    bool linear = false, rg = false;
+    vfx = vfx && VfxCopy(id, linear, rg);
     auto& cache = vfx ? m_vfxFlipbooks : m_flipbooks;
     const auto known = cache.find(id);
     if (known != cache.end()) {
@@ -1002,11 +1025,7 @@ public:
         }
       }
       if (vfx) {
-        for (size_t i = 0; i + 3 < atlas.rgba.size(); i += 4) {
-          for (size_t c = 0; c < 3; ++c) {
-            atlas.rgba[i + c] = SrgbToLinearByte(atlas.rgba[i + c]);
-          }
-        }
+        ToVfx(atlas.rgba, linear, rg);
       }
       const uint32_t fresh = m_io.freshId(Hash(id, kTxtr ^ (vfx ? 0xF11Cu : 0xF11Bu)));
       if (WriteTexture(fresh, atlas, vfx ? MapKind::Data : MapKind::Colour)) {
@@ -1038,6 +1057,61 @@ public:
       }
     }
     m_models.emplace(id, out);
+    return out;
+  }
+
+  // A Remastered vector field (VECF, the curl noise's lookup grid) as a port VECF file under a
+  // fresh id, written once; 0 when it cannot be read. Remastered's file is little-endian:
+  // 'RFRM', u64 size, 8 zero bytes, 'VECF', u32 version (4), u32 (5), s32 x3 dims, f32 x3 min,
+  // f32 x3 max, u32 count, then count float3 cells. The port file is big-endian: 'VECF', u32 1,
+  // the dims, min, max, count and the cells, in the same order.
+  uint32_t VectorField(const EffectGuid& stored) {
+    const auto known = m_vectorFields.find(stored);
+    if (known != m_vectorFields.end()) {
+      return known->second;
+    }
+    uint32_t out = 0;
+    std::vector<uint8_t> data;
+    std::string error;
+    constexpr size_t kHeader = 0x48;
+    if (!m_io.read(kVecf, Swap(stored), data, error)) {
+      Log("effect vector field " + EffectGuidString(Swap(stored)) + ": " + (error.empty() ? "unreadable" : error));
+    } else if (data.size() < kHeader || std::memcmp(data.data(), "RFRM", 4) != 0 ||
+               std::memcmp(data.data() + 0x14, "VECF", 4) != 0) {
+      Log("effect vector field " + EffectGuidString(Swap(stored)) + ": not a VECF file");
+    } else {
+      const uint8_t* d = data.data();
+      const int64_t x = int32_t(port::ReadLE32(d + 0x20));
+      const int64_t y = int32_t(port::ReadLE32(d + 0x24));
+      const int64_t z = int32_t(port::ReadLE32(d + 0x28));
+      const uint32_t count = port::ReadLE32(d + 0x44);
+      if (x < 1 || y < 1 || z < 1 || x > 1024 || y > 1024 || z > 1024 || uint64_t(x * y * z) != count ||
+          kHeader + size_t(count) * 12 > data.size()) {
+        Log("effect vector field " + EffectGuidString(Swap(stored)) + ": bad dimensions");
+      } else {
+        std::vector<uint8_t> file;
+        file.reserve(52 + size_t(count) * 12);
+        const auto put = [&file](uint32_t v) {
+          file.push_back(uint8_t(v >> 24));
+          file.push_back(uint8_t(v >> 16));
+          file.push_back(uint8_t(v >> 8));
+          file.push_back(uint8_t(v));
+        };
+        put(kVecf);
+        put(1);
+        for (size_t at = 0x20; at < kHeader; at += 4) {
+          put(port::ReadLE32(d + at));
+        }
+        for (size_t at = kHeader; at < kHeader + size_t(count) * 12; at += 4) {
+          put(port::ReadLE32(d + at));
+        }
+        out = m_io.freshId(Hash(Swap(stored), kVecf));
+        if (!m_io.write(Hex8(out) + ".VECF", file)) {
+          out = 0;
+        }
+      }
+    }
+    m_vectorFields.emplace(stored, out);
     return out;
   }
 
@@ -1159,6 +1233,9 @@ public:
                             const std::map<EffectGuid, ExternalSwoosh>& externalSwooshes) {
     EffectConvertIO io;
     io.assetId = [&](const EffectGuid& stored, uint32_t type) -> uint32_t {
+      if (type == kVecf) {
+        return VectorField(stored);
+      }
       const auto child = children.find(stored);
       if (child != children.end() && child->second.type == type) {
         return child->second.id;
@@ -1500,12 +1577,14 @@ public:
     // Children first, so the root never names a child that was not written.
     for (size_t i = 1; i < parts.size(); ++i) {
       const auto child = children.find(parts[i].id);
+      error.clear();
       if (child == children.end() || child->second.type != parts[i].type ||
           !SplitRetailEffect(parts[i].type, parts[i].part.data(), parts[i].part.size(), check, error) ||
           !m_io.write(Hex8(child->second.id) + "." + EffectFourCCString(parts[i].type), parts[i].part)) {
         // The root would name a missing child: leave the disc's PART in place.
         ++m_result.failed;
-        Log(name + ": child " + EffectGuidString(parts[i].id) + " not written");
+        Log(name + ": child " + EffectGuidString(parts[i].id) + " not written" +
+            (error.empty() ? std::string() : ": " + error));
         Report(row, "failed", "child " + EffectGuidString(parts[i].id) + " not written");
         return;
       }
@@ -1564,6 +1643,7 @@ private:
   std::map<EffectGuid, FlipbookAtlas> m_vfxFlipbooks; // linear-light copies for VFX materials
   uint32_t m_black = 0;                                // VfxTexture()'s black texture, once written
   std::map<EffectGuid, uint32_t> m_models;
+  std::map<EffectGuid, uint32_t> m_vectorFields;  // port VECF ids, 0 for one that failed
   EffectImportResult m_result;
 };
 

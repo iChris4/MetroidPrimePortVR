@@ -46,8 +46,9 @@
 CTexture* CreateTexture(int value);
 
 #ifdef TARGET_PC
-// The VMSH blob v1 (build/mpr/vfx/DESIGN.md section 1). Anything unreadable leaves the PART
-// without a mesh, so its model particles draw as retail.
+// The VMSH blob, v1 or v2 (build/mpr/vfx/DESIGN.md section 1; v2 adds a flags word, the
+// conversion's orient and offset, and a tangent and colour per vertex). Anything unreadable
+// leaves the PART without a mesh, so its model particles draw as retail.
 static bool PortReadVfxMesh(CPortVfxData& vfx, CInputStream& in, u32 nbytes) {
   u32 consumed = 0;
   auto skip = [&]() {
@@ -56,6 +57,8 @@ static bool PortReadVfxMesh(CPortVfxData& vfx, CInputStream& in, u32 nbytes) {
     }
   };
   vfx.meshVerts = vfx.meshTris = 0;
+  vfx.meshStride = 8;
+  vfx.meshFlags = 0;
   vfx.meshV.clear();
   vfx.meshIdx16.clear();
   vfx.meshIdx32.clear();
@@ -68,16 +71,30 @@ static bool PortReadVfxMesh(CPortVfxData& vfx, CInputStream& in, u32 nbytes) {
   const u32 nt = in.ReadLong();
   consumed = 12;
   const bool wide = nv > 65535;
-  const u64 expect = 12 + u64(nv) * 32 + u64(nt) * 3 * (wide ? 4 : 2);
-  if (version != 1 || nv == 0 || nt == 0 || expect != nbytes) {
+  const u32 header = version == 2 ? 12 + 4 + 12 * 4 : 12;
+  const u32 stride = version == 2 ? 16 : 8;
+  const u64 expect = header + u64(nv) * stride * 4 + u64(nt) * 3 * (wide ? 4 : 2);
+  if ((version != 1 && version != 2) || nv == 0 || nt == 0 || expect != nbytes) {
     skip();
     return true;
   }
-  vfx.meshV.resize(size_t(nv) * 8);
+  u32 flags = 0;
+  float orient[9], offset[3];
+  if (version == 2) {
+    flags = in.ReadLong();
+    for (float& f : orient) {
+      f = in.ReadFloat();
+    }
+    for (float& f : offset) {
+      f = in.ReadFloat();
+    }
+    consumed += 4 + 12 * 4;
+  }
+  vfx.meshV.resize(size_t(nv) * stride);
   for (float& f : vfx.meshV) {
     f = in.ReadFloat();
   }
-  consumed += nv * 32;
+  consumed += nv * stride * 4;
   if (wide) {
     vfx.meshIdx32.resize(size_t(nt) * 3);
     for (u32& i : vfx.meshIdx32) {
@@ -100,6 +117,52 @@ static bool PortReadVfxMesh(CPortVfxData& vfx, CInputStream& in, u32 nbytes) {
   }
   vfx.meshVerts = nv;
   vfx.meshTris = nt;
+  vfx.meshStride = stride;
+  if (version == 2) {
+    vfx.meshFlags = flags;
+    std::copy(orient, orient + 9, vfx.meshOrient);
+    std::copy(offset, offset + 3, vfx.meshOffset);
+  }
+  return true;
+}
+
+// VPRM v1: version, the NMAP slot, n, then n CCH rows of four floats; v2 has the TCH0 env slot
+// after the NMAP slot. Anything else is skipped and leaves no parameters (an IceCharge material then
+// has no mesh to draw, see PortVfxHasMesh).
+static bool PortReadVfxParams(CPortVfxData& vfx, CInputStream& in, u32 nbytes) {
+  u32 consumed = 0;
+  vfx.normalSlot = -1;
+  vfx.envSlot = -1;
+  vfx.paramCount = 0;
+  if (nbytes >= 12) {
+    const u32 version = in.ReadLong();
+    const s32 normalSlot = s32(in.ReadLong());
+    consumed = 8;
+    s32 envSlot = -1;
+    if (version == 2 && nbytes >= 16) {
+      envSlot = s32(in.ReadLong());
+      consumed += 4;
+    }
+    const u32 n = in.ReadLong();
+    consumed += 4;
+    if ((version == 1 || version == 2) && n <= kPortVfxParamCount && nbytes == consumed + n * 16) {
+      for (u32 r = 0; r < n; ++r) {
+        for (float& f : vfx.params[r]) {
+          f = in.ReadFloat();
+        }
+      }
+      consumed = nbytes;
+      vfx.normalSlot = normalSlot;
+      vfx.envSlot = envSlot;
+      vfx.paramCount = n;
+    }
+  }
+  for (; consumed + 4 <= nbytes; consumed += 4) {
+    in.ReadLong();
+  }
+  for (; consumed < nbytes; ++consumed) {
+    in.ReadChar();
+  }
   return true;
 }
 
@@ -110,7 +173,7 @@ static CPortVfxData& PortVfxData(std::unique_ptr< CPortVfxData >& vfx) {
   return *vfx;
 }
 
-// The port-only material properties a converted PART or SWSH carries (VMAT, VMSH, VTMT, VPMT,
+// The port-only material properties a converted PART or SWSH carries (VMAT, VMSH, VPRM, VTMT, VPMT,
 // VSMT, SSZE, ITEN, VORN). False when the stream can't be resynchronised.
 bool CParticleDataFactory::PortReadVfxProperty(FourCC clsId, std::unique_ptr< CPortVfxData >& vfxPtr,
                                                CInputStream& in, CSimplePool* pool) {
@@ -126,6 +189,13 @@ bool CParticleDataFactory::PortReadVfxProperty(FourCC clsId, std::unique_ptr< CP
     GetClassID(in);
     const u32 nbytes = in.ReadLong();
     if (!PortReadVfxMesh(PortVfxData(vfxPtr), in, nbytes)) {
+      return false;
+    }
+  } break;
+  case SBIG('VPRM'): {
+    GetClassID(in);
+    const u32 nbytes = in.ReadLong();
+    if (!PortReadVfxParams(PortVfxData(vfxPtr), in, nbytes)) {
       return false;
     }
   } break;

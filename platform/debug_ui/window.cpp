@@ -400,7 +400,7 @@ void DrawUI() {
   EnsureInitialized();
   PollSettingsFile(false);
   if (!sAudioSettingsApplied) {
-    // Apply persisted audio mutes once the backends are alive.
+    // Apply the startup audio switches (MP_DISABLE_AI_AUDIO) once the backends are alive.
     sAudioSettingsApplied = true;
     SetAiAudioEnabled(sAiAudioEnabled);
     SetMusyxAudioEnabled(sMusyxAudioEnabled);

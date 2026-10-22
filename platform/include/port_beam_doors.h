@@ -25,7 +25,9 @@
 // file and starts with no unlocks. The slot bytes change with every save, which
 // is fine because the file is rewritten at the same moment, after the card
 // write succeeded. A copy of only the card file loses the unlocks (the sidecar
-// stays in the user folder); a copy of both keeps them.
+// stays in the user folder); a copy of both keeps them. A file left under another
+// card key (a moved user folder) is still used when its fingerprint matches;
+// the next save writes it under the current key.
 class CStateManager;
 
 namespace PortBeamDoors {

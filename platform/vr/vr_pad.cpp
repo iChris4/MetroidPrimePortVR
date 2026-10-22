@@ -11,7 +11,10 @@
 #include "vr/vr_settings.h"
 #include "vr/vr_snap_turn.h"
 #include "vr/vr_smooth_turn.h"
+#include "vr/vr_controller_layout.h"
 #include "vr/vr_visor_dpad.h"
+#include "vr/vr_wrist_visor.h"
+#include "vr/vr_view.h"
 
 #include "MetroidPrime/CStateManager.hpp"
 #include "MetroidPrime/Cameras/CCameraManager.hpp"
@@ -71,6 +74,9 @@ std::mutex g_mutex;
 VrPadState g_state;
 WheelState g_wheel;
 VisorDpad::Tracker g_visor;
+WristVisor::Tracker g_wrist;
+WristVisor::SelectionQueue g_wristRequests;
+int g_wristHover = -1;
 SnapTurn::Tracker g_snap;
 float g_snap_pending = 0.0f; // degrees, positive right: VrTakeSnapTurn's, game thread only
 MoveState g_move;             // game thread only, as the ramp and its tick
@@ -82,6 +88,7 @@ bool g_recenter_was_pressed = false; // the right stick click's last state
 bool g_was_gameplay = false;
 bool g_in_game_menu = false; // VrNoteInGameMenu, from the game thread like VrPadUpdate
 uint32_t g_gameplay_samples = 0;
+std::atomic<bool> g_custom_layout{false};
 std::atomic<bool> g_owns_motor{false}; // port 0's rumble goes to the headset controllers
 
 // PADControlMotor's hook. While the headset controllers own port 0, its motor
@@ -121,13 +128,13 @@ double NowSeconds() noexcept {
 // The guard at the top of CPlayer::UpdateVisorState: a visor press counts only
 // unmorphed, out of a grapple and a grapple point lock, between transitions and
 // outside a scan. Anything else the game drops.
-bool VisorPressAccepted(const CStateManager& mgr, const CPlayer& player) {
+bool VisorPressAccepted(const CStateManager& mgr, const CPlayer& player, bool allowTransition = false) {
     if (player.GetOrbitState() == CPlayer::kOS_Grapple ||
         TCastToConstPtr< CScriptGrapplePoint >(mgr.GetObjectById(player.GetOrbitTargetId()))) {
         return false;
     }
     return player.GetMorphballTransitionState() == CPlayer::kMS_Unmorphed &&
-           !mgr.GetPlayerState()->GetIsVisorTransitioning() &&
+           (allowTransition || !mgr.GetPlayerState()->GetIsVisorTransitioning()) &&
            player.GetPlayerScanState() == CPlayer::kSS_NotScanning;
 }
 
@@ -223,6 +230,31 @@ void ApplyClassic(const OpenXRControllerState& left, const OpenXRControllerState
     pad.stickY = ToStick(left.thumbstick_y);
     pad.substickX = ToStick(right.thumbstick_x);
     pad.substickY = ToStick(right.thumbstick_y);
+    if (settings.custom_layout_enabled) {
+        const std::array<OpenXRControllerState, 2> hands{left, right};
+        const auto bound = [&](int binding) { return ControllerLayout::Pressed(hands, binding, ControllerLayout::Thresholds(settings)); };
+        if (morph_ball) {
+            if (bound(settings.custom_bomb)) pad.button |= PAD_BUTTON_A;
+            if (bound(settings.custom_unmorph)) pad.button |= PAD_BUTTON_X;
+            if (bound(settings.custom_boost)) pad.button |= PAD_BUTTON_B;
+            if (bound(settings.custom_power_bomb)) pad.button |= PAD_BUTTON_Y;
+            if (bound(settings.custom_spider)) { pad.button |= PAD_TRIGGER_R; pad.triggerRight = 255; }
+            if (bound(settings.custom_ball_camera)) { pad.button |= PAD_TRIGGER_L; pad.triggerLeft = 255; }
+            pad.substickY = std::min<int8_t>(pad.substickY, 0);
+            if (bound(settings.custom_spring)) pad.substickY = kStickFull;
+        } else {
+            if (bound(settings.custom_confirm)) pad.button |= PAD_BUTTON_A;
+            if (bound(settings.custom_back)) pad.button |= PAD_BUTTON_B;
+            if (bound(settings.custom_lock)) { pad.button |= PAD_TRIGGER_L; pad.triggerLeft = 255; }
+            if (bound(settings.custom_shoot)) { pad.button |= PAD_TRIGGER_R; pad.triggerRight = 255; }
+            if (bound(settings.custom_missile)) pad.button |= PAD_BUTTON_Y;
+        }
+        if (bound(settings.custom_menu_pause)) pad.button |= PAD_BUTTON_START;
+        if (bound(settings.custom_map)) pad.button |= PAD_TRIGGER_Z;
+        pad.analogA = (pad.button & PAD_BUTTON_A) ? 255 : 0;
+        pad.analogB = (pad.button & PAD_BUTTON_B) ? 255 : 0;
+        return;
+    }
     // In Morph Ball, the weapon hand drops bombs and the off hand unmorphs.
     // This is independent of primary-button jump; menu bindings stay fixed.
     if (morph_ball ? off.primary : left.primary) pad.button |= PAD_BUTTON_X;
@@ -250,8 +282,16 @@ float ApplyGameplay(const OpenXRControllerState& left, const OpenXRControllerSta
     const OpenXRControllerState& weapon = weapon_hand == 1 ? right : left;
     const OpenXRControllerState& off = weapon_hand == 1 ? left : right;
     const OpenXRControllerState& move = settings.directional_movement_use_right_stick ? right : left;
-    const OpenXRControllerState& look = settings.directional_movement_use_right_stick ? left : right;
-    const bool modifier = weapon.secondary; // the beam wheel
+    const OpenXRControllerState& look = settings.custom_layout_enabled ? (settings.custom_look_hand == 0 ? left : right)
+        : settings.directional_movement_use_right_stick ? left : right;
+    const std::array<OpenXRControllerState, 2> hands{left, right};
+    const bool custom = settings.custom_layout_enabled;
+    const auto bound = [&](int binding) {
+        if (custom && (binding == settings.custom_beam ||
+            (settings.custom_visor_mode == 1 && binding == settings.custom_visor_hold))) return false;
+        return ControllerLayout::Pressed(hands, binding, ControllerLayout::Thresholds(settings));
+    };
+    const bool modifier = custom ? ControllerLayout::Pressed(hands, settings.custom_beam, ControllerLayout::Thresholds(settings)) : weapon.secondary; // hold + swing
     const bool a_jump = settings.combat_jump_use_primary_button;
 
     // Forward / back on the move stick. Sideways: the orbit strafe in a lock,
@@ -283,31 +323,36 @@ float ApplyGameplay(const OpenXRControllerState& left, const OpenXRControllerSta
     }
     // Jump: the look stick pushed up, or the weapon hand's primary button
     // when enabled (A right-handed, X left-handed).
-    const bool jump = a_jump ? weapon.primary : (look.thumbstick_y > kJumpStickThreshold && !modifier);
+    const auto jumpBinding = [&](int binding) {
+        const int part = binding > 0 ? (binding - 1) % 16 + 1 : 0;
+        return bound(binding) && !(modifier && part >= 8 && part <= 11);
+    };
+    const bool jump = custom ? (jumpBinding(settings.custom_jump) || jumpBinding(settings.custom_jump_extra))
+                             : a_jump ? weapon.primary : (look.thumbstick_y > kJumpStickThreshold && !modifier);
     if (jump) {
         pad.button |= PAD_BUTTON_B;
         pad.analogB = kTriggerFull;
     }
     // Fire on the weapon trigger.
-    if (Pressed(weapon.trigger_value) || weapon.trigger_click) {
+    if (custom ? bound(settings.custom_shoot) : (Pressed(weapon.trigger_value) || weapon.trigger_click)) {
         pad.button |= PAD_BUTTON_A;
         pad.analogA = kTriggerFull;
     }
     // Lock / scan on the off trigger.
-    if (Pressed(off.trigger_value) || off.trigger_click) {
+    if (custom ? bound(settings.custom_lock) : (Pressed(off.trigger_value) || off.trigger_click)) {
         pad.button |= PAD_TRIGGER_L;
         pad.triggerLeft = kTriggerFull;
     }
     // Morph ball stays on the off hand's primary button (X right-handed,
     // A left-handed), even when the weapon hand's primary button jumps.
-    if (off.primary) pad.button |= PAD_BUTTON_X;
+    if (custom ? bound(settings.custom_morph) : off.primary) pad.button |= PAD_BUTTON_X;
     // Start on the off hand's Y, unless that hand is busy with the menu button
     // or the weapon modifier is held.
-    if (off.secondary && !off.menu && !modifier) pad.button |= PAD_BUTTON_START;
+    if (custom ? bound(settings.custom_pause) : (off.secondary && !off.menu && !modifier)) pad.button |= PAD_BUTTON_START;
     // Grips: map on the off hand, missile on the weapon hand, after the grace.
-    if (settings.grip_inputs_enabled && grips_ready) {
-        if (GripPressed(off, profiles[weapon_hand == 1 ? 0 : 1], settings)) pad.button |= PAD_TRIGGER_Z;
-        if (GripPressed(weapon, profiles[weapon_hand], settings)) pad.button |= PAD_BUTTON_Y;
+    if (custom || (settings.grip_inputs_enabled && grips_ready)) {
+        if (custom ? bound(settings.custom_map) : GripPressed(off, profiles[weapon_hand == 1 ? 0 : 1], settings)) pad.button |= PAD_TRIGGER_Z;
+        if (custom ? bound(settings.custom_missile) : GripPressed(weapon, profiles[weapon_hand], settings)) pad.button |= PAD_BUTTON_Y;
     }
     return turnSpeedScale;
 }
@@ -315,7 +360,11 @@ float ApplyGameplay(const OpenXRControllerState& left, const OpenXRControllerSta
 } // namespace
 
 void VrPadUpdate(const CStateManager* mgr) noexcept {
-    const PortVrSettings settings = GetVrSettings();
+    PortVrSettings settings = GetVrSettings();
+    if (settings.custom_layout_enabled) {
+        settings.controller_mode = ControllerModeSetting::PrimedGun;
+        settings.directional_movement_use_right_stick = settings.custom_move_hand == 1;
+    }
     const bool active = settings.enabled && settings.controller_mode == ControllerModeSetting::PrimedGun &&
                         OpenXRIsRunning();
     OpenXRInputSnapshot snapshot;
@@ -324,6 +373,7 @@ void VrPadUpdate(const CStateManager* mgr) noexcept {
     }
     const bool controllers = active && snapshot.runtime_active &&
                              (snapshot.controllers[0].connected || snapshot.controllers[1].connected);
+    g_custom_layout.store(controllers && settings.custom_layout_enabled, std::memory_order_relaxed);
     if (!controllers) {
         if (g_was_active) {
             PADClearVirtualStatus(0);
@@ -336,6 +386,8 @@ void VrPadUpdate(const CStateManager* mgr) noexcept {
         g_state = {};
         g_wheel = {};
         g_visor.Reset();
+        g_wrist.Reset();
+        g_wristRequests.Reset(); g_wristHover = -1;
         g_snap.Reset();
         g_snap_pending = 0.0f;
         g_move = {};
@@ -386,7 +438,26 @@ void VrPadUpdate(const CStateManager* mgr) noexcept {
     const bool grips_ready = g_gameplay_samples >= kGripGraceSamples;
 
     const uint32_t weapon_hand = settings.use_right_hand ? 1u : 0u;
-    const uint32_t visor_hand = weapon_hand == 1 ? 0u : 1u; // PrimedGun's D-pad hand: the off hand
+    unsigned wristOwned = 1u; // Combat visor is always available.
+    if (mgr && mgr->GetPlayerState()) {
+        const auto& playerState = *mgr->GetPlayerState();
+        if (playerState.HasPowerUp(CPlayerState::kIT_ScanVisor)) wristOwned |= 4u;
+        if (playerState.HasPowerUp(CPlayerState::kIT_ThermalVisor)) wristOwned |= 8u;
+        if (playerState.HasPowerUp(CPlayerState::kIT_XRayVisor)) wristOwned |= 2u;
+    }
+    const bool wristActive = settings.wrist_visor_enabled && gameplay && VrImmersive();
+    const int wristHover = wristActive ? WristVisor::Hover(snapshot, weapon_hand, g_wristHover, WristVisor::Calibration(settings)) : -1;
+    const auto wrist = g_wrist.Update(wristActive, wristHover, WristVisor::SelectionPressed(snapshot, settings.use_right_hand, settings),
+                                      WristVisor::SlotMask(wristOwned), wristActive && mgr && VisorPressAccepted(*mgr, *mgr->GetPlayer(), true));
+    g_wristHover = wristHover;
+    if (!wristActive) g_wristRequests.Reset();
+    if (wrist.selected >= 0) g_wristRequests.Submit(WristVisor::VisorForSlot[wrist.selected], NowSeconds());
+    // Remove the selection press before either legacy or custom bindings see it.
+    if (wrist.consume) WristVisor::ConsumeSelection(snapshot, weapon_hand);
+    // While focused on the wrist, the other hand's primary must not fall through
+    // to a legacy/custom action (such as Morph Ball forcing a visor change).
+    if (wrist.hover >= 0) snapshot.controllers[1u - weapon_hand].primary = false;
+    const uint32_t visor_hand = settings.custom_layout_enabled ? settings.custom_visor_hand : weapon_hand == 1 ? 0u : 1u; // PrimedGun's D-pad hand: the off hand
     OpenXRControllerState left = snapshot.controllers[0];
     OpenXRControllerState right = snapshot.controllers[1];
     const OpenXRControllerState& weapon = snapshot.controllers[weapon_hand];
@@ -406,19 +477,30 @@ void VrPadUpdate(const CStateManager* mgr) noexcept {
         in.deadzone = VisorDpad::EffectiveDeadzone(settings.xr_dpad_deadzone);
         in.accepting = visor_press_accepted;
         in.now = NowSeconds();
+        if (settings.custom_layout_enabled) {
+            const bool holdMode = settings.custom_visor_mode == 1;
+            const bool held = ControllerLayout::Pressed(snapshot.controllers, settings.custom_visor_hold, ControllerLayout::Thresholds(settings));
+            in.armed = gameplay && hand.connected && settings.custom_visor_mode != 2 &&
+                       (holdMode ? held : (hand.aim_pose.valid && snapshot.head_pose.valid));
+            if (holdMode) {
+                in.near_head = held;
+                if (!held) g_visor.Reset();
+            }
+        }
+        if (wrist.hover >= 0 || wrist.consume) { in.armed = false; g_visor.Reset(); }
         visor = g_visor.Update(in);
     }
     // The snap turn, on the look stick before the visor gesture takes it:
     // PrimedGun keeps a flick made at the head from counting afterwards.
     {
-        const uint32_t look_hand = settings.directional_movement_use_right_stick ? 0u : 1u;
+        const uint32_t look_hand = settings.custom_layout_enabled ? settings.custom_look_hand : settings.directional_movement_use_right_stick ? 0u : 1u;
         const OpenXRControllerState& hand = snapshot.controllers[look_hand];
         SnapTurn::Input in;
         in.enabled = settings.snap_turn_enabled;
         in.connected = hand.connected;
         in.stick_x = hand.thumbstick_x;
         in.near_head = (look_hand == visor_hand && visor.zone) ||
-                       (hand.aim_pose.valid && snapshot.head_pose.valid &&
+                       (!settings.custom_layout_enabled && hand.aim_pose.valid && snapshot.head_pose.valid &&
                         VisorDpad::HandNearHead(hand.aim_pose.position, snapshot.head_pose.position,
                                                 settings.xr_dpad_head_radius, settings.xr_dpad_head_y_below));
         in.accepting = gameplay && !visor_changing;
@@ -467,7 +549,9 @@ void VrPadUpdate(const CStateManager* mgr) noexcept {
     // immersive origin on where the head is now (position only, no yaw).
     // PrimedGun ignores it while the visor gesture is up.
     {
-        const bool pressed = right.connected && right.thumbstick_click && !visor.zone;
+        const bool pressed = (settings.custom_layout_enabled
+            ? ControllerLayout::Pressed(snapshot.controllers, settings.custom_height, ControllerLayout::Thresholds(settings))
+            : right.connected && right.thumbstick_click) && !visor.zone;
         if (pressed && !g_recenter_was_pressed) {
             OpenXRRequestRecenter();
         }
@@ -485,8 +569,18 @@ void VrPadUpdate(const CStateManager* mgr) noexcept {
     }
     // The beam wheel owns the weapon hand's B while it is held; the orbit lock
     // keeps its L (the game does the locking) and the pad's C-stick is free.
-    UpdateWeaponWheel(weapon, gameplay && weapon.secondary, gameplay, pad);
+    const bool beamHeld = settings.custom_layout_enabled
+        ? ControllerLayout::Pressed(snapshot.controllers, settings.custom_beam, ControllerLayout::Thresholds(settings)) : weapon.secondary;
+    UpdateWeaponWheel(weapon, gameplay && beamHeld, gameplay, pad);
     pad.button |= DpadButton(visor.held);
+    if (settings.custom_layout_enabled) {
+        const auto bound = [&](int binding) { return ControllerLayout::Pressed(snapshot.controllers, binding, ControllerLayout::Thresholds(settings)); };
+        if (bound(settings.custom_visor_up)) pad.button |= PAD_BUTTON_UP;
+        if (bound(settings.custom_visor_down)) pad.button |= PAD_BUTTON_DOWN;
+        if (bound(settings.custom_visor_left)) pad.button |= PAD_BUTTON_LEFT;
+        if (bound(settings.custom_visor_right)) pad.button |= PAD_BUTTON_RIGHT;
+    }
+    PADSetVirtualExclusive(0, settings.custom_layout_enabled);
     PADSetVirtualStatus(0, &pad);
 
     std::lock_guard lock(g_mutex);
@@ -497,6 +591,9 @@ void VrPadUpdate(const CStateManager* mgr) noexcept {
     g_state.weapon_panel = g_wheel.open;
     g_state.weapon_selected = static_cast<int>(g_wheel.selected);
     g_state.weapon_hand = weapon_hand;
+    g_state.wrist_visible = wristActive;
+    g_state.wrist_hover = wrist.hover;
+    g_state.wrist_owned = wristOwned;
     g_state.visor_zone = visor.zone;
     g_state.visor_direction = static_cast<int>(visor.direction);
     g_state.move_owned = g_move.owns;
@@ -504,6 +601,8 @@ void VrPadUpdate(const CStateManager* mgr) noexcept {
     g_state.move_heading_degrees =
         g_move.owns ? std::atan2(g_move.heading[0], g_move.heading[1]) * (180.0f / 3.14159265358979f) : 0.0f;
 }
+
+int VrTakeWristVisorRequest() noexcept { return g_wristRequests.Take(NowSeconds()); }
 
 void VrNoteInGameMenu(bool open) noexcept { g_in_game_menu = open; }
 
@@ -544,6 +643,8 @@ VrPadState GetVrPadState() noexcept {
 
 // The motor claim is the port claim: VrPadUpdate sets it when the controllers
 // take port 0 and clears it with PADClearVirtualStatus when they let go.
+bool VrCustomLayoutActive() noexcept { return g_custom_layout.load(std::memory_order_relaxed); }
+
 bool VrPadOwnsPort0() noexcept { return g_owns_motor.load(std::memory_order_relaxed); }
 
 } // namespace PortVr

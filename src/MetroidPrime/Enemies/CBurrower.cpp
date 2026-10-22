@@ -14,7 +14,14 @@
 const CDamageVulnerability CBurrower::skBombVulnerability =
     CDamageVulnerability(kVN_Deflect, kVN_Deflect, kVN_Deflect, kVN_Deflect, kVN_Normal, kVN_Normal,
                         kVN_Deflect, kVN_Deflect, kVN_Deflect, kVN_Deflect, kVN_Deflect,
-                        kVN_Deflect, kVN_Deflect, kVN_Deflect, kVN_Deflect, kDT_None);
+                        kVN_Deflect, kVN_Deflect, kVN_Deflect, kVN_Deflect, kDT_None)
+#ifdef TARGET_PC
+        // Retail's __sinit builds this on the stack and copies it, x60/x64 included, which the
+        // 16-argument ctor never writes: in v1.00 RAM they hold 0x3E666666/6. Explode's switch
+        // sends those to its default case, so charged and combo shots ricochet (#134).
+        .PortSetChargedComboDeflect(kDT_Ricochet)
+#endif
+    ;
 
 CBurrower::CBurrower(const TUniqueId uid, const rstl::string& name, const CEntityInfo& info,
                     const CTransform4f& xf, const CModelData& mData, const CPatternedInfo& pInfo,
