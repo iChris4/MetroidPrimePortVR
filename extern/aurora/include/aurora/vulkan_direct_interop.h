@@ -63,7 +63,8 @@ bool aurora_vulkan_direct_enable(AuroraVulkanDirectSubmittedCallback submitted, 
 /**
  * Publishes the acquired image(s) for frameToken: two for immersive projection frames, one for
  * the virtual screen, plus the settings panel's quad-layer image when `panel` is not null.
- * Exactly one frame may be pending at a time.
+ * Exactly one frame may be pending at a time. A frame whose encode finds no targets waits up to
+ * 20 ms for them (pipelined pacing sets a packet's targets once the previous one was submitted).
  */
 bool aurora_vulkan_direct_set_targets(uint64_t frameToken, const AuroraVulkanDirectTarget* targets,
                                       uint32_t targetCount, const AuroraVulkanDirectTarget* panel);

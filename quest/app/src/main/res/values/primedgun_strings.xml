@@ -325,7 +325,7 @@
     <string name="primedgun_direct_present">Direct to headset</string>
     <string name="primedgun_direct_present_note">The eyes go straight into the headset\'s images; off, through shared buffers on a second device.</string>
     <string name="primedgun_pipelined_rendering">Pipelined rendering</string>
-    <string name="primedgun_pipelined_rendering_note">More throughput, one frame of latency.</string>
+    <string name="primedgun_pipelined_rendering_note">More throughput, one frame of latency. Needs Direct to headset.</string>
     <string name="primedgun_deindex_vertices">Resolve indexed vertices</string>
     <string name="primedgun_deindex_vertices_note">On the CPU, which also keeps the world\'s geometry on the GPU between frames.</string>
     <string name="primedgun_diagnostics_logging">Diagnostics logging</string>
