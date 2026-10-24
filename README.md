@@ -206,9 +206,25 @@ and remains Nintendo's. See `NOTICE`.
 Metroid Prime is a trademark of Nintendo. This project is unaffiliated with
 Nintendo and Retro Studios, and ships no game data.
 
-`docs/NATIVE_PORT.md` is the detailed reference: build options, the smoke-test hooks,
-and the platform notes. Every setting and environment variable lives in
-`docs/SETTINGS.md` (debug console: `docs/CONSOLE.md`, mods: `docs/MODS.md`).
+## Documentation
+
+| Document | What it covers |
+|---|---|
+| `docs/SETTINGS.md` | Every control, setting and environment variable |
+| `docs/NATIVE_PORT.md` | The detailed reference: build options, smoke-test hooks, platform notes |
+| `docs/MODS.md` | HD texture packs and the mods folder |
+| `docs/DREAD_SAMUS.md` | The Metroid Dread Samus model import |
+| `docs/RANDOMIZER.md` | The built-in randomizer |
+| `docs/ARCHIPELAGO.md` | The Archipelago multiworld client |
+| `docs/CONSOLE.md` | The debug console (`MP_CONSOLE`) |
+| `docs/DEBUGGING.md` | Headless debugging with `tools/mprig.py` |
+| `tools/README.md` | What each script in `tools/` does and what runs it |
+| `docs/RELEASING.md` | What a release contains and must carry |
+| `docs/ANDROID.md` | The Android port's status and build |
+| `docs/REMASTERED_EFFECTS.md` | Importing Remastered particle effects |
+| `docs/FRAME_INTERPOLATION.md`, `docs/HIGH_FPS_AUDIT.md` | High frame rate design notes |
+| `decomp/` | The original decompilation's GameCube build and notes (not used by the port) |
+| `PORT_NOTES.md` | Open follow-ups and non-obvious facts |
 
 ## AI assistance
 

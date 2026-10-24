@@ -2,6 +2,7 @@
 #include "port_freecam.h"
 
 #include "port_debug.h"
+#include "port_third_person.h"
 #include "Kyoto/Input/CFinalInput.hpp"
 #include "Kyoto/Math/CRelAngle.hpp"
 #include "Kyoto/Math/CTransform4f.hpp"
@@ -203,7 +204,7 @@ bool Input(const CFinalInput& input) {
 
 CTransform4f View(const CTransform4f& game) {
   if (!sActive) {
-    return game;
+    return PortThirdPerson::View(game);
   }
   const Pose pose = PresentedPose();
   CTransform4f xf = ViewRotation(pose);

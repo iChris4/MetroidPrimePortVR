@@ -134,6 +134,19 @@ struct TxtrLayersBc6h {
   std::vector<std::vector<uint8_t>> layers;
 };
 bool ReadTxtrLayersBc6h(const uint8_t* data, size_t size, TxtrLayersBc6h& out, std::string& error);
+// A plain 2D BC6H texture's mip chain as it is stored, for writing it on as BC6H (a sky's
+// HDR map): mips[m] holds ceil(w_m / 4) * ceil(h_m / 4) blocks, rows in stored order, down
+// to 1x1 or as far as the file goes.
+struct TxtrMipsBc6h {
+  uint32_t width = 0, height = 0;
+  bool isSigned = false;
+  std::vector<std::vector<uint8_t>> mips;
+};
+bool ReadTxtrMipsBc6h(const uint8_t* data, size_t size, TxtrMipsBc6h& out, std::string& error);
+// A half float's value as a linear byte: clamped to [0, 1], rounded (what DecodeTxtr gives BC6H).
+uint8_t HalfToUnormByte(uint16_t half);
+// One BC6H block as 16 RGBA8 texels through HalfToUnormByte, alpha 255.
+void DecodeBc6hBlockRgba8(const uint8_t* block, bool isSigned, uint8_t* rgba);
 // DecodeBc6hFace for a width x height image (any size).
 void DecodeBc6hImage(const uint8_t* blocks, uint32_t width, uint32_t height, bool isSigned, uint16_t* rgba);
 // Decodes one face of BC6H blocks (`texels` on a side) into RGBA half floats, alpha 1.

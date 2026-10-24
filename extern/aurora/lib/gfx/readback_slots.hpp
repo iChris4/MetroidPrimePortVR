@@ -1,7 +1,10 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
+#include <deque>
+#include <type_traits>
 #include <cstdint>
 #include <mutex>
 #include <utility>
@@ -23,6 +26,9 @@
 //    buffer alive that the slot has let go of, and a callback that arrives late (or twice) could
 //    then read or unmap whatever that slot holds now. So a map is identified by a Key, which
 //    carries no reference, and every use of a slot takes a new generation.
+// `Count` slots exist from the start. A growing set (the constructor's `grow`) adds one when every
+// slot is busy instead of skipping the frame, as Remastered's staging pool does; each claim also
+// takes an order, so a reader can keep the newest of several maps that finish together.
 namespace aurora::gfx::detail {
 
 enum class ReadbackState { Available, CopySubmitted, MapPending };
@@ -42,25 +48,30 @@ public:
     Buffer buffer{};
   };
 
-  // The slots whose copy has been submitted: `count` of `mappings`, the rest empty. Mapping
-  // happens outside the lock, as a map can complete straight away and its callback takes the
-  // lock again. Fixed size, so a frame allocates nothing here.
+  // The slots whose copy has been submitted: `count` of them, in `mappings`. Mapping happens
+  // outside the lock, as a map can complete straight away and its callback takes the lock again.
   struct Submitted {
-    std::array<Mapping, Count> mappings{};
+    std::vector<Mapping> mappings;
     size_t count = 0;
   };
 
   // `make` builds a slot's buffer the first time that slot is used.
-  explicit ReadbackSlots(Buffer (*make)()) : m_make(make) {}
+  explicit ReadbackSlots(Buffer (*make)(), bool grow = false) : m_make(make), m_grow(grow), m_slots(Count) {}
 
   // A free slot's buffer, now marked as copying into it, or an empty buffer when every slot is
-  // busy: the caller then skips its copy for a frame. `exposure` is kept for the map's caller.
+  // busy and the set does not grow: the caller then skips its copy for a frame. `exposure` is kept for the map's caller.
   // A claimed slot always has a buffer, so every mapping submit() hands back has one too.
   Buffer claim(float exposure) {
     std::lock_guard lock(m_mutex);
     Buffer buffer{};
-    for (size_t i = 0; i < Count && !buffer; ++i) {
-      const size_t index = (m_next + i) % Count;
+    if (m_grow && std::none_of(m_slots.begin(), m_slots.end(),
+                               [](const Slot& slot) { return slot.state == ReadbackState::Available; })) {
+      m_next = m_slots.size();
+      m_slots.emplace_back();
+    }
+    const size_t count = m_slots.size();
+    for (size_t i = 0; i < count && !buffer; ++i) {
+      const size_t index = (m_next + i) % count;
       Slot& slot = m_slots[index];
       if (slot.state != ReadbackState::Available) {
         continue;
@@ -73,8 +84,9 @@ public:
       ++slot.generation;
       slot.state = ReadbackState::CopySubmitted;
       slot.exposure = exposure;
+      slot.order = ++m_claims;
       buffer = slot.buffer;
-      m_next = (index + 1) % Count;
+      m_next = (index + 1) % count;
     }
     return buffer;
   }
@@ -82,14 +94,15 @@ public:
   Submitted submit() {
     std::lock_guard lock(m_mutex);
     Submitted submitted;
-    for (size_t index = 0; index < Count; ++index) {
+    for (size_t index = 0; index < m_slots.size(); ++index) {
       Slot& slot = m_slots[index];
       if (slot.state != ReadbackState::CopySubmitted) {
         continue;
       }
       slot.state = ReadbackState::MapPending;
-      submitted.mappings[submitted.count++] =
-          Mapping{.key = Key{.index = index, .generation = slot.generation}, .buffer = slot.buffer};
+      submitted.mappings.push_back(
+          Mapping{.key = Key{.index = index, .generation = slot.generation}, .buffer = slot.buffer});
+      ++submitted.count;
     }
     return submitted;
   }
@@ -99,17 +112,21 @@ public:
   // a repeated delivery of one callback is. A callback that fails this must not read, unmap or
   // release what the slot holds now. `underLock(buffer, exposure)` runs with the slot still busy,
   // so no frame can claim it before the caller has read and unmapped it, and the slot is free
-  // again afterwards.
+  // again afterwards. `underLock(buffer, exposure, order)` also gets the claim's order.
   template <typename F> bool complete(const Key& key, F&& underLock) {
     std::lock_guard lock(m_mutex);
-    if (key.index >= Count) {
+    if (key.index >= m_slots.size()) {
       return false;
     }
     Slot& slot = m_slots[key.index];
     if (slot.state != ReadbackState::MapPending || slot.generation != key.generation) {
       return false;
     }
-    std::forward<F>(underLock)(slot.buffer, slot.exposure);
+    if constexpr (std::is_invocable_v<F, const Buffer&, float, uint64_t>) {
+      std::forward<F>(underLock)(slot.buffer, slot.exposure, slot.order);
+    } else {
+      std::forward<F>(underLock)(slot.buffer, slot.exposure);
+    }
     slot.state = ReadbackState::Available;
     return true;
   }
@@ -120,7 +137,7 @@ public:
   template <typename F> std::vector<Buffer> retire(F&& underLock) {
     std::vector<Buffer> retired;
     std::lock_guard lock(m_mutex);
-    retired.reserve(Count);
+    retired.reserve(m_slots.size());
     for (Slot& slot : m_slots) {
       retired.push_back(std::move(slot.buffer));
       ++slot.generation;
@@ -137,11 +154,15 @@ private:
     ReadbackState state = ReadbackState::Available;
     float exposure = 0.f;
     uint64_t generation = 0;
+    uint64_t order = 0;
   };
 
   std::mutex m_mutex;
   Buffer (*m_make)() = nullptr;
-  std::array<Slot, Count> m_slots{};
+  bool m_grow = false;
+  // A deque, so a slot grown in never moves the others.
+  std::deque<Slot> m_slots;
   size_t m_next = 0;
+  uint64_t m_claims = 0;
 };
 } // namespace aurora::gfx::detail

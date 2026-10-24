@@ -44,6 +44,13 @@ TEST(VfxBlend, OlderModesUnchanged) {
   expect_factors(Blend::Multiply, {BlendFactor::Dst, BlendFactor::Zero, BlendFactor::Zero, BlendFactor::One});
 }
 
+// Remastered's EBlendMode 5 and 6 (tables 0x1d0cc48/0x1d0cd38): the colour factors for the alpha channel too.
+TEST(VfxBlend, MatiModesBlendAlphaLikeColour) {
+  expect_factors(Blend::PremultipliedAlpha,
+                 {BlendFactor::One, BlendFactor::OneMinusSrcAlpha, BlendFactor::One, BlendFactor::OneMinusSrcAlpha});
+  expect_factors(Blend::AdditiveAlpha, {BlendFactor::SrcAlpha, BlendFactor::One, BlendFactor::SrcAlpha, BlendFactor::One});
+}
+
 TEST(VfxBlend, SerialisedValuesAreStable) {
   EXPECT_EQ(uint32_t(Blend::Alpha), 0u);
   EXPECT_EQ(uint32_t(Blend::Premultiplied), 1u);
@@ -51,13 +58,16 @@ TEST(VfxBlend, SerialisedValuesAreStable) {
   EXPECT_EQ(uint32_t(Blend::Opaque), 3u);
   EXPECT_EQ(uint32_t(Blend::Multiply), 4u);
   EXPECT_EQ(uint32_t(Blend::AdditiveOne), 5u);
-  EXPECT_EQ(aurora::gfx::vfx::MaxBlend, 5u);
+  EXPECT_EQ(uint32_t(Blend::PremultipliedAlpha), 6u);
+  EXPECT_EQ(uint32_t(Blend::AdditiveAlpha), 7u);
+  EXPECT_EQ(aurora::gfx::vfx::MaxBlend, 7u);
 }
 
 TEST(VfxBlend, OnlyAdditiveOneForcesDepthWriteOff) {
   using aurora::gfx::vfx::forces_depth_write_off;
   EXPECT_TRUE(forces_depth_write_off(Blend::AdditiveOne));
-  for (Blend b : {Blend::Alpha, Blend::Premultiplied, Blend::Additive, Blend::Opaque, Blend::Multiply})
+  for (Blend b : {Blend::Alpha, Blend::Premultiplied, Blend::Additive, Blend::Opaque, Blend::Multiply,
+                  Blend::PremultipliedAlpha, Blend::AdditiveAlpha})
     EXPECT_FALSE(forces_depth_write_off(b)) << uint32_t(b);
 }
 
@@ -69,7 +79,8 @@ TEST(VfxBlend, ModelDepthSelection) {
     const bool z = m & 1, aaph = m & 2, zbuf = m & 4;
     EXPECT_EQ(select_model_depth(Blend::AdditiveOne, z, aaph, zbuf), (DepthSelection{true, false})) << m;
     // Every older mode keeps the generator's own state exactly.
-    for (Blend b : {Blend::Alpha, Blend::Premultiplied, Blend::Additive, Blend::Opaque, Blend::Multiply})
+    for (Blend b : {Blend::Alpha, Blend::Premultiplied, Blend::Additive, Blend::Opaque, Blend::Multiply,
+                  Blend::PremultipliedAlpha, Blend::AdditiveAlpha})
       EXPECT_EQ(select_model_depth(b, z, aaph, zbuf), (DepthSelection{z, !aaph && zbuf})) << m << " mode " << uint32_t(b);
   }
 }

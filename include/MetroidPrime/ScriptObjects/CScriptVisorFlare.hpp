@@ -6,6 +6,7 @@
 #include "MetroidPrime/CVisorFlare.hpp"
 
 class CScriptVisorFlare : public CActor {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
   CVisorFlare xe8_flare;
   bool x11c_notInRenderLast;
 

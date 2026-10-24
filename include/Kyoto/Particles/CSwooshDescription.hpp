@@ -69,6 +69,13 @@ public:
   bool xPortIrnd = false;
   // port-only PDFG: Remastered's DFOG 1, drawn without volumetric fog (CGenDescription::xPortUnfogged)
   bool xPortUnfogged = false;
+  // port-only PZTS: Remastered's ZTES 0, the depth test passes everywhere (compare ALWAYS)
+  bool xPortNoZTest = false;
+  // port-only PDBS: Remastered's DBIS (CGenDescription::xPortDepthBias)
+  float xPortDepthBias = 0.f;
+  // port-only PSHM: Remastered's SHTM (CParticleGen::DoShutdownBehavior 0x27b88c); 1 = a shutdown
+  // also destroys the live segments (CParticleSwoosh::DestroyParticles 0x27f744)
+  u8 xPortShutdownMode = 0;
   // port-only PVRT: Remastered particle variables (names, types, defaults)
   std::unique_ptr< CPortVarTable > xPortVars;
   // port-only: the PKPR elements (per-point KPIN latches), latched at a point's birth in this

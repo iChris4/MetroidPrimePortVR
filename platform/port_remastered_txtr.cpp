@@ -34,10 +34,11 @@
 //   * astc-decode's asserts on a malformed block (an out of range weight, an
 //     illegal block mode) become a failed decode, and the block is filled with
 //     astc's own error colour. retrotool aborts the whole conversion there.
-//   * BC6H has no 8 bit form, so its half precision channels are reduced with
-//     the usual 16 to 8 bit rule. retrotool cannot write BC6H at all (its PNG
-//     writer has no 32 bit float case), which is why nothing checks this one
-//     against it.
+//   * BC6H has no 8 bit form, so its half floats are reduced to linear bytes
+//     by value, clamped to [0, 1] (HalfToUnormByte). retrotool cannot write
+//     BC6H at all (its PNG writer has no 32 bit float case), which is why
+//     nothing checks this one against it. A consumer that wants the full range
+//     reads the blocks themselves (ReadTxtrMipsBc6h).
 
 #include "port_remastered_txtr_codecs.h"
 #include "port_remastered_txtr.h"
@@ -480,10 +481,23 @@ const char* FormatName(uint32_t format) {
   }
 }
 
+// Half to float, with an infinity clamped to the largest finite half like the reference tool does.
+float HalfBitsToFloat(uint16_t h) {
+  const int e = (h >> 10) & 31, m = h & 1023;
+  const float sign = (h & 0x8000) ? -1.f : 1.f;
+  if (e == 0) {
+    return sign * std::ldexp(float(m), -24);
+  }
+  if (e == 31) {
+    return sign * 65504.f;
+  }
+  return sign * std::ldexp(float(m + 1024), e - 25);
+}
+
 // Fills the RGBA image from the untiled top mip. BC4 and BC5 become grey and
 // grey plus alpha, which is how retrotool writes them out as well; BC6H's half
-// float channels are reduced with the usual 16 to 8 bit rule, because it has no
-// 8 bit form of its own.
+// floats become linear bytes by value (HalfToUnormByte), because it has no 8 bit
+// form of its own.
 bool DecodeBlocks(uint32_t format, uint32_t width, uint32_t height, const uint8_t* blocks,
                   uint8_t* rgba, std::string& error) {
   if (width == 0 || height == 0) {
@@ -588,16 +602,9 @@ bool DecodeBlocks(uint32_t format, uint32_t width, uint32_t height, const uint8_
             break;
           case kTxtrFormatBc6hUfloat:
           case kTxtrFormatBc6hSfloat: {
-            // Three half float channels, reduced to 8 bits by taking their high
-            // byte, which is the usual 16 to 8 bit rule.
-            uint16_t half[4 * 4 * 3] = {};
-            DecodeBc6h(src, half, format == kTxtrFormatBc6hSfloat);
-            for (size_t i = 0; i < 16; ++i) {
-              decoded[i * 4 + 0] = uint8_t(half[i * 3 + 0] >> 8);
-              decoded[i * 4 + 1] = uint8_t(half[i * 3 + 1] >> 8);
-              decoded[i * 4 + 2] = uint8_t(half[i * 3 + 2] >> 8);
-              decoded[i * 4 + 3] = 255;
-            }
+            // Three half float channels, linear: their values clamped to [0, 1] as
+            // linear bytes (the format is not sRGB, so consumers read them raw).
+            DecodeBc6hBlockRgba8(src, format == kTxtrFormatBc6hSfloat, decoded);
             break;
           }
           case kTxtrFormatBc7Unorm:
@@ -798,23 +805,6 @@ bool ReadTxtrCubeBc6h(const uint8_t* data, size_t size, TxtrCubeBc6h& out, std::
   }
   return true;
 }
-
-namespace {
-
-// Half to float, with an infinity clamped to the largest finite half like the reference tool does.
-float HalfBitsToFloat(uint16_t h) {
-  const int e = (h >> 10) & 31, m = h & 1023;
-  const float sign = (h & 0x8000) ? -1.f : 1.f;
-  if (e == 0) {
-    return sign * std::ldexp(float(m), -24);
-  }
-  if (e == 31) {
-    return sign * 65504.f;
-  }
-  return sign * std::ldexp(float(m + 1024), e - 25);
-}
-
-}  // namespace
 
 bool DecodeVolumeFloat(const uint8_t* compressed, size_t compressedSize, size_t surfaceSize, uint32_t format,
                        uint32_t width, uint32_t height, uint32_t depth, std::vector<float>& rgba,
@@ -1231,6 +1221,83 @@ bool ReadTxtrLayersBc6h(const uint8_t* data, size_t size, TxtrLayersBc6h& out, s
     }
     const size_t unit = size_t(gobHeight) * kGobSizeBytes;
     srcOffset = DivRoundUp(srcOffset, unit) * unit;
+  }
+  return true;
+}
+
+uint8_t HalfToUnormByte(uint16_t half) {
+  const float v = HalfBitsToFloat(half);
+  if (!(v > 0.f)) {
+    return 0;  // negative, zero or NaN
+  }
+  return v >= 1.f ? 255 : uint8_t(v * 255.f + 0.5f);
+}
+
+void DecodeBc6hBlockRgba8(const uint8_t* block, bool isSigned, uint8_t* rgba) {
+  uint16_t half[4 * 4 * 3] = {};
+  DecodeBc6h(block, half, isSigned);
+  for (size_t i = 0; i < 16; ++i) {
+    rgba[i * 4 + 0] = HalfToUnormByte(half[i * 3 + 0]);
+    rgba[i * 4 + 1] = HalfToUnormByte(half[i * 3 + 1]);
+    rgba[i * 4 + 2] = HalfToUnormByte(half[i * 3 + 2]);
+    rgba[i * 4 + 3] = 255;
+  }
+}
+
+bool ReadTxtrMipsBc6h(const uint8_t* data, size_t size, TxtrMipsBc6h& out, std::string& error) {
+  out = TxtrMipsBc6h{};
+  if (data == nullptr || size == 0) {
+    error = "remastered txtr: no data";
+    return false;
+  }
+  TextureHeader head;
+  if (!ReadHeader(data, size, head, error)) {
+    return false;
+  }
+  if (head.kind == 2 || head.kind == 3 || head.kind == 5 || head.layers != 1 || head.width == 0 ||
+      head.height == 0 || head.width > 16384 || head.height > 16384 || head.mipSizes.empty()) {
+    error = "remastered txtr: not a plain 2D texture";
+    return false;
+  }
+  if (head.format != kTxtrFormatBc6hUfloat && head.format != kTxtrFormatBc6hSfloat) {
+    error = "remastered txtr: the texture is " + std::string(FormatName(head.format)) + ", not BC6H";
+    return false;
+  }
+  Meta meta;
+  if (!ReadMeta(data, size, meta, error)) {
+    return false;
+  }
+  std::vector<uint8_t> surface;
+  if (!BuildSurface(data, size, meta, surface, error)) {
+    return false;
+  }
+  // The array's layout with one layer (ReadTxtrLayersBc6h): the mips follow one another,
+  // each tiled with the block height its own size allows. The chain stops at 1x1.
+  uint32_t mipCount = 0;
+  while (mipCount < head.mipSizes.size() && (std::max(head.width, head.height) >> mipCount) != 0) {
+    ++mipCount;
+  }
+  const size_t bytesPerBlock = 16;
+  const uint32_t blockHeightMip0 = BlockHeightMip0(DivRoundUp(size_t(head.height), 4));
+  out.width = head.width;
+  out.height = head.height;
+  out.isSigned = head.format == kTxtrFormatBc6hSfloat;
+  out.mips.resize(mipCount);
+  size_t srcOffset = 0;
+  for (uint32_t mip = 0; mip < mipCount; ++mip) {
+    const size_t blocksX = DivRoundUp(size_t(std::max(head.width >> mip, 1u)), 4);
+    const size_t blocksY = DivRoundUp(size_t(std::max(head.height >> mip, 1u)), 4);
+    const uint32_t mipBlockHeight = MipBlockHeight(blocksY, blockHeightMip0);
+    const size_t swizzled = SwizzledMipSize(blocksX, blocksY, 1, mipBlockHeight, bytesPerBlock);
+    if (swizzled > surface.size() || srcOffset > surface.size() - swizzled) {
+      error = "remastered txtr: the texture's surface is short";
+      out = TxtrMipsBc6h{};
+      return false;
+    }
+    out.mips[mip].assign(blocksX * blocksY * bytesPerBlock, 0);
+    DeswizzleMip(blocksX, blocksY, 1, mipBlockHeight, 1, bytesPerBlock, surface.data(), srcOffset,
+                 out.mips[mip].data());
+    srcOffset += swizzled;
   }
   return true;
 }

@@ -29,9 +29,16 @@
 #include "port_debug.h"
 #include "port_env.h"
 #include "port_freecam.h"
+#include "vr/vr_view.h"
+#include "port_mods.h"
 #include "port_photo.h"
+#include "port_pipeline_context.h"
+#include "MetroidPrime/CWorld.hpp"
+
+#include <cstdio>
 #include "MetroidPrime/CScriptLayerManager.hpp"
 #include "port_room_env.h"
+#include "MetroidPrime/HUD/CSamusHud.hpp"
 #include <dolphin/gx/GXExtra.h>
 
 CMFGame::CMFGame(rstl::ncrc_ptr< CStateManager > stateManager,
@@ -264,12 +271,47 @@ void CMFGame::Draw() const {
 #ifdef TARGET_PC
   // Do not let a request survive a non-game draw (or an early return) into another frame.
   CStateManager::sPortSceneHdrRequest = false;
+  CSamusHud::PortSetTintFolded(false);
 #endif
   if (!mInitialized) {
     return;
   }
 
   Touch();
+
+#ifdef TARGET_PC
+  // Pipelines the world draws are tagged with the camera's area (issue #187); a change of area
+  // asks a lazy pipeline cache to build the new area's recorded pipelines in the background.
+  uint64_t pipelineContext = AURORA_PIPELINE_CONTEXT_FRONTEND;
+  if (const CWorld* world = mStateManager->GetWorld();
+      world != nullptr && mStateManager->GetNextAreaId() != kInvalidAreaId) {
+    pipelineContext = PortPipelineAreaContext(static_cast< uint32_t >(world->IGetWorldAssetId()),
+                                              mStateManager->GetNextAreaId().Value());
+  }
+  {
+    static uint64_t sLastContext = AURORA_PIPELINE_CONTEXT_FRONTEND;
+    static AuroraPipelineStats sLastStats{};
+    if (pipelineContext != sLastContext) {
+      AuroraPipelineStats stats{};
+      aurora_get_pipeline_stats(&stats);
+      if (sLastContext != AURORA_PIPELINE_CONTEXT_FRONTEND) {
+        std::fprintf(stderr,
+                     "MP pipeline context %llx left: %llu skipped draws, %llu new, %llu known, %llu late misses\n",
+                     static_cast< unsigned long long >(sLastContext),
+                     static_cast< unsigned long long >(stats.skippedDraws - sLastStats.skippedDraws),
+                     static_cast< unsigned long long >(stats.newMisses - sLastStats.newMisses),
+                     static_cast< unsigned long long >(stats.knownMisses - sLastStats.knownMisses),
+                     static_cast< unsigned long long >(stats.lateMisses - sLastStats.lateMisses));
+      }
+      sLastStats = stats;
+      sLastContext = pipelineContext;
+      if (pipelineContext != AURORA_PIPELINE_CONTEXT_FRONTEND) {
+        aurora_pipeline_prefetch(pipelineContext);
+      }
+    }
+  }
+  CPortPipelineContextScope pipelineScope(pipelineContext);
+#endif
 
   if (mGuiManager->GetIsGameDraw()) {
     gpMain->SetGameFrameDrawn(true);
@@ -291,9 +333,10 @@ void CMFGame::Draw() const {
     }
 #endif
 #ifdef TARGET_PC
-    // Remastered's bloom and colour grade, over the world and under the visor. Thermal and
-    // X-ray draw their own picture, not the room's exposed light, so they keep neither.
-    const auto postProcess = [this](bool measure, bool sceneHdr) {
+    // Remastered's bloom and colour grade, over the world and under the visor. Thermal and X-ray
+    // take the same UberPost with flags 3 (kb topic/visor-hdr-pipeline.md): colour grade and the
+    // colour-blind state are off in both, bloom is off in X-ray only.
+    const auto postProcess = [this](bool mainPost, bool sceneHdr) {
       const CPlayerState::EPlayerVisor visor = mStateManager->GetPlayerState()->GetActiveVisor(*mStateManager);
       const bool normalVisor = visor != CPlayerState::kPV_Thermal && visor != CPlayerState::kPV_XRay;
       if (sceneHdr) {
@@ -303,7 +346,8 @@ void CMFGame::Draw() const {
         float tints[5][3] = {};
         float tone[3][4] = {};
         const bool toned = PortRoomEnv::Tone(tone);
-        const bool bloom = normalVisor && toned && PortRoomEnv::Bloom(threshold, tints);
+        // X-ray's render context sets flag 0x400, which drops the bloom; thermal keeps it.
+        const bool bloom = visor != CPlayerState::kPV_XRay && toned && PortRoomEnv::Bloom(threshold, tints);
         struct Layers {
           CScriptLayerManager* layers;
           TAreaId area;
@@ -320,48 +364,41 @@ void CMFGame::Draw() const {
               },
               &layers, gradeA, gradeB, gradeWeight);
         }
-        GXPortPostProcessScene(bloom, threshold, tints, tone, gradeA, gradeB, gradeWeight,
-                               toned && normalVisor && measure ? PortRoomEnv::MeasureExposure() : 0.f);
-      } else if (normalVisor) {
-        // Keep the non-experimental LDR path and its FIFO commands unchanged.
-        float threshold = 0.f;
-        float tints[5][3] = {};
-        float tone[3][4] = {};
-        const bool toned = PortRoomEnv::Tone(tone);
-        const bool bloom = toned && PortRoomEnv::Bloom(threshold, tints);
-        struct Layers {
-          CScriptLayerManager* layers;
-          TAreaId area;
-        } layers{mStateManager->WorldLayerState().GetPtr(), mStateManager->GetNextAreaId()};
-        uint32_t gradeA = 0;
-        uint32_t gradeB = 0;
-        float gradeWeight = 0.f;
-        PortRoomEnv::ColorGrade(
-            [](int32_t layer, void* context) {
-              const Layers& l = *static_cast< const Layers* >(context);
-              return l.layers == nullptr || l.area == kInvalidAreaId ||
-                     l.layers->IsLayerActive(l.area, TLayerId(layer));
-            },
-            &layers, gradeA, gradeB, gradeWeight);
-        // The picture is measured for the next frames' auto exposure (UpdateFrame).
-        GXPortPostProcess(bloom, threshold, tints, tone, gradeA, gradeB, gradeWeight,
-                          toned && measure ? PortRoomEnv::MeasureExposure() : 0.f);
+        // Remastered folds the HUD's damage Add filter into this composite (kept off the free
+        // camera, whose frame has no HUD). Only the main post carries it.
+        // Its radial filter (slot B) likewise, always: Remastered never draws that one on its own.
+        float tint[4] = {};
+        float radial[3][4];
+        const bool hud = mainPost && !PortFreeCam::Active();
+        bool folded = hud && mGuiManager->PortCompositeTint(*mStateManager, tint) && tint[3] > 0.f;
+        if (folded) {
+          GXPortPostCompositeAdd(tint);
+        } else if (hud && mGuiManager->PortCompositeRadial(*mStateManager, radial[0], radial[1], radial[2])) {
+          GXPortPostCompositeRadial(radial[0], radial[1], radial[2]);
+          folded = true;
+        }
+        if (mainPost) {
+          CSamusHud::PortSetTintFolded(folded);
+        }
+        // The frame is measured at the opaque/sorted boundary (CStateManager::DrawWorld).
+        GXPortPostProcessScene(bloom, threshold, tints, tone, gradeA, gradeB, gradeWeight, 0.f);
       }
     };
     const auto drawWorld = [this]() {
-      static const bool hdrSceneEnabled = port::EnvFlag("MP_HDR_SCENE", false);
       const CPlayerState* playerState = mStateManager->GetPlayerState();
       const CPlayerState::EPlayerVisor visor = playerState->GetActiveVisor(*mStateManager);
       const bool supportedVisor = CStateManager::PortIsSceneHdrVisorSupported(
           visor == CPlayerState::kPV_Combat, visor == CPlayerState::kPV_Scan,
           visor == CPlayerState::kPV_Thermal, visor == CPlayerState::kPV_XRay);
-      const bool visorTransitioning = playerState->GetIsVisorTransitioning();
-      const bool roomEnvEnabled = hdrSceneEnabled && supportedVisor && !visorTransitioning &&
-                                  PortRoomEnv::Enabled();
-      float tone[3][4] = {};
-      const bool hasRoomTone = roomEnvEnabled && PortRoomEnv::Tone(tone);
-      const bool requestSceneHdr = CStateManager::PortShouldUseSceneHdr(
-          hdrSceneEnabled, roomEnvEnabled, hasRoomTone, supportedVisor, visorTransitioning);
+      // A visor transition keeps the HDR scene: Remastered has no transition path, each frame
+      // renders exactly one visor (kb topic/visor-hdr-pipeline.md, "Visor transitions").
+      // Remastered draws only through the HDR scene; a room without tone data tones through the
+      // identity (BuildLinear(3.0)). Retail, with no room environment loaded, never requests it.
+      const bool roomEnvActive = PortRoomEnv::Enabled() && PortMods::RoomEnvLoaded();
+      // Stereo eyes use the LDR path; keep HUD tint drawn there instead of folding
+      // it into a mono HDR composite the headset cannot replay.
+      const bool requestSceneHdr = !PortVr::VrImmersive() &&
+                                   CStateManager::PortShouldUseSceneHdr(roomEnvActive, supportedVisor);
       CStateManager::sPortSceneHdrRequest = requestSceneHdr;
       mStateManager->DrawWorld();
       return requestSceneHdr;
@@ -404,7 +441,12 @@ void CMFGame::Draw() const {
   // The debug free camera looks at the world, not through the visor.
   if (!PortFreeCam::Active() || mFlowState != kGFS_InGame)
 #endif
-  mGuiManager->Draw(*mStateManager);
+  {
+#ifdef TARGET_PC
+    CPortPipelineContextScope globalPipelines(AURORA_PIPELINE_CONTEXT_GLOBAL);
+#endif
+    mGuiManager->Draw(*mStateManager);
+  }
 #ifdef TARGET_PC
   // A zoomed copy the visor didn't draw this frame must not show on a later one.
   CPlayerVisor::PortDropScanZoom();

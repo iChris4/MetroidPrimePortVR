@@ -198,25 +198,22 @@ TEST(GxInventoryVisor, Kind36Wiring) {
   EXPECT_LT(b, diff);
   EXPECT_NE(pos(src, "var pbr_base = inv_b;"), std::string::npos);
   EXPECT_NE(src.find("* inv_a * ubuf.pbr_light_scale.x", diff), std::string::npos);
-  // ICMC (rgb only) is added linearly before the tone curve; C scales the toned foreground once, after the tone
-  // and before the composition, which precedes the encode. The generic model fade is gone.
+  // ICMC (rgb only) is added linearly before the tone curve, and C scales that light once, before the tone
+  // (source (lit + ICMC) * C); the composition precedes the encode. The generic model fade is gone.
   const size_t icmc = pos(src, "pbr_glow += ubuf.pbr_model_incan.rgb;");
-  const size_t out = pos(src, "let pbr_out = max(pbr_lo + pbr_glow");
+  const size_t out = pos(src, "let pbr_out = max(pbr_lo + pbr_glow, vec3f(0.0)) * inv_c;");
   const size_t tone = pos(src, "pbr_tm = clamp(pbr_tm, vec3f(0.0), vec3f(1.0));");
-  const size_t scale = pos(src, "pbr_tm *= inv_c;");
   const size_t comp = pos(src, "pbr_pass += pbr_sdst");
   const size_t enc = pos(src, "prev = vec4f(srgb_enc(pbr_tm + pbr_pass), pbr_alpha);");
   ASSERT_NE(icmc, std::string::npos);
-  ASSERT_NE(scale, std::string::npos);
+  ASSERT_NE(out, std::string::npos);
   EXPECT_LT(icmc, out);
   EXPECT_LT(out, tone);
-  EXPECT_LT(tone, scale);
-  EXPECT_LT(scale, comp);
+  EXPECT_LT(tone, comp);
   EXPECT_LT(comp, enc);
-  // C is applied exactly once and never before the tone curve; ICMC alpha is not read.
-  EXPECT_EQ(count(src, "*= inv_c"), 1u);
-  EXPECT_EQ(src.find("pbr_lo *= inv_c"), std::string::npos);
-  EXPECT_EQ(src.find("pbr_glow *= inv_c"), std::string::npos);
+  // C is applied exactly once; ICMC alpha is not read.
+  EXPECT_EQ(count(src, "inv_c;"), 1u);
+  EXPECT_EQ(src.find("*= inv_c"), std::string::npos);
   EXPECT_EQ(src.find("pbr_model_incan.w"), std::string::npos);
   EXPECT_EQ(src.find("pbr_model_incan.a"), std::string::npos);
   EXPECT_EQ(src.find("pbr_light_scale.w - 1.0"), std::string::npos);
@@ -244,8 +241,9 @@ TEST(GxInventoryVisor, Kind37Wiring) {
   EXPECT_EQ(src.find("* inv_a * ubuf.pbr_light_scale.x"), std::string::npos);
 }
 
+// Kinds 0 and 3 read the model tint now (GxModelTint); the others still do not.
 TEST(GxInventoryVisor, OtherKindsDoNotReadModulation) {
-  for (const int kind : {0, 34, 35}) {
+  for (const int kind : {34, 35}) {
     const std::string src = build_shader_source(inventoryConfig(kind, true));
     // Only the uniform struct mentions the fields.
     EXPECT_EQ(count(src, "pbr_model_diffuse"), 1u) << kind;
@@ -257,6 +255,36 @@ TEST(GxInventoryVisor, OtherKindsDoNotReadModulation) {
   // Kind 34 keeps its own composition untouched.
   const std::string k34 = build_shader_source(inventoryConfig(34, true));
   EXPECT_NE(k34.find("pbr_pass += pbr_sdst * vec3f(1.0 - pbr_alpha);"), std::string::npos);
+}
+
+
+// --- model tint outside the visor (kb topic/model-flags-fade-tint.md) -------------------------------------------
+
+TEST(GxModelTint, StdKindsApplyDiffuseAndIncan) {
+  for (const int kind : {0, 3}) {
+    const std::string src = build_shader_source(inventoryConfig(kind, false));
+    const size_t diff = pos(src, "let pbr_diff = select(pbr_base * ubuf.pbr_model_diffuse.rgb * (1.0 - pbr_metal)");
+    EXPECT_NE(diff, std::string::npos) << "kind " << kind;
+    const size_t glow = pos(src, "pbr_glow += ubuf.pbr_model_incan.rgb;");
+    const size_t out = pos(src, "let pbr_out = max(pbr_lo + pbr_glow, vec3f(0.0));");
+    ASSERT_NE(glow, std::string::npos) << "kind " << kind;
+    EXPECT_LT(glow, out); // after the exposure scaling, before the output
+    EXPECT_EQ(count(src, "pbr_model_incan.rgb"), 1u);
+  }
+}
+
+TEST(GxModelTint, GlassTakesNoTint) {
+  const std::string src = build_shader_source(inventoryConfig(8, false));
+  EXPECT_EQ(pos(src, "pbr_model_diffuse.rgb"), std::string::npos);
+  EXPECT_EQ(pos(src, "pbr_model_incan.rgb"), std::string::npos);
+}
+
+TEST(GxModelTint, InventoryKindsNotDoubleApplied) {
+  for (const int kind : {36, 37}) {
+    const std::string src = build_shader_source(inventoryConfig(kind, true));
+    EXPECT_EQ(count(src, "pbr_model_diffuse.rgb"), 1u) << kind; // inv_b only
+    EXPECT_EQ(count(src, "pbr_model_incan.rgb"), 1u) << kind;
+  }
 }
 
 } // namespace

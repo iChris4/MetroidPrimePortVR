@@ -247,11 +247,11 @@ u8 AuroraSetCullMirrored(u8 mirrored);
 //   f32 diffuse r, g, b, a, f32 incan r, g, b, a, f32 coverage
 #define GX_AURORA_SET_PBR_MODEL_MODULATION 0x006D
 
-// Port extension: Remastered's bloom, colour grade and frame average over the EFB as drawn so
-// far (see GXPortPostProcess). Queued, so the game thread does not wait for the FIFO to be
+// Port extension: Remastered's bloom, colour grade and frame average over the HDR scene as drawn
+// so far (see GXPortPostProcessScene). Queued, so the game thread does not wait for the FIFO to be
 // processed before it can record it.
 // Payload:
-//   32 u32: aurora::gfx::bloom::Params, word for word
+//   49 u32: aurora::gfx::bloom::Params, word for word
 #define GX_AURORA_PORT_POST_PROCESS 0x0052
 
 // Replaces one light's colour, position and attenuation in the following PBR draws with a

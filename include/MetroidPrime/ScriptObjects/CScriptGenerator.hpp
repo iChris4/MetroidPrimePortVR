@@ -4,6 +4,7 @@
 #include "MetroidPrime/CEntity.hpp"
 
 class CScriptGenerator : public CEntity {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 public:
   CScriptGenerator(TUniqueId uid, const rstl::string& name, const CEntityInfo& info,
                    int spawnCount, bool noReuseFollowers, const CVector3f& vec1, bool noInheritXf,

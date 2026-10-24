@@ -130,6 +130,7 @@ struct State_ {
   // Set when an atlas is evicted: the cached bind groups still hold its views, so the render thread drops them.
   std::atomic<bool> groupsStale{false};
   wgpu::Texture dummyTexture;
+  wgpu::Texture dummyArrayTexture;
   wgpu::TextureView dummyView;
   wgpu::TextureView dummyColorView; // dummyTexture as a texture_2d
   wgpu::Texture dummyDepthTexture;  // 1x1 R32Float
@@ -286,8 +287,16 @@ fn vs_main(in: VIn) -> VOut {
   out.tan = in.tan;
   out.vp = mv;
   if ((FEAT & 32768u) != 0u) {
-    // SceneWarp: the warp's perspective scale, near / view distance (the VS's o3.x = vp_c4[0].w / -viewZ).
+    // SceneWarp: the warp's perspective scale, near / view distance (the VS's o3.x =
+    // vp_c4[0].w / -viewZ).
     out.sw = u.scene.z / -mv.z;
+  }
+  if ((FEAT & 268435456u) != 0u) {
+    // VisorRain: o6.x = game near / HUD view depth. Remastered draws HUD billboards in the HUD
+    // camera at basewidget_visorFX (FRME_BaseHud z -2.2311, eye at the origin: the scale
+    // 0xcb0ef8 fills the frustum there); the port's sits at near + 0.01 (GetNearClipDistance),
+    // so map its depth onto that plane (kb topic/hud-billboard-visor-draw).
+    out.sw = u.scene.z * (u.scene.z + 0.01) / (2.2311 * -mv.z);
   }
   if ((FEAT & 2097152u) != 0u || (FEAT & 33554432u) != 0u) {
     // IceChargeCollision: the refraction's perspective scale, min(|INDP.w / -viewZ|, 0.2) (VS o5.x / o6.x).
@@ -605,6 +614,64 @@ R"(    let nm = sample_raw(S_NORMAL, uv2, 0).xy;
     } else {
       rgb = ((tint + c1.x * (vec3f(1.0) - tint)) * fb + glow) * fade * vc.rgb * M;
     }
+  } else if ((FEAT & 268435456u) != 0u) {
+    // VFX_VisorRain (0ec41df0, FS perm 000; vfx/0ec41df0.md section 3): the visor's rain splash.
+    // TCH0 is a two-channel noise map, read twice: at a per-particle patch (PMTR row 0's xy offset,
+    // scaled by CCH0.y) and at the texel the roundEven sample lands on over the whole quad (p and q
+    // are in [-0.125, 0.625], so round(p - 0.25) is always 0). The patch's channels warp a sum of two
+    // sines, and the constant sample shrinks it as PMTR row 0's z (the lifetime fade, times
+    // 0.355/0.365) grows into H. 0.5 < H < 1 is inside the drop: its height Z gives the normal n
+    // (each axis' cosine, Z kept as the unnormalised height) that offsets the scene copy at the
+    // fragment by (1 - fade) x CCH0.w x near / view depth (v down: the y offset negates), and f =
+    // Z^4 x 10 + 0.75 + 0.25 x fade is the edge darkening. Elsewhere alpha is 0 and the fragment is
+    // discarded. The bigger drops ("runners": row 1's y < CCH0.z, size row 1's w > row 2's y) slide
+    // the pattern down by min(2 x row 1's x, 0.5) x 0.33, narrow the mask and take their own fade
+    // (row 1's z; row 0's z otherwise). M is PCMD.x. x stays the instance alpha.
+    let c = u.ice0;
+    let R0 = in.e0;
+    let R1 = in.e1;
+    let uvs = uv_of(in, u.uvSets[max(S_COLOR, 0)]);
+    let qu = sat(uvs.x);
+    var qv = sat(uvs.y);
+    let runner = R1.y < c.z && R1.w > in.e2.y;
+    if (runner) { qv = qv + min(2.0 * R1.x, 0.5) * 0.33; }
+    let p = qu * 0.75 - 0.125;
+    let q = qv * 0.75 - 0.125;
+    let lay = layer(uvs.z, u.layers[max(S_COLOR, 0)]);
+    let n1 = sample_raw(S_COLOR, vec2f(p * c.y + R0.x, q * c.y + R0.y), lay).xy;
+    let n2 = sample_raw(S_COLOR, vec2f(round(p - 0.25), round(q - 0.25)), lay).xy;
+    let sa = p * 6.28318530718 + (n1.x - 0.5) * 2.0 * c.x * R0.w;
+    let sb = q * 6.28318530718 + (n1.y - 0.5) * 2.0 * c.x * R0.w;
+    let ca = cos(sa);
+    let cb = cos(sb);
+    var sn = sin(sa) + sin(sb);
+    if (runner) {
+      // The runner's closing window: the sides and the top and bottom come in with row 1's x.
+      sn = sn * select(0.0, 1.0, qu > 0.25 * R1.x && qu < 1.0 - 0.25 * R1.x) *
+          select(0.0, 1.0, abs(qv) > 0.1 * R1.x && abs(qv) < 1.0 - 0.1 * R1.x);
+    }
+    let k = select(0.365, 0.355, runner);
+    let H = sat(max(0.0, 1.0 - sat(max(n2.x, 0.02) * (R0.z * k) + n2.y - 0.175)) * sn);
+    var Z = 0.0;
+    var nn = vec2f(0.0);
+    if (H > 0.5 && H < 1.0) {
+      Z = (H - 0.5) * 1.8 + 0.1;
+      let e = vec3f(-sign(ca) * ca * ca, -sign(cb) * cb * cb, Z);
+      nn = -(normalize(e).xy);
+    }
+    let g = select(R0.z, R1.z, runner);
+    let T = (1.0 - g) * c.w * in.sw;
+    var fb = vec3f(0.0);
+    if (u.scene.w > 0.5) {
+      // v down: the copy's y offset negates. The copy is exposed, so x the inverse exposure.
+      let fbuv = vec2f(in.pos.x * u.scene.x + T * nn.x, in.pos.y * u.scene.y - T * nn.y);
+      var ie = 1.0;
+      if (u.tone1.x > 0.0 && u.tone0.w > 0.0) { ie = 1.0 / u.tone0.w; }
+      fb = scene_light(textureSampleLevel(sceneColor, sceneSampler, fbuv, 0.0).rgb) * ie;
+    }
+    let f = sat(Z * Z * Z * Z * 10.0 + (0.75 + 0.25 * g) * select(0.0, 1.0, Z > 0.0));
+    rgb = f * fb * vc.rgb * M;
+    x = select(0.0, 1.0, Z > 0.0);
   } else if ((FEAT & 16384u) != 0u) {
     // VFX_Disintegration (d749057f, perm 000_0): the mask's x squared, PMTR rows 0..2 as the colours at
     // s = 0 and 1 and the edge colour, row 3 as (threshold, edge width, alpha lo, alpha hi). ceil(e)
@@ -706,6 +773,14 @@ R"(    let nm = sample_raw(S_NORMAL, uv2, 0).xy;
     if (u.tone1.x > 0.0 && u.tone0.w > 0.0) { ie = 1.0 / u.tone0.w; }
     rgb = scene_light(textureSampleLevel(sceneColor, sceneSampler, fbuv, 0.0).rgb) * rgb * ie;
   }
+  if ((FEAT & 67108864u) != 0u) {
+    // ParticleLit: a VFX_*_Lit shader's lit perm (20e149b2 080_0..091_0) is its unlit colour x (AMBS +
+    // the probe + the clustered lights) x BLCM x PCMD / pi; PCMD (M) is already in rgb. vec is camera-
+    // local (x, z, y); Remastered's view normal is (x, y, -z) of it.
+    let N = normalize(vec3f(in.nrm.x, in.nrm.y, -in.nrm.z) + vec3f(0.0, 0.0, 1e-6));
+    let lighting = u.lit0.xyz + probe_ambient(N) + cluster_lights(in, N);
+    rgb = rgb * lighting * u.lit6.rgb * 0.3183098862;
+  }
   var a = x * vc.w;
   if ((FEAT & 32u) != 0u && u.soft.z > 0.5 && u.misc2.w > 0.0) {
     // DepthSoften, as VFX_DualModColorRamp_Indirect_Unlit (71dc2465, perm 000) does it: the opaque
@@ -737,8 +812,9 @@ R"(  // The tone map runs before this blend, so an alpha blend brighter than 1 t
   // BLEND 5 (AdditiveOne) takes no alpha compensation above and no fog below, as Additive; its tone is unchanged.
   // Remastered sets a no-fog bit for every particle blend but alpha and opaque
   // (SetupFogFromBlendMode), so additive and premultiplied draws are not fogged at all.
+  // Fogged (1 << 27) keeps the fog of an alpha/opaque row whose MATI EBlendMode draws with other factors.
   // IceChargeBeam: DFOG 1 (perm 000), so unfogged in either blend; IceChargeCollision too where Unfogged.
-  if ((BLEND == 0u || BLEND == 3u) && (FEAT & 1048576u) == 0u && (FEAT & 4194304u) == 0u) {
+  if ((BLEND == 0u || BLEND == 3u || (FEAT & 134217728u) != 0u) && (FEAT & 1048576u) == 0u && (FEAT & 4194304u) == 0u) {
     col = mix(col, u.fogColor.rgb, fog_factor(in.pos.z));
   }
   return vec4f(col, alpha);
@@ -807,7 +883,8 @@ uint32_t block_size(wgpu::TextureFormat format) {
 
 // The PBDM factors (RESOLVED-state.md Q1): alpha (SrcAlpha, 1-SrcAlpha | One, 1-SrcAlpha), premultiplied
 // (One, 1-SrcAlpha | Zero, One), additive (SrcAlpha, One | Zero, One), opaque (One, Zero for both).
-// AdditiveOne (port-only, the wave orb's model blend) is (One, One | Zero, One). Not in the anonymous namespace:
+// AdditiveOne (port-only, the wave orb's model blend) is (One, One | Zero, One). PremultipliedAlpha and AdditiveAlpha
+// are the MATI EBlendModes 5 (One, 1-SrcAlpha) and 6 (SrcAlpha, One), colour and alpha alike. Not in the anonymous namespace:
 // the unit tests call it.
 wgpu::BlendState blend_state(Blend blend) {
   wgpu::BlendComponent c{.operation = wgpu::BlendOperation::Add};
@@ -840,6 +917,14 @@ wgpu::BlendState blend_state(Blend blend) {
   case Blend::Opaque:
     c.srcFactor = a.srcFactor = wgpu::BlendFactor::One;
     c.dstFactor = a.dstFactor = wgpu::BlendFactor::Zero;
+    break;
+  case Blend::PremultipliedAlpha:
+    c.srcFactor = a.srcFactor = wgpu::BlendFactor::One;
+    c.dstFactor = a.dstFactor = wgpu::BlendFactor::OneMinusSrcAlpha;
+    break;
+  case Blend::AdditiveAlpha:
+    c.srcFactor = a.srcFactor = wgpu::BlendFactor::SrcAlpha;
+    c.dstFactor = a.dstFactor = wgpu::BlendFactor::One;
     break;
   case Blend::Multiply:
     c.srcFactor = wgpu::BlendFactor::Dst;
@@ -1010,8 +1095,22 @@ void ensure_dummy(const DrawContext& ctx) {
   const wgpu::TexelCopyBufferLayout layout{.bytesPerRow = 4, .rowsPerImage = 1};
   const wgpu::Extent3D size{1, 1, 1};
   ctx.queue.WriteTexture(&dst, white, 4, &layout, &size);
+  // A Compatibility device fixes a texture's binding view dimension, so the array view gets a texture of its own.
+  wgpu::TextureBindingViewDimension arrayBinding;
+  arrayBinding.textureBindingViewDimension = wgpu::TextureViewDimension::e2DArray;
+  const wgpu::TextureDescriptor arrayDescriptor{
+      .nextInChain = &arrayBinding,
+      .label = "VFX Dummy Array",
+      .usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst,
+      .size = {1, 1, 1},
+      .format = wgpu::TextureFormat::RGBA8Unorm,
+  };
+  AURORA_NOTE_TEXTURE(&arrayDescriptor);
+  g_state.dummyArrayTexture = ctx.device.CreateTexture(&arrayDescriptor);
+  const wgpu::TexelCopyTextureInfo arrayDst{.texture = g_state.dummyArrayTexture};
+  ctx.queue.WriteTexture(&arrayDst, white, 4, &layout, &size);
   const wgpu::TextureViewDescriptor view{.dimension = wgpu::TextureViewDimension::e2DArray, .arrayLayerCount = 1};
-  g_state.dummyView = g_state.dummyTexture.CreateView(&view);
+  g_state.dummyView = g_state.dummyArrayTexture.CreateView(&view);
   const wgpu::TextureViewDescriptor view2D{.dimension = wgpu::TextureViewDimension::e2D};
   g_state.dummyColorView = g_state.dummyTexture.CreateView(&view2D);
   const wgpu::TextureDescriptor depthDescriptor{
@@ -1088,13 +1187,22 @@ void build_array(const EncoderTaskContext& ctx, const wgpu::CommandEncoder& cmd,
   if (cw == 0 || ch == 0 || cw % block != 0 || ch % block != 0) {
     return fail("cell size");
   }
+  // Compatibility devices can't copy compressed textures on the GPU; the layers are written from the bytes the
+  // source was uploaded from instead (kept by the texture upload on those devices).
+  const bool writeFromBytes = !webgpu::g_hasCoreFeatures && block != 1;
+  if (writeFromBytes && !src.cpuBytes) {
+    return fail("compressed source without its uploaded bytes on a Compatibility device");
+  }
   // Mip m of a cell is its own copy only if the cell halves evenly that far (and stays block aligned).
   uint32_t mips = 1;
   while (mips < src.mipCount && (cw % (1u << mips)) == 0 && (ch % (1u << mips)) == 0 &&
          ((cw >> mips) % block) == 0 && ((ch >> mips) % block) == 0) {
     ++mips;
   }
+  wgpu::TextureBindingViewDimension arrayBinding;
+  arrayBinding.textureBindingViewDimension = wgpu::TextureViewDimension::e2DArray;
   const wgpu::TextureDescriptor descriptor{
+      .nextInChain = &arrayBinding,
       .label = "VFX Atlas",
       .usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst,
       .size = {cw, ch, entry->layers},
@@ -1103,12 +1211,51 @@ void build_array(const EncoderTaskContext& ctx, const wgpu::CommandEncoder& cmd,
   };
   AURORA_NOTE_TEXTURE(&descriptor);
   entry->texture = ctx.device.CreateTexture(&descriptor);
+  // Byte offset of each source mip in cpuBytes, and its row pitch in blocks.
+  std::array<size_t, 16> mipOffset{};
+  std::array<uint32_t, 16> mipBlocksWide{};
+  if (writeFromBytes) {
+    const auto info = format_info(src.format);
+    size_t offset = 0;
+    for (uint32_t mip = 0; mip < mips && mip < mipOffset.size(); ++mip) {
+      const uint32_t w = std::max(src.size.width >> mip, 1u);
+      const uint32_t h = std::max(src.size.height >> mip, 1u);
+      const uint32_t wideBlocks = (w + info.blockWidth - 1) / info.blockWidth;
+      const uint32_t highBlocks = (h + info.blockHeight - 1) / info.blockHeight;
+      mipOffset[mip] = offset;
+      mipBlocksWide[mip] = wideBlocks;
+      offset += size_t(wideBlocks) * highBlocks * info.blockSize;
+    }
+    if (mips > mipOffset.size() || offset > src.cpuBytes->size()) {
+      return fail("kept source bytes don't cover the mip chain");
+    }
+  }
+  std::vector<uint8_t> cell;
   for (uint32_t layer = 0; layer < entry->layers; ++layer) {
     const uint32_t col = layer % entry->cols;
     const uint32_t row = layer / entry->cols;
     for (uint32_t mip = 0; mip < mips; ++mip) {
       const uint32_t w = cw >> mip;
       const uint32_t h = ch >> mip;
+      if (writeFromBytes) {
+        const auto info = format_info(src.format);
+        const uint32_t cellBlocksWide = w / info.blockWidth;
+        const uint32_t cellBlocksHigh = h / info.blockHeight;
+        const size_t rowBytes = size_t(cellBlocksWide) * info.blockSize;
+        cell.resize(rowBytes * cellBlocksHigh);
+        const size_t firstBlockX = size_t(col) * cellBlocksWide;
+        const size_t firstBlockY = size_t(row) * cellBlocksHigh;
+        for (uint32_t by = 0; by < cellBlocksHigh; ++by) {
+          const size_t from =
+              mipOffset[mip] + ((firstBlockY + by) * mipBlocksWide[mip] + firstBlockX) * info.blockSize;
+          std::memcpy(cell.data() + by * rowBytes, src.cpuBytes->data() + from, rowBytes);
+        }
+        const wgpu::TexelCopyTextureInfo to{.texture = entry->texture, .mipLevel = mip, .origin = {0, 0, layer}};
+        const wgpu::TexelCopyBufferLayout layout{.bytesPerRow = uint32_t(rowBytes), .rowsPerImage = cellBlocksHigh};
+        const wgpu::Extent3D extent{w, h, 1};
+        ctx.queue.WriteTexture(&to, cell.data(), cell.size(), &layout, &extent);
+        continue;
+      }
       const wgpu::TexelCopyTextureInfo from{.texture = src.texture, .mipLevel = mip, .origin = {col * w, row * h, 0}};
       const wgpu::TexelCopyTextureInfo to{.texture = entry->texture, .mipLevel = mip, .origin = {0, 0, layer}};
       const wgpu::Extent3D extent{w, h, 1};
@@ -1261,7 +1408,8 @@ bool resolve_slot(const Texture& tex, uint32_t& id) {
   const uint32_t cols = std::max(tex.cols, 1u);
   const uint32_t rows = std::max(tex.rows, 1u);
   const uint32_t layers = std::max(tex.layers, 1u);
-  const bool copy = layers > 1 || cols > 1 || rows > 1;
+  // Compatibility devices can't view a plain 2D texture as a 2D array, so every entry is a copy there.
+  const bool copy = layers > 1 || cols > 1 || rows > 1 || !webgpu::g_hasCoreFeatures;
   std::shared_ptr<ArrayEntry> entry;
   bool request = false;
   {
@@ -1353,10 +1501,12 @@ bool upload_cluster_mask(const ClusterView& view) {
     // Bind groups still hold the old view.
     g_state.groupsStale.store(true, std::memory_order_release);
   }
+  // Through the frame's uploads, not the queue: a queue write from this thread records into Dawn's pending
+  // command buffer, and past 16 MiB of pending staging Dawn submits it from here, under the render worker
+  // recording the last frame into it (Adreno crashes on the ended command buffer).
   const wgpu::TexelCopyTextureInfo dst{.texture = slot.texture};
-  const wgpu::TexelCopyBufferLayout layout{.bytesPerRow = 4 * view.maskWidth, .rowsPerImage = view.maskHeight};
-  const wgpu::Extent3D size{view.maskWidth, view.maskHeight, 1};
-  webgpu::g_queue.WriteTexture(&dst, view.mask, words * sizeof(uint32_t), &layout, &size);
+  const auto mask = reinterpret_cast<const uint8_t*>(view.mask);
+  queue_texture_upload_data(mask, 4 * view.maskWidth, view.maskHeight, dst, {view.maskWidth, view.maskHeight, 1});
   slot.frame = current_frame();
   slot.signature = signature;
   return true;
@@ -1394,20 +1544,12 @@ std::string pipeline_source(const PipelineConfig& p) {
     const uint32_t v = (p.slotKey >> (3 * i)) & 7;
     source += std::string("const ") + SlotNames[i] + ": i32 = " + (v == 7 ? "-1" : std::to_string(v)) + ";\n";
   }
-  // The scene copy's light as the exposed linear the HDR tail writes: the HDR copy is that already;
-  // the display copy (RGBA8) goes back through the room's curve, exact below the white it clipped at.
+  // The scene copy's light: the HDR copy holds the exposed linear the HDR tail writes already. LDR
+  // draws never read a scene copy (draw_prims drops them), so theirs is never called.
   static constexpr std::string_view SceneLight = "fn scene_light(c: vec3f) -> vec3f { return c; }\n";
-  static constexpr std::string_view SceneLightDisplay =
-      "fn scene_light(c: vec3f) -> vec3f { return hdr_exposed(c, u.tone0, u.tone1, u.tone2); }\n";
   if (!hdr) {
-    // LDR: the source as it always was, and the curve's inverse only where SceneWarp reads it.
     source += ShaderSource;
-    if ((p.features & (SceneWarp | IceChargeCollision | IceChargeCollisionLit | VisorRunOff | VisorRunOffLit)) != 0) {
-      source += SceneLightDisplay;
-      source += hdr::ToneWgsl;
-    } else {
-      source += SceneLight;
-    }
+    source += SceneLight;
     return source;
   }
   source += "const HDR: bool = true;\n";
@@ -1421,7 +1563,7 @@ std::string pipeline_source(const PipelineConfig& p) {
   static constexpr std::string_view HdrTail = R"(  if (HDR) {
     var lin = max(rgb, vec3f(0.0));
     if (u.tone1.x > 0.0 && u.tone0.w > 0.0) { lin = lin * u.tone0.w; }
-    if ((BLEND == 0u || BLEND == 3u) && (FEAT & 1048576u) == 0u && (FEAT & 4194304u) == 0u) {
+    if ((BLEND == 0u || BLEND == 3u || (FEAT & 134217728u) != 0u) && (FEAT & 1048576u) == 0u && (FEAT & 4194304u) == 0u) {
       lin = mix(lin, hdr_exposed(u.fogColor.rgb, u.tone0, u.tone1, u.tone2), fog_factor(in.pos.z));
     }
     return vec4f(lin, alpha);
@@ -1448,7 +1590,7 @@ static void draw_prims(const DrawDesc& desc, const Vertex* verts, uint32_t verte
   // The slots each enabled feature reads; a slot nothing reads is left unbound (the dummy).
   const std::pair<uint32_t, int8_t> reads[] = {
       {ColorTex | ColorIndexing | Pyro | Disintegration | VisorSplat | IceChargeBeam | IceChargeCollision |
-           IceChargeCollisionLit | VisorRunOff | VisorRunOffLit,
+           IceChargeCollisionLit | VisorRunOff | VisorRunOffLit | VisorRain,
        desc.colorSlot},
       {OpacityTex, desc.opacitySlot},
       {Ramp | Pyro, desc.rampSlot},
@@ -1502,6 +1644,12 @@ static void draw_prims(const DrawDesc& desc, const Vertex* verts, uint32_t verte
   std::memcpy(u.tone, &gx.pbrTone, sizeof(u.tone));
   // Per draw: the GX state keeps the room's exposure for every later draw.
   const bool hdr = scene_hdr_pass_active();
+  if (!hdr &&
+      (features & (SceneWarp | IceChargeCollision | IceChargeCollisionLit | VisorRunOff | VisorRunOffLit | VisorRain)) !=
+          0) {
+    // The scene-reading effects read the HDR scene's light; outside it there is none to read.
+    return;
+  }
   u.tone[0][3] = draw_exposure(u.tone[0][3], hdr, desc.alreadyExposed);
   std::memcpy(u.fogColor, &gx.fog.color, sizeof(u.fogColor));
   u.fog[0] = float(gx.fog.type);
@@ -1536,10 +1684,17 @@ static void draw_prims(const DrawDesc& desc, const Vertex* verts, uint32_t verte
     u.scene[2] = gx.proj.m2[3] / (gx.proj.m2[2] - 1.f);
     u.scene[3] = 1.f;
   }
-  if ((features & (IceChargeBeam | IceChargeCollision | IceChargeCollisionLit | VisorRunOff | VisorRunOffLit)) != 0) {
-    const uint32_t rows = (features & (IceChargeCollision | IceChargeCollisionLit)) != 0 ? 7
-                          : (features & (VisorRunOff | VisorRunOffLit)) != 0 ? 5
-                                                                             : 3;
+  if ((features & (IceChargeBeam | IceChargeCollision | IceChargeCollisionLit | VisorRunOff | VisorRunOffLit |
+                   VisorRain)) != 0) {
+    // The recipe's CCH rows: IceChargeCollision 0..6, VisorRunOff 0..4, IceChargeBeam 0..2, VisorRain 0 only.
+    uint32_t rows = 3;
+    if ((features & (IceChargeCollision | IceChargeCollisionLit)) != 0) {
+      rows = 7;
+    } else if ((features & (VisorRunOff | VisorRunOffLit)) != 0) {
+      rows = 5;
+    } else if ((features & VisorRain) != 0) {
+      rows = 1;
+    }
     for (uint32_t i = 0; i < rows; ++i) {
       std::memcpy(u.ice[i], desc.params[i], sizeof(u.ice[i]));
     }
@@ -1547,7 +1702,7 @@ static void draw_prims(const DrawDesc& desc, const Vertex* verts, uint32_t verte
   }
   // IceChargeCollisionLit: AMBS, the probe record's mean/lobe/three lobes and BLCM into the padding before
   // the cluster block (u.lit0..u.lit6).
-  if ((features & IceChargeCollisionLit) != 0) {
+  if ((features & (IceChargeCollisionLit | ParticleLit)) != 0) {
     const LitAmbient& lit = desc.lit;
     std::memcpy(u.lit[0], lit.ambient, sizeof(lit.ambient));
     std::memcpy(u.lit[1], lit.mean, sizeof(lit.mean));
@@ -1561,7 +1716,7 @@ static void draw_prims(const DrawDesc& desc, const Vertex* verts, uint32_t verte
   // into this frame slot's texture. Validated once here; an unusable view leaves the block zeroed and the
   // draw on the dummy mask.
   uint8_t maskSlot = NoMask;
-  if ((features & IceChargeCollisionLit) != 0 && valid_cluster_view(desc.cluster)) {
+  if ((features & (IceChargeCollisionLit | ParticleLit)) != 0 && valid_cluster_view(desc.cluster)) {
     write_cluster_block(desc.cluster, reinterpret_cast<float*>(&u));
     if (upload_cluster_mask(desc.cluster)) {
       maskSlot = uint8_t(frameSlot);
@@ -1696,6 +1851,7 @@ void shutdown() {
   g_state.dummyDepthTexture = {};
   g_state.dummyView = {};
   g_state.dummyTexture = {};
+  g_state.dummyArrayTexture = {};
   g_state.bindLayout = {};
   g_state.pipelineLayout = {};
   const auto task = g_state.task;

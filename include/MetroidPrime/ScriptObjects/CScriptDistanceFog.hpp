@@ -9,6 +9,7 @@
 #include "MetroidPrime/CGameArea.hpp"
 
 class CScriptDistanceFog : public CEntity {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
   ERglFogMode x34_mode;
   CColor x38_color;
   CVector2f x3c_range;

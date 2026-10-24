@@ -5,6 +5,7 @@
 #include "MetroidPrime/Weapons/CProjectileInfo.hpp"
 
 class CPuddleSpore : public CPatterned {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 public:
   CPuddleSpore(const TUniqueId uid, const rstl::string& name, const EFlavorType flavor,
                const CEntityInfo& info, const CTransform4f& xf, const CModelData& mData,

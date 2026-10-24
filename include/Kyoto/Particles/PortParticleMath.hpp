@@ -15,6 +15,32 @@
 
 namespace PortParticleMath {
 
+// Remastered's particle depth bias (DBIS): CParticleSceneNode::ConstructDepthBias 0x2b1004 ->
+// CScopedGraphicsDepthBias::CalculateProjMatrixDepthBias 0x22a604 + ctor 0x22a0ac. `bias` world
+// units (negative = toward the camera) along the view depth `depth` of the bounds centre become a
+// constant NDC depth shift, applied by replacing the projection's m22 with m22 - shift.
+// m22, m23, m32, m33 are the GX/retro projection elements (clip z = m22 * -d + m23, w = m33 - m32 * d);
+// ComputeNdcDepthFromRetroDepth 0x12e234 is (m23 - m22 * d) / (m33 - m32 * d).
+inline float DepthBiasedProjM22(float m22, float m23, float m32, float m33, float depth, float bias) {
+  constexpr float kEps = 1.1920929e-07f;
+  const auto ndc = [&](float d) {
+    float w = m33 - m32 * d;
+    if (w - kEps < 0.f) {
+      w = kEps;
+    }
+    return (m23 - m22 * d) / w;
+  };
+  if (depth - kEps < 0.f) {
+    depth = kEps;
+  }
+  const float shift = ndc(depth + bias) - ndc(depth);
+  const float biased = m22 - shift;
+  if (std::fabs(biased) >= 1e-5f) {
+    return biased;
+  }
+  return m22 - shift >= 0.f ? kEps : -kEps;
+}
+
 // XFMD3 particles already carry the emitter's global orientation in their positions.
 // Their center/sort transform therefore removes only the camera rotation; the legacy
 // system-camera transform remains in use for XFMD2/default positions and directions.

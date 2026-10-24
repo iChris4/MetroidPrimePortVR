@@ -4,6 +4,7 @@
 #include "MetroidPrime/CActor.hpp"
 
 class CScriptPlayerHint : public CActor {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 public:
   CScriptPlayerHint(TUniqueId uid, const rstl::string& name, const CEntityInfo& info,
                     const CTransform4f& xf, bool active, int priority, int overrideFlags);

@@ -4,6 +4,7 @@
 #include "MetroidPrime/CActor.hpp"
 
 class CScriptSpiderBallAttractionSurface : public CActor {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
   CVector3f xe8_scale;
   CAABox xf4_aabb;
 

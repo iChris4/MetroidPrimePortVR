@@ -8,6 +8,7 @@
 
 class CCollisionActorManager;
 class CThardusRockProjectile : public CPatterned {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
   friend class CThardus;
 
 public:

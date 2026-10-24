@@ -4,6 +4,7 @@
 #include "MetroidPrime/CActor.hpp"
 
 class CScriptAiJumpPoint : public CActor {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 private:
   float xe8_apex;
   rstl::optional_object<CAABox> xec_touchBounds;

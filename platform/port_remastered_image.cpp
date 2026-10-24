@@ -1208,6 +1208,139 @@ DdsFormat NormalDdsFormat() {
   return WantedTextureFormat() == TextureFormat::ASTC ? DdsFormat::ASTC4x4Normal : DdsFormat::BC5;
 }
 
+namespace {
+
+// A DX10 .dds header for one 2D texture. A block format gives the top level's size as the
+// linear size, an uncompressed one (`compressed` false) its row pitch.
+void AppendDx10Header(std::vector<uint8_t>& out, uint32_t width, uint32_t height, uint32_t mips,
+                      uint32_t sizeOrPitch, uint32_t dxgi, bool compressed) {
+  // DDSD_CAPS|HEIGHT|WIDTH|PIXELFORMAT|MIPMAPCOUNT, and LINEARSIZE or PITCH; DDPF_FOURCC
+  // 'DX10'; COMPLEX|TEXTURE|MIPMAP.
+  out.insert(out.end(), {'D', 'D', 'S', ' '});
+  AppendLE32(out, 124);
+  AppendLE32(out, compressed ? 0x000A1007 : 0x0002100F);
+  AppendLE32(out, height);
+  AppendLE32(out, width);
+  AppendLE32(out, sizeOrPitch);
+  AppendLE32(out, 0);
+  AppendLE32(out, mips);
+  out.resize(out.size() + 44);
+  AppendLE32(out, 32);
+  AppendLE32(out, 4);
+  out.insert(out.end(), {'D', 'X', '1', '0'});
+  out.resize(out.size() + 20);
+  AppendLE32(out, 0x00401008);
+  out.resize(out.size() + 16);
+  AppendLE32(out, dxgi);
+  AppendLE32(out, 3);  // TEXTURE2D
+  AppendLE32(out, 0);
+  AppendLE32(out, 1);  // array size
+  AppendLE32(out, 0);
+}
+
+}  // namespace
+
+std::vector<uint8_t> EncodeDdsBc6h(uint32_t width, uint32_t height, bool isSigned,
+                                   const std::vector<std::vector<uint8_t>>& mips) {
+  std::vector<uint8_t> out;
+  if (width == 0 || height == 0 || mips.empty()) {
+    return out;
+  }
+  const auto blocks = [](uint32_t side) { return size_t((std::max(side, 1u) + 3) / 4); };
+  size_t total = 0;
+  for (size_t m = 0; m < mips.size(); ++m) {
+    const size_t want = blocks(width >> m) * blocks(height >> m) * 16;
+    if (mips[m].size() != want || ((width >> m) == 0 && (height >> m) == 0)) {
+      return {};
+    }
+    total += want;
+  }
+  out.reserve(148 + total);
+  AppendDx10Header(out, width, height, uint32_t(mips.size()), uint32_t(blocks(width) * blocks(height) * 16),
+                   isSigned ? 96 : 95, true);  // BC6H_SF16, BC6H_UF16
+  for (const auto& level : mips) {
+    out.insert(out.end(), level.begin(), level.end());
+  }
+  return out;
+}
+
+std::vector<uint8_t> EncodeDdsRgba16f(uint32_t width, uint32_t height, const std::vector<std::vector<uint16_t>>& mips) {
+  std::vector<uint8_t> out;
+  if (width == 0 || height == 0 || mips.empty()) {
+    return out;
+  }
+  size_t total = 0;
+  for (size_t m = 0; m < mips.size(); ++m) {
+    const size_t want = size_t(std::max(width >> m, 1u)) * std::max(height >> m, 1u) * 4;
+    if (mips[m].size() != want || ((width >> m) == 0 && (height >> m) == 0)) {
+      return {};
+    }
+    total += want * 2;
+  }
+  out.reserve(148 + total);
+  AppendDx10Header(out, width, height, uint32_t(mips.size()), width * 8, 10, false);  // R16G16B16A16_FLOAT
+  for (const auto& level : mips) {
+    for (const uint16_t h : level) {
+      out.push_back(uint8_t(h));
+      out.push_back(uint8_t(h >> 8));
+    }
+  }
+  return out;
+}
+
+namespace {
+
+float HalfToFloat(uint16_t v) {
+  const int e = (v >> 10) & 31, m = v & 1023;
+  const float sign = (v & 0x8000) ? -1.f : 1.f;
+  return e == 0 ? sign * std::ldexp(float(m), -24)
+         : e == 31 ? sign * 65504.f
+                   : sign * std::ldexp(float(m + 1024), e - 25);
+}
+
+// Round to nearest; out of range clamps to the largest finite half.
+uint16_t FloatToHalf(float f) {
+  const uint16_t sign = std::signbit(f) ? 0x8000 : 0;
+  f = std::fabs(f);
+  if (!(f == f)) {
+    return 0;
+  }
+  if (f >= 65504.f) {
+    return sign | 0x7BFF;
+  }
+  if (f < std::ldexp(1.f, -14)) {
+    return sign | uint16_t(std::lround(f * std::ldexp(1.f, 24)));  // subnormal (1024 rounds into the normals)
+  }
+  int e = 0;
+  const float m = std::frexp(f, &e);  // f = m * 2^e, m in [0.5, 1)
+  long bits = std::lround((m * 2.f - 1.f) * 1024.f) + (long(e - 1 + 15) << 10);
+  return sign | uint16_t(std::min(bits, 0x7BFFL));
+}
+
+}  // namespace
+
+std::vector<uint16_t> HalveRgba16f(const std::vector<uint16_t>& level, uint32_t width, uint32_t height) {
+  const uint32_t w = std::max(width >> 1, 1u), h = std::max(height >> 1, 1u);
+  std::vector<uint16_t> out(size_t(w) * h * 4);
+  for (uint32_t y = 0; y < h; ++y) {
+    for (uint32_t x = 0; x < w; ++x) {
+      for (int c = 0; c < 4; ++c) {
+        float sum = 0.f;
+        int n = 0;
+        for (uint32_t dy = 0; dy < 2; ++dy) {
+          for (uint32_t dx = 0; dx < 2; ++dx) {
+            const uint32_t sx = std::min(x * 2 + dx, width - 1), sy = std::min(y * 2 + dy, height - 1);
+            sum += HalfToFloat(level[(size_t(sy) * width + sx) * 4 + c]);
+            ++n;
+          }
+        }
+        out[(size_t(y) * w + x) * 4 + c] = FloatToHalf(sum / float(n));
+      }
+    }
+  }
+  return out;
+}
+
 std::vector<uint8_t> EncodeDds(const Image& image, DdsFormat format, bool punch, MapKind kind, bool srgb) {
   std::vector<Image> levels{image};
   if (punch) {
@@ -1222,31 +1355,12 @@ std::vector<uint8_t> EncodeDds(const Image& image, DdsFormat format, bool punch,
   const auto blocks = [](int side) { return size_t(std::max(side, 4) / 4); };
   std::vector<uint8_t> out;
   out.reserve(148 + blocks(image.width) * blocks(image.height) * 16 * 4 / 3 + 64);
-  // DDSD_CAPS|HEIGHT|WIDTH|PIXELFORMAT|MIPMAPCOUNT|LINEARSIZE; DDPF_FOURCC
-  // 'DX10'; COMPLEX|TEXTURE|MIPMAP.
-  out.insert(out.end(), {'D', 'D', 'S', ' '});
-  AppendLE32(out, 124);
-  AppendLE32(out, 0x000A1007);
-  AppendLE32(out, uint32_t(image.height));
-  AppendLE32(out, uint32_t(image.width));
-  AppendLE32(out, uint32_t(blocks(image.width) * blocks(image.height) * 16));
-  AppendLE32(out, 0);
-  AppendLE32(out, uint32_t(levels.size()));
-  out.resize(out.size() + 44);
-  AppendLE32(out, 32);
-  AppendLE32(out, 4);
-  out.insert(out.end(), {'D', 'X', '1', '0'});
-  out.resize(out.size() + 20);
-  AppendLE32(out, 0x00401008);
-  out.resize(out.size() + 16);
   const bool astc = format == DdsFormat::ASTC4x4 || format == DdsFormat::ASTC4x4Normal;
   // DXGI format: BC7_UNORM(_SRGB), BC5_UNORM, ASTC_4X4_UNORM(_SRGB). A normal map is never sRGB.
   const bool colour = format == DdsFormat::BC7 || format == DdsFormat::ASTC4x4;
-  AppendLE32(out, astc ? (srgb && colour ? 135 : 134) : format == DdsFormat::BC7 ? (srgb ? 99 : 98) : 83);
-  AppendLE32(out, 3);  // TEXTURE2D
-  AppendLE32(out, 0);
-  AppendLE32(out, 1);  // array size
-  AppendLE32(out, 0);
+  AppendDx10Header(out, uint32_t(image.width), uint32_t(image.height), uint32_t(levels.size()),
+                   uint32_t(blocks(image.width) * blocks(image.height) * 16),
+                   astc ? (srgb && colour ? 135 : 134) : format == DdsFormat::BC7 ? (srgb ? 99 : 98) : 83, true);
   for (const Image& lv : levels) {
     if (astc) {
       EncodeAstcLevel(lv, format == DdsFormat::ASTC4x4Normal, out);

@@ -106,6 +106,8 @@ std::optional<uint32_t> resolve_mip_count(const DDSHeader& header) noexcept {
 
 std::optional<wgpu::TextureFormat> resolve_dx10_format(uint32_t dxgiFormat) noexcept {
   switch (dxgiFormat) {
+  case 10:
+    return wgpu::TextureFormat::RGBA16Float;
   case 28:
     return wgpu::TextureFormat::RGBA8Unorm;
   case 29:
@@ -122,6 +124,10 @@ std::optional<wgpu::TextureFormat> resolve_dx10_format(uint32_t dxgiFormat) noex
     return wgpu::TextureFormat::BC3RGBAUnormSrgb;
   case 83:
     return wgpu::TextureFormat::BC5RGUnorm;
+  case 95:
+    return wgpu::TextureFormat::BC6HRGBUfloat;
+  case 96:
+    return wgpu::TextureFormat::BC6HRGBFloat;
   case 98:
     return wgpu::TextureFormat::BC7RGBAUnorm;
   case 99:

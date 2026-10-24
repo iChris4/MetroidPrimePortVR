@@ -32,6 +32,10 @@ struct MaterialDecision {
   double p[4] = {0, 0, 0, 0};
   std::string cube;         // the reflection cube's id (8 hex digits), or "-"
   std::string retail;       // the retail material it stands on: "blendSrc,blendDst 0xflags"
+  std::string meshClass;    // the Remastered mesh class (bits2): 0 opaque, 1 blended, 2 cutout, 3 additive, or "-"
+  std::string blend;        // the blend written: "src,dst"
+  std::string classBlend;   // whether it is the class's own (opaque/cutout 1,0, blended 4,5, additive 4,1): yes, no or "-"
+  std::string uv;           // texcoord attributes (c: a colour too), then each PBR map's slot: "2c:0,1,0,0"
 };
 
 // One row of the effects report: what became of one Remastered effect, and why. A GENP with

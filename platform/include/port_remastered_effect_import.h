@@ -39,6 +39,9 @@ struct EffectImportIO {
   // Optional: pairings the image itself gives (a projectile's particles, from its WPSM and the
   // disc's WPSC), used after the importer's own table.
   std::vector<EffectPairing> pairings;
+  // Optional: GENPs a room's effect actors use (RoomEffectGenps) that stand for no disc PART:
+  // each is written under RoomEffectId(), for the rooms' .roomfx files to name.
+  std::vector<EffectGuid> roomOnly;
   // A Remastered asset's bytes by type ('GENP', 'MATI', 'TXTR') and id; false
   // when the image has none.
   std::function<bool(uint32_t type, const EffectGuid& id, std::vector<uint8_t>& out, std::string& error)> read;
@@ -49,6 +52,8 @@ struct EffectImportIO {
   // A disc resource's bytes by type and id; false when the disc has none.
   // Optional: without it a converted effect keeps its own light.
   std::function<bool(uint32_t type, uint32_t id, std::vector<uint8_t>& out)> retail;
+  // Optional: whether the disc has a resource of this type and id (any type, unlike `retail`).
+  std::function<bool(uint32_t type, uint32_t id)> retailHas;
   // A new id for a resource of the import, never one the disc or the import
   // already has; `seed` makes it the same in every import.
   std::function<uint32_t(uint32_t seed)> freshId;
@@ -97,6 +102,16 @@ struct EffectImportResult {
 bool WantsRemasteredEffects();
 
 EffectImportResult ImportEffects(const EffectImportIO& io);
+
+// The synthetic id (port_synthetic_effect.h) of a GENP only room effect actors use: of its id
+// (in a pak's byte order) as it prints, 8-4-4-4-12 in lower case.
+uint32_t RoomEffectId(const EffectGuid& id);
+
+// The retail PARTs kMatchedEffects pairs with `id` (in a pak's byte order) by its `shared-genp`
+// entries: the ones one GENP shares with several retail PARTs, so that a reference cannot say
+// which PART it is. The rooms step lets the retail object drawing one of them take the effect
+// actor's particle variables.
+std::vector<uint32_t> MatchedRetailEffects(const EffectGuid& id);
 
 }  // namespace PortRemastered
 

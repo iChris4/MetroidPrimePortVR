@@ -1,4 +1,5 @@
 #include "xray.hpp"
+#include "tex_copy_conv.hpp"
 
 #include "../logging.hpp"
 #include "../webgpu/gpu.hpp"
@@ -23,15 +24,17 @@
 //    about its centre by s = 1 - (p5.x i + p5.y i^2), each mapped through a piecewise ramp of its
 //    luminance (p1.rgb at 0, p6.rgb at p6.w, p3.rgb at 1), averaged, and mixed with p2.rgb by a
 //    vignette pow(clamp(|2 (uv - 0.5)| p4.w, 0, 1) p4.x, p4.z).
-// The EFB holds the tone-mapped colour sRGB encoded, so pass 1 works in the exposed level (the
-// EFB undone through the room's curve, as the fog does) and draws its result through the curve
-// again; the ramp pass runs on the decoded colour and re-encodes it.
+// Pass 1 works in the exposed level on the HDR scene; the ramp pass runs after the post on the
+// display-encoded EFB, on the decoded colour, and re-encodes it.
 // Remastered draws the whole X-ray world into a 0.7-scale HDR target and blends it back to the
 // full-resolution frame (xray_blend_upscale 0xfb4500, a plain textured quad), tone mapping after
 // that: pass 1 here therefore writes the unclamped level E (it can go negative, the depth fade
 // subtracts) at 0.7 of the frame, sampling the full-resolution frame at each target pixel's
 // centre (the nearest of the pixels the world was rasterised to), and a second pass filters it
-// up bilinearly in that HDR domain before the curve and the sRGB encoding.
+// up bilinearly in that HDR domain.
+// Pass A reads the HDR scene's exposed linear light as it is and blends the level back into it as
+// it is (kb topic/visor-hdr-pipeline.md): the post's tonemap applies the curve once. Outside the
+// HDR scene there is no pass A.
 namespace aurora::gfx::xray {
 namespace {
 Module Log("aurora::gfx::xray");
@@ -66,37 +69,7 @@ fn vs_main(@builtin(vertex_index) i: u32) -> VertexOutput {
   return out;
 }
 
-// The tone curve and its inverse, as bloom.cpp has them.
-fn tone(x: f32) -> f32 {
-  if (x < u.tone[1].z) {
-    return ((u.tone[0].x * x + u.tone[0].y) * x + u.tone[0].z) * x;
-  }
-  if (x < u.tone[1].w) {
-    return u.tone[1].x * x + u.tone[1].y;
-  }
-  let st = max(u.tone[2].y * x + u.tone[2].z, 0.0);
-  return u.tone[2].x * st / (1.0 + st) + u.tone[2].w;
-}
-
-fn untone(y: f32) -> f32 {
-  let mid = u.tone[1].z;
-  let lineStart = u.tone[1].x * mid + u.tone[1].y;
-  if (y < lineStart) {
-    var x = y / max(lineStart, 1e-4) * mid;
-    for (var n = 0; n < 4; n++) {
-      let slope = (3.0 * u.tone[0].x * x + 2.0 * u.tone[0].y) * x + u.tone[0].z;
-      x = clamp(x - (tone(x) - y) / max(slope, 1e-4), 0.0, mid);
-    }
-    return x;
-  }
-  let top = u.tone[2].w;
-  if (y < top || u.tone[2].y <= 0.0) {
-    return (y - u.tone[1].y) / u.tone[1].x;
-  }
-  let t = min((y - top) / max(u.tone[2].x, 1e-4), 0.999);
-  return t / (1.0 - t) / u.tone[2].y + u.tone[1].w;
-}
-
+// Pass 2 runs after the post, on the display-encoded EFB.
 fn srgb_enc(c: vec3f) -> vec3f {
   let l = clamp(c, vec3f(0.0), vec3f(1.0));
   return select(1.055 * pow(l, vec3f(1.0 / 2.4)) - 0.055, 12.92 * l, l <= vec3f(0.0031308));
@@ -123,20 +96,23 @@ fn fs_distort(in: VertexOutput) -> @location(0) vec4f {
   let lo = select(u.p[2].w, 0.03, near);
   let hi = select(u.p[3].w, 0.037, near);
   let a = max((d - lo) / (hi - lo), 0.0);
-  // x: the exposed colour; u.p[0].w is 1 / exposure.
-  let y = srgb_dec(f.rgb);
-  let x = vec3f(untone(y.r), untone(y.g), untone(y.b));
+  // x: the exposed colour, which the HDR scene holds as it is (it can exceed 1, and go negative).
+  let x = f.rgb;
   let c = pow(x, vec3f(u.p[0].x));
   let sel = select(c * u.p[0].y, vec3f(1.0) - c * u.p[0].y, u.p[1].w < 0.0);
   let e = sel * abs(u.p[1].w) - vec3f(a * u.p[4].y);
   return vec4f(e, 1.0);
 }
 
-// Pass 1b: the low-resolution level, filtered up and drawn through the curve.
+// Pass 1b: the low-resolution level, filtered up and blended back as the HDR scene holds it (signed,
+// unclamped); the post's tonemap applies the curve, which like Remastered's takes a negative level
+// through the toe cubic (pale; kb topic/xray-post-shader-00089f0.md).
+fn enc(e: vec3f) -> vec3f { return e; }
+
 @fragment
 fn fs_upscale(in: VertexOutput) -> @location(0) vec4f {
   let e = textureSampleLevel(src, samp, in.uv, 0.0).rgb;
-  return vec4f(srgb_enc(vec3f(tone(e.r), tone(e.g), tone(e.b))), 1.0);
+  return vec4f(enc(e), 1.0);
 }
 
 // Pass 2: the ramp taps and the vignette.
@@ -180,6 +156,7 @@ struct State {
   uint32_t pipelineSamples = 0;
   wgpu::Buffer uniforms;
   wgpu::Sampler sampler;
+  wgpu::Sampler nearestSampler; // Compatibility: depth is read through a comparison sampler
   wgpu::Texture frame;
   wgpu::TextureView frameView;
   wgpu::TextureFormat frameFormat = wgpu::TextureFormat::Undefined;
@@ -188,8 +165,18 @@ struct State {
 };
 State g_state;
 
+// The targets a slot reads and writes, taken at the FIFO: the recorder's HDR mode is reset every
+// frame, so the encode cannot ask it.
+struct Capture {
+  bool scene = false;                  // pass A on the HDR scene; pass B on the display EFB
+  webgpu::TextureWithSampler color;    // the pass's scene attachment (MSAA when samples > 1)
+  webgpu::TextureWithSampler resolved; // its resolve target
+  webgpu::TextureWithSampler depth;
+};
+
 // Params are larger than an encoder task's inline payload, so the task carries a slot of this ring.
 std::array<Params, 8> g_recorded;
+std::array<Capture, 8> g_recordedCapture;
 // A slot's uniform offset in the buffer (the dynamic-offset alignment limit's worst case).
 constexpr uint64_t SlotStride = 256;
 static_assert(sizeof(Params) <= SlotStride);
@@ -199,9 +186,7 @@ void ensure_pipelines(wgpu::TextureFormat format, uint32_t samples) {
   if (g_state.distort && g_state.pipelineFormat == format && g_state.pipelineSamples == samples) {
     return;
   }
-  std::string code = Source;
-  const std::string token = "DEPTH_TYPE";
-  code.replace(code.find(token), token.size(), samples > 1 ? "texture_depth_multisampled_2d" : "texture_depth_2d");
+  const std::string code = source_for(samples);
   wgpu::ShaderSourceWGSL wgsl{};
   wgsl.code = code.c_str();
   const wgpu::ShaderModuleDescriptor moduleDescriptor{.nextInChain = &wgsl, .label = "X-ray Post"};
@@ -229,10 +214,16 @@ void ensure_pipelines(wgpu::TextureFormat format, uint32_t samples) {
           .visibility = wgpu::ShaderStage::Fragment,
           .sampler = {.type = wgpu::SamplerBindingType::Filtering},
       },
+      // Compatibility only: the depth is sampled through a Nearest sampler (see source_for)
+      wgpu::BindGroupLayoutEntry{
+          .binding = 4,
+          .visibility = wgpu::ShaderStage::Fragment,
+          .sampler = {.type = wgpu::SamplerBindingType::Comparison},
+      },
   };
   const wgpu::BindGroupLayoutDescriptor layoutDescriptor{
       .label = "X-ray Post Layout",
-      .entryCount = entries.size(),
+      .entryCount = webgpu::g_hasCoreFeatures ? 4u : 5u,
       .entries = entries.data(),
   };
   g_state.layout = g_device.CreateBindGroupLayout(&layoutDescriptor);
@@ -277,6 +268,15 @@ void ensure_pipelines(wgpu::TextureFormat format, uint32_t samples) {
         .minFilter = wgpu::FilterMode::Linear,
     };
     g_state.sampler = g_device.CreateSampler(&samplerDescriptor);
+    const wgpu::SamplerDescriptor nearestDescriptor{
+        .label = "X-ray Post Depth Sampler",
+        .addressModeU = wgpu::AddressMode::ClampToEdge,
+        .addressModeV = wgpu::AddressMode::ClampToEdge,
+        .magFilter = wgpu::FilterMode::Nearest,
+        .minFilter = wgpu::FilterMode::Nearest,
+        .compare = wgpu::CompareFunction::LessEqual,
+    };
+    g_state.nearestSampler = g_device.CreateSampler(&nearestDescriptor);
   }
 }
 
@@ -295,6 +295,27 @@ void ensure_level(uint32_t width, uint32_t height) {
   AURORA_NOTE_TEXTURE(&descriptor);
   g_state.level = g_device.CreateTexture(&descriptor);
   g_state.levelView = g_state.level.CreateView();
+}
+
+// The HDR targets a pass reads and writes, checked as one whole: the scene format throughout, the
+// depth buffer's size and sample count those of the colour, a resolve target when multisampled.
+// Anything else fails closed (no visor post) instead of shrinking 16F texels as 8-bit ones.
+bool hdr_capture_valid(const Capture& c, uint32_t& samples) {
+  if (!c.color.texture || !c.color.view || !c.depth.texture || !c.depth.view ||
+      c.color.format != webgpu::SceneHdrFormat || c.color.texture.GetFormat() != webgpu::SceneHdrFormat) {
+    return false;
+  }
+  samples = c.color.texture.GetSampleCount();
+  if (c.depth.texture.GetSampleCount() != samples || c.depth.size.width != c.color.size.width ||
+      c.depth.size.height != c.color.size.height) {
+    return false;
+  }
+  if (samples > 1) {
+    return c.resolved.texture && c.resolved.view && c.resolved.format == webgpu::SceneHdrFormat &&
+           c.resolved.texture.GetFormat() == webgpu::SceneHdrFormat && c.resolved.texture.GetSampleCount() == 1 &&
+           c.resolved.size.width == c.color.size.width && c.resolved.size.height == c.color.size.height;
+  }
+  return true;
 }
 
 void ensure_frame(uint32_t width, uint32_t height, wgpu::TextureFormat format) {
@@ -324,13 +345,21 @@ void encode(const EncoderTaskContext& ctx, const wgpu::CommandEncoder& cmd, cons
   std::memcpy(&slot, payload, sizeof(slot));
   slot %= g_recorded.size();
   const Params& params = g_recorded[slot];
+  const Capture& capture = g_recordedCapture[slot];
+  const bool hdr = capture.scene;
+  uint32_t hdrSamples = 1;
+  if (hdr && !hdr_capture_valid(capture, hdrSamples)) {
+    return;
+  }
   // The targets this frame was recorded against (a resize may have made newer ones since).
   const auto efb = webgpu::efb_targets();
-  const auto& source = webgpu::present_source();
-  const auto& target = efb.color;
-  const auto& depth = efb.depth;
-  const uint32_t samples = webgpu::g_graphicsConfig.msaaSamples > 1 ? webgpu::g_graphicsConfig.msaaSamples : 1;
-  const auto format = webgpu::g_graphicsConfig.surfaceConfiguration.format;
+  const auto& source = hdr ? (hdrSamples > 1 ? capture.resolved : capture.color) : webgpu::present_source();
+  const auto& target = hdr ? capture.color : efb.color;
+  const auto& resolveTarget = hdr ? capture.resolved : efb.resolved;
+  const auto& depth = hdr ? capture.depth : efb.depth;
+  const uint32_t samples =
+      hdr ? hdrSamples : (webgpu::g_graphicsConfig.msaaSamples > 1 ? webgpu::g_graphicsConfig.msaaSamples : 1);
+  const auto format = hdr ? webgpu::SceneHdrFormat : webgpu::g_graphicsConfig.surfaceConfiguration.format;
   const uint32_t width = source.size.width;
   const uint32_t height = source.size.height;
   if (width == 0 || height == 0 || !source.texture || !target.view || !depth.view) {
@@ -354,11 +383,12 @@ void encode(const EncoderTaskContext& ctx, const wgpu::CommandEncoder& cmd, cons
         wgpu::BindGroupEntry{.binding = 1, .textureView = view},
         wgpu::BindGroupEntry{.binding = 2, .textureView = depth.view},
         wgpu::BindGroupEntry{.binding = 3, .sampler = g_state.sampler},
+        wgpu::BindGroupEntry{.binding = 4, .sampler = g_state.nearestSampler},
     };
     const wgpu::BindGroupDescriptor groupDescriptor{
         .label = label,
         .layout = g_state.layout,
-        .entryCount = groupEntries.size(),
+        .entryCount = webgpu::g_hasCoreFeatures ? 4u : 5u,
         .entries = groupEntries.data(),
     };
     return g_device.CreateBindGroup(&groupDescriptor);
@@ -389,7 +419,7 @@ void encode(const EncoderTaskContext& ctx, const wgpu::CommandEncoder& cmd, cons
   // Every pixel is written without blending, so the frame need not be loaded first.
   const wgpu::RenderPassColorAttachment attachment{
       .view = target.view,
-      .resolveTarget = samples > 1 ? efb.resolved.view : wgpu::TextureView{},
+      .resolveTarget = samples > 1 ? resolveTarget.view : wgpu::TextureView{},
       .loadOp = wgpu::LoadOp::Clear,
       .storeOp = wgpu::StoreOp::Store,
       .clearValue = {0.0, 0.0, 0.0, 0.0},
@@ -408,7 +438,36 @@ void encode(const EncoderTaskContext& ctx, const wgpu::CommandEncoder& cmd, cons
 }
 } // namespace
 
+// The task's source for a sample count: outside the anonymous namespace so it is the one declared
+// in xray.hpp (the anonymous one would be a different function).
+std::string source_for(uint32_t samples) {
+  std::string code = Source;
+  const std::string depthToken = "DEPTH_TYPE";
+  const size_t depthAt = code.find(depthToken);
+  if (depthAt != std::string::npos) {
+    code.replace(depthAt, depthToken.size(),
+                 samples > 1 ? "texture_depth_multisampled_2d" : "texture_depth_2d");
+  }
+  if (!webgpu::g_hasCoreFeatures) {
+    // textureLoad on a depth texture is rejected there; a Nearest sample at the texel centre returns the same texel.
+    const std::string load = "textureLoad(depthTex, at, 0)";
+    const size_t at = code.find(load);
+    if (at != std::string::npos) {
+      code.replace(at, load.size(),
+                   "mp_depth_load(depthTex, depthSamp, at)");
+    }
+    code += "\n@group(0) @binding(4) var depthSamp: sampler_comparison;\n";
+    code += tex_copy_conv::compat_depth_load_wgsl();
+  }
+  return code;
+}
+
 bool ensure_task() {
+  // Compatibility devices cannot bind a multisampled depth texture: with MSAA on, the distortion pass has no
+  // depth to read there, so the X-ray post stays off (record() then fails closed).
+  if (!webgpu::g_hasCoreFeatures && webgpu::g_graphicsConfig.msaaSamples > 1) {
+    return false;
+  }
   if (g_state.task == InvalidEncoderTask) {
     g_state.task = register_encoder_task_type(EncoderTaskDescriptor{.label = "X-ray Post", .callback = encode});
     if (g_state.task == InvalidEncoderTask) {
@@ -423,12 +482,25 @@ bool record(const Params& params) {
   if (g_state.task == InvalidEncoderTask) {
     return false;
   }
-  const auto& size = webgpu::present_source().size;
+  // The targets are the pass's, taken here at the FIFO; the encode never asks the recorder, whose HDR
+  // mode is reset every frame. Pass A blends into the HDR scene and has no target outside it (no
+  // scene, offscreen, a colour pass): fail closed. Pass B runs after the post, which has left the HDR
+  // scene, on the display EFB.
+  const bool hdr = scene_hdr_pass_active();
+  if (params.p[0][2] == 1.f ? !hdr : scene_hdr_active()) {
+    return false;
+  }
+  const auto& size = hdr ? webgpu::g_sceneHdr.size : webgpu::present_source().size;
   if (size.width == 0 || size.height == 0) {
     return false;
   }
   const uint32_t slot = g_nextSlot++ % g_recorded.size();
   g_recorded[slot] = params;
+  g_recordedCapture[slot] = hdr ? Capture{.scene = true,
+                                          .color = webgpu::g_sceneHdr,
+                                          .resolved = webgpu::g_sceneHdrResolved,
+                                          .depth = webgpu::g_depthBuffer}
+                                : Capture{};
   record_encoder_task(g_state.task, &slot, sizeof(slot));
   return true;
 }
@@ -436,6 +508,7 @@ bool record(const Params& params) {
 void shutdown() {
   const auto task = g_state.task;
   g_state = {};
+  g_recordedCapture = {};
   if (task != InvalidEncoderTask) {
     unregister_encoder_task_type(task);
   }

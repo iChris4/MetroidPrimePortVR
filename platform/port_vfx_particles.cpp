@@ -377,6 +377,10 @@ bool PortVfxBuildDesc(const CPortVfxData& vfx, const float* vsmt, uint vsmtMask,
   return true;
 }
 
+namespace {
+void PortVfxClusterView(const float* pos, aurora::gfx::vfx::DrawDesc& desc);
+} // namespace
+
 void CElementGen::PortRenderParticlesVfx() {
   const CPortVfxData& vfx = *x28_loadedGenDesc->xPortVfx;
   const CPortVfxMat& mat = vfx.mat;
@@ -390,9 +394,28 @@ void CElementGen::PortRenderParticlesVfx() {
     return; // a texture is not streamed in yet
   }
   // VisorRunOff is a PMDL model particle (the mesh path below), but a sprite generator sharing its
-  // material still reads CCH0..4: evaluate them rather than draw from zeroed uniforms.
-  if ((desc.features & (aurora::gfx::vfx::VisorRunOff | aurora::gfx::vfx::VisorRunOffLit)) != 0) {
+  // material still reads CCH0..4: evaluate them rather than draw from zeroed uniforms. VisorRain is a
+  // sprite whose CCH0 is the drop mask's scale (SMTR-animated), so it needs the same rows.
+  if ((desc.features & (aurora::gfx::vfx::VisorRunOff | aurora::gfx::vfx::VisorRunOffLit |
+                        aurora::gfx::vfx::VisorRain)) != 0) {
     PortVfxEvalParams(vfx, x74_curFrame, desc.params);
+  }
+  // A VFX_*_Lit shader under LIT_ 1 (ParticleLit): AMBS and the clustered gather, and with BLIT 1 (PBLT)
+  // the room's baked probe. CParticleSceneNode::AppendBakedLightingIfRequested (0x2b12a8) appends the probe
+  // texture (BPTX) and BLCM only for a BLIT generator; CSceneRenderContext+0x990, the baked-lighting manager
+  // it reads, is set every main frame (RenderPrimaryPass). Remastered samples the texture per fragment
+  // (20e149b2 084_0..087_0); the port takes the room's grid at the emitter. Without BLIT, the probe-less lit
+  // perm (088_0..091_0): the probe terms stay zero.
+  const bool lit = (desc.features & aurora::gfx::vfx::ParticleLit) != 0;
+  if (lit) {
+    const float probePos[3] = {xe8_globalTranslation.GetX(), xe8_globalTranslation.GetY(),
+                               xe8_globalTranslation.GetZ()};
+    PortVfxClusterView(x28_loadedGenDesc->xPortBakedLighting ? probePos : nullptr, desc);
+    // BLCM (c6[7]) comes with the probe: CBakedLightingManager::GetModulationColor, the colour the room's
+    // models take too (power-bomb flash, X-ray). Without BLIT it is not appended and stays white.
+    if (x28_loadedGenDesc->xPortBakedLighting) {
+      PortRoomEnv::BakedLightModulation(desc.lit.modulate);
+    }
   }
 
   // The retail frame: the same model matrix as the non-ORNT path. Particles are placed in a
@@ -483,8 +506,9 @@ void CElementGen::PortRenderParticlesVfx() {
       tm[s].f = EvalReal(r[5], partFrame, 0.f);
     }
 
-    float color[4] = {p.xPortColor[0] * p.xPortIten, p.xPortColor[1] * p.xPortIten,
-                      p.xPortColor[2] * p.xPortIten, p.xPortColor[3]};
+    // A lit perm (ParticleLit) reads no ITEN: Remastered's 080_1 passes the colour through without it.
+    const float iten = lit ? 1.f : p.xPortIten;
+    float color[4] = {p.xPortColor[0] * iten, p.xPortColor[1] * iten, p.xPortColor[2] * iten, p.xPortColor[3]};
     if (hasModu) {
       for (int i = 0; i < 4; ++i) {
         color[i] *= modu[i];
@@ -504,12 +528,12 @@ void CElementGen::PortRenderParticlesVfx() {
     // width B (perpendicular to the direction and to the view) and length C.
     CVector3f center = vp;
     CVector3f axisU(1.f, 0.f, 0.f), axisW(0.f, 0.f, 1.f);
-    float vec[3] = {0.f, 0.f, 1.f}; // [I] view-space quad normal, depth component in z
+    float vec[3] = {0.f, 0.f, -1.f}; // [I] view-space quad normal, depth component in z
     if (vfx.vorn == 0 && PortVr::VrImmersive()) {
       axisU = billboard.Vertex(center, center + axisU) - center;
       axisW = billboard.Vertex(center, center + axisW) - center;
       const CVector3f nw = systemModelMatrix.Rotate(CVector3f::Cross(axisU, axisW));
-      const CVector3f n = Normalised(systemViewCopy.TransposeRotate(nw), CVector3f(0.f, 1.f, 0.f));
+      const CVector3f n = Normalised(-systemViewCopy.TransposeRotate(nw), CVector3f(0.f, -1.f, 0.f));
       vec[0] = n.GetX();
       vec[1] = n.GetZ();
       vec[2] = n.GetY();
@@ -804,9 +828,11 @@ void CPortVfxMeshBatch::Add(const CPortVfxData& vfx, const CTransform4f& model,
     tm[s].sinE = std::sin(e);
     tm[s].f = EvalReal(r[5], partFrame, 0.f);
   }
-  const float color[4] = {p.xPortColor[0] * p.xPortIten * modulate.GetRed(),
-                          p.xPortColor[1] * p.xPortIten * modulate.GetGreen(),
-                          p.xPortColor[2] * p.xPortIten * modulate.GetBlue(),
+  // ParticleLit reads no ITEN (see the sprite path).
+  const float iten = (vfx.mat.features & aurora::gfx::vfx::ParticleLit) != 0 ? 1.f : p.xPortIten;
+  const float color[4] = {p.xPortColor[0] * iten * modulate.GetRed(),
+                          p.xPortColor[1] * iten * modulate.GetGreen(),
+                          p.xPortColor[2] * iten * modulate.GetBlue(),
                           p.xPortColor[3] * modulate.GetAlpha()};
 
   // The vertices once, in world space; the triangles index them. One scratch buffer serves every
@@ -902,9 +928,11 @@ void PortVfxClusterAmbient(const PortClusteredLights::Camera& camera, const floa
 // The clustered gather for this camera, from the port's room lights. Remastered masks every light scene node
 // in the scene (muzzle, beam, ball and explosion lights included) and culls it on the GPU; the port has only
 // the room's LightDynamic lights, which is what RoomLights walks. AMBS (the flat ambient c6[0].xyz) is the
-// ambient colour the game set for this area (CGraphics::SetAmbientColor, GX channel 0's), which is the same
-// quantity Remastered's lighting manager hands the material.
-void PortVfxClusterView(const float pos[3], aurora::gfx::vfx::DrawDesc& desc) {
+// scene's ambient light-node sum (kb topic/ambient-constant.md); the port has no such nodes, so it is the
+// fallback SFlatAmbientSourcePOD constant (0x1d0e184), black. The LIT_ 1 waterfall mist (GENP 1d3d2dfc) is
+// lit by the baked probe instead: both its generators are BLIT 1.
+// Without pos (a sprite without BLIT), no baked probe: desc.lit keeps its zero mean, lobe and directions.
+void PortVfxClusterView(const float* pos, aurora::gfx::vfx::DrawDesc& desc) {
   PortClusteredLights::Camera camera;
   PortVfxClusterCamera(camera);
   static std::vector< PortClusteredLights::LightSource > sources;
@@ -924,11 +952,12 @@ void PortVfxClusterView(const float pos[3], aurora::gfx::vfx::DrawDesc& desc) {
     desc.cluster.maskWidth = uint32_t(frame.grid.tilesX * frame.grid.tilesY);
     desc.cluster.maskHeight = uint32_t(PortClusteredLights::kSlices);
   }
-  PortVfxClusterAmbient(camera, pos, desc.lit);
-  const CColor ambient = CGraphics::GetAmbientColor();
-  desc.lit.ambient[0] = ambient.GetRed();
-  desc.lit.ambient[1] = ambient.GetGreen();
-  desc.lit.ambient[2] = ambient.GetBlue();
+  if (pos != nullptr) {
+    PortVfxClusterAmbient(camera, pos, desc.lit);
+  }
+  desc.lit.ambient[0] = 0.f;
+  desc.lit.ambient[1] = 0.f;
+  desc.lit.ambient[2] = 0.f;
 }
 
 } // namespace
@@ -951,11 +980,12 @@ void CElementGen::PortRenderMeshesVfx(CPortVfxMeshBatch& batch) {
   }
   // VPRM's CCHn rows, with the VSMT overrides, at this frame: IceCharge* and VisorRunOff's 5 rows.
   if ((features & (aurora::gfx::vfx::IceChargeBeam | aurora::gfx::vfx::IceChargeCollision |
-                   aurora::gfx::vfx::VisorRunOff | aurora::gfx::vfx::VisorRunOffLit)) != 0) {
+                   aurora::gfx::vfx::VisorRunOff | aurora::gfx::vfx::VisorRunOffLit |
+                   aurora::gfx::vfx::VisorRain)) != 0) {
     PortVfxEvalParams(vfx, x74_curFrame, desc.params);
   }
   // VFX_IceChargeCollision_Lit's lighting: the clustered gather (block and mask) and the baked probe.
-  if ((features & aurora::gfx::vfx::IceChargeCollisionLit) != 0) {
+  if ((features & (aurora::gfx::vfx::IceChargeCollisionLit | aurora::gfx::vfx::ParticleLit)) != 0) {
     PortVfxClusterView(batch.probePos, desc);
   }
   // This is a model draw, so a material whose mesh permutation was read against the shader takes its

@@ -9,6 +9,7 @@
 #include "Kyoto/Graphics/CGX.hpp"
 #include "Kyoto/Graphics/CGX_Impl.hpp" // IWYU pragma: keep
 #include "Kyoto/Graphics/CGraphics.hpp"
+#include "MetaRender/CCubeRenderer.hpp"
 #include "dolphin/gx/GXVert.h"
 #ifdef TARGET_PC
 #include <dolphin/gx/GXExtra.h>
@@ -564,7 +565,7 @@ f32 CCubeModel::PortSetPBRMaterial(const int idx, const f32 fade, const bool fad
   if ((values[13] > 4.5f && values[13] < 7.5f) || (values[13] > 8.5f && values[13] < 9.5f) ||
       (values[13] > 10.5f && values[13] < 11.5f) || (values[13] > 13.5f && values[13] < 15.5f) || (values[13] > 17.5f && values[13] < 18.5f) ||
       (values[13] > 20.5f && values[13] < 22.5f) || (values[13] > 28.5f && values[13] < 29.5f) ||
-      (values[13] > 31.5f && values[13] < 32.5f)) {
+      (values[13] > 31.5f && values[13] < 32.5f) || (values[13] > 42.5f && values[13] < 43.5f)) {
     // The Phazon3 stone and the PhazonPool blister read Remastered's scene clock (stops while paused, wraps at 15120 s).
     values[15] *= ((values[13] > 20.5f && values[13] < 22.5f) || (values[13] > 31.5f && values[13] < 32.5f))
                       ? CGraphics::GetSimTime()
@@ -590,8 +591,8 @@ f32 CCubeModel::PortSetPBRMaterial(const int idx, const f32 fade, const bool fad
     shield[31] = sPortDisintegration;
   }
   // The HoloGlass (kind 29) offsets its layers by a per-object phase: the sum of the model matrix's
-  // translation, times 0.33 (row 4 x of its constants).
-  if (kind > 28.5f && kind < 29.5f) {
+  // translation, times 0.33 (row 4 x of its constants). The simple glass (43) is taken to do the same.
+  if ((kind > 28.5f && kind < 29.5f) || (kind > 42.5f && kind < 43.5f)) {
     const CTransform4f& model = CGraphics::GetModelMatrix();
     shield[16] = (model.Get03() + model.Get13() + model.Get23()) * 0.33f;
   }
@@ -638,9 +639,11 @@ f32 CCubeModel::PortSetPBRMaterial(const int idx, const f32 fade, const bool fad
     rows[27] = m.Get23();
     std::memcpy(shield, rows, sizeof(shield));
   }
-  // Only the boundary shield, the pickup, the holograms (16-18) and the Phazon3 stone (21) have constants;
+  // Only the boundary shield, the pickup, the holograms (16-18), the Phazon3 stone (21) and the others listed
+  // (the unlit cube surface, 38, the unlit vertex-coloured fx, 39, the unlit matcap, 40, and the unlit
+  // METL-weighted fx, 41, the spider ball's glass, 42, and the simple glass, 43: DIFC and their glow) have constants;
   // every other material clears the last one's.
-  GXSetPBRShield(wind || (kind > 13.5f && kind < 19.5f) || (kind > 20.5f && kind < 22.5f) || (kind > 24.5f && kind < 25.5f) || (kind > 27.5f && kind < 29.5f) || (kind > 30.5f && kind < 33.5f) || (kind > 34.5f && kind < 35.5f) ? reinterpret_cast< const f32(*)[4] >(shield) : nullptr);
+  GXSetPBRShield(wind || (kind > 10.5f && kind < 11.5f) || (kind > 13.5f && kind < 19.5f) || (kind > 20.5f && kind < 22.5f) || (kind > 24.5f && kind < 25.5f) || (kind > 27.5f && kind < 29.5f) || (kind > 30.5f && kind < 33.5f) || (kind > 34.5f && kind < 35.5f) || (kind > 37.5f && kind < 43.5f) ? reinterpret_cast< const f32(*)[4] >(shield) : nullptr);
   // World up as the shader sees it: view space is right, up, -forward.
   const f32 up[3] = {view.Get20(), view.Get22(), -view.Get21()};
   GXSetPBRMaterial(values, values + 3, values[6], values[7], values + 8, values + 13, up);
@@ -720,11 +723,24 @@ void CCubeModel::DrawSurface(const CCubeSurface& surface, const CModelFlags& mod
   const bool outside = inventoryDraw == kPID_Outside;
   const bool inventory = inventoryDraw == kPID_Pbr;
   const CColor& tint = modelFlags.GetColorRef();
-  const bool pbrBlend = outside && modelFlags.GetTrans() == CModelFlags::kT_Blend && tint.GetRedu8() == 0xFF &&
-                        tint.GetGreenu8() == 0xFF && tint.GetBlueu8() == 0xFF &&
-                        material.IsFlagSet(kStateFlag_PortPBR) &&
-                        CCubeMaterial::PortPBRAllowed(opaqueFlags);
-  const bool solidBlend = pbrBlend && tint.GetAlphau8() == 0xFF;
+  const CModelFlags::ETrans trans = modelFlags.GetTrans();
+  const bool tintWhite = tint.GetRedu8() == 0xFF && tint.GetGreenu8() == 0xFF && tint.GetBlueu8() == 0xFF;
+  // Remastered never swaps a material for a model tint or fade: the flags only override the blend and hand the
+  // colour to the material as DIFC / ICMC (kb topic/model-flags-fade-tint.md). So a PBR material keeps its own
+  // shading under ColorModulate (kT_One), ColorAdd (kT_Two, kT_Three; retail's striped alpha on kT_Three is dropped
+  // as Remastered does), AlphaBlended (kT_Blend) and Additive (kT_Additive). kT_Additive2, kT_Four, black and
+  // thermal stay on the TEV fallback (a white blend keeps its thermal-PBR modes as before). Only the kinds whose
+  // shader takes the colour as Remastered's does (0 and 3, and glass, kind 8, which reads neither) are tinted in
+  // PBR; the others read DIFC elsewhere (GXSetPBRShield row 7, kind 35's DIFC.w), not wired yet, so they keep TEV.
+  const bool pbrOutside = outside && material.IsFlagSet(kStateFlag_PortPBR) && CCubeMaterial::PortPBRAllowed(opaqueFlags);
+  const bool tintKind = (portKind > -0.5f && portKind < 0.5f) || (portKind > 2.5f && portKind < 3.5f) ||
+                        (portKind > 7.5f && portKind < 8.5f);
+  const bool tintable = pbrOutside && tintKind && !CCubeRenderer::That()->GetThermal();
+  const bool tintOpaque =
+      tintable && (trans == CModelFlags::kT_One || trans == CModelFlags::kT_Two || trans == CModelFlags::kT_Three);
+  const bool pbrBlend = (pbrOutside && trans == CModelFlags::kT_Blend && tintWhite) ||
+                        (tintable && (trans == CModelFlags::kT_Blend || trans == CModelFlags::kT_Additive));
+  const bool solidBlend = pbrBlend && trans == CModelFlags::kT_Blend && tint.GetAlphau8() == 0xFF;
   const bool fadeBlend = pbrBlend && !solidBlend;
   f32 inventoryDiffuse[4];
   f32 inventoryIncan[4];
@@ -733,7 +749,7 @@ void CCubeModel::DrawSurface(const CCubeSurface& surface, const CModelFlags& mod
       !PortInventoryModulation(sPortInventoryPass, inventoryDiffuse, inventoryIncan, inventoryCoverage)) {
     return;
   }
-  const CModelFlags drawFlags = PortDrawFlags(inventory, solidBlend, opaqueFlags, modelFlags);
+  const CModelFlags drawFlags = PortDrawFlags(inventory, solidBlend || tintOpaque, opaqueFlags, modelFlags);
   // The Ice Beam cannon's frost shell (kind 12) shows only while the beam charges
   // (PortSetChargeShell, or a console override of its first parameter), and only as PBR:
   // the TEV fallback has no dissolve and would freeze the gun for good.
@@ -975,12 +991,12 @@ void CCubeModel::DrawSurface(const CCubeSurface& surface, const CModelFlags& mod
     // copied into map 7 as the refracting particles copy it (CElementGen).
     if (((kind > 7.5f && kind < 8.5f) || (kind > 10.5f && kind < 11.5f) || (kind > 13.5f && kind < 14.5f) ||
          (kind > 22.5f && kind < 23.5f) || (kind > 28.5f && kind < 30.5f) || (kind > 33.5f && kind < 34.5f) ||
-         (kind > 35.5f && kind < 36.5f)) &&
+         (kind > 35.5f && kind < 36.5f) || (kind > 42.5f && kind < 43.5f)) &&
         CCubeMaterial::PortScreenCopyUsed()) {
       int portLeft, portTop, portWidth, portHeight;
       CGraphics::GetViewport(portLeft, portTop, portWidth, portHeight);
       SPortGlassCopy& copy = sPortGlassCopy;
-      const bool wantMips = (kind > 22.5f && kind < 23.5f) || (kind > 28.5f && kind < 30.5f);
+      const bool wantMips = (kind > 22.5f && kind < 23.5f) || (kind > 28.5f && kind < 30.5f) || (kind > 42.5f && kind < 43.5f);
       // The visor's glass (36) keeps the scene by its pass's weight, so each pass sees what is
       // there now, the other visor layer's last draw included: it copies every time.
       const bool current = !(kind > 35.5f && kind < 36.5f) && copy.valid && copy.serial == GXPortCopySerial() &&
@@ -1023,7 +1039,28 @@ void CCubeModel::DrawSurface(const CCubeSurface& surface, const CModelFlags& mod
     if (inventory) {
       GXSetPBRModelModulation(inventoryDiffuse, inventoryIncan, inventoryCoverage);
     } else {
-      GXSetPBRModelModulation(nullptr, nullptr, 1.f);
+      // Outside the visor: the model colour as DIFC (kT_One; the blends' rgb, their alpha rides the fade) or ICMC
+      // (ColorAdd, when any rgb > 0, else none), identity when untinted so nothing leaks between draws. Remastered
+      // sets flag 0x4000 (ICMC x inverse exposure) at the damage-flash sites, so the add reaches the screen
+      // unexposed, as the shader adds it after the exposure scaling; CPatterned's 0x4000 gate (this+0x491 bit 1) is
+      // unverified, so every ColorAdd takes it.
+      f32 diffuse[4] = {1.f, 1.f, 1.f, 1.f};
+      f32 incan[4] = {0.f, 0.f, 0.f, 1.f};
+      if (tintOpaque || pbrBlend) {
+        if (trans == CModelFlags::kT_Two || trans == CModelFlags::kT_Three) {
+          if (tint.GetRed() > 0.f || tint.GetGreen() > 0.f || tint.GetBlue() > 0.f) {
+            incan[0] = tint.GetRed();
+            incan[1] = tint.GetGreen();
+            incan[2] = tint.GetBlue();
+          }
+        } else {
+          diffuse[0] = tint.GetRed();
+          diffuse[1] = tint.GetGreen();
+          diffuse[2] = tint.GetBlue();
+          diffuse[3] = trans == CModelFlags::kT_One ? tint.GetAlpha() : 1.f;
+        }
+      }
+      GXSetPBRModelModulation(diffuse, incan, 1.f);
     }
     GXSetPBR(GX_TRUE);
     ++CCubeMaterial::sPortPBRDraws;

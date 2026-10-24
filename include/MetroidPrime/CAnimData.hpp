@@ -222,6 +222,7 @@ public:
 #endif
 
 private:
+  friend struct PortStateCodec; // save states (platform/port_savestate_fields.cpp)
 #ifdef TARGET_PC
   void PortNotePoseBuild();
 #endif

@@ -24,6 +24,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "port_remastered_cmdl.h"
@@ -31,6 +32,11 @@
 #include "port_remastered_report.h"
 
 namespace PortRemastered {
+
+// The matrix that carries a normal through the orient M (gc = M * remastered): the inverse
+// transpose of M, so a normal stays perpendicular to the surface under a non-uniform scale.
+// Equals M for a rotation or mirror. A singular M gives the zero matrix.
+void NormalMatrix(const double (*M)[3], double out[3][3]);
 
 struct ConvertOptions {
   uint32_t retail = 0;  // CMDL id the model replaces
@@ -74,6 +80,12 @@ struct ConvertOptions {
   // `retail` and `skins` are still read for the materials and the skeleton.
   uint32_t outputModel = 0;
   std::vector<uint32_t> outputSkins;
+  // Weights chosen elsewhere (a model re-skinned onto the retail skeleton, port_dread_samus.h): per
+  // vertex buffer of the model, per vertex, (retail bone id, weight). When set they are written as
+  // given, quantised as the votes are, instead of the nearest-retail-vertex votes, and under every
+  // id in `skins` (the caller's skeleton binds them all, so no bone-set check). Every buffer a mesh
+  // draws needs one list per vertex. Empty: the votes.
+  std::vector<std::vector<std::vector<std::pair<uint32_t, float>>>> boneWeights;
   // A texture's id is hashed from a tag naming its source. These wrap the
   // Remastered texture's uuid in that tag; the test tool sets them to
   // reproduce the reference converter's ids, the game leaves them empty.
@@ -100,6 +112,11 @@ struct ConvertIO {
   // The top mip of a Remastered texture as RGBA8. The id is in a pak's byte
   // order (what IdToString prints), not the order a model stores it in.
   std::function<bool(const ModelUuid& id, Image& out, std::string& error)> texture;
+  // Optional: a plain 2D BC6H (HDR) Remastered texture as a whole .dds with its range kept:
+  // its own blocks where the import writes BC, RGBA16F where it writes ASTC; the top level's
+  // longest edge at most maxEdge (0: the source's own). The converter asks it for a colour map
+  // whose Image came back with `hdr` set. False when there is none (the 8-bit .dds stays).
+  std::function<bool(const ModelUuid& id, int maxEdge, std::vector<uint8_t>& dds, std::string& error)> hdrDds;
   // Optional: the top mip of every face of a Remastered cube map as linear RGBA floats,
   // 6 faces of edge * edge texels (DecodeTxtrCubeLinear). Without it no material gets a
   // reflection cube of its own.

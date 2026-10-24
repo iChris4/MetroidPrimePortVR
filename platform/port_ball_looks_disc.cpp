@@ -6,15 +6,12 @@
 #include "port_ball_looks.h"
 
 #include "port_disc.h"
+#include "port_disc_reader.h"
 #include "port_log.h"
 #include "port_model_variant.h"
 #include "port_paths.h"
 #include "port_strings.h"
-#include "port_bytes.h"
 #include "port_custom_res.h"
-#include "port_ws.h"
-
-#include <aurora/dvd.h>
 
 #include <cstdio>
 #include <filesystem>
@@ -22,6 +19,7 @@
 #include <map>
 #include <string>
 #include <unordered_set>
+#include <vector>
 
 namespace fs = std::filesystem;
 
@@ -42,114 +40,6 @@ std::string FileName(uint32_t type, uint32_t id) {
   std::snprintf(name, sizeof(name), "%08X.", id);
   return name + TypeName(type);
 }
-
-// Every resource of the base disc's PAKs, read on demand.
-class Disc {
-public:
-  ~Disc() {
-    for (auto& [entry, handle] : m_handles) {
-      aurora_dvd_base_close(handle);
-    }
-  }
-
-  void Index() {
-    const int32_t baseCount = aurora_dvd_base_entry_count();
-    for (const auto& [entry, path] : PortMods::DiscPaks()) {
-      if (entry < 0 || entry >= baseCount) {
-        continue;  // a PAK only a mod brings
-      }
-      void* handle = aurora_dvd_base_open(entry);
-      if (handle == nullptr) {
-        continue;
-      }
-      m_handles[entry] = handle;
-      std::vector<uint8_t> header;
-      PortMods::PakTable table;
-      size_t needed = 0x10000;
-      bool parsed = false;
-      while (needed <= (64u << 20)) {
-        header.resize(needed);
-        const size_t got = ReadAt(handle, 0, header.data(), header.size());
-        if (PortMods::ParsePakTable(header.data(), got, table, needed)) {
-          parsed = true;
-          break;
-        }
-        if (got < header.size() || needed <= header.size()) {
-          break;
-        }
-      }
-      if (!parsed) {
-        continue;
-      }
-      for (const PortMods::PakResource& res : table.resources) {
-        m_ids.insert(res.id);
-        m_where.emplace(Key(res.type, res.id), Where{entry, res.offset, res.size, res.compressed != 0});
-      }
-    }
-  }
-
-  bool HasId(uint32_t id) const { return m_ids.count(id) != 0; }
-
-  bool Read(uint32_t type, uint32_t id, std::vector<uint8_t>& out) {
-    const auto found = m_where.find(Key(type, id));
-    if (found == m_where.end()) {
-      return false;
-    }
-    const Where& where = found->second;
-    std::vector<uint8_t> raw(where.size);
-    if (ReadAt(m_handles[where.entry], where.offset, raw.data(), raw.size()) != raw.size()) {
-      return false;
-    }
-    if (!where.compressed) {
-      out = std::move(raw);
-      return true;
-    }
-    // A big-endian length, then a zlib stream: two header bytes, the DEFLATE
-    // data, and a checksum the decoder never reaches.
-    if (raw.size() < 6) {
-      return false;
-    }
-    const size_t length = port::ReadBE32(raw.data());
-    const std::string deflated(raw.begin() + 6, raw.end());
-    PortWs::Inflater inflater;
-    inflater.SetKeepWindow(false);
-    std::string inflated;
-    if (!inflater.InflateMessage(deflated, inflated, length) || inflated.size() != length) {
-      return false;
-    }
-    out.assign(inflated.begin(), inflated.end());
-    return true;
-  }
-
-private:
-  struct Where {
-    int32_t entry = -1;
-    uint32_t offset = 0;
-    uint32_t size = 0;
-    bool compressed = false;
-  };
-
-  static uint64_t Key(uint32_t type, uint32_t id) { return (uint64_t(type) << 32) | id; }
-
-  static size_t ReadAt(void* handle, uint64_t offset, uint8_t* out, size_t size) {
-    if (aurora_dvd_base_seek(handle, int64_t(offset), 0) != int64_t(offset)) {
-      return 0;
-    }
-    size_t done = 0;
-    while (done < size) {
-      const int64_t got = aurora_dvd_base_read(handle, out + done, size - done);
-      if (got <= 0) {
-        break;
-      }
-      done += size_t(got);
-    }
-    return done;
-  }
-
-  std::map<int32_t, void*> m_handles;
-  std::map<uint64_t, Where> m_where;
-  std::unordered_set<uint32_t> m_ids;
-};
 
 struct Output {
   uint32_t type = 0;
@@ -183,7 +73,7 @@ bool Fail(Look look, const std::string& why) {
   return false;
 }
 
-bool ReadImage(Disc& disc, uint32_t id, PortRemastered::Image& image) {
+bool ReadImage(PortDiscReader& disc, uint32_t id, PortRemastered::Image& image) {
   std::vector<uint8_t> txtr;
   return disc.Read(kTXTR, id, txtr) && DecodeCmprTxtr(txtr, image);
 }
@@ -208,7 +98,7 @@ void LogShift(Look look, const char* what, const Shift& shift) {
 }
 
 // The move from Varia's colours to the look's suit.
-bool FitLook(Look look, Disc& disc, Shift& shift) {
+bool FitLook(Look look, PortDiscReader& disc, Shift& shift) {
   switch (look) {
   case Look::PowerSpider: {
     PortRemastered::Image ballPower, ballVaria;
@@ -260,7 +150,7 @@ bool FitLook(Look look, Disc& disc, Shift& shift) {
 }
 
 bool Generate(Look look, std::vector<Output>& outputs) {
-  Disc disc;
+  PortDiscReader disc;
   disc.Index();
   const uint32_t suit = uint32_t(Suit(look));
 

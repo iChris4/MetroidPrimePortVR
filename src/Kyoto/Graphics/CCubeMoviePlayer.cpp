@@ -408,8 +408,15 @@ void CMoviePlayer::DecodeFromRead(const void* ptr) {
   for (uint i = 0; i < x58_thpComponents.mNumComponents; ++i) {
     const uchar* data = dataStart + offset;
     if (x58_thpComponents.mFrameComp[i] == 0) {
+#ifdef TARGET_PC
+      // Bounded by the component's size and the planes' picture: the decoder
+      // reads ahead of its last bit, and a corrupt frame could claim any size.
+      THPVideoDecodeBounded(data, CBasics::SwapBytes(sizes[0]), texture.Y(), texture.U(), texture.V(),
+                            x6c_videoInfo.mXSize, x6c_videoInfo.mYSize);
+#else
       THPVideoDecode(const_cast< uchar* >(data), texture.Y(), texture.U(), texture.V(),
                      alignedWork);
+#endif
     } else if (x58_thpComponents.mFrameComp[i] == 1) {
       const uint samples =
           THPAudioDecode(static_cast< short* >(texture.Audio()), const_cast< uchar* >(data), 0);

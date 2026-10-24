@@ -8,6 +8,7 @@
 #include "WorldFormat/CCollisionSurface.hpp"
 
 class CWallWalker : public CPatterned {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 public:
   enum EType {
     kWT_Parasite = 0,

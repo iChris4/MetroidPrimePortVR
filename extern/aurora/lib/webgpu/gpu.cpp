@@ -98,6 +98,7 @@ bool g_lightmapBinding = false;
 bool g_astcTexturesSupported = false;
 bool g_textureComponentSwizzleSupported = false;
 bool g_multiviewSupported = false;
+bool g_dualSourceBlendingSupported = false;
 static std::atomic_bool g_initialized = false;
 static std::atomic_bool g_vsyncEnabled = true;
 
@@ -419,7 +420,6 @@ uint32_t g_sceneHdrSamples = 0;
 // changes or release_scene_hdr_target() runs.
 wgpu::Extent3D g_sceneHdrFailedSize{};
 uint32_t g_sceneHdrFailedSamples = 0;
-bool g_sceneHdrNoCoreLogged = false;
 
 bool scene_hdr_handles_valid(const TextureWithSampler& target) noexcept {
   return target.texture && target.view && target.format == SceneHdrFormat;
@@ -487,7 +487,7 @@ bool create_scene_hdr_textures(uint32_t width, uint32_t height, std::string& err
 }
 } // namespace
 
-bool scene_hdr_supported() noexcept { return g_device && g_hasCoreFeatures; }
+bool scene_hdr_supported() noexcept { return static_cast<bool>(g_device); }
 
 bool ensure_scene_hdr_target() {
   const auto size = g_frameBuffer.size;
@@ -500,13 +500,6 @@ bool ensure_scene_hdr_target() {
   // Stale (other size or sample count) or partial: never reused.
   release_scene_hdr_textures();
   if (!g_device || size.width == 0 || size.height == 0) {
-    return false;
-  }
-  if (!g_hasCoreFeatures) {
-    if (!g_sceneHdrNoCoreLogged) {
-      g_sceneHdrNoCoreLogged = true;
-      Log.info("HDR scene target disabled: the device lacks CoreFeaturesAndLimits");
-    }
     return false;
   }
   if (g_sceneHdrFailedSamples == samples && g_sceneHdrFailedSize.width == size.width &&
@@ -522,6 +515,7 @@ bool ensure_scene_hdr_target() {
     return false;
   }
   g_sceneHdrSamples = samples;
+  Log.info("HDR scene target {}x{} ({} samples) allocated", size.width, size.height, samples);
   g_sceneHdrFailedSize = {};
   g_sceneHdrFailedSamples = 0;
   return true;
@@ -1291,12 +1285,19 @@ static bool initialize_once(AuroraBackend auroraBackend, bool allowCpu) {
     g_astcTexturesSupported = false;
     g_textureComponentSwizzleSupported = false;
     g_multiviewSupported = false;
+    g_dualSourceBlendingSupported = false;
     for (size_t i = 0; i < supportedFeatures.featureCount; ++i) {
       const auto feature = supportedFeatures.features[i];
       if (feature == wgpu::FeatureName::CoreFeaturesAndLimits || feature == wgpu::FeatureName::TextureCompressionBC ||
           feature == wgpu::FeatureName::TextureCompressionASTC ||
-          feature == wgpu::FeatureName::TextureComponentSwizzle) {
+          feature == wgpu::FeatureName::TextureComponentSwizzle || feature == wgpu::FeatureName::DualSourceBlending) {
         if (feature == wgpu::FeatureName::CoreFeaturesAndLimits) {
+          // MP_GPU_NO_CORE=1 leaves it out, so Dawn validates the device as a Compatibility one
+          // (to test those paths on a Vulkan desktop).
+          if (const char* noCore = std::getenv("MP_GPU_NO_CORE"); noCore != nullptr && noCore[0] == '1') {
+            Log.info("MP_GPU_NO_CORE=1: not requesting CoreFeaturesAndLimits");
+            continue;
+          }
           g_hasCoreFeatures = true;
         } else if (feature == wgpu::FeatureName::TextureCompressionBC) {
           g_bcTexturesSupported = true;
@@ -1304,6 +1305,8 @@ static bool initialize_once(AuroraBackend auroraBackend, bool allowCpu) {
           g_astcTexturesSupported = true;
         } else if (feature == wgpu::FeatureName::TextureComponentSwizzle) {
           g_textureComponentSwizzleSupported = true;
+        } else if (feature == wgpu::FeatureName::DualSourceBlending) {
+          g_dualSourceBlendingSupported = true;
         }
         requiredFeatures.push_back(feature);
       }
@@ -1328,8 +1331,7 @@ static bool initialize_once(AuroraBackend auroraBackend, bool allowCpu) {
       // device synchronization.
       if (g_config.xrInterop && g_backendType == wgpu::BackendType::Vulkan &&
           (feature == wgpu::FeatureName::SharedTextureMemoryAHardwareBuffer ||
-           feature == wgpu::FeatureName::SharedFenceSyncFD ||
-           feature == wgpu::FeatureName::ImplicitDeviceSynchronization)) {
+           feature == wgpu::FeatureName::SharedFenceSyncFD)) {
         requiredFeatures.push_back(feature);
       }
 #if defined(WGPU_DAWN_RENDER_PASS_MULTIVIEW_INIT)
@@ -1346,6 +1348,14 @@ static bool initialize_once(AuroraBackend auroraBackend, bool allowCpu) {
         }
       }
 #endif
+#endif
+#ifdef WEBGPU_DAWN
+      // The game thread creates textures and buffers (room env volumes, lightmaps, spilled uploads)
+      // while the render worker submits. Without this Dawn takes no device lock: its Vulkan memory
+      // allocator and pending command buffer would be shared between the two threads unguarded.
+      if (feature == wgpu::FeatureName::ImplicitDeviceSynchronization) {
+        requiredFeatures.push_back(feature);
+      }
 #endif
     }
     std::string featureList;

@@ -122,8 +122,9 @@ which are authoritative. Inside a mod:
   importer writes BC7 (BC5, two-channel, for PBR normal maps), or ASTC 4x4
   (normal maps as RGBA with B=0, A=255) when the GPU has ASTC and no BC; the
   loader also reads BC3, BC1 and RGBA8. `MP_REMASTERED_TEXTURE_FORMAT=bc|astc`
-  forces the choice (for testing); `--import-remastered` has no GPU and writes BC
-  unless told otherwise. The import logs `remastered: writing <BC7|ASTC 4x4>
+  forces the choice (for testing); `--import-remastered` and
+  `--import-dread-samus` have no GPU and write BC unless told otherwise. The
+  import logs `remastered: writing <BC7|ASTC 4x4>
   textures`. The ASTC encoder is ARM's astc-encoder (`extern/astcenc`, FAST
   preset, about 2 s for a 2048 px map with its mips on one desktop core). The TXTR still
   loads (the mod's own, which can be a few texels across, or the disc's) and
@@ -171,8 +172,7 @@ which are authoritative. Inside a mod:
   range its auto exposure is held to, cubes and baked ambient keep their
   level relative to that, and the result goes through that room's tone curve
   (the formulas are Remastered's own; the frame's average is stood in for by
-  the room's middle probe). `MP_ROOM_ENV_EXPOSURE=0` turns that off: every
-  cube is then exposed to middle grey and the game's ambient sets the level.
+  the room's middle probe).
   Files load and unload with their areas, and a cube is decoded
   on first use. The layout is in `platform/include/port_room_env.h`.
 - a file named `<MREA id, 8 hex digits>.roomgeo`, anywhere in the mod, is that
@@ -200,6 +200,19 @@ which are authoritative. Inside a mod:
   shade it as they shade a fluid plane (the hot pass adds it), and the X-Ray
   visor draws it unchanged. `MP_ROOM_LIQUID=0` or the
   console's `roomliquid off` draws the retail planes instead.
+- a file named `<MREA id, 8 hex digits>.roomfx`, anywhere in the mod, adds
+  particle effect actors to that area: retail Effect objects, per script layer,
+  created after the layer's own objects while it is active, and a list of the
+  area's retail objects not to create (the effects they replace). Their editor
+  ids use instance numbers 0xF000 to 0xFFFF, which no retail area has; nothing
+  saves them, and nothing can send them a message. The Remastered import writes
+  one for each room with effects of Remastered's own that nothing connects to.
+  The same file may also override a retail Effect object that a Remastered
+  effect actor matched: the object is created as retail has it, connections and
+  all, then gets the actor's PART and its particle variables.
+  The layout is in `platform/include/port_room_effects.h`.
+  `MP_REMASTERED_EFFECT_ACTORS=0` ignores the files; the console's `fx addons`
+  lists the current area's.
 - a PBR material (flag bit 14) may end in a 28-byte record: six big-endian floats
   (emissive multiplier rgb, backlight) and the tag `PBRM`, inside the
   material's own span in the offset table. The multiplier scales the emissive map.
@@ -308,16 +321,18 @@ alone, so a script should pass it on to its children. Desktop only.
 environments and above all room geometry are work in progress: expect wrong
 or missing models, lighting that is off, crashes and heavy memory use, and a
 re-import after most updates. Bug reports about a game running with this mod
-are not handled for now; switch it off on the Remastered page (or remove
+are not handled for now; switch it off in F1 > Mods > Built-in mods (or remove
 `remastered-models` from the import's folder: `mods/` on desktop, the app's own
 storage on Android) to get the retail game back.
 
 The port can build a model mod from your own copy of Metroid Prime Remastered;
-nothing of it ships. F1 > Remastered > Import > "Metroid Prime Remastered models"
-takes the game's `.nsp` or gamecard dump (`.xci`) and your console's key file
+nothing of it ships. Both built-in imports read one key file, so F1 > Mods >
+Built-in mods has a single "Your Nintendo Switch's prod.keys" row above the
+sections, and each section then asks only for its own image: Prime Remastered >
+Import takes the game's `.nsp` or gamecard dump (`.xci`), with the key file
 (`prod.keys`, not `title.keys`; `~/.switch/prod.keys` is filled in when it
-exists). An `.xci`, or an `.nsp` converted from one, needs the key file's
-`key_area_key_application_XX` keys; compressed `.nsz`/`.xcz` must be
+exists) from that one row. An `.xci`, or an `.nsp` converted from one, needs the
+key file's `key_area_key_application_XX` keys; compressed `.nsz`/`.xcz` must be
 decompressed first. The panel remembers both files once they are picked
 or used, as `remastered_nsp` and `remastered_keys` in the settings file (on
 Android, the picked documents). Import converts in the background while the game
@@ -338,6 +353,7 @@ From a terminal,
 `metroid_prime_port --import-remastered <image.nsp|image.xci> [key file]` does the same
 on every core without starting the game and installs at once, printing the folder it installed into
 (the disc comes from `MP_DISC`, the remembered path, or a copy beside the executable).
+`--import-dread-samus` is the Dread import's, with the same arguments.
 
 Where the import lives, in full: on desktop it is a mod folder like any other
 (`mods/remastered-models`, and `MP_MODS`/`MP_USER_PATH` move it with the rest). On Android it is in
@@ -490,7 +506,8 @@ below.
 The concept art of the image galleries comes too: the 120 full-size pictures in
 `UI_FrontEnd` (taller than 1000 pixels) are written as JPEGs into the mod's
 `gallery` folder (`gallery/NNN.jpg`, fitted within 1920x1080, quality 90; about
-0.3 MB each, 36 MB in all), and F1 > Remastered > Gallery opens them in a viewer window. The decoder
+0.3 MB each, 36 MB in all), and F1 > Mods > Built-in mods > Prime Remastered >
+Gallery opens them in a viewer window. The decoder
 is the one the game uses for THP movies, so no extra library is needed.
 `MP_REMASTERED_GALLERY=0` leaves them out.
 
@@ -510,8 +527,9 @@ Measured on the development machine: 342 models and 275 room environments, 44
 seconds on 16 threads, 2.3 GB of memory at the peak, 1.1 GB on disk (half of it
 the room environments).
 
-On Android the panel has two buttons that open the system's file picker, one
-for the `.nsp`/`.xci` and one for the key file. Neither file is copied: the import
+On Android the panel's buttons open the system's file picker: "Pick the keys..."
+in the shared keys row above the sections, and one for the `.nsp`/`.xci` in the
+section's import. Neither file is copied: the import
 reads them where they are. It runs on two threads there to keep its memory
 down. Not yet run on a device.
 
@@ -522,6 +540,19 @@ The importer already turns their vectors from Remastered's particle space (X
 left, Y up, Z forward) into the port's, so no extra frame goes on top: the Power
 charge disc's EMTR, Remastered `(0,0,0.15)`, becomes the port's `(0,0.15,0)` and
 at scale 2 sits 0.30 m forward of the barrel, as on native's LBEAM.
+
+### Metroid Dread Samus models
+
+The other model import, under F1 > Mods > Built-in mods > Metroid Dread: Samus's
+Power, Varia, Gravity and Phazon Suit bodies and Morph Balls from your own Metroid Dread
+`.nsp`/`.xci` and `prod.keys`, in place of Prime's, in cutscenes, the Morph Ball
+transitions and the third-person camera. It is a mod of its own, `dread-samus`,
+so it has a switch of its own there and turns off without touching the
+Remastered models; its section sits beside Prime Remastered, not under it, and it
+shares the `prod.keys` row above both sections and the import worker with the
+Remastered import (only one of the two runs at a time). Phazon takes
+Dread's Metroid Suit; Fusion keeps its models. It needs the base Dread release only. See
+[`docs/DREAD_SAMUS.md`](DREAD_SAMUS.md) for the import and its limits.
 
 ### Collision stays on the disc's model
 

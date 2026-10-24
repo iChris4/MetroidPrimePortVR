@@ -636,6 +636,10 @@ constexpr MatchedEffect kMatchedEffects[] = {
     {"fbfee463-1dec-4d67-bc51-c528a125043d", 0xD7FFF8D6},  // 020B6226 LCTR_MAGMOUTH
     {"fc6a3e0d-eb0d-4b81-99a9-e208ec1b80e4", 0x599B4D00},  // 76C35773 Collar
     {"fe324176-fcbe-480b-8437-fd19c3369f9e", 0x88460B49},  // 76C35773 root
+    // The visor's rain drops: the splash is drawn by the visor's own CHUDBillboardEffect, whose GENP
+    // no room or CHPR reaches (kb topic/unpaired-retail-particles.md). VFX_VisorRain (0ec41df0) is
+    // its shader, so the pair draws Remastered's drops.
+    {"45ba782d-5656-40dd-a115-9f20cac3955e", 0xBC978532},  // PART_EnvRainSplash, visor rain drops (RenderLooseDataMP1.LDTA)
     {"#script-slot", 0},  // method of the entries below
     // By script slot: Remastered keeps retail's property order, so a ROOM
     // object and the retail object it stands for name their assets in the same
@@ -807,6 +811,7 @@ constexpr MatchedEffect kMatchedEffects[] = {
     {"cdf30852-2632-4596-9dd1-e85e2908daea", 0x4A5F51FD},  // 65177C3A Fire1/Fire2
     {"4d818e87-ce9b-4581-aeba-e8155b813082", 0xD3BD37FC},  // 65177C3A Fire2/Fire3
     {"74d36fa3-690a-456e-9469-09b97fcc554a", 0x1233E83C},  // 65177C3A Fire3
+    {"db8e16a5-c5bb-4c7c-adfc-112df3d890f4", 0x43CD9074},  // F9F4B18F SpeedSwoosh (a SWHC)
     {"00aadc3b-c393-4e1b-b379-2b114bc1bbe8", 0x9884632F},  // 6B45F06D Eyes
     {"cc86c15d-0f2a-4807-a727-eda4723f3a9c", 0x273375E3},  // 8169653A TwoEyes
     {"#by-hand", 0},  // method of the entries below
@@ -834,6 +839,27 @@ constexpr MatchedEffect kMatchedEffects[] = {
     // keeps the disc's.
     {"c3a53327-731d-4870-8f1e-fdc755bccf13", 0x2D16014C},  // 07BEED38 breastPlate_LCTR
     {"d701c231-cf56-4451-b177-107724371c42", 0xFD17C2C9},  // 07BEED38 breastPlate_LCTR
+    {"#loose-chpr", 0},  // method of the entries below
+    // No ROOM, CHPR-set or script reference reaches these, or the counts are not
+    // 1:1 (kb topic/unpaired-retail-particles.md). The missile pickup: CHPR a9b8e446 has one
+    // GENP for retail's two PARTs, so C6D1DD10 (Skeleton_Root) takes it; 8438F539
+    // (Missile_Launcher_SDK) stays retail. The energy tank pickup: CHPR f37bcbc7
+    // has two GENPs, e460a1ad (sparks + light) and cd809719 (the same light only),
+    // for one PART.
+    {"c0aefd83-1327-4ae6-a4bc-9b2593393244", 0xC6D1DD10},  // A9B8E446 missile pickup
+    {"e460a1ad-6142-413d-b04c-7adb655b0410", 0xECD68B2F},  // F37BCBC7 energy tank pickup
+    {"#shared-genp", 0},  // method of the entries below
+    // The lava spit: one GENP for both retail PARTs, the big spit and the small one, so
+    // neither PART says which of the two it is. The rooms step gives a retail Effect object
+    // that draws one of them the Remastered actor's particle variables, which set its size
+    // (port_remastered_room_effects.cpp).
+    {"47b4f5e0-5a5d-4a9b-a1fb-62486ec76c5a", 0x2ECE9B8C},  // bigspittle
+    {"47b4f5e0-5a5d-4a9b-a1fb-62486ec76c5a", 0x68907841},  // spittle
+    {"#visual-inferred", 0},  // method of the entries below
+    // FlickerBat root burst (EVNT 31BF4B18, frames 6-60): inferred from the blue circular
+    // effect, a model shell replacing retail's radial sprite. Checked on the bat in the port;
+    // no Remastered runtime reference or CHPR mapping establishes this pairing.
+    {"3b29b0b3-0c3d-42b6-9159-f4863f6c3ed9", 0x0B9E48EB},  // 1E14B003 FlickerBat root
 };
 
 // Retail PARTs whose Remastered effect is a stub because Remastered draws them
@@ -1232,6 +1258,7 @@ public:
   EffectConvertIO ConvertIO(const std::map<EffectGuid, Child>& children,
                             const std::map<EffectGuid, ExternalSwoosh>& externalSwooshes) {
     EffectConvertIO io;
+    io.spreadDefault = true;
     io.assetId = [&](const EffectGuid& stored, uint32_t type) -> uint32_t {
       if (type == kVecf) {
         return VectorField(stored);
@@ -1574,6 +1601,24 @@ public:
       Report(row, "failed", "draws nothing: its materials are placeholders");
       return;
     }
+    // A generator that draws nothing and only starts one swoosh stands for a retail SWHC (the
+    // CHPR's SpeedSwoosh): the swoosh itself replaces it, a PART under a SWHC's id would not.
+    if (rootType == kPart && m_io.retailHas && m_io.retailHas(kSwhc, retail)) {
+      error.clear();
+      if (parts.size() != 2 || !parts[0].drawsNothing || parts[1].type != kSwhc ||
+          !SplitRetailEffect(kSwhc, parts[1].part.data(), parts[1].part.size(), check, error) ||
+          !m_io.write(Hex8(retail) + ".SWHC", parts[1].part)) {
+        ++m_result.failed;
+        Log(name + ": a SWHC's stand-in is not a generator around one swoosh");
+        Report(row, "failed", "a retail SWHC's stand-in is not a generator around one swoosh");
+        return;
+      }
+      ++m_result.parts;
+      ++m_result.written;
+      m_result.dropped += parts[1].droppedRetail;
+      Report(row, "imported");
+      return;
+    }
     // Children first, so the root never names a child that was not written.
     for (size_t i = 1; i < parts.size(); ++i) {
       const auto child = children.find(parts[i].id);
@@ -1621,7 +1666,11 @@ public:
 
   EffectImportResult Run() {
     for (const EffectGuid& id : m_io.effects) {
-      const std::vector<Pairing> pairings = RetailEffects(id, m_io.pairings);
+      std::vector<Pairing> pairings = RetailEffects(id, m_io.pairings);
+      if (pairings.empty() && m_io.typeOf && m_io.typeOf(id) == EffectFourCC("GENP") &&
+          std::find(m_io.roomOnly.begin(), m_io.roomOnly.end(), id) != m_io.roomOnly.end()) {
+        pairings.push_back({RoomEffectId(id), "room"});
+      }
       if (pairings.empty() && m_io.report) {
         EffectReportRow row;
         row.genp = EffectGuidString(Swap(id));
@@ -1652,5 +1701,21 @@ private:
 bool WantsRemasteredEffects() { return port::EnvFlag("MP_REMASTERED_EFFECTS", true); }
 
 EffectImportResult ImportEffects(const EffectImportIO& io) { return Importer(io).Run(); }
+
+uint32_t RoomEffectId(const EffectGuid& id) { return SyntheticEffectId(EffectGuidString(Swap(id)).c_str()); }
+
+std::vector<uint32_t> MatchedRetailEffects(const EffectGuid& id) {
+  const std::string text = EffectGuidString(Swap(id));
+  std::vector<uint32_t> out;
+  std::string method;
+  for (const MatchedEffect& matched : kMatchedEffects) {
+    if (matched.id[0] == '#') {
+      method = matched.id + 1;
+    } else if (method == "shared-genp" && text == matched.id) {
+      out.push_back(matched.retail);
+    }
+  }
+  return out;
+}
 
 }  // namespace PortRemastered

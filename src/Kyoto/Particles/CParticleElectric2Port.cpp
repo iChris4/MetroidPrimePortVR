@@ -71,7 +71,8 @@ CAABox CParticleElectric2Port::Bounds() const {
   for (const Bolt& b : mBolts) {
     rad = std::max(rad, std::max(b.leftRad, b.rightRad));
     for (const auto& l : b.lines) {
-      for (const V3& p : l) {
+      for (const V3& pl : l) {
+        const V3 p = mDesc->xPortXfmdFollow ? WorldPoint(pl) : pl;
         if (!any) {
           lo = hi = p;
           any = true;
@@ -88,10 +89,14 @@ CAABox CParticleElectric2Port::Bounds() const {
   return CAABox(CVector3f(lo.x - rad, lo.y - rad, lo.z - rad), CVector3f(hi.x + rad, hi.y + rad, hi.z + rad));
 }
 
+V3 CParticleElectric2Port::WorldPoint(const V3& p) const {
+  return ToV3(mXf * CVector3f(p.x * mScale.GetX(), p.y * mScale.GetY(), p.z * mScale.GetZ()));
+}
+
 void CParticleElectric2Port::UpdateBolt(Bolt& bolt, int systemFrame) {
   // UpdateBolt 0xb77638: radii (LLRD copies LRAD to RRAD), colour, material point values.
-  // The material point values (desc+0x140) are the bolt's own: they are evaluated once before the
-  // node loop. RADS/LRAD/RRAD (desc+0x138/0x128/0x130) and COLR (desc+0x148) are inside it, so the
+  // COLR (desc+0x140) is the bolt's own: it is evaluated once before the node loop (into
+  // lineMgr+0x38). RADS/LRAD/RRAD (desc+0x138/0x128/0x130) and NCLR (desc+0x148) are inside it, so the
   // original evaluates them once per node, with the context time (ctx+0x68) and life (ctx+0x6c,
   // ctx+0x70 = end - start) of the bolt and the node's own tween (ctx+0x80, i = node) alongside.
   // The port keeps one pair of radii and one colour per bolt, from a single evaluation per element
@@ -106,11 +111,24 @@ void CParticleElectric2Port::UpdateBolt(Bolt& bolt, int systemFrame) {
   bolt.leftRad = radii.left;
   bolt.rightRad = radii.right;
 
+  // Node colour = NCLR modulated by COLR: UpdateRenderState 0xb760e0 builds COLR (lineMgr+0x38)
+  // x the owner's modulate colour (this+0x90) with CColor4f16::Modulate and Modulates every node's
+  // NCLR colour with it (Modulate is a component multiply (unverified: body not decompiled)).
+  // Both are per bolt here: NCLR is evaluated with the bolt's age as frame and slot-2 life = nodes
+  // - 1 on every node, so it is the same on each node of a bolt (UpdateBolt 0xb77638, SPEC-grad).
   float color[4] = {1.f, 1.f, 1.f, 1.f};
-  if (mDesc->x14_COLR != nullptr) {
-    mDesc->x14_COLR->GetValueHdr(frame, color);
-  } else if (mDesc->xPortNCLR != nullptr) {
+  if (mDesc->xPortNCLR != nullptr) {
+    const int life = bolt.life;
+    CParticleGlobals::SetParticleLifetime(std::max(mNodes - 1, 1));
     mDesc->xPortNCLR->GetValueHdr(frame, color);
+    CParticleGlobals::SetParticleLifetime(life);
+  }
+  if (mDesc->x14_COLR != nullptr) {
+    float colr[4] = {1.f, 1.f, 1.f, 1.f};
+    mDesc->x14_COLR->GetValueHdr(frame, colr);
+    for (int c = 0; c < 4; ++c) {
+      color[c] *= colr[c];
+    }
   }
   std::copy(color, color + 4, bolt.color);
   bolt.iten = 1.f;
@@ -176,6 +194,8 @@ void CParticleElectric2Port::CreateBolt(int frame, const Ctx& ctx) {
   if (mDesc->x1c_FEMT != nullptr) {
     mDesc->x1c_FEMT->GetValue(frame, end, endDir);
   }
+  start = ctx.spread * start;
+  end = ctx.spread * end;
   if (ctx.ipos != nullptr) {
     start = *ctx.ipos;
   }
@@ -214,12 +234,17 @@ void CParticleElectric2Port::CreateBolt(int frame, const Ctx& ctx) {
     MakeBranches(lines[0], amp, ampd, 0, bdep, prm, lines, frame);
   }
 
-  // Bake to world space (InitBoltNodePosition 0xb76e18): pos = xf * (pt * scale).
-  const CVector3f scale(ctx.globalScale.GetX() * ctx.localScale.GetX(), ctx.globalScale.GetY() * ctx.localScale.GetY(),
-                        ctx.globalScale.GetZ() * ctx.localScale.GetZ());
-  for (auto& line : lines) {
-    for (V3& p : line) {
-      p = ToV3(ctx.xf * CVector3f(p.x * scale.GetX(), p.y * scale.GetY(), p.z * scale.GetZ()));
+  // Bake to world space (InitBoltNodePosition 0xb76e18): pos = xf * (pt * scale). XFMD 3 leaves
+  // the points local and unscaled (the mode zeroes vec 0x12 and the local rotation) and the
+  // render moves them with the live transform (WorldPoint).
+  mXf = ctx.xf;
+  mScale = CVector3f(ctx.globalScale.GetX() * ctx.localScale.GetX(), ctx.globalScale.GetY() * ctx.localScale.GetY(),
+                     ctx.globalScale.GetZ() * ctx.localScale.GetZ());
+  if (!mDesc->xPortXfmdFollow) {
+    for (auto& line : lines) {
+      for (V3& p : line) {
+        p = WorldPoint(p);
+      }
     }
   }
   bolt.lines = std::move(lines);
@@ -235,6 +260,9 @@ void CParticleElectric2Port::Create(int frame, int count, const Ctx& ctx) {
 
 void CParticleElectric2Port::Step(int frame, bool emitting, const Ctx& ctx) {
   mModu = ctx.modu;
+  mXf = ctx.xf;
+  mScale = CVector3f(ctx.globalScale.GetX() * ctx.localScale.GetX(), ctx.globalScale.GetY() * ctx.localScale.GetY(),
+                     ctx.globalScale.GetZ() * ctx.localScale.GetZ());
   // UpdateElectricalEffects 0xb757a4
   for (size_t i = 0; i < mBolts.size();) {
     Bolt& bolt = mBolts[i];
@@ -311,7 +339,15 @@ void CParticleElectric2Port::Render(int frame, const CTransform4f& view) {
     for (int c = 0; c < 4; ++c) {
       color[c] = bolt.color[c] * (c < 3 ? iten : 1.f) * modu[c];
     }
-    for (const auto& line : bolt.lines) {
+    for (const auto& localLine : bolt.lines) {
+      std::vector<V3> moved;
+      if (mDesc->xPortXfmdFollow) {
+        moved.reserve(localLine.size());
+        for (const V3& p : localLine) {
+          moved.push_back(WorldPoint(p));
+        }
+      }
+      const std::vector<V3>& line = mDesc->xPortXfmdFollow ? moved : localLine;
       const int n = int(line.size());
       if (n < 2) {
         continue;

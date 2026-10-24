@@ -1333,7 +1333,7 @@ int Mat(const std::string& romfs, const std::string& which, int index) {
           for (char c : name) n += char(std::tolower(uint8_t(c)));
           if (n.find(wanted) != std::string::npos && assets[a].type == FourCCOf("CMDL")) match = true;
         }
-        if (match && assets[a].type == FourCCOf("CMDL")) {
+        if (match && (assets[a].type == FourCCOf("CMDL") || assets[a].type == FourCCOf("SMDL"))) {
           labels[assets[a].id] = idText;
         }
       }

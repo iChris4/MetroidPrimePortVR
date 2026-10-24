@@ -1542,6 +1542,12 @@ void CMain::EnsureWorldPakReady(CAssetId id) {
         ++cur;
       }
       if (notInNameList) {
+#ifdef TARGET_PC
+        // Port: the stash frees the PAK's table, which the loader's one-entry
+        // cache may point into (RemovePakFile clears it for the same reason);
+        // a later lookup of that id would read the freed table.
+        resLoader.ClearCache();
+#endif
         pakFile->sub_8036742c();
       } else {
         pakFile->EnsureWorldPakReady();

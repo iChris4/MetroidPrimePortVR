@@ -11,6 +11,7 @@
 class CFinalInput;
 
 class CGameCamera : public CActor {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 public:
   CGameCamera(const TUniqueId uid, const bool active, const rstl::string& name,
               const CEntityInfo& info, const CTransform4f& xf, const float fov, const float nearZ,

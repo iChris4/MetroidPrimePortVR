@@ -28,9 +28,9 @@
 //  - upscale (a1dc45c4) back to the frame: the target, darkened by vertical stripes of period
 //    width / 200 pixels (down to 0.896).
 // Remastered keeps this in HDR and divides the exposure out of the luminance (a shader constant
-// E on both sides), so in the port's exposed domain (the EFB undone through the room's tone
-// curve) E cancels. The EFB holds the tone-mapped colour sRGB encoded; the result is drawn
-// through the curve and encoded again.
+// E on both sides), so on the port's HDR scene (the exposed linear light, kb
+// topic/visor-hdr-pipeline.md) E cancels: scene() takes the light as it is, and enc() hands it
+// back as it is, for the post's tonemap to encode. Outside the HDR scene there is no thermal post.
 namespace aurora::gfx::thermal {
 namespace {
 Module Log("aurora::gfx::thermal");
@@ -68,53 +68,12 @@ fn vs_main(@builtin(vertex_index) i: u32) -> VertexOutput {
   return out;
 }
 
-fn tone(x: f32) -> f32 {
-  if (x < u.tone[1].z) {
-    return ((u.tone[0].x * x + u.tone[0].y) * x + u.tone[0].z) * x;
-  }
-  if (x < u.tone[1].w) {
-    return u.tone[1].x * x + u.tone[1].y;
-  }
-  let st = max(u.tone[2].y * x + u.tone[2].z, 0.0);
-  return u.tone[2].x * st / (1.0 + st) + u.tone[2].w;
-}
-
-fn untone(y: f32) -> f32 {
-  let mid = u.tone[1].z;
-  let lineStart = u.tone[1].x * mid + u.tone[1].y;
-  if (y < lineStart) {
-    var x = y / max(lineStart, 1e-4) * mid;
-    for (var n = 0; n < 4; n++) {
-      let slope = (3.0 * u.tone[0].x * x + 2.0 * u.tone[0].y) * x + u.tone[0].z;
-      x = clamp(x - (tone(x) - y) / max(slope, 1e-4), 0.0, mid);
-    }
-    return x;
-  }
-  let top = u.tone[2].w;
-  if (y < top || u.tone[2].y <= 0.0) {
-    return (y - u.tone[1].y) / u.tone[1].x;
-  }
-  let t = min((y - top) / max(u.tone[2].x, 1e-4), 0.999);
-  return t / (1.0 - t) / u.tone[2].y + u.tone[1].w;
-}
-
-fn tone3(x: vec3f) -> vec3f { return vec3f(tone(x.r), tone(x.g), tone(x.b)); }
-fn untone3(y: vec3f) -> vec3f { return vec3f(untone(y.r), untone(y.g), untone(y.b)); }
-
-fn srgb_enc(c: vec3f) -> vec3f {
-  let l = clamp(c, vec3f(0.0), vec3f(1.0));
-  return select(1.055 * pow(l, vec3f(1.0 / 2.4)) - 0.055, 12.92 * l, l <= vec3f(0.0031308));
-}
-
-fn srgb_dec(c: vec3f) -> vec3f {
-  let e = clamp(c, vec3f(0.0), vec3f(1.0));
-  return select(pow((e + 0.055) / 1.055, vec3f(2.4)), e / 12.92, e <= vec3f(0.04045));
-}
-
-// The exposed colour of the frame at a uv.
+// The HDR scene holds the exposed linear light itself; the result goes back as it is, for the
+// post's tonemap to encode once.
 fn scene(uv: vec2f) -> vec3f {
-  return untone3(srgb_dec(textureSampleLevel(src, clampSamp, uv, 0.0).rgb));
+  return textureSampleLevel(src, clampSamp, uv, 0.0).rgb;
 }
+fn enc(c: vec3f) -> vec3f { return c; }
 
 @fragment
 fn fs_cold(@builtin(position) pos: vec4f) -> @location(0) vec4f {
@@ -125,7 +84,7 @@ fn fs_cold(@builtin(position) pos: vec4f) -> @location(0) vec4f {
   let off = vec2f(n, 0.0) * 0.02 - 0.01;
   let x = scene(uv + vec2f(off.x, -off.y));
   let g = x / (x + vec3f(1.0)) * 0.5;
-  return vec4f(srgb_enc(tone3(g)), 1.0);
+  return vec4f(enc(g), 1.0);
 }
 
 fn lut(v: f32) -> vec3f {
@@ -186,7 +145,7 @@ fn fs_upscale(@builtin(position) pos: vec4f) -> @location(0) vec4f {
   let t = fract(pos.x * 200.0 / u.fb.x);
   let a = clamp(1.0 - 0.2 * (1.0 - abs(1.0 - 2.0 * t)), 0.0, 1.0);
   let s = a * a * (3.0 - 2.0 * a);
-  return vec4f(srgb_enc(tone3(col * s)), 1.0);
+  return vec4f(enc(col * s), 1.0);
 }
 )";
 
@@ -235,7 +194,15 @@ std::vector<uint8_t> g_lutData;
 std::vector<uint8_t> g_noiseData;  // the 64x64 R8 noise
 bool g_lutUploaded = false;
 
+// The targets a slot reads and writes, taken at the FIFO: the recorder's HDR mode is reset every
+// frame, so the encode cannot ask it.
+struct Capture {
+  webgpu::TextureWithSampler color;    // the pass's scene attachment (MSAA when samples > 1)
+  webgpu::TextureWithSampler resolved; // its resolve target
+};
+
 std::array<Params, 8> g_recorded;
+std::array<Capture, 8> g_recordedCapture;
 constexpr uint64_t SlotStride = 256;
 static_assert(sizeof(Uniforms) <= SlotStride);
 uint32_t g_nextSlot = 0;
@@ -244,8 +211,9 @@ void ensure_pipelines(wgpu::TextureFormat format, uint32_t samples) {
   if (g_state.cold && g_state.pipelineFormat == format && g_state.pipelineSamples == samples) {
     return;
   }
+  const std::string code = Source;
   wgpu::ShaderSourceWGSL wgsl{};
-  wgsl.code = Source;
+  wgsl.code = code.c_str();
   const wgpu::ShaderModuleDescriptor moduleDescriptor{.nextInChain = &wgsl, .label = "Thermal Post"};
   const auto module = g_device.CreateShaderModule(&moduleDescriptor);
   const auto texture = [](uint32_t binding) {
@@ -400,6 +368,23 @@ void ensure_targets(uint32_t width, uint32_t height) {
   }
 }
 
+// The HDR targets a pass reads and writes, checked as one whole: the scene format throughout, and a
+// resolve target when multisampled. Anything else fails closed (no visor post) instead of shrinking
+// 16F texels as 8-bit ones or the reverse.
+bool hdr_capture_valid(const Capture& c, uint32_t& samples) {
+  if (!c.color.texture || !c.color.view || c.color.format != webgpu::SceneHdrFormat ||
+      c.color.texture.GetFormat() != webgpu::SceneHdrFormat) {
+    return false;
+  }
+  samples = c.color.texture.GetSampleCount();
+  if (samples > 1) {
+    return c.resolved.texture && c.resolved.view && c.resolved.format == webgpu::SceneHdrFormat &&
+           c.resolved.texture.GetFormat() == webgpu::SceneHdrFormat && c.resolved.texture.GetSampleCount() == 1 &&
+           c.resolved.size.width == c.color.size.width && c.resolved.size.height == c.color.size.height;
+  }
+  return true;
+}
+
 void ensure_frame(uint32_t width, uint32_t height, wgpu::TextureFormat format) {
   if (g_state.frame && g_state.width == width && g_state.height == height && g_state.frameFormat == format) {
     return;
@@ -427,12 +412,16 @@ void encode(const EncoderTaskContext& ctx, const wgpu::CommandEncoder& cmd, cons
   std::memcpy(&slot, payload, sizeof(slot));
   slot %= g_recorded.size();
   const Params& params = g_recorded[slot];
+  const Capture& capture = g_recordedCapture[slot];
+  uint32_t samples = 1;
+  if (!hdr_capture_valid(capture, samples)) {
+    return;
+  }
   // The targets this frame was recorded against (a resize may have made newer ones since).
-  const auto efb = webgpu::efb_targets();
-  const auto& source = webgpu::present_source();
-  const auto& target = efb.color;
-  const uint32_t samples = webgpu::g_graphicsConfig.msaaSamples > 1 ? webgpu::g_graphicsConfig.msaaSamples : 1;
-  const auto format = webgpu::g_graphicsConfig.surfaceConfiguration.format;
+  const auto& source = samples > 1 ? capture.resolved : capture.color;
+  const auto& target = capture.color;
+  const auto& resolveTarget = capture.resolved;
+  const auto format = webgpu::SceneHdrFormat;
   const uint32_t width = source.size.width;
   const uint32_t height = source.size.height;
   if (width == 0 || height == 0 || !source.texture || !target.view) {
@@ -497,7 +486,7 @@ void encode(const EncoderTaskContext& ctx, const wgpu::CommandEncoder& cmd, cons
   const auto drawFrame = [&](const char* label, const wgpu::RenderPipeline& pipeline, const wgpu::BindGroup& group) {
     const wgpu::RenderPassColorAttachment attachment{
         .view = target.view,
-        .resolveTarget = samples > 1 ? efb.resolved.view : wgpu::TextureView{},
+        .resolveTarget = samples > 1 ? resolveTarget.view : wgpu::TextureView{},
         .loadOp = wgpu::LoadOp::Clear,
         .storeOp = wgpu::StoreOp::Store,
         .clearValue = {0.0, 0.0, 0.0, 0.0},
@@ -557,6 +546,9 @@ void encode(const EncoderTaskContext& ctx, const wgpu::CommandEncoder& cmd, cons
 }
 } // namespace
 
+// The task's source: outside the anonymous namespace so it is the one declared in thermal.hpp.
+std::string source() { return Source; }
+
 bool set_lut(const uint8_t* rgba, uint32_t size) {
   if (rgba == nullptr || size != LutBytes + NoiseSize * NoiseSize) {
     return false;
@@ -591,12 +583,19 @@ bool record(const Params& params) {
   if (g_state.task == InvalidEncoderTask) {
     return false;
   }
-  const auto& size = webgpu::present_source().size;
+  // The targets are the pass's, taken here at the FIFO; the encode never asks the recorder, whose HDR
+  // mode is reset every frame. Outside the HDR scene (no scene, offscreen, a colour pass) there is no
+  // target this post knows: fail closed.
+  if (!scene_hdr_pass_active()) {
+    return false;
+  }
+  const auto& size = webgpu::g_sceneHdr.size;
   if (size.width == 0 || size.height == 0) {
     return false;
   }
   const uint32_t slot = g_nextSlot++ % g_recorded.size();
   g_recorded[slot] = params;
+  g_recordedCapture[slot] = Capture{.color = webgpu::g_sceneHdr, .resolved = webgpu::g_sceneHdrResolved};
   record_encoder_task(g_state.task, &slot, sizeof(slot));
   return true;
 }
@@ -604,6 +603,7 @@ bool record(const Params& params) {
 void shutdown() {
   const auto task = g_state.task;
   g_state = {};
+  g_recordedCapture = {};
   g_lutUploaded = false;
   if (task != InvalidEncoderTask) {
     unregister_encoder_task_type(task);

@@ -16,7 +16,26 @@ struct DrawData {
   // The same clear in a multiview eye pass (stereo_multiview.hpp); zero outside a
   // multiview frame (recording.hpp clear_multiview_pipeline_ref).
   PipelineRef multiviewPipeline{};
+  // The part of the target cleared; empty: all of it.
+  ClipRect rect{};
+  uint32_t rectReferenceWidth = 0;
+  uint32_t rectReferenceHeight = 0;
 };
+
+inline ClipRect target_rect(const DrawData& data, const wgpu::Extent3D& target) noexcept {
+  if (data.rect.width <= 0 || data.rect.height <= 0) {
+    return {0, 0, static_cast<int32_t>(target.width), static_cast<int32_t>(target.height)};
+  }
+  if (data.rectReferenceWidth == 0 || data.rectReferenceHeight == 0) return data.rect;
+  const auto left = uint64_t(data.rect.x) * target.width / data.rectReferenceWidth;
+  const auto top = uint64_t(data.rect.y) * target.height / data.rectReferenceHeight;
+  const auto right = (uint64_t(data.rect.x + data.rect.width) * target.width + data.rectReferenceWidth - 1) /
+                     data.rectReferenceWidth;
+  const auto bottom = (uint64_t(data.rect.y + data.rect.height) * target.height + data.rectReferenceHeight - 1) /
+                      data.rectReferenceHeight;
+  return {static_cast<int32_t>(left), static_cast<int32_t>(top), static_cast<int32_t>(right - left),
+          static_cast<int32_t>(bottom - top)};
+}
 
 constexpr uint32_t ClearPipelineConfigVersion = 4;
 struct PipelineConfig {

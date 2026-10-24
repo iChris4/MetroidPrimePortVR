@@ -90,7 +90,6 @@ struct Area {
   uint32_t lightmap = 0; // GXCreatePBRLightmap's id; 0 until the worker has made it, or none
   float exposure = 0.f; // what takes the room's radiance to the display's range; 0: unknown
   float tone[3][4] = {}; // its tone curve
-  bool hasGeo = false;   // the mod replaces its geometry
   ExposureHints hints;   // the fluid-mode exposure hints' state
   bool hintSnap = false; // a fluid hint registered this frame: the exposure snaps
   uint64_t layers = ~uint64_t(0); // its active script layers (SetAreaLayers)
@@ -137,14 +136,9 @@ struct FrameState {
   bool started = false;
   uint32_t area = 0; // the camera's room last frame
   std::vector<uint32_t> loaded; // the areas in memory last frame
-  Convergence ev;
-  float sigma = -1.f;
+  float ev = 0.f; // the frame's EV
   float targetEv = 0.f;
   bool measuring = false; // this frame is measured (MeasureExposure)
-  bool measured = false;  // targetEv is a measurement
-  float measuredEv = 0.f;
-  uint32_t serial = 0;      // of the last measurement seen
-  uint32_t ignoreUntil = 0; // measurements up to here are of before a jump
   // The tonemap's EV, mid, contrast, toe and shoulder, and the static EV (see GlowScale),
   // moving linearly from `from` to `to`.
   float from[6] = {};
@@ -289,6 +283,7 @@ struct FogCore {
   float attenSlope = 0.f, attenBias = 1.f;
   float noiseFreq = 0.f, noiseStrength = 0.f, lightCap = 65535.f;
   float wind[3] = {};
+  float worldShift[3] = {};
   float colorB[4] = {1.f, 1.f, 1.f, 1.f}, colorA[3] = {1.f, 1.f, 1.f};
   bool noProbe = false;
   float lut[64] = {};
@@ -378,6 +373,8 @@ extern int sVolFog;
 extern bool sFogRegions;
 extern bool sPlayerFluid;
 extern bool sCameraWater;
+extern uint8_t sExposureSwap; // ExposureHints::SwapState of the frame
+extern uint64_t sItems;
 extern std::vector<WorldVolume> sWorldVolumes; // the world's camera volumes (SetCameraPoint)
 extern WorldVolumeState sWorldVolumeState;
 extern std::unordered_set<uint32_t> sGradeLuts;
@@ -406,6 +403,9 @@ void StepTransitions(Area& area, float dt);
 void DriveLights(uint32_t mrea, Area& area, uint32_t sender, int state);
 void StepLights(uint32_t mrea, Area& area, float dt);
 void DriveGrades(uint32_t mrea, Area& area, uint32_t sender, int state);
+// The camera has gone under water: what kSenderCameraWaterItem + k drives, by whether `items`
+// has bit k.
+void DriveCameraWaterItems(uint32_t mrea, Area& area, uint64_t items);
 void StartGrades(uint32_t mrea, Area& area, bool playerFluid, bool cameraWater);
 void ReplayWorldVolumes(uint32_t mrea, Area& area);
 bool LoadTiming();

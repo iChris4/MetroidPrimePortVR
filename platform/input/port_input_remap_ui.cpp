@@ -727,6 +727,10 @@ void DrawAdvancedEditor(const Binding& parsed, bool inputsOk) {
     ImGui::Checkbox("Invert", &sDraft.invert);
   }
 
+  if (PortInput::FindBallRow(sDraft.action) != nullptr) {
+    ImGui::TextDisabled("Works only in Morph Ball, where its inputs do nothing else.");
+    return;
+  }
   bool everywhere = sDraft.contexts == PortInput::kCtxAll;
   if (ImGui::Checkbox("Works everywhere", &everywhere)) {
     sDraft.contexts = everywhere ? PortInput::kCtxAll : PortInput::kCtxGameplay;
@@ -911,7 +915,11 @@ const std::vector<SGroup>& Groups() {
          {Action::VisorCombat, Action::VisorScan, Action::VisorThermal, Action::VisorXray, Action::VisorNext,
           Action::VisorPrev},
          true},
-        {"Morph Ball", {Action::SpringBall}, true},
+        // Issue #167: the ball's own buttons; an input on one does only that in the ball.
+        {"Morph Ball",
+         {Action::BallBomb, Action::BallPowerBomb, Action::BallBoost, Action::BallSpider, Action::BallUnmorph,
+          Action::SpringBall},
+         true},
         {"Gyro", {Action::GyroAim, Action::ResetAim}, true},
         // Read instead of the game buttons in menus and on the map ("Separate menu buttons").
         {"Menus and map",
@@ -980,8 +988,10 @@ const char* GameHint(Action a) {
   case Action::MenuDown:
   case Action::MenuLeft:
   case Action::MenuRight: return "Navigate";
-  default: return nullptr;
+  default: break;
   }
+  const PortInput::BallRow* ball = PortInput::FindBallRow(a);
+  return ball != nullptr ? ball->hint : nullptr;
 }
 
 // A binding's non-default settings, in words ("" when it has none).
@@ -1467,19 +1477,19 @@ void Draw() {
   DrawReset(views);
   bool menuStandard = PortDebug::MenuStandardButtons();
   if (ImGui::Checkbox("Separate menu buttons", &menuStandard)) PortDebug::SetMenuStandardButtons(menuStandard);
-  ImGui::SetItemTooltip("On: menus and the map use the controller's \"Menus and map\" rows (by default its own "
-                        "buttons: A confirms, B backs out, the triggers page and zoom). Start and the map "
-                        "button keep their gameplay inputs. Keys and mouse buttons on those rows replace their "
-                        "gameplay action there. Bindings set for Menu or Map under Advanced still apply.\nOff: menus and the map follow your gameplay bindings, and the Menus and map "
-                        "rows do nothing.");
+  ImGui::SetItemTooltip(
+      "On: menus and the map use the controller's \"Menus and map\" rows (by default A\n"
+      "confirms, B backs out, the triggers page and zoom). Start and the map button keep\n"
+      "their gameplay inputs. Keys and mouse buttons on those rows replace their\n"
+      "gameplay action there.\nOff: menus and the map follow your gameplay bindings.");
   ImGui::SameLine();
   bool pointerMenus = PortPointer::Enabled();
   if (ImGui::Checkbox("Point and click menus", &pointerMenus)) PortDebug::SetPointerMenus(pointerMenus);
-  ImGui::SetItemTooltip("On: the mouse and touch work the game's menus and map. Hovering or tapping selects, "
-                        "a click (or a tap on the selected item) confirms, right click backs out, a click on a "
-                        "button hint presses it. Drags set sliders and turn the Samus doll and the map (two "
-                        "fingers or a right drag pan the map, see \"Swap map finger gestures\"); the wheel or a pinch zooms them; a two-finger "
-                        "twist turns the map.\nOff: menus and the map read only buttons and keys.");
+  ImGui::SetItemTooltip(
+      "On: the mouse and touch work the game's menus and map. Hover or tap selects,\n"
+      "a click (or a tap on the selected item) confirms, right click backs out. Drags\n"
+      "set sliders and turn the Samus doll and the map; the wheel or a pinch zooms.\nOff: menus "
+      "and the map read only buttons and keys.");
   ImGui::SameLine();
   bool swapFingers = PortPointer::MapSwapFingers();
   ImGui::BeginDisabled(!pointerMenus);

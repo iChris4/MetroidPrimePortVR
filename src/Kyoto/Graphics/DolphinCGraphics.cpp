@@ -56,6 +56,7 @@ Java_org_metroidprime_port_MetroidPrimeActivity_nativeFramePresented(JNIEnv*, jc
 #include "Kyoto/Graphics/CGraphicsSys.hpp"
 #include "Kyoto/Graphics/CTexture.hpp"
 #include "Kyoto/Math/CRelAngle.hpp"
+#include "Kyoto/Particles/PortParticleMath.hpp"
 
 #include "GameVersions.h"
 #include "dolphin/types.h"
@@ -1571,6 +1572,25 @@ void CGraphics::LoadScreenProjectionTexMtx(GXTexMtx id) {
     tex[r][3] += rows[r][3];
   }
   GXLoadTexMtxImm(tex, id, GX_MTX3x4);
+}
+
+void CGraphics::PortSetProjectionDepthBias(float bias, float depth) {
+  if (bias == 0.f) {
+    FlushProjection();
+    return;
+  }
+  Mtx44 mtx;
+  if (mProj.IsPerspective()) {
+    MTXFrustum(mtx, mProj.GetTop(), mProj.GetBottom(), mProj.GetLeft(), mProj.GetRight(),
+               mProj.GetNear(), mProj.GetFar());
+    mtx[2][2] = PortParticleMath::DepthBiasedProjM22(mtx[2][2], mtx[2][3], mtx[3][2], mtx[3][3], depth, bias);
+    GXSetProjection(mtx, GX_PERSPECTIVE);
+  } else {
+    MTXOrtho(mtx, mProj.GetTop(), mProj.GetBottom(), mProj.GetLeft(), mProj.GetRight(),
+             mProj.GetNear(), mProj.GetFar());
+    mtx[2][2] = PortParticleMath::DepthBiasedProjM22(mtx[2][2], mtx[2][3], mtx[3][2], mtx[3][3], depth, bias);
+    GXSetProjection(mtx, GX_ORTHOGRAPHIC);
+  }
 }
 #endif
 

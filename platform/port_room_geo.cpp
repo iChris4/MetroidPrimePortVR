@@ -150,6 +150,7 @@ struct Placed {
   bool wasShown = false;
   CTransform4f base = CTransform4f::Identity();
   bool sky = false; // Instance::sky: drawn by Sky, not with the room
+  bool worldSky = false; // Instance::worldSky
   float skyRadiance[3] = {};
   float lightmap[3] = {}; // Instance::lightmap
   // Instance::drivers[0]: a float driver of one kind parameter. `value` is the spline at the
@@ -1040,6 +1041,7 @@ void Load(uint32_t mrea, Area& area) {
     item.shown = item.active = instance.active;
     item.glows = instance.glows;
     item.sky = instance.sky;
+    item.worldSky = instance.sky && instance.worldSky;
     std::copy(instance.skyRadiance, instance.skyRadiance + 3, item.skyRadiance);
     std::copy(instance.glow, instance.glow + 3, item.glow);
     std::copy(instance.lightmap, instance.lightmap + 3, item.lightmap);
@@ -1468,7 +1470,14 @@ bool Draw(const CStateManager& mgr, const CGameArea& gameArea, const CFrustumPla
       item.following = false;
     }
   }
-  const bool baked = !AreaLights() && PortRoomEnv::HasVolume(gameArea.GetAreaAssetId());
+  const bool volumes = !AreaLights() && PortRoomEnv::HasVolume(gameArea.GetAreaAssetId());
+  // A room with a lightmap and no grid: what has a lookup into the lightmap is lit by it, as
+  // Remastered's world models are; the rest (a merged cluster, an instance without a lookup)
+  // keeps the area's lights, there being no grid to light it.
+  const bool lightmapOnly = !AreaLights() && !volumes && PortRoomEnv::HasLightmapOnly(gameArea.GetAreaAssetId());
+  const auto bakes = [&](const float* lookup) {
+    return volumes || (lightmapOnly && lookup != nullptr && HasLightmapLookup(lookup));
+  };
   CScriptLayerManager* const layers =
       area.gated ? const_cast< CStateManager& >(mgr).WorldLayerState().GetPtr() : nullptr;
   if (area.drawOrder.size() != area.items.size()) {
@@ -1521,7 +1530,7 @@ bool Draw(const CStateManager& mgr, const CGameArea& gameArea, const CFrustumPla
     }
     return picked;
   };
-  const auto light = [&](std::unique_ptr< CActorLights >& lights, bool& areaLit, const CAABox& bounds) {
+  const auto light = [&](std::unique_ptr< CActorLights >& lights, bool& areaLit, const CAABox& bounds, bool baked) {
     if (lights == nullptr || areaLit == baked) {
       // The baked ambient already holds the area's lights, so that set has room for none:
       // one that expects area lights and has none drops its dynamic lights too. Its
@@ -1601,7 +1610,7 @@ bool Draw(const CStateManager& mgr, const CGameArea& gameArea, const CFrustumPla
         (!inView(area.models[cluster.model], cluster.bounds, casts) && !casts)) {
       continue;
     }
-    light(cluster.lights, cluster.areaLit, cluster.bounds);
+    light(cluster.lights, cluster.areaLit, cluster.bounds, bakes(nullptr));
     const int level = pickLevel(area.models[cluster.model], cluster.levels.size(), cluster.bounds, cluster.scaleSq);
     add(area.models[cluster.model], level < 0 ? *cluster.merged : *cluster.levels[level].merged, kIdentity,
         cluster.lights.get(), cluster.bounds, nullptr, nullptr, !casts);
@@ -1632,7 +1641,8 @@ bool Draw(const CStateManager& mgr, const CGameArea& gameArea, const CFrustumPla
     if (tooSmall(item.bounds) || (!inView(model, item.bounds, casts) && (!casts || item.alpha < 1.f))) {
       continue;
     }
-    light(item.lights, item.areaLit, item.bounds);
+    const bool baked = bakes(item.lightmap);
+    light(item.lights, item.areaLit, item.bounds, baked);
     item.volume = baked ? gameArea.GetAreaAssetId() : 0;
     // Blended surfaces (glass, decals) wait for the sorted pass, where they are drawn
     // back to front among the actors.
@@ -1667,7 +1677,7 @@ bool Draw(const CStateManager& mgr, const CGameArea& gameArea, const CFrustumPla
     });
   }
   const auto drawOne = [&](const Visible& draw) {
-    if (baked) {
+    if (bakes(draw.lightmap)) {
       const CVector3f centre = draw.bounds->GetCenterPoint();
       const float at[3] = {centre.GetX(), centre.GetY(), centre.GetZ()};
       PortRoomEnv::SetVolumeHint(gameArea.GetAreaAssetId(), at);
@@ -1716,7 +1726,7 @@ bool Draw(const CStateManager& mgr, const CGameArea& gameArea, const CFrustumPla
   }
   gpRender->SetAmbientColor(CColor::White());
   CGraphics::DisableAllLights();
-  if (baked) {
+  if (volumes || lightmapOnly) {
     PortRoomEnv::ClearVolumeHint();
   }
   return GetMode() == Mode::Replace;
@@ -1813,9 +1823,10 @@ bool Hides(const CGameArea& gameArea, uint32_t editorId) {
   return false;
 }
 
-// The room's sky instances that are shown and on a layer that is on.
+// The room's sky instances that are shown and on a layer that is on: its own, or (`world`)
+// the world's (Instance::worldSky).
 template < typename Fn >
-void ForEachSky(const CGameArea& gameArea, Fn&& fn) {
+void ForEachSky(const CGameArea& gameArea, bool world, Fn&& fn) {
   if (GetMode() == Mode::Off || gpGameState == nullptr) {
     return;
   }
@@ -1827,7 +1838,7 @@ void ForEachSky(const CGameArea& gameArea, Fn&& fn) {
   const Area& area = found->second;
   const CScriptLayerManager* const layers = gpGameState->CurrentWorldState().GetLayerState().GetPtr();
   for (const Placed& item : area.items) {
-    if (!item.sky || !item.shown || area.models[item.model].hidden ||
+    if (!item.sky || item.worldSky != world || !item.shown || area.models[item.model].hidden ||
         (item.layer != kEveryLayer && layers != nullptr && !layers->IsLayerActive(gameArea.GetAreaId(), item.layer))) {
       continue;
     }
@@ -1837,12 +1848,12 @@ void ForEachSky(const CGameArea& gameArea, Fn&& fn) {
   }
 }
 
-int Skies(const CGameArea& gameArea, SkyLayer (&out)[kMaxSkyLayers]) {
+int Skies(const CGameArea& gameArea, SkyLayer (&out)[kMaxSkyLayers], bool world) {
   int count = 0;
   bool loading = false;
   float corners[kMaxSkyLayers];
   float largest = 0.f;
-  ForEachSky(gameArea, [&](const Area& area, const Placed& item) {
+  ForEachSky(gameArea, world, [&](const Area& area, const Placed& item) {
     const Model& model = area.models[item.model];
     if (!model.data->IsLoaded(0)) {
       // Draw loads the area's models, but only while the area is drawn.
@@ -1890,7 +1901,7 @@ int Skies(const CGameArea& gameArea, SkyLayer (&out)[kMaxSkyLayers]) {
 
 bool HasSky(const CGameArea& gameArea) {
   bool has = false;
-  ForEachSky(gameArea, [&](const Area&, const Placed&) {
+  ForEachSky(gameArea, false, [&](const Area&, const Placed&) {
     has = true;
     return false;
   });

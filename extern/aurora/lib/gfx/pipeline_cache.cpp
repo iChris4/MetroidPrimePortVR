@@ -120,6 +120,33 @@ static std::deque<PipelineCacheWrite> g_pipelineCacheWriteQueue;
 static bool g_pipelineCacheWriterStop = false;
 static int g_sdlVfsRegisterResult = SQLITE_ERROR;
 
+// Per-context pipeline use (issue #187). Draws record (context, hash) in pipeline_use; a lazy cache
+// builds a context's rows in the background when the game asks (aurora_pipeline_prefetch).
+static sqlite3_stmt* g_pipelineUseInsertStmt = nullptr;
+static sqlite3_stmt* g_pipelineContextLoadStmt = nullptr;
+static sqlite3_stmt* g_pipelineSharedLoadStmt = nullptr;
+static std::atomic_uint64_t g_pipelineContext = AURORA_PIPELINE_CONTEXT_FRONTEND;
+// The uses recorded this session; any draw thread (require_pipeline records from the render thread).
+static std::mutex g_recordedUsesMutex;
+static absl::flat_hash_set<std::pair<uint64_t, PipelineRef>> g_recordedUses;
+// Under g_pipelineMutex: GLOBAL pipelines, never evicted; and (lazy only) the hashes the cache has rows for.
+static absl::flat_hash_set<PipelineRef> g_pinnedPipelines;
+static absl::flat_hash_set<PipelineRef> g_knownPipelines;
+// Under g_pipelineCacheWriterMutex, written by the writer thread.
+static std::deque<std::pair<uint64_t, PipelineRef>> g_pipelineUseQueue;
+static std::deque<uint64_t> g_pipelinePrefetchQueue;
+static absl::flat_hash_map<uint64_t, uint32_t> g_prefetchFrames;
+constexpr uint32_t PrefetchRepeatFrames = 600;
+constexpr uint64_t MaxLoggedNewMisses = 64;
+constexpr size_t MaxRecordedUses = 65536;
+constexpr size_t MaxKnownPipelines = 65536;
+static std::atomic_uint64_t g_skippedDraws = 0;
+static std::atomic_uint64_t g_newMisses = 0;
+static std::atomic_uint64_t g_knownMisses = 0;
+static std::atomic_uint64_t g_lateMisses = 0;
+static std::atomic_uint64_t g_prefetches = 0;
+static std::atomic_uint64_t g_prefetchQueued = 0;
+
 static SdlVfsSqliteFile* sdl_vfs_file(sqlite3_file* file) { return reinterpret_cast<SdlVfsSqliteFile*>(file); }
 
 static sqlite3_vfs* default_vfs(sqlite3_vfs* vfs) { return static_cast<sqlite3_vfs*>(vfs->pAppData); }
@@ -423,10 +450,13 @@ static PendingPipeline* touch_pending_pipeline(PipelineRef hash, PipelinePriorit
   case PipelinePriority::Background:
     return &*backgroundIt;
   case PipelinePriority::Normal:
+    // A draw wants a pipeline that a startup load or prefetch queued but hasn't built yet.
+    g_lateMisses.fetch_add(1, std::memory_order_relaxed);
     g_pipelineQueue.emplace_back(std::move(*backgroundIt));
     g_backgroundPipelineQueue.erase(backgroundIt);
     return &g_pipelineQueue.back();
   case PipelinePriority::Blocking:
+    g_lateMisses.fetch_add(1, std::memory_order_relaxed);
     g_pipelineQueue.emplace_front(std::move(*backgroundIt));
     g_backgroundPipelineQueue.erase(backgroundIt);
     return &g_pipelineQueue.front();
@@ -523,6 +553,50 @@ static void apply_pipeline_drop() {
   g_lastPipelineRef = std::numeric_limits<PipelineRef>::max();
 }
 
+// Records that a draw in the current context uses `hash`: once per (context, hash) a session, queued
+// for the writer thread. A GLOBAL use also pins the pipeline. Takes g_pipelineMutex for a pin, so
+// never call it with that held.
+static void record_pipeline_use(PipelineRef hash) {
+  if (g_pipelineCacheBroken || g_pipelineCacheDb == nullptr) {
+    return;
+  }
+  const uint64_t context = g_pipelineContext.load(std::memory_order_relaxed);
+  {
+    std::lock_guard lock{g_recordedUsesMutex};
+    // Bounds the set over a long session: forgetting only re-queues uses the DB already has
+    // (INSERT OR IGNORE) and re-pins GLOBAL ones.
+    if (g_recordedUses.size() >= MaxRecordedUses) {
+      g_recordedUses.clear();
+    }
+    if (!g_recordedUses.emplace(context, hash).second) {
+      return;
+    }
+  }
+  if (context == AURORA_PIPELINE_CONTEXT_GLOBAL) {
+    std::lock_guard lock{g_pipelineMutex};
+    g_pinnedPipelines.insert(hash);
+  }
+  {
+    std::lock_guard lock{g_pipelineCacheWriterMutex};
+    g_pipelineUseQueue.emplace_back(context, hash);
+  }
+  g_pipelineCacheWriterCv.notify_one();
+}
+
+// Under g_pipelineMutex: a draw lookup found `hash` neither built nor queued. Returns true for a new
+// miss the caller should log (the first MaxLoggedNewMisses only).
+static bool note_pipeline_miss(PipelineRef hash) {
+  if (g_knownPipelines.contains(hash)) {
+    g_knownMisses.fetch_add(1, std::memory_order_relaxed);
+    return false;
+  }
+  // Past the bound a repeat miss counts as new again; only the stats tell the two apart.
+  if (g_config.pipelineCacheLazy && g_knownPipelines.size() < MaxKnownPipelines) {
+    g_knownPipelines.insert(hash);
+  }
+  return g_newMisses.fetch_add(1, std::memory_order_relaxed) < MaxLoggedNewMisses;
+}
+
 template <typename PipelineConfig>
 static PipelineRef find_pipeline_impl(ShaderType type, const PipelineConfig& config, NewPipelineCallback&& cb,
                                       PipelinePriority priority = PipelinePriority::Normal,
@@ -537,7 +611,7 @@ static PipelineRef find_pipeline_impl(ShaderType type, const PipelineConfig& con
   const PipelineRef hash = xxh3_hash(config, static_cast<HashType>(type));
   const bool blocking = priority == PipelinePriority::Blocking;
   const uint32_t frameNow = g_pipelineFrame.load(std::memory_order_relaxed);
-  if (!blocking && hash == g_lastPipelineRef && g_lastPipelineStampFrame == frameNow) {
+  if (!blocking && !renderThread && hash == g_lastPipelineRef && g_lastPipelineStampFrame == frameNow) {
     return g_lastPipelineRef;
   }
   if (!renderThread) {
@@ -547,9 +621,13 @@ static PipelineRef find_pipeline_impl(ShaderType type, const PipelineConfig& con
   const uint32_t firstFrameUsed = firstFrameUsedOverride.value_or(current_frame());
   bool notifyWorker = false;
   bool persist = priority != PipelinePriority::Background;
+  if (persist) {
+    record_pipeline_use(hash);
+  }
   bool pipelineReady = false;
   bool createdPipeline = false;
   bool queued = false;
+  bool logNewMiss = false;
   std::optional<PipelineCacheWrite> cacheWrite;
   {
     std::scoped_lock guard{g_pipelineMutex};
@@ -593,6 +671,9 @@ static PipelineRef find_pipeline_impl(ShaderType type, const PipelineConfig& con
         notifyWorker = priority != PipelinePriority::Background;
       }
     } else if (!g_hasPipelineThread && (blocking || g_pipelinesPerFrame < BuildPipelinesPerFrame)) {
+      if (persist) {
+        logNewMiss = note_pipeline_miss(hash);
+      }
       g_pipelines.try_emplace(hash, CachedPipeline{
                                         .pipeline = create_pipeline_timed(hash, std::move(cb)),
                                         .firstFrameUsed = firstFrameUsed,
@@ -623,10 +704,16 @@ static PipelineRef find_pipeline_impl(ShaderType type, const PipelineConfig& con
       g_pendingPipelines.insert(hash);
       if (persist) {
         cacheWrite = make_pipeline_cache_write(type, hash, config, firstFrameUsed);
+        logNewMiss = note_pipeline_miss(hash);
       }
       ++queuedPipelines;
       notifyWorker = true;
     }
+  }
+
+  if (logNewMiss) {
+    Log.info("pipeline cache: new pipeline {:016x} (type {}, context {:x})", hash, underlying(type),
+             g_pipelineContext.load(std::memory_order_relaxed));
   }
 
   if (cacheWrite) {
@@ -682,6 +769,12 @@ static void pipeline_cache_abort() {
     sqlite3_finalize(g_pipelineCacheUpsertStmt);
     g_pipelineCacheUpsertStmt = nullptr;
   }
+  for (sqlite3_stmt** stmt : {&g_pipelineUseInsertStmt, &g_pipelineContextLoadStmt, &g_pipelineSharedLoadStmt}) {
+    if (*stmt != nullptr) {
+      sqlite3_finalize(*stmt);
+      *stmt = nullptr;
+    }
+  }
   if (g_pipelineCacheDb != nullptr) {
     sqlite3_close(g_pipelineCacheDb);
     g_pipelineCacheDb = nullptr;
@@ -693,6 +786,7 @@ static void pipeline_cache_abort() {
 }
 
 static bool write_pipeline_cache_record(const PipelineCacheWrite& write);
+static bool write_pipeline_use_record(uint64_t context, PipelineRef hash);
 
 static std::string pipeline_cache_seed_path() {
   if (g_config.pipelineCacheSeedData != nullptr && g_config.pipelineCacheSeedSize != 0) {
@@ -859,6 +953,7 @@ static void merge_pipeline_cache_seed(const std::string& seedPath) {
   uint32_t mergedRows = 0;
   uint32_t skippedRows = 0;
   uint32_t leftOutRows = 0;
+  uint32_t mergedUses = 0;
   {
     sqlite::Transaction tx(g_pipelineCacheDb, Log, true);
     if (!tx) {
@@ -912,6 +1007,27 @@ static void merge_pipeline_cache_seed(const std::string& seedPath) {
     if (!writeFailed && ret != SQLITE_DONE) {
       Log.warn("Failed while reading bundled pipeline cache rows from '{}': {}", seedPath, sqlite3_errmsg(seedDb));
       readFailed = true;
+    }
+
+    // A seed recorded before pipeline_use existed has no such table; it then seeds no uses.
+    sqlite3_stmt* useStmt = nullptr;
+    if (!writeFailed && !readFailed &&
+        sqlite3_prepare_v3(seedDb, "SELECT context, hash FROM pipeline_use", -1, 0, &useStmt, nullptr) == SQLITE_OK) {
+      while ((ret = sqlite3_step(useStmt)) == SQLITE_ROW) {
+        if (!write_pipeline_use_record(static_cast<uint64_t>(sqlite3_column_int64(useStmt, 0)),
+                                       static_cast<PipelineRef>(sqlite3_column_int64(useStmt, 1)))) {
+          writeFailed = true;
+          break;
+        }
+        ++mergedUses;
+      }
+      if (!writeFailed && ret != SQLITE_DONE) {
+        Log.warn("Failed while reading bundled pipeline uses from '{}': {}", seedPath, sqlite3_errmsg(seedDb));
+        readFailed = true;
+      }
+    }
+    if (useStmt != nullptr) {
+      sqlite3_finalize(useStmt);
     }
 
     if (!writeFailed && !readFailed) {
@@ -1064,7 +1180,8 @@ static bool prepare_pipeline_cache_db() {
 
     if (!schemaFailed && !schemaMatch) {
       const auto schemaSql = fmt::format(
-          R"(DROP TABLE IF EXISTS pipeline_cache;
+          R"(DROP TABLE IF EXISTS pipeline_use;
+DROP TABLE IF EXISTS pipeline_cache;
 CREATE TABLE pipeline_cache (
   type INTEGER NOT NULL,
   hash INTEGER NOT NULL,
@@ -1096,19 +1213,57 @@ INSERT INTO aurora_schema VALUES ({});)",
     return false;
   }
 
-  // PrimedGun: before the bundled seed is merged and before any row is loaded.
+  // Remove incompatible VR layouts before the seed or any row is loaded.
   if (!purge_previous_layout_gx_rows()) {
     pipeline_cache_abort();
     return false;
   }
+  // Added within schema 1: older files gain the table and index, and older builds ignore them.
+  ret = sqlite::exec(g_pipelineCacheDb,
+                     "CREATE TABLE IF NOT EXISTS pipeline_use ("
+                     "  context INTEGER NOT NULL,"
+                     "  hash INTEGER NOT NULL,"
+                     "  PRIMARY KEY (context, hash)"
+                     ") WITHOUT ROWID;"
+                     "CREATE INDEX IF NOT EXISTS pipeline_cache_hash_idx ON pipeline_cache(hash);");
+  if (ret != SQLITE_OK) {
+    Log.error("Failed to create pipeline use table: {}", sqlite3_errmsg(g_pipelineCacheDb));
+    pipeline_cache_abort();
+    return false;
+  }
 
+  // load_rows reads every row statement as (type, config_version, config, first_frame_used).
   ret = sqlite3_prepare_v3(g_pipelineCacheDb,
-                           "SELECT config, first_frame_used FROM pipeline_cache "
+                           "SELECT type, config_version, config, first_frame_used FROM pipeline_cache "
                            "WHERE type = ? AND config_version = ? "
                            "ORDER BY first_frame_used ASC, rowid ASC",
                            -1, SQLITE_PREPARE_PERSISTENT, &g_pipelineCacheLoadStmt, nullptr);
   if (ret != SQLITE_OK) {
     Log.error("Failed to prepare pipeline cache load statement: {}", sqlite3_errmsg(g_pipelineCacheDb));
+    pipeline_cache_abort();
+    return false;
+  }
+
+  ret = sqlite3_prepare_v3(g_pipelineCacheDb, "INSERT OR IGNORE INTO pipeline_use (context, hash) VALUES (?, ?)", -1,
+                           SQLITE_PREPARE_PERSISTENT, &g_pipelineUseInsertStmt, nullptr);
+  if (ret == SQLITE_OK) {
+    ret = sqlite3_prepare_v3(g_pipelineCacheDb,
+                             "SELECT p.type, p.config_version, p.config, p.first_frame_used "
+                             "FROM pipeline_use u JOIN pipeline_cache p ON p.hash = u.hash "
+                             "WHERE u.context = ? ORDER BY p.first_frame_used",
+                             -1, SQLITE_PREPARE_PERSISTENT, &g_pipelineContextLoadStmt, nullptr);
+  }
+  if (ret == SQLITE_OK) {
+    // Pipelines at least three areas used: likely wanted by an area never visited yet.
+    ret = sqlite3_prepare_v3(g_pipelineCacheDb,
+                             "SELECT p.type, p.config_version, p.config, p.first_frame_used "
+                             "FROM pipeline_cache p WHERE p.hash IN "
+                             "(SELECT hash FROM pipeline_use WHERE context > 1 GROUP BY hash HAVING COUNT(*) >= 3) "
+                             "ORDER BY p.first_frame_used",
+                             -1, SQLITE_PREPARE_PERSISTENT, &g_pipelineSharedLoadStmt, nullptr);
+  }
+  if (ret != SQLITE_OK) {
+    Log.error("Failed to prepare pipeline use statements: {}", sqlite3_errmsg(g_pipelineCacheDb));
     pipeline_cache_abort();
     return false;
   }
@@ -1186,7 +1341,32 @@ static void prune_old_pipeline_cache_versions() {
   if (ret != SQLITE_OK) {
     Log.error("Failed to prune water pipeline cache rows: {}", sqlite3_errmsg(g_pipelineCacheDb));
     pipeline_cache_abort();
+    return;
   }
+
+  ret = sqlite::exec(g_pipelineCacheDb, "DELETE FROM pipeline_use WHERE hash NOT IN (SELECT hash FROM pipeline_cache)");
+  if (ret != SQLITE_OK) {
+    Log.error("Failed to prune pipeline use rows: {}", sqlite3_errmsg(g_pipelineCacheDb));
+    pipeline_cache_abort();
+  }
+}
+
+static bool write_pipeline_use_record(uint64_t context, PipelineRef hash) {
+  auto ret = sqlite3_bind_int64(g_pipelineUseInsertStmt, 1, static_cast<sqlite3_int64>(context));
+  if (ret == SQLITE_OK) {
+    ret = sqlite3_bind_int64(g_pipelineUseInsertStmt, 2, static_cast<sqlite3_int64>(hash));
+  }
+  if (ret == SQLITE_OK) {
+    ret = sqlite3_step(g_pipelineUseInsertStmt);
+  }
+  const bool ok = ret == SQLITE_DONE;
+  if (!ok) {
+    Log.error("Failed to insert pipeline use row: {}", sqlite3_errmsg(g_pipelineCacheDb));
+    note_pipeline_cache_corrupt();
+  }
+  sqlite3_reset(g_pipelineUseInsertStmt);
+  sqlite3_clear_bindings(g_pipelineUseInsertStmt);
+  return ok;
 }
 
 static bool write_pipeline_cache_record(const PipelineCacheWrite& write) {
@@ -1239,6 +1419,8 @@ static bool write_pipeline_cache_record(const PipelineCacheWrite& write) {
   return true;
 }
 
+static size_t prefetch_pipeline_context(uint64_t context, bool withShared, bool& ok);
+
 static void pipeline_cache_writer() {
 #ifdef TRACY_ENABLE
   tracy::SetThreadName("Pipeline cache writer thread");
@@ -1246,34 +1428,55 @@ static void pipeline_cache_writer() {
 
   while (true) {
     std::deque<PipelineCacheWrite> batch;
+    std::deque<std::pair<uint64_t, PipelineRef>> uses;
+    std::deque<uint64_t> prefetches;
+    bool stopping = false;
     {
       std::unique_lock lock{g_pipelineCacheWriterMutex};
-      g_pipelineCacheWriterCv.wait(lock,
-                                   [] { return g_pipelineCacheWriterStop || !g_pipelineCacheWriteQueue.empty(); });
-      if (g_pipelineCacheWriterStop && g_pipelineCacheWriteQueue.empty()) {
+      g_pipelineCacheWriterCv.wait(lock, [] {
+        return g_pipelineCacheWriterStop || !g_pipelineCacheWriteQueue.empty() || !g_pipelineUseQueue.empty() ||
+               !g_pipelinePrefetchQueue.empty();
+      });
+      stopping = g_pipelineCacheWriterStop;
+      if (stopping && g_pipelineCacheWriteQueue.empty() && g_pipelineUseQueue.empty()) {
         return;
       }
       batch.swap(g_pipelineCacheWriteQueue);
+      uses.swap(g_pipelineUseQueue);
+      prefetches.swap(g_pipelinePrefetchQueue);
     }
 
     bool writeFailed = false;
-    {
+    if (!batch.empty() || !uses.empty()) {
       sqlite::Transaction tx(g_pipelineCacheDb, Log, true);
       if (!tx) {
         Log.error("Failed to begin pipeline cache write transaction");
         writeFailed = true;
       } else {
+        // Rows before uses, so a prefetch's join already sees a new pipeline's row.
         for (const auto& write : batch) {
           if (!write_pipeline_cache_record(write)) {
             writeFailed = true;
             break;
           }
         }
+        for (size_t i = 0; !writeFailed && i < uses.size(); ++i) {
+          writeFailed = !write_pipeline_use_record(uses[i].first, uses[i].second);
+        }
 
         if (!writeFailed) {
           tx.commit();
         }
       }
+    }
+
+    // Prefetches only read and queue Background builds; nothing waits on them.
+    for (size_t i = 0; !writeFailed && !stopping && i < prefetches.size(); ++i) {
+      bool ok = true;
+      const size_t queued = prefetch_pipeline_context(prefetches[i], i == 0, ok);
+      writeFailed = !ok;
+      g_prefetches.fetch_add(1, std::memory_order_relaxed);
+      g_prefetchQueued.fetch_add(queued, std::memory_order_relaxed);
     }
 
     if (writeFailed) {
@@ -1344,8 +1547,136 @@ static size_t pipeline_thread_count() {
   return std::clamp<size_t>(std::thread::hardware_concurrency() / 2, 1, 8);
 }
 
+struct CachedRowOptions {
+  // Queued from a thread other than the draw thread (the writer's prefetch).
+  bool renderThread = false;
+  // Stamp rows already built as used now, so idle eviction keeps them a while longer.
+  bool touchBuilt = false;
+  bool pin = false;
+};
+
+struct CachedRowStats {
+  size_t accepted = 0;
+  size_t incompatible = 0;
+  size_t otherSettings = 0;
+  size_t pbr = 0;
+  size_t queued = 0;
+};
+
 template <typename PipelineConfig, typename CreateFn>
-static size_t load_pipeline_cache_entries(ShaderType type, uint32_t configVersion, CreateFn&& create) {
+static void queue_cached_row(ShaderType type, uint32_t configVersion, CreateFn&& create, const uint8_t* configBlob,
+                             int configSize, uint32_t firstFrameUsed, const CachedRowOptions& opts,
+                             CachedRowStats& stats) {
+  if (configSize != static_cast<int>(sizeof(PipelineConfig)) || (configSize != 0 && configBlob == nullptr)) {
+    return;
+  }
+
+  PipelineConfig config;
+  std::memcpy(&config, configBlob, sizeof(config));
+  if (config.version != configVersion) {
+    return;
+  }
+
+  if constexpr (std::is_same_v<PipelineConfig, gx::PipelineConfig>) {
+    if (!gx::pipeline_config_compatible(config, webgpu::g_lightmapBinding)) {
+      ++stats.incompatible;
+      return;
+    }
+    if (!gx_row_drawn_here(config)) {
+      ++stats.otherSettings;
+      return;
+    }
+    // Left in the database, and built by find_pipeline on the first draw that wants it.
+    if (g_config.pipelineCacheSkipPbr && config.shaderConfig.pbr != 0) {
+      ++stats.pbr;
+      return;
+    }
+  }
+
+  ++stats.accepted;
+  const PipelineRef hash = xxh3_hash(config, static_cast<HashType>(type));
+  {
+    std::scoped_lock guard{g_pipelineMutex};
+    if (opts.pin) {
+      g_pinnedPipelines.insert(hash);
+    }
+    if (const auto it = g_pipelines.find(hash); it != g_pipelines.end()) {
+      if (opts.touchBuilt) {
+        it->second.lastUsedFrame = g_pipelineFrame.load(std::memory_order_relaxed);
+      }
+      return;
+    }
+    if (g_pendingPipelines.contains(hash)) {
+      return;
+    }
+  }
+  find_pipeline_impl(type, config, [=] { return create(config); }, PipelinePriority::Background, firstFrameUsed,
+                     opts.renderThread);
+  ++stats.queued;
+}
+
+static void queue_cached_row_any(int type, uint32_t configVersion, const uint8_t* blob, int size, uint32_t firstFrame,
+                                 const CachedRowOptions& opts, CachedRowStats& stats) {
+  switch (static_cast<ShaderType>(type)) {
+#ifdef AURORA_ENABLE_RMLUI
+  case ShaderType::Rml:
+    if (configVersion == rmlui::RmlPipelineConfigVersion) {
+      queue_cached_row<rmlui::PipelineConfig>(ShaderType::Rml, configVersion, rmlui::create_pipeline, blob, size,
+                                              firstFrame, opts, stats);
+    }
+    break;
+#endif
+  case ShaderType::Clear:
+    if (configVersion == clear::ClearPipelineConfigVersion) {
+      queue_cached_row<clear::PipelineConfig>(ShaderType::Clear, configVersion, clear::create_pipeline, blob, size,
+                                              firstFrame, opts, stats);
+    }
+    break;
+  case ShaderType::GX:
+    if (configVersion == gx::GXPipelineConfigVersion) {
+      queue_cached_row<gx::PipelineConfig>(ShaderType::GX, configVersion, gx::create_pipeline, blob, size, firstFrame,
+                                           opts, stats);
+    }
+    break;
+  case ShaderType::Vfx:
+    if (configVersion == vfx::VfxPipelineConfigVersion) {
+      queue_cached_row<vfx::PipelineConfig>(ShaderType::Vfx, configVersion, vfx::create_pipeline, blob, size,
+                                            firstFrame, opts, stats);
+    }
+    break;
+  case ShaderType::Water:
+    if (configVersion == water::WaterPipelineConfigVersion) {
+      queue_cached_row<water::PipelineConfig>(ShaderType::Water, configVersion, water::create_pipeline, blob, size,
+                                              firstFrame, opts, stats);
+    }
+    break;
+  default:
+    break;
+  }
+}
+
+// Steps a statement whose columns are (type, config_version, config, first_frame_used), with its
+// parameters already bound, and queues each row; resets the statement. False on a read failure.
+static bool load_rows(sqlite3_stmt* stmt, const CachedRowOptions& opts, CachedRowStats& stats) {
+  int ret;
+  while ((ret = sqlite3_step(stmt)) == SQLITE_ROW) {
+    const int type = sqlite3_column_int(stmt, 0);
+    const auto configVersion = static_cast<uint32_t>(sqlite3_column_int64(stmt, 1));
+    const auto* configBlob = static_cast<const uint8_t*>(sqlite3_column_blob(stmt, 2));
+    const auto configSize = sqlite3_column_bytes(stmt, 2);
+    const auto firstFrameUsed = static_cast<uint32_t>(sqlite3_column_int64(stmt, 3));
+    queue_cached_row_any(type, configVersion, configBlob, configSize, firstFrameUsed, opts, stats);
+  }
+  const bool ok = ret == SQLITE_DONE;
+  if (!ok) {
+    Log.error("Failed to read pipeline cache rows: {}", sqlite3_errmsg(g_pipelineCacheDb));
+  }
+  sqlite3_reset(stmt);
+  sqlite3_clear_bindings(stmt);
+  return ok;
+}
+
+static size_t load_pipeline_cache_entries(ShaderType type, uint32_t configVersion) {
   if (!prepare_pipeline_cache_db()) {
     return 0;
   }
@@ -1363,63 +1694,45 @@ static size_t load_pipeline_cache_entries(ShaderType type, uint32_t configVersio
     return 0;
   }
 
-  size_t acceptedRows = 0;
-  size_t skippedIncompatibleRows = 0;
-  size_t skippedOtherSettingsRows = 0;
-  size_t skippedPbrRows = 0;
-  while ((ret = sqlite3_step(g_pipelineCacheLoadStmt)) == SQLITE_ROW) {
-    const auto* configBlob = static_cast<const uint8_t*>(sqlite3_column_blob(g_pipelineCacheLoadStmt, 0));
-    const auto configSize = sqlite3_column_bytes(g_pipelineCacheLoadStmt, 0);
-    const auto firstFrameUsed = static_cast<uint32_t>(sqlite3_column_int64(g_pipelineCacheLoadStmt, 1));
-    if (configSize != static_cast<int>(sizeof(PipelineConfig)) || (configSize != 0 && configBlob == nullptr)) {
-      continue;
-    }
-
-    PipelineConfig config;
-    std::memcpy(&config, configBlob, sizeof(config));
-    if (config.version != configVersion) {
-      continue;
-    }
-
-    if constexpr (std::is_same_v<PipelineConfig, gx::PipelineConfig>) {
-      if (!gx::pipeline_config_compatible(config, webgpu::g_lightmapBinding)) {
-        ++skippedIncompatibleRows;
-        continue;
-      }
-      // PrimedGun: not compiled at every start for nothing; the row stays for when the setting
-      // comes back. A flat start still compiles the eye rows of its own VR play.
-      if (!gx_row_drawn_here(config)) {
-        ++skippedOtherSettingsRows;
-        continue;
-      }
-      // Left in the database, and built by find_pipeline on the first draw that wants it.
-      if (g_config.pipelineCacheSkipPbr && config.shaderConfig.pbr != 0) {
-        ++skippedPbrRows;
-        continue;
-      }
-    }
-
-    find_pipeline_impl(type, config, [=] { return create(config); }, PipelinePriority::Background, firstFrameUsed);
-    ++acceptedRows;
-  }
-
-  if (ret != SQLITE_DONE) {
-    Log.error("Failed to read pipeline cache rows: {}", sqlite3_errmsg(g_pipelineCacheDb));
+  CachedRowStats stats;
+  if (!load_rows(g_pipelineCacheLoadStmt, {}, stats)) {
     pipeline_cache_abort();
   }
-
-  sqlite3_reset(g_pipelineCacheLoadStmt);
-  sqlite3_clear_bindings(g_pipelineCacheLoadStmt);
-  if constexpr (std::is_same_v<PipelineConfig, gx::PipelineConfig>) {
-    Log.info("pipeline cache: skipped {} incompatible GX rows", skippedIncompatibleRows);
-    Log.info("pipeline cache: skipped {} GX rows of another MSAA or eye pass ({}x MSAA here)",
-             skippedOtherSettingsRows, device_sample_count());
+  if (type == ShaderType::GX) {
+    Log.info("pipeline cache: skipped {} incompatible GX rows", stats.incompatible);
     if (g_config.pipelineCacheSkipPbr) {
-      Log.info("pipeline cache: {} PBR rows skipped ({})", skippedPbrRows,
+      Log.info("pipeline cache: {} PBR rows skipped ({})", stats.pbr,
                g_config.pipelineCacheSkipPbrReason != nullptr ? g_config.pipelineCacheSkipPbrReason : "no PBR");
     }
   }
-  return acceptedRows;
+  return stats.accepted;
+}
+
+// Queues the Background builds for one context's recorded rows. The startup lazy load runs it on
+// the init thread; aurora_pipeline_prefetch's requests run it on the writer thread.
+static CachedRowStats queue_pipeline_context(uint64_t context, const CachedRowOptions& opts, bool& ok) {
+  CachedRowStats stats;
+  auto ret = sqlite3_bind_int64(g_pipelineContextLoadStmt, 1, static_cast<sqlite3_int64>(context));
+  if (ret != SQLITE_OK) {
+    Log.error("Failed to bind pipeline use context: {}", sqlite3_errmsg(g_pipelineCacheDb));
+    sqlite3_clear_bindings(g_pipelineContextLoadStmt);
+    ok = false;
+    return stats;
+  }
+  ok = load_rows(g_pipelineContextLoadStmt, opts, stats);
+  return stats;
+}
+
+static size_t prefetch_pipeline_context(uint64_t context, bool withShared, bool& ok) {
+  const auto contextStats =
+      queue_pipeline_context(context, {.renderThread = true, .touchBuilt = true, .pin = false}, ok);
+  CachedRowStats sharedStats;
+  if (ok && withShared) {
+    ok = load_rows(g_pipelineSharedLoadStmt, {.renderThread = true, .touchBuilt = false, .pin = false}, sharedStats);
+  }
+  Log.info("pipeline cache: prefetch context {:x}: {} rows, {} queued; shared {} rows, {} queued", context,
+           contextStats.accepted, contextStats.queued, sharedStats.accepted, sharedStats.queued);
+  return contextStats.queued + sharedStats.queued;
 }
 
 static size_t load_pipeline_cache() {
@@ -1434,25 +1747,48 @@ static size_t load_pipeline_cache() {
   g_pipelineEvictFrames.store(g_config.pipelineEvictFrames, std::memory_order_relaxed);
   g_pipelineTrimRequest.store(NoTrimRequest, std::memory_order_relaxed);
   if (g_config.pipelineCacheLazy) {
-    // The rows stay in the database (and keep recording what is used); nothing is queued, so
-    // queuedPipelines stays 0 and nothing waits on a startup compile.
-    Log.info("pipeline cache: lazy, rows not compiled at startup");
+    // Only GLOBAL (pinned) and FRONTEND rows queue now, in the background; an area's rows queue when
+    // the game prefetches it. Returns 0 either way: nothing waits on a startup compile.
+    {
+      sqlite3_stmt* stmt = nullptr;
+      if (sqlite3_prepare_v2(g_pipelineCacheDb, "SELECT hash FROM pipeline_cache", -1, &stmt, nullptr) == SQLITE_OK) {
+        std::scoped_lock guard{g_pipelineMutex};
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+          g_knownPipelines.insert(static_cast<PipelineRef>(sqlite3_column_int64(stmt, 0)));
+        }
+      }
+      sqlite3_finalize(stmt);
+    }
+    bool ok = true;
+    const auto global = queue_pipeline_context(AURORA_PIPELINE_CONTEXT_GLOBAL,
+                                               {.renderThread = false, .touchBuilt = true, .pin = true}, ok);
+    CachedRowStats frontend;
+    if (ok) {
+      frontend = queue_pipeline_context(AURORA_PIPELINE_CONTEXT_FRONTEND,
+                                        {.renderThread = false, .touchBuilt = true, .pin = false}, ok);
+    }
+    if (!ok) {
+      pipeline_cache_abort();
+      return 0;
+    }
+    size_t known = 0;
+    {
+      std::scoped_lock guard{g_pipelineMutex};
+      known = g_knownPipelines.size();
+    }
+    Log.info("pipeline cache: lazy, {} rows known; queued {} global (pinned) and {} frontend in the background", known,
+             global.queued, frontend.queued);
     return 0;
   }
 
   size_t acceptedRows = 0;
 #ifdef AURORA_ENABLE_RMLUI
-  acceptedRows += load_pipeline_cache_entries<rmlui::PipelineConfig>(ShaderType::Rml, rmlui::RmlPipelineConfigVersion,
-                                                                     rmlui::create_pipeline);
+  acceptedRows += load_pipeline_cache_entries(ShaderType::Rml, rmlui::RmlPipelineConfigVersion);
 #endif
-  acceptedRows += load_pipeline_cache_entries<clear::PipelineConfig>(
-      ShaderType::Clear, clear::ClearPipelineConfigVersion, clear::create_pipeline);
-  acceptedRows +=
-      load_pipeline_cache_entries<gx::PipelineConfig>(ShaderType::GX, gx::GXPipelineConfigVersion, gx::create_pipeline);
-  acceptedRows += load_pipeline_cache_entries<vfx::PipelineConfig>(ShaderType::Vfx, vfx::VfxPipelineConfigVersion,
-                                                                   vfx::create_pipeline);
-  acceptedRows += load_pipeline_cache_entries<water::PipelineConfig>(
-      ShaderType::Water, water::WaterPipelineConfigVersion, water::create_pipeline);
+  acceptedRows += load_pipeline_cache_entries(ShaderType::Clear, clear::ClearPipelineConfigVersion);
+  acceptedRows += load_pipeline_cache_entries(ShaderType::GX, gx::GXPipelineConfigVersion);
+  acceptedRows += load_pipeline_cache_entries(ShaderType::Vfx, vfx::VfxPipelineConfigVersion);
+  acceptedRows += load_pipeline_cache_entries(ShaderType::Water, water::WaterPipelineConfigVersion);
   return acceptedRows;
 }
 
@@ -1503,17 +1839,21 @@ bool touch_pipeline(PipelineRef ref) {
   if (ref == g_lastPipelineRef && g_lastPipelineStampFrame == frameNow) {
     return true;
   }
-  std::scoped_lock guard{g_pipelineMutex};
-  if (const auto it = g_pipelines.find(ref); it != g_pipelines.end()) {
-    it->second.lastUsedFrame = frameNow;
-  } else {
-    if (!g_pendingPipelines.contains(ref)) {
-      return false;
+  {
+    std::scoped_lock guard{g_pipelineMutex};
+    if (const auto it = g_pipelines.find(ref); it != g_pipelines.end()) {
+      it->second.lastUsedFrame = frameNow;
+    } else {
+      if (!g_pendingPipelines.contains(ref)) {
+        return false;
+      }
+      touch_pending_pipeline(ref, PipelinePriority::Normal);
     }
-    touch_pending_pipeline(ref, PipelinePriority::Normal);
   }
   g_lastPipelineRef = ref;
   g_lastPipelineStampFrame = frameNow;
+  // A memoised pipeline drawn in another context is a use of that context too.
+  record_pipeline_use(ref);
   return true;
 }
 
@@ -1549,6 +1889,10 @@ void initialize_pipeline_cache() {
   g_compileTotalMs.store(0, std::memory_order_relaxed);
   g_compileSlowestMs.store(0, std::memory_order_relaxed);
   g_compileFailures.store(0, std::memory_order_relaxed);
+  for (auto* counter : {&g_skippedDraws, &g_newMisses, &g_knownMisses, &g_lateMisses, &g_prefetches, &g_prefetchQueued}) {
+    counter->store(0, std::memory_order_relaxed);
+  }
+  g_pipelineContext.store(AURORA_PIPELINE_CONTEXT_FRONTEND, std::memory_order_relaxed);
   g_pipelineCacheWriterStop = false;
   g_pipelineThreadEnd = false;
   g_gpuCachePrunePending = false;
@@ -1602,6 +1946,16 @@ void shutdown_pipeline_cache() {
   g_pipelineQueue.clear();
   g_backgroundPipelineQueue.clear();
   g_pendingPipelines.clear();
+  g_pinnedPipelines.clear();
+  g_knownPipelines.clear();
+  {
+    std::lock_guard lock{g_recordedUsesMutex};
+    g_recordedUses.clear();
+  }
+  g_pipelineUseQueue.clear();
+  g_pipelinePrefetchQueue.clear();
+  g_prefetchFrames.clear();
+  g_pipelineContext.store(AURORA_PIPELINE_CONTEXT_FRONTEND, std::memory_order_relaxed);
 
   queuedPipelines = 0;
   createdPipelines = 0;
@@ -1638,7 +1992,7 @@ static uint32_t evict_idle_pipelines(uint32_t minIdle, uint32_t* totalOut) {
   uint32_t evicted = 0;
   std::scoped_lock guard{g_pipelineMutex};
   for (auto it = g_pipelines.begin(); it != g_pipelines.end();) {
-    if (frameNow - it->second.lastUsedFrame >= minIdle) {
+    if (frameNow - it->second.lastUsedFrame >= minIdle && !g_pinnedPipelines.contains(it->first)) {
       g_pipelines.erase(it++);
       ++evicted;
     } else {
@@ -1674,6 +2028,8 @@ void begin_pipeline_frame() {
     g_pipelinesPerFrame = 0;
   }
   const uint32_t frame = g_pipelineFrame.fetch_add(1, std::memory_order_relaxed) + 1;
+  // Each frame starts outside any area; the game sets the context while it draws one.
+  g_pipelineContext.store(AURORA_PIPELINE_CONTEXT_FRONTEND, std::memory_order_relaxed);
   if (const uint32_t trim = g_pipelineTrimRequest.exchange(NoTrimRequest, std::memory_order_acq_rel);
       trim != NoTrimRequest) {
     log_eviction(trim == MinEvictIdleFrames ? "memory trim" : "requested", std::max(trim, MinEvictIdleFrames));
@@ -1690,10 +2046,15 @@ void end_pipeline_frame() {
   }
 }
 
+void note_skipped_draw() { g_skippedDraws.fetch_add(1, std::memory_order_relaxed); }
+
 bool get_pipeline(PipelineRef ref, wgpu::RenderPipeline& pipeline) {
   std::lock_guard guard{g_pipelineMutex};
   const auto it = g_pipelines.find(ref);
-  if (it == g_pipelines.end()) {
+  // A failed build stays cached as a null pipeline so it isn't retried every draw; report it as
+  // unavailable, or the caller binds null and Dawn invalidates the pass (other draws then render
+  // with stale state: wrong textures, black surfaces).
+  if (it == g_pipelines.end() || !it->second.pipeline) {
     return false;
   }
   pipeline = it->second.pipeline;
@@ -1714,5 +2075,54 @@ void aurora_trim_pipelines(uint32_t idleFrames) {
 uint32_t aurora_get_pipeline_count(void) {
   std::lock_guard guard{aurora::gfx::g_pipelineMutex};
   return static_cast<uint32_t>(aurora::gfx::g_pipelines.size());
+}
+
+uint64_t aurora_pipeline_set_context(uint64_t context) {
+  using namespace aurora::gfx;
+  const uint64_t prev = g_pipelineContext.exchange(context, std::memory_order_relaxed);
+  if (prev != context) {
+    // The same-pipeline shortcut skips recording; a new context must see its first lookup.
+    g_lastPipelineRef = std::numeric_limits<PipelineRef>::max();
+  }
+  return prev;
+}
+
+void aurora_pipeline_prefetch(uint64_t context) {
+  using namespace aurora::gfx;
+  if (!aurora::g_config.pipelineCacheLazy || g_pipelineCacheBroken || g_pipelineCacheDb == nullptr || !g_hasPipelineThread) {
+    return;
+  }
+  const uint32_t frame = g_pipelineFrame.load(std::memory_order_relaxed);
+  {
+    std::lock_guard lock{g_pipelineCacheWriterMutex};
+    if (g_pipelineCacheWriterStop) {
+      return;
+    }
+    const auto [it, inserted] = g_prefetchFrames.try_emplace(context, frame);
+    if (!inserted) {
+      if (frame - it->second < PrefetchRepeatFrames) {
+        return;
+      }
+      it->second = frame;
+    }
+    g_pipelinePrefetchQueue.push_back(context);
+  }
+  g_pipelineCacheWriterCv.notify_one();
+}
+
+void aurora_get_pipeline_stats(AuroraPipelineStats* stats) {
+  using namespace aurora::gfx;
+  if (stats == nullptr) {
+    return;
+  }
+  stats->skippedDraws = g_skippedDraws.load(std::memory_order_relaxed);
+  stats->newMisses = g_newMisses.load(std::memory_order_relaxed);
+  stats->knownMisses = g_knownMisses.load(std::memory_order_relaxed);
+  stats->lateMisses = g_lateMisses.load(std::memory_order_relaxed);
+  stats->prefetches = g_prefetches.load(std::memory_order_relaxed);
+  stats->prefetchQueued = g_prefetchQueued.load(std::memory_order_relaxed);
+  std::lock_guard guard{g_pipelineMutex};
+  stats->pinned = static_cast<uint32_t>(g_pinnedPipelines.size());
+  stats->known = static_cast<uint32_t>(g_knownPipelines.size());
 }
 }

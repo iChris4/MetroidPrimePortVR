@@ -4,6 +4,7 @@
 #include "MetroidPrime/CActor.hpp"
 
 class CScriptCameraWaypoint : public CActor {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
   float xe8_hfov;
   uint xec_;
 

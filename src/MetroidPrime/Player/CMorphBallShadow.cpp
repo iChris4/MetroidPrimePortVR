@@ -92,8 +92,13 @@ void CMorphBallShadow::RenderIdBuffer(const CAABox& aabb, CStateManager& mgr, CP
       x0_actors.push_back(actor);
       GXSetDstAlpha(true, id * 4);
       const CModelData& modelData = *actor->GetModelData();
+#ifdef TARGET_PC
+      const CTransform4f modelXf =
+          modelData.PortScaledXf(CModelData::kWM_Normal, actor->GetTransform());
+#else
       const CTransform4f modelXf =
           actor->GetTransform() * CTransform4f::Scale(CVector3f(modelData.GetScale()));
+#endif
       gpRender->SetModelMatrix(modelXf);
       const CModelFlags flags(CModelFlags::kT_Opaque, 1.f);
       const CModel& model = **modelData.PickStaticModel(CModelData::kWM_Normal);
@@ -203,8 +208,13 @@ void CMorphBallShadow::Render(CStateManager& mgr, float alpha) {
     CActor* actor = *it;
     CGX::SetTevKColor(GX_KCOLOR0, idColor);
     const CModelData& modelData = *actor->GetModelData();
+#ifdef TARGET_PC
+    const CTransform4f modelXf =
+        modelData.PortScaledXf(CModelData::kWM_Normal, actor->GetTransform());
+#else
     const CTransform4f modelXf =
         actor->GetTransform() * CTransform4f::Scale(CVector3f(modelData.GetScale()));
+#endif
     gpRender->SetModelMatrix(modelXf);
     const CTransform4f modelTextureXf = textureXf * modelXf;
     CGX::LoadTexMtxImm(modelTextureXf.GetCStyleMatrix(), GX_TEXMTX0, GX_MTX3x4);

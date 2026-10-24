@@ -30,6 +30,10 @@ constexpr int kTouchControlCount = 29;
 constexpr int kTouchBeamShift = 32;
 constexpr int kTouchTurbo = 33;
 constexpr int kTouchMapTap = 34; // one poll of Z after a minimap tap
+// The buttons the player adds in the layout editor (slot 0..63, its `k<slot>`
+// entry in the touch layout; PortInput::BindTouchButtons).
+constexpr int kTouchCustomBase = 64;
+constexpr int kTouchCustomCount = 64;
 
 struct SPoll {
   PADStatus status{};

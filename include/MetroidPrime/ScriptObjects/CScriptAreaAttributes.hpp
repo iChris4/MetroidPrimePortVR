@@ -6,6 +6,7 @@
 #include "MetroidPrime/CWorld.hpp"
 
 class CScriptAreaAttributes : public CEntity {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
   bool x34_24_showSkybox : 1;
   EEnvFxType x38_envFx;
   float x3c_envFxDensity;

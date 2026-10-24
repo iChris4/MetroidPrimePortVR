@@ -397,7 +397,8 @@ int main() {
     layered.roomState.spawnLayersRecorded = true;
     layered.roomState.spawnLayers = {{2, true, 0x2Bull | (1ull << 40)}, {5, false, 0}};
     const std::string layeredFile = Encode(layered, blob);
-    REQUIRE(static_cast< uint8_t >(layeredFile[data.size() + 4]) == 3);
+    // Written as version 4: version 3 with 16-bit block lengths.
+    REQUIRE(static_cast< uint8_t >(layeredFile[data.size() + 4]) == 4);
     REQUIRE(Decode(layeredFile, out, outBlob));
     REQUIRE(outBlob == blob && out.roomState.areas == saved.areas);
     REQUIRE(out.roomState.fingerprintsRecorded && out.roomState.fingerprints.size() == 2);
@@ -406,6 +407,20 @@ int main() {
             out.roomState.spawnLayers[0].mask == (0x2Bull | (1ull << 40)));
     REQUIRE(out.roomState.spawnLayers[1].area == 5 && !out.roomState.spawnLayers[1].known &&
             out.roomState.spawnLayers[1].mask == 0);
+    // A block past 255 bytes (an enemy's kTagFields) survives version 4; one of 64 KiB
+    // or more is still dropped.
+    Header wide = layered;
+    RoomObject big;
+    big.editorId = 0x00020001;
+    big.blocks = {{13, std::string(1700, 'f')}, {3, std::string(8, 'h')}, {14, std::string(1u << 16, 'x')}};
+    wide.roomState.present = {big.editorId};
+    wide.roomState.objects = {big};
+    REQUIRE(Decode(Encode(wide, blob), out, outBlob));
+    REQUIRE(out.roomState.objects.size() == 1 && out.roomState.objects[0].blocks.size() == 2);
+    REQUIRE(out.roomState.objects[0].blocks[0].tag == 13 &&
+            out.roomState.objects[0].blocks[0].data == std::string(1700, 'f'));
+    REQUIRE(out.roomState.objects[0].blocks[1].tag == 3 &&
+            out.roomState.objects[0].blocks[1].data == std::string(8, 'h'));
     REQUIRE(Decode(file, out, outBlob));  // the version 2 file from above
     REQUIRE(out.roomState.fingerprintsRecorded && !out.roomState.spawnLayersRecorded &&
             out.roomState.spawnLayers.empty());

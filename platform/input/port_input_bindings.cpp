@@ -32,12 +32,23 @@ constexpr std::string_view kPadAxisNames[] = {"leftx", "lefty", "rightx", "right
                                               "righttrigger"};
 constexpr std::string_view kGyroNames[] = {"pitch", "yaw", "roll"};
 // Touch codes: the overlay's control ids (TouchControlsView.CONTROL_IDS, the names
-// its saved layout uses), then the overlay's own signals at 32..34.
+// its saved layout uses), then the overlay's own signals at 32..34, then the
+// buttons added in its layout editor at 64..127 (their layout ids, k0..k63).
 constexpr std::string_view kTouchNames[] = {
     "lstick", "cstick", "dpad",    "a",     "b",    "x",   "y",          "l",          "r",
     "z",      "visor",  "beam",    "start", "menu", "map", "eye",        "rstick",     "jump",
     "fire",   "morph",  "missile", "lt",    "lb",   "rt",  "rb",         "tz",         "tr",
     "turbo",  "tturbo", "",        "",      "",     "beam_shift", "turbo_held", "map_tap",
+    "", "", "", "", "", "", "", "", "", "",
+    "", "", "", "", "", "", "", "", "", "",
+    "", "", "", "", "", "", "", "", "", "k0",
+    "k1", "k2", "k3", "k4", "k5", "k6", "k7", "k8", "k9", "k10",
+    "k11", "k12", "k13", "k14", "k15", "k16", "k17", "k18", "k19", "k20",
+    "k21", "k22", "k23", "k24", "k25", "k26", "k27", "k28", "k29", "k30",
+    "k31", "k32", "k33", "k34", "k35", "k36", "k37", "k38", "k39", "k40",
+    "k41", "k42", "k43", "k44", "k45", "k46", "k47", "k48", "k49", "k50",
+    "k51", "k52", "k53", "k54", "k55", "k56", "k57", "k58", "k59", "k60",
+    "k61", "k62", "k63",
 };
 
 // Mouse code bases (see the header): aim 0, SDL state 8, menu 16, held 24.
@@ -901,6 +912,139 @@ void Revert(UserProfile& user, Action action, Family family) {
 void ClearFamily(UserProfile& user, Family family) {
   std::erase_if(user.unbind, [&](const Unbind& u) { return u.family == family; });
   std::erase_if(user.bindings, [&](const Binding& b) { return b.count > 0 && BindingFamily(b) == family; });
+}
+
+bool SamePhysicalInput(const Input& a, const Input& b) {
+  if (a.device != b.device || a.dir != b.dir)
+    return false;
+  // Each run of mouse codes holds the five buttons (port_input_devices.h).
+  if (a.device == Device::MouseButton)
+    return a.code % 8 == b.code % 8;
+  return a.code == b.code;
+}
+
+void BlockRowInputs(Profile& profile, bool (*isRow)(const Binding&), uint16_t ctx, bool everywhereOnly) {
+  std::vector<const Binding*> rows;
+  for (const Binding& b : profile.bindings)
+    if (b.count > 0 && isRow(b))
+      rows.push_back(&b);
+  const auto covered = [&](const Binding& b) {
+    for (const Binding* r : rows) {
+      if (r->count != b.count)
+        continue;
+      bool all = true;
+      for (int k = 0; k < b.count && all; ++k)
+        all = std::any_of(r->inputs.begin(), r->inputs.begin() + r->count,
+                          [&](const Input& in) { return SamePhysicalInput(in, b.inputs[k]); });
+      if (all)
+        return true;
+    }
+    return false;
+  };
+  std::vector<size_t> hit;
+  for (size_t i = 0; i < profile.bindings.size(); ++i) {
+    const Binding& b = profile.bindings[i];
+    if (b.count == 0 || isRow(b) || (everywhereOnly && b.contexts != kCtxAll))
+      continue;
+    if (covered(b))
+      hit.push_back(i);
+  }
+  for (size_t i : hit)
+    profile.bindings[i].blocked |= ctx;
+}
+
+const BallRow* FindBallRow(Action a) {
+  for (const BallRow& r : kBallRows)
+    if (r.row == a)
+      return &r;
+  return nullptr;
+}
+
+const BallRow* BallRowForGame(Action game) {
+  for (const BallRow& r : kBallRows)
+    if (r.game == game)
+      return &r;
+  return nullptr;
+}
+
+void ApplyBallButtons(Profile& profile) {
+  for (Binding& b : profile.bindings) {
+    if (FindBallRow(b.action) == nullptr)
+      continue;
+    // Contexts match any bit, so a row with layers keeps them and blocks every
+    // context but the ball: Morph Ball while a layer is held, ranked as a layer's.
+    const uint16_t layers = b.contexts == kCtxAll ? 0 : uint16_t(b.contexts & kCtxLayers);
+    b.contexts = layers != 0 ? layers : uint16_t(kCtxMorphBall);
+    b.blocked = layers != 0 ? uint16_t(kCtxAll & ~(kCtxMorphBall | kCtxLayers)) : 0;
+  }
+  BlockRowInputs(
+      profile,
+      [](const Binding& b) { return FindBallRow(b.action) != nullptr && BindingFamily(b) != Family::Touch; },
+      kCtxMorphBall, false);
+}
+
+bool TouchButtonAction(Action a) {
+  if (a == Action::None || Info(a).kind != ActionKind::Digital)
+    return false;
+  if (a >= Action::Layer1 && a <= Action::Layer4)
+    return false;
+  return !(a >= Action::MenuA && a <= Action::MenuRight) && FindBallRow(a) == nullptr;
+}
+
+std::vector<TouchButton> ParseTouchButtons(std::string_view layout) {
+  Action slots[kTouchButtonSlots] = {};
+  while (!layout.empty()) {
+    const size_t semi = layout.find(';');
+    const std::string_view entry = Trim(layout.substr(0, semi));
+    layout = semi == std::string_view::npos ? std::string_view{} : layout.substr(semi + 1);
+    const size_t colon = entry.find(':');
+    if (colon == std::string_view::npos)
+      continue;
+    // The stock controls' ids are words; a button's is k and its slot, 0..63.
+    const std::string_view id = Trim(entry.substr(0, colon));
+    if (id.size() < 2 || id.size() > 3 || id[0] != 'k')
+      continue;
+    int slot = 0;
+    bool digits = true;
+    for (char c : id.substr(1)) {
+      digits = digits && c >= '0' && c <= '9';
+      slot = slot * 10 + (c - '0');
+    }
+    if (!digits || slot >= kTouchButtonSlots || (id.size() == 3 && id[1] == '0'))
+      continue;
+    std::string_view fields = entry.substr(colon + 1);
+    std::string_view last;
+    int count = 0;
+    while (true) {
+      const size_t comma = fields.find(',');
+      last = fields.substr(0, comma);
+      ++count;
+      if (comma == std::string_view::npos)
+        break;
+      fields = fields.substr(comma + 1);
+    }
+    if (count != 6)
+      continue;
+    const Action a = ActionFromKey(Trim(last));
+    if (TouchButtonAction(a))
+      slots[slot] = a;
+  }
+  std::vector<TouchButton> out;
+  for (int slot = 0; slot < kTouchButtonSlots; ++slot) {
+    if (slots[slot] != Action::None)
+      out.push_back({slot, slots[slot]});
+  }
+  return out;
+}
+
+void BindTouchButtons(Profile& profile, std::string_view layout) {
+  for (const TouchButton& button : ParseTouchButtons(layout)) {
+    Binding b;
+    b.action = button.action;
+    b.inputs[0] = Input{Device::Touch, 0, 50, uint16_t(kTouchButtonBase + button.slot)};
+    b.count = 1;
+    profile.bindings.push_back(b);
+  }
 }
 
 } // namespace PortInput

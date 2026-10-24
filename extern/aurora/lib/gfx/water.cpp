@@ -31,7 +31,7 @@
 // (build/mpr/water/A-shader.md, D-rain.md); what is the port's own is said where it is: the
 // inputs it is fed (the room's volume and cube as the GX PBR path has them) and the blend,
 // which Remastered does with dual-source blending in linear light and the port does here
-// against a snapshot of the tone-mapped EFB.
+// against a snapshot of the HDR scene's linear light.
 namespace aurora::gfx::water {
 namespace {
 Module Log("aurora::gfx::water");
@@ -255,56 +255,6 @@ fn env_at(r: vec3f, lod: f32) -> vec3f {
   return textureSampleLevel(cube, cubeSamp, rb, lod).rgb * u.cubeP.x;
 }
 
-// The EFB's tone curve (GXSetPBRTone, or the PBR path's fallback roll-off) and its inverse,
-// as volfog.cpp's full-screen pass has them.
-// The EFB holds colour as Remastered's sRGB swapchain does: the exact piecewise sRGB curve.
-fn srgb_enc(c: vec3f) -> vec3f {
-  let l = clamp(c, vec3f(0.0), vec3f(1.0));
-  return select(1.055 * pow(l, vec3f(1.0 / 2.4)) - 0.055, 12.92 * l, l <= vec3f(0.0031308));
-}
-
-fn srgb_dec(c: vec3f) -> vec3f {
-  let e = clamp(c, vec3f(0.0), vec3f(1.0));
-  return select(pow((e + 0.055) / 1.055, vec3f(2.4)), e / 12.92, e <= vec3f(0.04045));
-}
-
-fn tone(x: f32) -> f32 {
-  if (u.tone1.x <= 0.0) {
-    return min(x, 0.6) + 0.4 * (1.0 - exp(-max(x - 0.6, 0.0) / 0.4));
-  }
-  if (x < u.tone1.z) {
-    return ((u.tone0.x * x + u.tone0.y) * x + u.tone0.z) * x;
-  }
-  if (x < u.tone1.w) {
-    return u.tone1.x * x + u.tone1.y;
-  }
-  let st = max(u.tone2.y * x + u.tone2.z, 0.0);
-  return u.tone2.x * st / (1.0 + st) + u.tone2.w;
-}
-
-fn untone(y: f32) -> f32 {
-  if (u.tone1.x <= 0.0) {
-    if (y < 0.6) { return y; }
-    return 0.6 - 0.4 * log(1.0 - min((y - 0.6) / 0.4, 0.999));
-  }
-  let mid = u.tone1.z;
-  let lineStart = u.tone1.x * mid + u.tone1.y;
-  if (y < lineStart) {
-    var x = y / max(lineStart, 1e-4) * mid;
-    for (var n = 0; n < 4; n++) {
-      let slope = (3.0 * u.tone0.x * x + 2.0 * u.tone0.y) * x + u.tone0.z;
-      x = clamp(x - (tone(x) - y) / max(slope, 1e-4), 0.0, mid);
-    }
-    return x;
-  }
-  let top = u.tone2.w;
-  if (y < top || u.tone2.y <= 0.0) {
-    return (y - u.tone1.y) / u.tone1.x;
-  }
-  let q = min((y - top) / max(u.tone2.x, 1e-4), 0.999);
-  return q / (1.0 - q) / u.tone2.y + u.tone1.w;
-}
-
 @fragment
 fn fs_main(in: VOut) -> @location(0) vec4f {
   // The normal map, read twice along the flow and cross-faded.
@@ -397,13 +347,12 @@ fn fs_main(in: VOut) -> @location(0) vec4f {
     o0 = fade * col;
   }
 
-  // Remastered's blend, dst = o0 + dst * (1 - o1), in the light the EFB holds tone mapped.
+  // Remastered's blend, dst = o0 + dst * (1 - o1), in the HDR scene's exposed linear light
+  // (RGBA16F): the snapshot is read raw and the result written back as light; the post-tone after
+  // the scene curves and encodes it. Alpha is the snapshot's.
   let snap = textureLoad(sceneColor, px, 0);
-  let y = srgb_dec(snap.rgb);
-  let dst = min(vec3f(untone(y.r), untone(y.g), untone(y.b)), vec3f(4.0));
-  let x = max(o0 + dst * (1.0 - o1), vec3f(0.0));
-  let drawn = vec3f(tone(x.r), tone(x.g), tone(x.b));
-  return vec4f(srgb_enc(drawn), snap.a);
+  let x = max(o0 + snap.rgb * (1.0 - o1), vec3f(0.0));
+  return vec4f(x, snap.a);
 }
 )";
 
@@ -474,20 +423,6 @@ PipelineConfig make_config(const RenderTargetLayout& layout, const Payload& p) {
   }
   return config;
 }
-
-// The LDR blend's tail, and the HDR scene's in its place. In the HDR scene the snapshot is exposed
-// linear light already (RGBA16F): it is read raw, blended in the light as before and written back as
-// light, with no decode, inverse curve, clip or encode; the post-tone after the scene does those. The
-// floor at 0 is the LDR blend's own. Alpha is the snapshot's, as in LDR.
-constexpr std::string_view LdrBlend = R"(  let y = srgb_dec(snap.rgb);
-  let dst = min(vec3f(untone(y.r), untone(y.g), untone(y.b)), vec3f(4.0));
-  let x = max(o0 + dst * (1.0 - o1), vec3f(0.0));
-  let drawn = vec3f(tone(x.r), tone(x.g), tone(x.b));
-  return vec4f(srgb_enc(drawn), snap.a);
-)";
-constexpr std::string_view HdrBlend = R"(  let x = max(o0 + snap.rgb * (1.0 - o1), vec3f(0.0));
-  return vec4f(x, snap.a);
-)";
 
 wgpu::RenderPipeline make_pipeline(const PipelineConfig& p) {
   const wgpu::Device& device = webgpu::g_device;
@@ -596,7 +531,7 @@ void draw_payload(const DrawContext& ctx, const wgpu::RenderPassEncoder& pass, c
   Payload p;
   std::memcpy(&p, data, sizeof(p));
   if (!scene_format_matches(ctx.layout, p.flags)) {
-    // Fail closed: an HDR blend into an LDR target (or the reverse) would read and write the wrong domain.
+    // Fail closed: the blend reads and writes the HDR scene's light, never an LDR target.
     return;
   }
   ensure_static(ctx.device);
@@ -765,18 +700,7 @@ bool scene_format_matches(const RenderTargetLayout& layout, uint32_t flags) noex
 std::string pipeline_source(const PipelineConfig& p) {
   std::string source = std::string("const BOTTOM: bool = ") + ((p.flags & 1) != 0 ? "true" : "false") +
                        ";\nconst RAIN: bool = " + ((p.flags & 2) != 0 ? "true" : "false") + ";\n";
-  if ((p.flags & WaterSceneHdr) == 0) {
-    // LDR: the source as it always was, byte for byte.
-    source += ShaderSource;
-    return source;
-  }
-  std::string body = ShaderSource;
-  const size_t at = body.find(LdrBlend);
-  if (at == std::string::npos) {
-    Log.fatal("water: no LDR blend to replace for the HDR scene");
-  }
-  body.replace(at, LdrBlend.size(), HdrBlend);
-  source += body;
+  source += ShaderSource;
   return source;
 }
 
@@ -803,10 +727,9 @@ void draw(const DrawDesc& desc, const Vertex* verts, uint32_t vertexCount, const
   if (!resolve_pass(ResolveDesc{.color = true, .depth = true}, targets) || !targets.color) {
     return;
   }
-  // The domain is the snapshot's actual format (the pass's scene attachment), not a later global. An
-  // RGBA16F snapshot outside the HDR scene pass, or the reverse, has no domain this blend knows: skip.
-  const bool hdr = targets.colorFormat == webgpu::SceneHdrFormat;
-  if (hdr != scene_hdr_pass_active()) {
+  // The blend is in the HDR scene's light: the snapshot must be the HDR scene pass's own RGBA16F
+  // attachment (its actual format, not a later global). Anywhere else there is no scene to blend: skip.
+  if (targets.colorFormat != webgpu::SceneHdrFormat || !scene_hdr_pass_active()) {
     return;
   }
   const uint32_t colorId = register_view(targets.color.Get(), targets.color, {});
@@ -852,7 +775,7 @@ void draw(const DrawDesc& desc, const Vertex* verts, uint32_t vertexCount, const
   u.cube[1] = desc.cubeMips;
 
   Payload p{};
-  p.flags = (desc.bottom ? 1u : 0u) | (rain ? 2u : 0u) | (hdr ? WaterSceneHdr : 0u);
+  p.flags = (desc.bottom ? 1u : 0u) | (rain ? 2u : 0u) | WaterSceneHdr;
   p.cull = uint32_t(desc.cull == Cull::Front  ? wgpu::CullMode::Front
                     : desc.cull == Cull::Back ? wgpu::CullMode::Back
                                               : wgpu::CullMode::None);

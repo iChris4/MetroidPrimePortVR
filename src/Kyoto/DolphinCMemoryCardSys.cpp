@@ -116,7 +116,10 @@ ECardResult SMemoryCardFileInfo::FileRead() {
       x24_saveFileData = rstl::vector< uchar, rstl::aligned_allocator >();
       return result;
     }
-    if (offset > size) {
+    // A file with a valid CRC can still be too short for the body
+    // CMemoryCardDriver::ReadFinished reads (a hand-made or truncated GCI).
+    if (offset > size || size - offset < static_cast< uint >(PortSaveFormat::BodyBytes())) {
+      x24_saveFileData = rstl::vector< uchar, rstl::aligned_allocator >();
       return kCR_BROKEN;
     }
     const uint saveSize = size - offset;

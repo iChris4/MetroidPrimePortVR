@@ -399,5 +399,27 @@ TEST_F(ReadbackSlotsTest, ASlotIsFreeAgainOnceItsMapIsRead) {
   EXPECT_EQ(g_device.made, 3);
 }
 
+// The measure's pool (Remastered's staging pool): it grows instead of skipping a frame, and each
+// claim carries an order, so a map that finishes after a newer one can be told apart and dropped.
+TEST_F(ReadbackSlotsTest, AGrowingPoolNeverSkipsAndOrdersItsClaims) {
+  Slots grown([]() { return g_device.make(); }, true);
+  for (int frame = 0; frame < 5; ++frame) {
+    ASSERT_EQ(grown.claim(1.f).id(), frame + 1); // past the three it started with
+  }
+  const auto submitted = grown.submit();
+  ASSERT_EQ(submitted.count, 5u);
+  ASSERT_EQ(submitted.mappings.size(), 5u);
+  std::vector<uint64_t> orders;
+  for (const auto& mapping : std::views::reverse(submitted.mappings)) {
+    EXPECT_TRUE(grown.complete(mapping.key, [&](const Buffer&, float, uint64_t order) { orders.push_back(order); }));
+  }
+  EXPECT_EQ(orders, (std::vector<uint64_t>{5, 4, 3, 2, 1}));
+  // Every slot free again: the next claim reuses one rather than growing.
+  EXPECT_EQ(grown.claim(1.f).id(), 1);
+  EXPECT_EQ(g_device.made, 5);
+  auto retired = grown.retire([] {});
+  retired.clear();
+}
+
 } // namespace
 } // namespace aurora::gfx::detail::testing

@@ -49,7 +49,7 @@ constexpr int kKeyCount = 512;
 constexpr int kMouseButtonCount = 32;
 constexpr int kPadButtonCount = 32;
 constexpr int kPadAxisCount = 8;
-constexpr int kTouchCount = 64;
+constexpr int kTouchCount = 128;
 constexpr int kTouchAxisCount = 8;
 
 // One physical input. dir: 0 the whole axis (analog, signed), +1/-1 one half of
@@ -74,7 +74,7 @@ struct RawState {
   float mouseDelta[2] = {};
   uint32_t padButtons = 0;
   float padAxes[kPadAxisCount] = {};
-  uint64_t touch = 0;
+  std::bitset<kTouchCount> touch;
   float touchAxes[kTouchAxisCount] = {};
   float gyro[3] = {};
 
@@ -172,7 +172,12 @@ enum class ActionKind : uint8_t {
   X(MenuUp, Digital, "menu_up", "Menu up")                                                         \
   X(MenuDown, Digital, "menu_down", "Menu down")                                                   \
   X(MenuLeft, Digital, "menu_left", "Menu left")                                                   \
-  X(MenuRight, Digital, "menu_right", "Menu right")
+  X(MenuRight, Digital, "menu_right", "Menu right")                                                \
+  X(BallBomb, Digital, "ball_bomb", "Bomb")                                                        \
+  X(BallPowerBomb, Digital, "ball_power_bomb", "Power Bomb")                                       \
+  X(BallBoost, Digital, "ball_boost", "Boost Ball")                                                \
+  X(BallSpider, Digital, "ball_spider", "Spider Ball")                                             \
+  X(BallUnmorph, Digital, "ball_unmorph", "Unmorph")
 
 enum class Action : uint16_t {
 #define PORT_INPUT_ACTION_ENUM(id, kind, key, label) id,
@@ -213,6 +218,10 @@ struct Binding {
   float scale = 1.f;
   bool invert = false;
   uint16_t contexts = kCtxAll;
+  // Context bits that turn it off, even with a held layer matching `contexts`.
+  // Set only by the passes that build the polled profile (never saved), so taking
+  // a binding out of one context leaves its rank alone.
+  uint16_t blocked = 0;
 
   bool operator==(const Binding&) const = default;
   bool IsChord() const { return count > 1; }
@@ -282,7 +291,9 @@ private:
   static constexpr int kConsumedAll = -2;
 
   void Rebuild();
-  bool InContext(const Binding& b, uint16_t contexts) const { return (b.contexts & contexts) != 0; }
+  bool InContext(const Binding& b, uint16_t contexts) const {
+    return (b.contexts & contexts) != 0 && (b.blocked & contexts) == 0;
+  }
   static bool Passthrough(const Binding& b);
   bool MembersFree(int bi) const;
   void Consume(int bi);

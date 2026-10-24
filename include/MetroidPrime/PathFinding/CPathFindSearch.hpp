@@ -10,6 +10,7 @@ class CBeetle;
 
 class CPathFindSearch {
   friend class CBeetle;
+  friend struct PortStateCodec;
 
 public:
   enum EResult {

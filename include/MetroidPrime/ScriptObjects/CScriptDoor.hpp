@@ -4,6 +4,7 @@
 #include "MetroidPrime/CPhysicsActor.hpp"
 
 class CScriptDoor : public CPhysicsActor {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 public:
   rstl::optional_object< CAABox > GetTouchBounds() const override;
   CVector3f GetOrbitPosition(const CStateManager& mgr) const override;

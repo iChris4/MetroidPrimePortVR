@@ -188,10 +188,10 @@ void CFlameThrower::Reset(CStateManager& mgr, bool resetWarp) {
     x330_particleWaitDelayTimer = 0.f;
     x334_fireStopTimer = 0.f;
     x318_flameBounds = CAABox::MakeNullBox();
-    x348_flameGen->SetParticleEmission(false);
+    x348_flameGen->ShutdownEffect();
     x34c_flameWarp.ResetPosition(x2e8_flameXf.GetTranslation());
   } else {
-    x348_flameGen->SetParticleEmission(false);
+    x348_flameGen->ShutdownEffect();
     x400_25_particlesActive = false;
     x3f0_flameState = kFS_FireStopTimer;
   }

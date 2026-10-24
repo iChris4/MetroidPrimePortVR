@@ -66,6 +66,22 @@ public:
   virtual bool SystemHasLight() const = 0;
   virtual CLight GetLight() const = 0;
   virtual void DestroyParticles() = 0;
+#ifdef TARGET_PC
+  // The owner ends the effect (Remastered's CParticleGen::ShutdownEffect, vtable +0x98): stop
+  // emitting. CElementGen adds the description's SHTM (kill live particles) and SHTT (delay).
+  virtual void ShutdownEffect() { SetParticleEmission(false); }
+  // Scales where new particles (or bolt end points) spawn in the system's local axes, without
+  // scaling the particles themselves: HUD effects use it to cover a view wider than 4:3. `origin`
+  // is the parent's translation: a child placed off it (SSPO/SEPO) has its offset spread too.
+  virtual void PortSetSpawnSpread(const CVector3f& spread, const CVector3f& origin) {}
+  // Remastered's DoShutdownBehavior (vtable +0x1e8), which a parent with ISDT calls on its children:
+  // mode 0xff is the generator's own SHTM, acting at once (no SHTT countdown); 0 and 1 stop emitting.
+  virtual void PortDoShutdownBehavior(u32 mode) {
+    if (mode == 0xff || (mode & 0xff) < 2) {
+      SetParticleEmission(false);
+    }
+  }
+#endif
   virtual void AddModifier(CWarp*);
   virtual uint Get4CharId() const = 0;
 

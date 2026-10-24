@@ -150,9 +150,9 @@ void DrawRandomizerTab() {
     ItemHelp(help);
   };
 
-  ImGui::TextWrapped("Makes a seed from these options and plays it as a one-player Archipelago game "
-                     "(slot Samus), with its own save card. The same options and seed text give the "
-                     "same seed everywhere.");
+  ImGui::TextWrapped(
+      "Makes a seed from these options and plays it as a one-player Archipelago game with its own "
+      "save card. The same options and seed text give the same seed everywhere.");
 
   ImGui::SeparatorText("Goal");
   changed |= ImGui::SliderInt("Required artifacts", &s.requiredArtifacts, 1, 12);
@@ -163,8 +163,8 @@ void DrawRandomizerTab() {
 
   ImGui::SeparatorText("Start");
   changed |= ImGui::Combo("Starting room", &s.startingRoom, "Normal\0Safe\0Buckle up\0");
-  ItemHelp("Normal starts at the Landing Site (Save Station 1 with random elevators). Safe and Buckle up "
-           "start in a random room with that room's items; Buckle up's rooms are harder to get out of.");
+  ItemHelp("Normal starts at the Landing Site. Safe and Buckle up start in a random room with that "
+           "room's items; Buckle up's rooms are harder to leave.");
   check("Random starting beam", s.randomizeStartingBeam,
         "Start with the Wave, Ice or Plasma Beam instead of the Power Beam.");
 
@@ -215,7 +215,7 @@ void DrawRandomizerTab() {
   check("Backwards Lower Mines", s.backwardsLowerMines, "Phazon Mines' lower levels can be entered from the other end.");
   check("Flaahgra power bombs", s.flaahgraPowerBombs, "Flaahgra can be beaten with power bombs.");
   changed |= ImGui::SliderInt("Energy tank capacity", &s.etankCapacity, 10, 200);
-  ItemHelp("Energy per tank; the suit alone holds one less (100: 99 + 100 per tank). Combat logic still counts tanks as 100.");
+  ItemHelp("Energy per tank (the suit alone holds 99). Combat logic still counts a tank as 100.");
 
   ImGui::SeparatorText("Logic");
   check("Heat damage without the Varia Suit", s.nonVariaHeatDamage, "Hot rooms hurt without Varia, so other suits or tanks can carry you through.");

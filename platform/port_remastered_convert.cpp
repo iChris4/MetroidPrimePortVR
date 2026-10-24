@@ -13,6 +13,23 @@
 
 namespace PortRemastered {
 
+void NormalMatrix(const double (*M)[3], double out[3][3]) {
+  // The cofactor matrix over the determinant is the inverse transpose.
+  const double det = M[0][0] * (M[1][1] * M[2][2] - M[1][2] * M[2][1]) -
+                     M[0][1] * (M[1][0] * M[2][2] - M[1][2] * M[2][0]) +
+                     M[0][2] * (M[1][0] * M[2][1] - M[1][1] * M[2][0]);
+  for (int r = 0; r < 3; ++r) {
+    for (int c = 0; c < 3; ++c) {
+      if (std::fabs(det) < 1e-12) {
+        out[r][c] = 0.0;
+        continue;
+      }
+      const int r1 = (r + 1) % 3, r2 = (r + 2) % 3, c1 = (c + 1) % 3, c2 = (c + 2) % 3;
+      out[r][c] = (M[r1][c1] * M[r2][c2] - M[r1][c2] * M[r2][c1]) / det;
+    }
+  }
+}
+
 using namespace ConvertDetail;
 
 // ---- textures ----
@@ -22,7 +39,7 @@ struct Converter::State {
   std::map<std::string, std::optional<uint32_t>> ids;  // tag -> texture id, or none where retail's stays
   std::map<uint32_t, std::string> owner;               // texture id -> the tag it was written for
   // The last few textures decoded: a map that was measured is usually written
-  // straight after, and a bake reads its neighbours.
+  // straight after.
   std::vector<std::pair<std::string, Image>> opened;
   int pbr = 0, tev = 0;
   uint32_t model = 0;  // the retail id being converted, for the joint log
@@ -67,42 +84,6 @@ struct Converter::State {
       io.remember(key, value, {});
     }
     return value;
-  }
-
-  // Whether a map is more than a placeholder texel (over 4 px either way).
-  bool Real(const MapRef& map) {
-    int w = 0, h = 0;
-    const std::string text = Fact("size:" + map.src, [&] {
-      const Image& img = Open(map);
-      return std::to_string(img.width) + " " + std::to_string(img.height);
-    });
-    if (std::sscanf(text.c_str(), "%d %d", &w, &h) != 2) {
-      const Image& img = Open(map);
-      w = img.width;
-      h = img.height;
-    }
-    return w > 4 || h > 4;
-  }
-
-  // A flat fill has no surface detail to convert: Remastered keeps such a
-  // surface's pattern in its shader.
-  static bool FlatBase(const Image& img) {
-    if (std::max(img.width, img.height) <= 4) {
-      return true;
-    }
-    const size_t count = img.rgba.size() / 4;
-    uint64_t sum = 0, squares = 0;
-    for (size_t i = 0; i < count; ++i) {
-      for (int c = 0; c < 3; ++c) {
-        const uint64_t v = img.rgba[i * 4 + c];
-        sum += v;
-        squares += v * v;
-      }
-    }
-    const long double n = (long double)(count * 3);
-    const long double mean = (long double)sum / n;
-    const long double var = (long double)squares / n - mean * mean;
-    return std::sqrt(double(var > 0 ? var : 0)) < kFlatStd;
   }
 
   uint32_t TexId(const std::string& tag) const {
@@ -320,51 +301,6 @@ struct Converter::State {
     return uint16_t(std::min<uint32_t>(bits + uint32_t(frac), 0x7BFF));
   }
 
-  struct Bake {
-    bool on = false;
-    const MapRef* mr = nullptr;
-    const MapRef* normal = nullptr;
-    double ao = 0.6, cavity = 0.5, spec = 0.35;
-  };
-
-  // Remastered's shading folded into the base colour, texel-local, for the TEV
-  // path: occlusion (MR red), cavities (normal-map tilt) and a sheen on smooth
-  // metal (MR blue metal, green roughness).
-  Image Baked(const Image& base, const Bake& bake) {
-    const size_t count = size_t(base.width) * size_t(base.height);
-    std::vector<float> shade(count, 1.0f), lift(count, 0.0f);
-    auto load = [&](const MapRef& map, MapKind kind) {
-      const Image& img = Open(map);
-      return img.width == base.width && img.height == base.height ? img : Resize(img, base.width, base.height, kind);
-    };
-    if (bake.mr) {
-      const Image t = load(*bake.mr, MapKind::Data);
-      for (size_t i = 0; i < count; ++i) {
-        const float r = t.rgba[i * 4] / 255.0f, g = t.rgba[i * 4 + 1] / 255.0f, b = t.rgba[i * 4 + 2] / 255.0f;
-        shade[i] *= 1.0f - float(bake.ao) * (1.0f - r);
-        lift[i] = float(bake.spec) * b * (1.0f - g) * (1.0f - g);
-      }
-    }
-    if (bake.normal) {
-      const Image t = load(*bake.normal, MapKind::Normal);
-      for (size_t i = 0; i < count; ++i) {
-        const float nx = t.rgba[i * 4] / 255.0f * 2.0f - 1.0f, ny = t.rgba[i * 4 + 1] / 255.0f * 2.0f - 1.0f;
-        const float nz = std::sqrt(std::clamp(1.0f - nx * nx - ny * ny, 0.0f, 1.0f));
-        shade[i] *= 1.0f - float(bake.cavity) * (1.0f - nz);
-      }
-    }
-    Image out = base;
-    for (size_t i = 0; i < count; ++i) {
-      for (int c = 0; c < 3; ++c) {
-        float v = base.rgba[i * 4 + c] / 255.0f;
-        v *= shade[i];
-        v += (1.0f - v) * lift[i] * shade[i];  // screen-style, stays under white
-        out.rgba[i * 4 + c] = uint8_t(std::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f);
-      }
-    }
-    return out;
-  }
-
   // The texture id for a role of a Remastered material, converting and writing
   // the texture the first time its tag is seen. `role` is "pbr:<map>" or a TEV
   // slot role; `alpha` is RetailAlpha() of the texture a TEV slot replaces.
@@ -375,13 +311,11 @@ struct Converter::State {
     std::string tag;
     int ncap = 0;  // largest edge of the native .dds, 0 for none
     int k = -1;    // the PBR map, on that path
-    bool surface = true;  // the PBR base's normal map has a surface to it
     // A PBR colour texture (base, glow, a shader's ramp) follows its source format, as
     // Remastered's GPU does: an sRGB one is filtered in linear light and written sRGB, so
     // the GPU decodes it; a UNORM one is data, filtered and sampled raw. MR and normal
     // maps are never decoded.
     bool colourTex = false, srgbTex = false;
-    Bake bake;
     if (role.rfind("pbr:", 0) == 0) {
       for (int i = 0; i < kMaps; ++i) {
         if (role.compare(4, std::string::npos, kMapName[i]) == 0) {
@@ -390,8 +324,11 @@ struct Converter::State {
       }
       if (rt[k].has) {
         src = &rt[k];
-        tag = std::string("pbr:") + kMapName[k] + ":" + src->src + (src->raw ? ":raw" : src->mean ? ":mean" : "") +
+        tag = std::string("pbr:") + kMapName[k] + ":" + src->src + (src->raw ? ":raw" : "") +
               (src->volume ? ":vol" : "");
+        if (k == kBase && alpha == "mask" && !src->mask.empty()) {
+          tag += ":amask:" + src->mask[0].src;
+        }
         colourTex = k != kNormal && (k != kMr || src->raw);
         if (colourTex || k == kNormal) {
           srgbTex = Fact("srgb:" + src->src, [&] { return std::string(Open(*src).srgb ? "1" : "0"); }) == "1";
@@ -401,39 +338,12 @@ struct Converter::State {
         if (k == kMr && !src->raw) {
           tag += ":mmax=" + FormatG(src->metalMax);
         }
-        // Only a retail model has a retail texture to fall back on.
-        if (k == kBase && !opt.standalone) {
-          // A map that is more than a placeholder texel (not a mean, over 4 px).
-          auto real = [&](int m) { return rt[m].has && !rt[m].mean && Real(rt[m]); };
-          // The normal map is the surface. Failing that, the material's own MR or
-          // glow map still makes Remastered's draw its own (a flat suit light, the
-          // eye's shadow): a solid base under them is what it draws. Nothing but
-          // placeholders (the Eyon's) gives Remastered nothing to draw.
-          surface = real(kNormal) || real(kMr) || (rt[kEmissive].has && real(kEmissive)) || real(kBase) || rt[kBase].solid;
-          tag += surface ? "" : ":bare";
-        }
       } else {
         tag = std::string("const:") + kMapNeutral[k];
       }
     } else if (role == "diffuse" && rt[kBase].has) {
       src = &rt[kBase];
       tag = "base:" + src->src;
-      // Only maps sharing the base's texcoord can be baked texel for texel.
-      const uint32_t uv = rt[kBase].coord;
-      bake.mr = rt[kMr].has && rt[kMr].coord == uv ? &rt[kMr] : nullptr;
-      bake.normal = rt[kNormal].has && rt[kNormal].coord == uv ? &rt[kNormal] : nullptr;
-      if (!bake.mr) {
-        bake.ao = bake.spec = 0.0;
-      }
-      if (!bake.normal) {
-        bake.cavity = 0.0;
-      }
-      bake.on = bake.ao != 0.0 || bake.cavity != 0.0 || bake.spec != 0.0;
-      if (bake.on) {
-        tag += ":bake:" + (bake.mr ? bake.mr->src : std::string("-")) + ":" +
-               (bake.normal ? bake.normal->src : std::string("-")) + ":" + FormatG(bake.ao) + ":" +
-               FormatG(bake.cavity) + ":" + FormatG(bake.spec) + ":0:0";
-      }
     } else if (role == "emissive" && rt[kEmissive].has) {
       src = &rt[kEmissive];
       tag = "emis:" + src->src + ":1";
@@ -536,25 +446,7 @@ struct Converter::State {
     }
     Writing writing(*this);
     Image img = Open(*src);
-    if (src->mean) {
-      // An sRGB texture is averaged in linear light, then encoded again.
-      double sum[3] = {0.0, 0.0, 0.0};
-      const size_t n = img.rgba.size() / 4;
-      for (size_t i = 0; i < n; ++i) {
-        for (int c = 0; c < 3; ++c) {
-          const double v = srgbTex ? double(SrgbByteToLinear(img.rgba[i * 4 + c])) : double(img.rgba[i * 4 + c]);
-          sum[c] += v * double(img.rgba[i * 4 + 3]) / 255.0;
-        }
-      }
-      uint8_t mean[3];
-      for (int c = 0; c < 3; ++c) {
-        const double m = sum[c] / double(n);
-        mean[c] = srgbTex ? LinearToSrgbByteExact(float(m)) : uint8_t(std::nearbyint(m));
-      }
-      img = Solid(mean[0], mean[1], mean[2]);
-    }
     const size_t count = img.rgba.size() / 4;
-    const bool isBase = k == kBase || role == "diffuse";
     // How the image is filtered when it is resized and mipped: base, emissive
     // and the TEV colour slots are sRGB colour, the normal map a direction,
     // and the MR and reflect maps are plain data.
@@ -576,6 +468,15 @@ struct Converter::State {
       }
       srgbTex = false;  // decoded: from here on it is data
     }
+    if (k == kBase && alpha == "mask" && !src->mask.empty()) {
+      // The glow mask is another map's red: it becomes the base's alpha, linear as the
+      // shader reads it.
+      const Image& m = Open(src->mask[0]);
+      const Image t = m.width == img.width && m.height == img.height ? m : Resize(m, img.width, img.height, MapKind::Data);
+      for (size_t i = 0; i < count; ++i) {
+        img.rgba[i * 4 + 3] = m.srgb ? SrgbToLinearByte(t.rgba[i * 4]) : t.rgba[i * 4];
+      }
+    }
     if (alpha == "blend" || alpha == "mask2") {
       // Remastered's shader squares the base map's alpha into the opacity, or
       // into the glow mask ("mask2", the port's mask being the alpha as is).
@@ -585,57 +486,12 @@ struct Converter::State {
       }
     }
     const bool keepAlpha = alpha == "punch" || alpha == "cut" || alpha == "blend" || alpha == "mask" || alpha == "mask2";
-    if (isBase && !raw && !keepAlpha && FlatBase(img)) {
-      // On the TEV path the retail texture is kept, which beats writing a flat
-      // grey over a textured model. On the PBR path a flat albedo is fine: the
-      // normal and MR maps carry the surface, so the material gets a solid base.
-      // Unless the normal map is a placeholder texel too (the Eyon's 9E5BDD71,
-      // every map 1x1): then Remastered gives nothing, and it drew a grey ball.
-      if (k != kBase || !surface) {
-        ids[tag] = std::nullopt;
-        Remember(key, "-", {});
-        return std::nullopt;
-      }
-      uint64_t sum[3] = {0, 0, 0};
-      for (size_t i = 0; i < count; ++i) {
-        for (int c = 0; c < 3; ++c) {
-          sum[c] += img.rgba[i * 4 + c];
-        }
-      }
-      uint8_t col[3];
-      for (int c = 0; c < 3; ++c) {
-        col[c] = uint8_t(std::nearbyint(double(sum[c]) / double(count)));
-      }
-      if (srgbTex) {
-        // Average in linear light. The .dds holds the sRGB bytes (the GPU decodes
-        // them); the TXTR stub, sampled raw, holds the linear ones.
-        double lin[3] = {0.0, 0.0, 0.0};
-        for (size_t i = 0; i < count; ++i) {
-          for (int c = 0; c < 3; ++c) {
-            lin[c] += double(SrgbByteToLinear(img.rgba[i * 4 + c]));
-          }
-        }
-        for (int c = 0; c < 3; ++c) {
-          col[c] = LinearToSrgbByteExact(float(lin[c] / double(count)));
-        }
-        Write(name + ".dds", EncodeDds(Solid(col[0], col[1], col[2]), ColourDdsFormat(), false, MapKind::Data, true));
-        Write(name + ".TXTR",
-              EncodeTxtrRgba8(Solid(SrgbToLinearByte(col[0]), SrgbToLinearByte(col[1]), SrgbToLinearByte(col[2])), 8));
-      } else {
-        Write(name + ".TXTR", EncodeTxtrRgba8(Solid(col[0], col[1], col[2]), 8));
-      }
-      Remember(key, name, writing.files);
-      return tid;
-    }
     // A PBR map's id is its tag's alone, so whoever wrote it wrote the same file.
     // Asked only now: up to here the tag alone decides whether there is a
     // texture at all (none, a solid, or a failed decode), so every converter
     // that gets this far would write one, and the costly part below runs once.
     if (k >= 0 && !claimed && io.claim && !io.claim(tid)) {
       return tid;
-    }
-    if (bake.on) {
-      img = Baked(img, bake);
     }
     if (k == kMr && !raw) {
       const uint8_t ceiling = uint8_t(std::nearbyint(float(src->metalMax * 255.0)));
@@ -662,7 +518,21 @@ struct Converter::State {
       }
       // otherwise the stub already holds every texel (an sRGB one is always drawn from its
       // .dds: the stub holds 8-bit linear, which is coarse in the darks)
-      if (srgbTex || std::max(w, h) > cap) {
+      // A BC6H colour map (a sky) keeps its range: its .dds is its own blocks, or half floats,
+      // never the clamped bytes. BC6H has no alpha, so a map whose alpha comes from another
+      // map ("mask") keeps the 8-bit path.
+      bool hdrWritten = false;
+      if (img.hdr && io.hdrDds && colourTex && !(alpha == "mask" && !src->mask.empty())) {
+        std::vector<uint8_t> dds;
+        std::string hdrError;
+        if (io.hdrDds(src->id, opt.nativeMax, dds, hdrError) && !dds.empty()) {
+          Write(name + ".dds", dds);
+          hdrWritten = true;
+        } else {
+          Log("texture " + IdToString(src->id) + ": HDR .dds: " + hdrError + "; writing 8-bit");
+        }
+      }
+      if (!hdrWritten && (srgbTex || std::max(w, h) > cap)) {
         const DdsFormat format = k == kNormal ? NormalDdsFormat() : ColourDdsFormat();
         const bool punch = alpha == "punch";
         if (w == img.width && h == img.height) {
@@ -741,6 +611,9 @@ void Converter::State::Convert(const Model& model, const ConvertOptions& opt) {
                      M[0][1] * (M[1][0] * M[2][2] - M[1][2] * M[2][0]) +
                      M[0][2] * (M[1][0] * M[2][1] - M[1][1] * M[2][0]);
 
+  double NM[3][3];
+  NormalMatrix(M, NM);
+
   // Primitives in GameCube space; a vertex buffer is shared by many meshes and
   // is transformed once.
   std::vector<RemMaterial> mats;
@@ -767,6 +640,10 @@ void Converter::State::Convert(const Model& model, const ConvertOptions& opt) {
   // material's meshes the same class, and 1 and 3 only to materials flagged 0x1.
   // An additive surface's alpha is its opacity unless the base alpha masks the glow.
   for (const ModelMesh& mesh : model.meshes) {
+    if (mesh.material < mats.size() && mats[mesh.material].blendClass < 0) {
+      mats[mesh.material].blendClass = mesh.bits2;
+      mats[mesh.material].classBlend = !opt.standalone;
+    }
     if (mesh.bits2 == 3 && mesh.material < mats.size()) {
       RemMaterial& m = mats[mesh.material];
       m.additive = true;
@@ -864,7 +741,7 @@ void Converter::State::Convert(const Model& model, const ConvertOptions& opt) {
           double p = 0.0, q = 0.0;
           for (int c = 0; c < 3; ++c) {
             p += double(vb.positions[v * 3 + c]) * M[r][c];
-            q += double(vb.normals[v * 3 + c]) * M[r][c];
+            q += double(vb.normals[v * 3 + c]) * NM[r][c];
           }
           b.P[v * 3 + r] = p + opt.offset[r];
           nrm[r] = q;
@@ -972,13 +849,13 @@ void Converter::State::Convert(const Model& model, const ConvertOptions& opt) {
           for (int r = 0; r < 3; ++r) {
             vmshV.push_back(float(b.P[size_t(i) * 3 + r]));
           }
-          // The normal and tangent raw (orient x the buffer's, unnormalised), as Remastered's
+          // The normal and tangent raw (the normal matrix x the buffer's, unnormalised), as Remastered's
           // vertex shader takes them; the colour as its float attribute.
           const ModelVertexBuffer& src = *b.src;
           for (int r = 0; r < 3; ++r) {
             double q = 0.0;
             for (int c = 0; c < 3; ++c) {
-              q += double(src.normals[size_t(i) * 3 + c]) * M[r][c];
+              q += double(src.normals[size_t(i) * 3 + c]) * NM[r][c];
             }
             vmshV.push_back(float(q));
           }
@@ -1002,7 +879,10 @@ void Converter::State::Convert(const Model& model, const ConvertOptions& opt) {
         vmshI.push_back(at->second);
       }
     }
-    if (mesh.twoSided) {
+    // A door shield (ColorUnlit, all vertex colour) is one-sided in Remastered, whose door
+    // prefab turns its front to the room. The retail shield actors face either way (their
+    // model was two-sided), so the port draws it from both sides.
+    if (mesh.twoSided || mats[mesh.material].colorUnlit) {
       // Seen from behind too: Remastered draws the mesh with culling off (its MESH
       // chunk's one-bit map; every material flagged 0x400 plus holograms and glow
       // planes), the game culls back faces, so the back is drawn as a copy: each
@@ -1169,6 +1049,11 @@ void Converter::State::Convert(const Model& model, const ConvertOptions& opt) {
 
   // Retail material per primitive: forced, or by a vote of the nearest retail
   // vertices among materials of the same kind (blended effect or opaque surface).
+  // A retail model's blend and pass come from the Remastered mesh class; what the
+  // vote still gives a PBR material is retail's vertex descriptor (a lower bound),
+  // lighting flags, channels, texgens with their UV animations, a gun particle's
+  // konst alpha, and the TEV fallback's slots. The fx pass picks those from an
+  // effect for an effect: without it 53 of 1843 report rows took another material.
   std::vector<double> up;
   std::vector<int> upm;
   for (size_t v = 0; v < retail.Count(); ++v) {
@@ -1180,7 +1065,7 @@ void Converter::State::Convert(const Model& model, const ConvertOptions& opt) {
   for (Prim& p : prims) {
     if (opt.standalone) {
       const RemMaterial& m = mats[p.mat];
-      p.rmat = m.kind == 8 || m.kind == 10 || m.kind == 11 || m.kind == 14 || m.kind == 23 || m.kind == 29 || m.kind == 30 || m.kind == 34 || m.kind == 36 ? 3 : m.cutout ? 1 : m.additive ? 4 : m.blended ? 2 : 0;
+      p.rmat = m.kind == 8 || m.kind == 10 || m.kind == 11 || m.kind == 14 || m.kind == 23 || m.kind == 29 || m.kind == 30 || m.kind == 34 || m.kind == 36 || m.kind == 43 ? 3 : m.cutout ? 1 : m.additive ? 4 : m.blended ? 2 : 0;
       continue;
     }
     if (opt.material >= 0) {
@@ -1251,12 +1136,12 @@ void Converter::State::Convert(const Model& model, const ConvertOptions& opt) {
     maxuv = std::max(maxuv, b.uv.size() - 1);
     skinned = skinned && b.skinned;
   }
-  if (opt.standalone) {
-    // A texcoord slot for every set, so each map keeps the one it was made on.
-    for (RetailMaterial& m : retail.mats) {
-      for (size_t k = 0; k <= std::min<size_t>(maxuv, 7); ++k) {
-        m.vtx |= 3u << (8 + 2 * k);
-      }
+  // A texcoord slot for every set, so each map keeps the one it was made on, as Remastered
+  // samples it: a retail material's own slots stay, and the sets it lacks are added. Bits
+  // 8..23 are the eight texcoord slots, two bits each, and 3 is the encoding retail uses.
+  for (RetailMaterial& m : retail.mats) {
+    for (size_t k = 0; k <= std::min<size_t>(maxuv, 7); ++k) {
+      m.vtx |= 3u << (8 + 2 * k);
     }
   }
   // Vertex tangents (the NBT normal section, CMDL flag 0x8) only when every buffer has them.
@@ -1309,20 +1194,15 @@ void Converter::State::Convert(const Model& model, const ConvertOptions& opt) {
       i += uint32_t(buffers[p.buffer].offset);
     }
   }
-  // Vertex colours, for a room's own materials that are tinted by them. The
-  // alpha is an opacity only on a blended surface (on an opaque one it weighs
-  // the material's layers), so a vertex no blended surface uses is opaque.
-  // On a retail model, only a glow that is all vertex colour reads them: an
-  // unlit Remastered surface over a retail effect (a door shield's cyan rim),
-  // and the arm cannon's beam glow (kind 9), which is all vertex colour and ramp.
-  auto ownGlow = [&](const RemMaterial& m, const RetailMaterial& pm) {
-    return !opt.standalone && m.unlit && m.tinted && IsFx(pm);
-  };
+  // Vertex colours, for the materials that read them: tinted by them, or a shader
+  // whose kind is drawn from them (the beam glow, the shields), on a retail model as
+  // on a room's own; the descriptor the converter writes is its own. The alpha is an
+  // opacity only on a blended surface (on an opaque one it weighs the material's
+  // layers), so a vertex no blended surface uses is opaque.
   std::vector<uint8_t> C;
   bool useColor = false;
   for (const Prim& p : prims) {
-    const bool reads = opt.standalone ? mats[p.mat].tinted || mats[p.mat].vcolor
-                                      : ownGlow(mats[p.mat], retail.mats[p.rmat]) || mats[p.mat].kind == 9 || mats[p.mat].kind == 13 || mats[p.mat].kind == 14 || mats[p.mat].kind == 29 || mats[p.mat].kind == 15 || mats[p.mat].kind == 18;
+    const bool reads = mats[p.mat].tinted || mats[p.mat].vcolor;
     useColor = useColor || (reads && buffers[p.buffer].colored);
   }
   if (useColor) {
@@ -1332,8 +1212,7 @@ void Converter::State::Convert(const Model& model, const ConvertOptions& opt) {
     }
     std::vector<bool> keepAlpha(n, false);
     for (const Prim& p : prims) {
-      if (((mats[p.mat].blended || mats[p.mat].layered) && mats[p.mat].tinted) || mats[p.mat].vcolor ||
-          ownGlow(mats[p.mat], retail.mats[p.rmat]) || mats[p.mat].kind == 13 || mats[p.mat].kind == 14 || mats[p.mat].kind == 29 || mats[p.mat].kind == 15 || mats[p.mat].kind == 18) {
+      if (((mats[p.mat].blended || mats[p.mat].layered) && mats[p.mat].tinted) || mats[p.mat].vcolor) {
         for (uint32_t i : p.I) {
           keepAlpha[i] = true;
         }
@@ -1404,7 +1283,8 @@ void Converter::State::Convert(const Model& model, const ConvertOptions& opt) {
   std::vector<bool> dlColor;                   // and whether a colour index comes before them
   // The materials report: one row per output material, as it is pushed.
   auto decide = [&](const RemMaterial& rem, uint32_t sourceIndex, const char* path, const std::string& pathReason,
-                    const std::string& notes, const std::string& tag, uint32_t cube, const RetailMaterial& pm) {
+                    const std::string& notes, const std::string& tag, uint32_t cube, const RetailMaterial& pm,
+                    const std::string& uv) {
     if (!io.decision) {
       return;
     }
@@ -1432,6 +1312,18 @@ void Converter::State::Convert(const Model& model, const ConvertOptions& opt) {
     char retailBlend[48];
     std::snprintf(retailBlend, sizeof(retailBlend), "%u,%u 0x%X", pm.blendSrc, pm.blendDst, pm.flags);
     d.retail = retailBlend;
+    // The TEV path writes the retail material as it is.
+    uint32_t src = pm.blendSrc;
+    uint32_t dst = pm.blendDst;
+    if (std::strcmp(path, "pbr") == 0) {
+      PbrBlend(rem, pm, src, dst);
+    }
+    d.meshClass = rem.blendClass >= 0 ? std::to_string(rem.blendClass) : "-";
+    d.blend = std::to_string(src) + "," + std::to_string(dst);
+    uint32_t classSrc = 0;
+    uint32_t classDst = 0;
+    d.classBlend = !ClassBlend(rem.blendClass, classSrc, classDst) ? "-" : classSrc == src && classDst == dst ? "yes" : "no";
+    d.uv = uv;
     io.decision(d);
   };
   for (size_t outputMaterial = 0; outputMaterial < keys.size(); ++outputMaterial) {
@@ -1463,130 +1355,58 @@ void Converter::State::Convert(const Model& model, const ConvertOptions& opt) {
       rem.lightScale[0] = std::abs(rem.lits);
       rem.lightScale[1] = 0.0;
     }
-    const bool glow = ownGlow(rem, pm) && useColor;
     // Remastered's missile lock-on highlight is a runtime effect: its map is
     // solid red, so baked in it turns grey shards red.
     if (Lower(rem.name).find("missilelock") != std::string::npos) {
       loopNotes += "missilelock: emissive map dropped; ";
       rem.maps[kEmissive].has = false;
     }
-    // A retail material's vertices have no layer weight.
-    // A shader of its own needs none: without colours the up-facing one goes by
-    // the normal alone.
-    // The beam glow is the exception: it is the vertex colour's, on the gun's own vertices.
-    // Without the colours (the inventory and cinematic guns) it is drawn as the ramp's mean,
-    // a glow that does not move.
-    const bool gunGlow = rem.kind == 9 && useColor;
-    if (rem.kind == 9 && !gunGlow) {
-      if (!rem.maps[kEmissive].has) {
-        rem.maps[kEmissive] = rem.layer[kMr];
-        rem.maps[kEmissive].raw = false;
-        rem.maps[kEmissive].mean = true;
-        rem.maps[kEmissive].coord = 0;  // one colour: any texcoord does
-        rem.emissive = rem.kindStrength / kPbrEmissive;
-        rem.glowLinear = true;
-      }
-      loopNotes += "gun-glow without vertex colours: drawn as the ramp's mean; ";
-      rem.kind = 0;
-      rem.vcolor = false;
-      rem.layered = false;
-    }
-    // So is the Ice Beam cannon's frost shell, which needs no vertex colours: drawn as a
-    // plain surface it would freeze the gun for good.
+    // The Ice Beam cannon's frost shell (kind 12) needs no vertex colours: its glow mask is
+    // the shader's own.
     const bool frostShell = rem.kind == 12;
-    // The Metroid dome's matcap shell (kind 13) is a retail model's blended surface drawn by
-    // the shader: its alpha, rim and colours are all the Remastered material's.
-    const bool matcapShell = rem.kind == 13;
-    // And the Frigate's force fields (kind 14), a retail model's fx surface drawn by the shader.
-    const bool shield = (rem.kind >= 14 && rem.kind <= 19) || rem.kind == 25 || rem.kind == 28 || rem.kind == 29 || rem.kind == 31 || rem.kind == 33 || rem.kind == 34;
-    // The Phazon Beam's own materials (Core_Phazon_Mat 1ac34e37, Phazon_Veins_Mat d61ae63a) are retail gun surfaces
-    // drawn by their shaders too.
-    const bool phazonGun = rem.kind == 35 || (rem.kind == 32 && rem.shader == 0x1AC34E37);
     // The pause visor's two materials (kinds 36, 37) are retail fx surfaces drawn by their shaders,
     // and only by those: no vertex colour, no second layer.
     const bool inventory = rem.kind == 36 || rem.kind == 37;
-    // 4BC890C1 is a plain lit Lambert that Remastered draws opaque (mesh class 0) where retail
-    // used a blended effect: it takes the standard path, so it leaves the retail-fx gate.
-    // Likewise any Remastered material without the blend or cutout flag: its mesh is class 0,
-    // which Remastered draws opaque whatever retail's blend (the missile pickup's top,
-    // 274D21BE; kb topic/mesh-blend-class.md).
-    const bool lambertFx = rem.family == kShaderLambertFx || rem.shader == kShaderVfxBase || rem.shader == kShaderVfxBase2 ||
-                           (!opt.standalone && !(rem.flags & (kTransparentFlag | kCutoutFlag)));
-    rem.opaqueFx = !opt.standalone && IsFx(pm) && !(rem.flags & (kTransparentFlag | kCutoutFlag));
-    if (rem.kind == 19 || rem.kind == 25) {
+    if (rem.kind == 19 || rem.kind == 25 || rem.kind == 42) {
       // Row 6 w (unused by this kind otherwise): the retail konst alpha, a factor of the alpha of a particle model.
       rem.shieldRows[27] = GunFxParticle(pm) ? pm.konstAlpha : 1.0;
     }
-    if (!opt.standalone && !gunGlow && !frostShell && !matcapShell && !shield && !phazonGun && !inventory) {
-      if (rem.kind != 0) {
-        loopNotes += std::string("kind ") + KindName(rem.kind) + " dropped: a retail model, not standalone; ";
-      }
-      rem.kind = 0;
-      rem.vcolor = false;
-    }
-    rem.macro = rem.macro && opt.standalone;
-    rem.layered = rem.layered && (gunGlow || frostShell || matcapShell || shield || phazonGun || (opt.standalone && (rem.kind != 0 || (useColor && rem.tinted))));
-    rem.macroLayered = rem.macroLayered && rem.layered && opt.standalone;
-    // Nor do the alpha and shading modes belong on one: what they say is about the
-    // Remastered surface, and a retail model keeps the retail material's
-    // (bar a glow of its own, whose colour and fade are all in it).
-    // The glow mask is the exception: a glow map is often a few solid blocks the
-    // base map's alpha cuts down to lamps (the save station's arms went yellow
-    // all over), and the opacity stays the retail draw's either way.
-    if (!opt.standalone) {
-      rem.unlit = glow;
-      rem.mask = rem.mask && rem.maps[kEmissive].has;
-      rem.height = 0.0;
-    }
+    // A retail model's material keeps its kind, macro and second layer as a room's does: its
+    // vertices carry the colour and its texcoords every set (above). A second layer is
+    // weighed by a kind's shader or by the vertex colour.
+    rem.layered = rem.layered && (rem.kind != 0 || (useColor && rem.tinted));
+    rem.macroLayered = rem.macroLayered && rem.layered;
     const MapRef* rt = rem.maps;
-    // A retail descriptor with no texcoord slot at all cannot feed a material
-    // that samples texcoord 0, so one is declared: bits 8..23 are the eight
-    // texcoord slots, two bits each, and 3 is the encoding retail uses.
+    // Every set has its slot already (above), the beam glow's noise and the frost shell's
+    // glow map (ICAN, texcoord 1) among them.
     uint32_t vtx = pm.vtx;
     size_t ntexattr = 0;
     for (int k = 0; k < 8; ++k) {
       ntexattr += ((vtx >> (8 + 2 * k)) & 3) ? 1 : 0;
     }
-    if (ntexattr == 0) {
-      vtx |= 3u << 8;
-      ntexattr = 1;
-    }
-    // The beam glow's noise is on a texcoord of its own, which a retail gun lacks.
-    if (gunGlow) {
-      const size_t want = std::min<size_t>(std::min<size_t>(rem.layer[kBase].coord, maxuv) + 1, 8);
-      for (; ntexattr < want; ++ntexattr) {
-        vtx |= 3u << (8 + 2 * ntexattr);
-      }
-    }
-    // The frost shell's glow map (ICAN) is on texcoord 1.
-    if (frostShell) {
-      size_t coord = rem.layer[kBase].coord;
-      for (int k = 0; k < kMaps; ++k) {
-        coord = std::max<size_t>(coord, rem.maps[k].has ? rem.maps[k].coord : 0);
-      }
-      const size_t want = std::min<size_t>(std::min<size_t>(coord, maxuv) + 1, 8);
-      for (; ntexattr < want; ++ntexattr) {
-        vtx |= 3u << (8 + 2 * ntexattr);
-      }
-    }
     // Bits 4 and 5 are colour 0. Only a material that reads it declares it.
-    const bool colored = useColor && (opt.standalone ? rem.tinted || rem.vcolor : glow || gunGlow || matcapShell || shield);
+    const bool colored = useColor && (rem.tinted || rem.vcolor);
     rem.tinted = colored && rem.tinted;
     if (colored) {
       vtx |= 3u << 4;
     }
     dlColor.push_back(colored);
-    // PBR needs a base map and an opaque retail material: blended effects keep
-    // their TEV.
-    // Only a room's own material asks for a cutout: a retail material's alpha
-    // test says nothing about what the Remastered map's alpha holds.
+    // A retail model's material blends as its mesh class (PbrBlend), so its alpha and shading
+    // are the Remastered material's, as on a room's own.
     // A plain lit cutout (no vertex colour) is Remastered's 1-bit alpha shader: full alpha,
     // cut by the shader. Any other keeps the CMPR punch and retail's alpha compare.
-    const bool exactCut = opt.standalone && rem.cutout && (rem.kind == 0 || rem.kind == 24) && !rem.unlit && !rem.layered;
+    // The glow masks (and the frost shell's, the Vfx shaders', the pickups' and the pause
+    // visor's alpha) are the shaders' own, squared where USE_DIFFUSE_AS_INCAN_MASK squares it.
+    const bool exactCut = rem.cutout && (rem.kind == 0 || rem.kind == 24) && !rem.unlit && !rem.layered;
     const char* const baseAlpha =
-        glow ? "blend" : !opt.standalone ? (inventory ? "mask" : frostShell || rem.mask || rem.shader == kShaderVfxBase || rem.shader == kShaderVfxBase2 || (rem.kind >= 16 && rem.kind <= 18) ? (!frostShell && rem.maskSquared ? "mask2" : "mask") : "") : rem.cutout ? (exactCut ? "cut" : "punch") : rem.mask || rem.layered || rem.height > 0.0 ? "mask" : rem.blended ? "blend" : "";
-    const bool usePbr = opt.pbr && rt[kBase].has && (opt.standalone || glow || matcapShell || shield || inventory || lambertFx || !IsFx(pm)) &&
-                        Get("pbr:base", rt, baseAlpha, opt).has_value();
+        rem.cutout ? (exactCut ? "cut" : "punch")
+        : rem.mask || rem.layered || rem.height > 0.0 || frostShell || inventory || rem.shader == kShaderVfxBase ||
+                rem.shader == kShaderVfxBase2 || (rem.kind >= 16 && rem.kind <= 18)
+            ? (!frostShell && rem.maskSquared ? "mask2" : "mask")
+        : rem.blended ? "blend"
+                      : "";
+    // Blended retail effects draw as their Remastered shader: every retail fx shader has a port kind.
+    const bool usePbr = opt.pbr && rt[kBase].has && Get("pbr:base", rt, baseAlpha, opt).has_value();
     // The base map keeps its whole alpha, and the shader cuts it as Remastered's does.
     rem.cutExact = usePbr && exactCut;
     if (usePbr) {
@@ -1607,10 +1427,9 @@ void Converter::State::Convert(const Model& model, const ConvertOptions& opt) {
         }
         tids[k] = *Get(std::string("pbr:") + kMapName[m], both + (k - m), m == kBase ? baseAlpha : "", opt);
       }
-      // Each map keeps the texcoord set it was authored on. The descriptor
-      // fixes how many texcoord attributes exist, and a coord past it cannot be
-      // sampled at all, so it is folded onto the base's; and if the base's own
-      // is past it too, onto 0, which the descriptor always has.
+      // Each map keeps the texcoord set it was authored on: the descriptor has a
+      // slot for every set up to the eighth. Only a coord past that is folded,
+      // onto the base's, or onto 0 if the base's is past it too.
       size_t bset = std::min<size_t>(rt[kBase].coord, maxuv);
       bset = bset < ntexattr ? bset : 0;
       uint32_t coords[kMacroMaps];
@@ -1714,14 +1533,17 @@ void Converter::State::Convert(const Model& model, const ConvertOptions& opt) {
           setBlobs[si].back().insert(setBlobs[si].back().end(), {'L', 'M', 'U', 'V'});
         }
       }
-      decide(rem, std::get<1>(key), "pbr", "ok", loopNotes, recordTag, cube, pm);
+      std::string uv = std::to_string(ntexattr) + (dlColor.back() ? "c:" : ":");
+      for (int k = 0; k < nmaps; ++k) {
+        uv += (k ? "," : "") + std::to_string(coords[k]);
+      }
+      decide(rem, std::get<1>(key), "pbr", "ok", loopNotes, recordTag, cube, pm, uv);
       continue;
     }
     ++tev;
     const std::string tevReason =
         !opt.pbr ? "pbr off"
         : !rt[kBase].has ? "no base map"
-        : !(opt.standalone || glow || matcapShell || shield || inventory || lambertFx || !IsFx(pm)) ? "retail fx material keeps its TEV"
                                                    : "the base map did not resolve";
     // The TEV path: the retail material with each texture slot refilled from
     // the Remastered map that matches what its stage does.
@@ -1763,7 +1585,8 @@ void Converter::State::Convert(const Model& model, const ConvertOptions& opt) {
       }
     }
     dlAttrs.push_back(attrs);
-    decide(rem, std::get<1>(key), "tev", tevReason, loopNotes, wrap != 0x55555555u ? "WRAP" : "TEV", 0, pm);
+    decide(rem, std::get<1>(key), "tev", tevReason, loopNotes, wrap != 0x55555555u ? "WRAP" : "TEV", 0, pm,
+           std::to_string(ntexattr) + (dlColor.back() ? "c:-" : ":-"));
     for (size_t si = 0; si < retail.nmat; ++si) {
       const MaterialSet& set = retail.sets[si];
       if (size_t(rmat) >= set.mats.size()) {
@@ -1821,6 +1644,11 @@ void Converter::State::Convert(const Model& model, const ConvertOptions& opt) {
     const std::vector<uint32_t> refBones = SkinBones(refSpan);
     skins.push_back(sids[0]);
     for (size_t i = 1; i < sids.size(); ++i) {
+      if (!opt.boneWeights.empty()) {
+        // Given weights name the bones of the caller's skeleton, which binds every one of these.
+        skins.push_back(sids[i]);
+        continue;
+      }
       Blob other;
       if (io.retail(FourCC('C', 'S', 'K', 'R'), sids[i], other)) {
         const std::vector<uint32_t> bones = SkinBones(Span{other.data(), other.size()});
@@ -1831,9 +1659,28 @@ void Converter::State::Convert(const Model& model, const ConvertOptions& opt) {
       }
       Log("  note: skin " + Hex8(sids[i]) + " has a different skeleton, not writing weights for it");
     }
+    std::vector<WeightKey> perVertex;
+    if (!opt.boneWeights.empty()) {
+      // Weights chosen by the caller, already on retail bones: written as given.
+      std::vector<std::vector<std::pair<uint32_t, double>>> given;
+      given.reserve(n);
+      for (uint32_t bi : bufOrder) {
+        if (bi >= opt.boneWeights.size() || opt.boneWeights[bi].size() < buffers[bi].src->vertexCount) {
+          throw Fail{"the given skin weights do not cover vertex buffer " + std::to_string(bi)};
+        }
+        for (uint32_t v : buffers[bi].srcOf) {
+          auto& row = given.emplace_back();
+          for (const auto& w : opt.boneWeights[bi][v]) {
+            row.emplace_back(w.first, double(w.second));
+          }
+        }
+      }
+      perVertex = QuantiseWeights(given);
+      Log(Hex8(this->model) + "  weights as given: " + std::to_string(n) + " vertices");
+    }
     std::vector<uint16_t> J;
     std::vector<float> W;
-    if (skinned) {
+    if (skinned && opt.boneWeights.empty()) {
       for (uint32_t bi : bufOrder) {
         const ModelVertexBuffer& src = *buffers[bi].src;
         for (uint32_t v : buffers[bi].srcOf) {
@@ -1842,9 +1689,10 @@ void Converter::State::Convert(const Model& model, const ConvertOptions& opt) {
         }
       }
     }
-    const std::vector<WeightKey> perVertex =
-        SkinWeights(P, n, skinned ? &J : nullptr, skinned ? &W : nullptr, retail, refSpan,
-                    [this](const std::string& line) { Log(Hex8(this->model) + line); });
+    if (opt.boneWeights.empty()) {
+      perVertex = SkinWeights(P, n, skinned ? &J : nullptr, skinned ? &W : nullptr, retail, refSpan,
+                              [this](const std::string& line) { Log(Hex8(this->model) + line); });
+    }
     std::map<WeightKey, int> intern;
     weights.resize(n);
     for (size_t v = 0; v < n; ++v) {

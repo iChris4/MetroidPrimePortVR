@@ -62,6 +62,9 @@ PipelineRef find_pipeline(ShaderType type, const gx::PipelineConfig& config, New
 
 bool get_pipeline(PipelineRef ref, wgpu::RenderPipeline& pipeline);
 
+// Render thread: a draw was dropped because its pipeline wasn't built (aurora_get_pipeline_stats).
+void note_skipped_draw();
+
 // Draw thread: whether `ref`, returned by an earlier find_pipeline, is still built or queued (a
 // queued background build moves up, as a lookup would). False after drop_pipelines(), so the
 // caller looks the config up again.

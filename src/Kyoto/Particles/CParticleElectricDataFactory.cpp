@@ -196,6 +196,12 @@ bool CParticleElectricDataFactory::CreateELSM(CElectricDescription* desc, CInput
     case 'NCLR':
       desc->xPortNCLR = CParticleDataFactory::GetColorElement(in);
       break;
+    // Port-only Remastered transform mode; only 3 (bolts follow the emitter) is written.
+    case 'XFMD': {
+      CParticleDataFactory::GetClassID(in);
+      desc->xPortXfmdFollow = in.ReadLong() == 3;
+      break;
+    }
     case 'LLRD':
       desc->xPortLLRD = CParticleDataFactory::GetBool(in);
       break;

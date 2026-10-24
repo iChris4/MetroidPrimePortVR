@@ -4,7 +4,8 @@ name: windows-msvc
 # gets by default (issue #170). The supported Windows compiler is clang-cl
 # (windows.yml); this job only finds what cl.exe rejects. It keeps going past
 # errors so one run lists them all (errors.txt in the artifact), and fails if
-# there are any. No tests, no package. A manual start needs the workflow on the
+# there are any. It builds the tests, as a default configure does, but runs
+# none; no package. A manual start needs the workflow on the
 # default branch, which is not port, so it also runs on a push to ci-msvc:
 # `git push -f user port:ci-msvc`.
 on:
@@ -41,7 +42,7 @@ jobs:
           -DCMAKE_CXX_COMPILER=cl
           -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON
           -DAURORA_ENABLE_TESTS=OFF
-          -DMP_BUILD_TESTS=OFF
+          -DMP_BUILD_TESTS=ON
           -DBUILD_SHARED_LIBS=OFF
           -DAURORA_SDL3_PROVIDER=vendor
           -DAURORA_SDL3_LINKAGE=static

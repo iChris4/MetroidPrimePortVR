@@ -117,6 +117,7 @@ public:
   void SetCodeTrigger() { x18_24_codeTrigger = true; }
 
 private:
+  friend struct PortStateCodec; // save states (platform/port_savestate_fields.cpp)
   const CStateMachine* x0_machine;
   CAiState* x4_state;
   float x8_time;

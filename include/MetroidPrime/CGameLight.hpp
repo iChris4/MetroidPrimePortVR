@@ -6,6 +6,7 @@
 #include "Kyoto/Graphics/CLight.hpp"
 
 class CGameLight : public CActor {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 public:
   CGameLight(const TUniqueId uid, const TAreaId aid, const bool active, const rstl::string& name,
              const CTransform4f& xf, const TUniqueId parentId, const CLight& light,

@@ -25,6 +25,7 @@ struct Image {
   int height = 0;
   std::vector<uint8_t> rgba;  // width * height * 4
   bool srgb = false;          // as decoded: the source format is an sRGB one (the bytes are encoded either way)
+  bool hdr = false;           // the source is BC6H: the bytes are its linear values clamped to 1 (ConvertIO::hdrDds has them all)
 };
 
 enum class DdsFormat {
@@ -83,6 +84,17 @@ std::vector<uint8_t> EncodeTxtrCmpr(const Image& image, bool alpha, MapKind kind
 // the texels are the same sRGB-encoded bytes.
 std::vector<uint8_t> EncodeDds(const Image& image, DdsFormat format, bool punch = false, MapKind kind = MapKind::Data,
                                  bool srgb = false);
+
+// High dynamic range maps (a sky's BC6H), linear and never sRGB:
+// a DX10 .dds of BC6H blocks passed through as they are (DXGI 95 BC6H_UF16, 96 BC6H_SF16),
+// mips[m] holding ceil(w_m / 4) * ceil(h_m / 4) blocks; empty when a level's size is wrong.
+std::vector<uint8_t> EncodeDdsBc6h(uint32_t width, uint32_t height, bool isSigned,
+                                   const std::vector<std::vector<uint8_t>>& mips);
+// A DX10 .dds of RGBA half floats (DXGI 10, R16G16B16A16_FLOAT), for a GPU without BC;
+// mips[m] holding w_m * h_m * 4 halves. Empty when a level's size is wrong.
+std::vector<uint8_t> EncodeDdsRgba16f(uint32_t width, uint32_t height, const std::vector<std::vector<uint16_t>>& mips);
+// The next level of an RGBA half float image: a 2x2 box in float.
+std::vector<uint16_t> HalveRgba16f(const std::vector<uint16_t>& level, uint32_t width, uint32_t height);
 
 // One 4x4 block, 16 RGBA texels in, 16 bytes out; exposed for the tests.
 void EncodeBc7Block(const uint8_t* rgba, uint8_t* out);

@@ -60,7 +60,7 @@ void CScriptRandomRelay::SendLocalScriptMsgs(EScriptObjectState state, CStateMan
     targetSetSize +=
         int(float(x38_sendSetVariance) * (stateMgr.Random()->Float() * 2.0f)) - x38_sendSetVariance;
 
-    targetSetSize = rstl::min_val(rstl::max_val(0, targetSetSize), 64);
+    targetSetSize = rstl::min_val(rstl::max_val(0, targetSetSize), 100);
 
     while (objs.size() > targetSetSize) {
       const int randomRemoveIdx = int(stateMgr.Random()->Float() * float(objs.size()) * 0.99f);

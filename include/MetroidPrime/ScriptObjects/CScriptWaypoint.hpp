@@ -6,6 +6,7 @@
 #include "MetroidPrime/CActor.hpp"
 
 class CScriptWaypoint : public CActor {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 public:
   CScriptWaypoint(TUniqueId uid, const rstl::string& name, const CEntityInfo& info,
                   const CTransform4f& xf, const bool active, float speed, float pause,

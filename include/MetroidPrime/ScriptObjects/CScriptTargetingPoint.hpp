@@ -6,6 +6,7 @@
 #include "Kyoto/Math/CTransform4f.hpp"
 
 class CScriptTargetingPoint : public CActor {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
   bool xe8_e4_ : 1;
   TUniqueId xea_;
   float xec_time;

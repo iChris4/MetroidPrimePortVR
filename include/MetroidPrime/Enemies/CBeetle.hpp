@@ -13,6 +13,7 @@
 class CTeamAiRole;
 
 class CBeetle : public CPatterned {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 public:
   enum EEntranceType {
     kET_FacePlayer = 0,

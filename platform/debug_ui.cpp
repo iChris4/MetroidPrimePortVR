@@ -73,7 +73,7 @@ float sRenderScale = 1.f;
 // Dynamic resolution: draws the EFB between sDynamicResMin and sRenderScale to hold a frame rate.
 bool sDynamicRes = false;
 int sDynamicResTarget = 0;  // fps; 0 = the 60 fps cap, or the display's rate without it
-float sDynamicResMin = 1.f; // the lowest scale it drops to: 0.5, 0.75 or 1
+float sDynamicResMin = 1.f; // the lowest scale it drops to, kDynamicResMinLowest to 4
 // Sharpening of a frame stretched up to the window: 0 off, 1 while dynamic resolution has
 // lowered the scale, 2 whenever the EFB is smaller than the window. Strength 0-100.
 int sSharpenMode = 1;
@@ -86,6 +86,7 @@ bool sSharpScanWindow = false;
 bool sGeneratedBallLooks = true;
 bool sAutoAim = true;
 int sScanSpeed = 100;
+int sHintDelay = 0;
 bool sSecondaryCrosshairs = true;
 // A remapped pad drives menus and the map with its standard buttons (issue #57).
 bool sMenuStandardButtons = true;
@@ -133,6 +134,7 @@ bool sSkippableCutscenes = false;
 // Off by default: a beam door that was opened stays blue (PortBeamDoors).
 bool sBeamDoorsStayUnlocked = false;
 bool sStackBeams = false;
+int sWalkSpeed = PortDebug::kWalkSpeedDefault;
 // The stored choice only. Randomizer and Archipelago games force it on at use
 // (PortSkipCutscenes::Forced), which the getter does not fold in.
 bool sRevision100Compatibility = false;
@@ -147,6 +149,7 @@ std::atomic<bool> sTouchTurboFire{false}; // the touch Turbo button, held
 // PrimedGun: the controls settings (sInput) keep their defaults in PortInput::Settings
 // (port_input_settings.h), the fork's Spring Ball on by default among them.
 bool sInvulnerable = false;
+bool sPhazonBeamCheat = false;
 // MP_GODMODE, for this run only: -1 unset, else 0 or 1. Never saved, and changing the
 // setting ends it.
 int sInvulnerableRun = -1;
@@ -452,6 +455,7 @@ void EnsureInitialized() {
   }
   sInitialized = true;
   LoadSettings();
+  const std::string fileSettings = SettingsText();
 
   // Environment variables are explicit per-run overrides and win over the file.
   if (port::EnvFlag("MP_TRACE_TIMING")) {
@@ -510,6 +514,8 @@ void EnsureInitialized() {
   sAutoAim = port::EnvFlag("MP_AUTO_AIM", sAutoAim);
   sScanSpeed = std::clamp(port::EnvInt("MP_SCAN_SPEED", sScanSpeed), PortDebug::kScanSpeedMin,
                           PortDebug::kScanSpeedMax);
+  sHintDelay = std::clamp(port::EnvInt("MP_HINT_DELAY", sHintDelay), PortDebug::kHintDelayMin,
+                          PortDebug::kHintDelayMax);
   sSecondaryCrosshairs = port::EnvFlag("MP_SECONDARY_CROSSHAIRS", sSecondaryCrosshairs);
   if (const char* style = std::getenv("MP_CROSSHAIR_STYLE")) {
     if (std::strcmp(style, "classic") == 0) {
@@ -542,6 +548,7 @@ void EnsureInitialized() {
   if (port::EnvString("MP_FPS_CAP") != nullptr) {
     sFpsCap = ClampFpsCap(port::EnvInt("MP_FPS_CAP", 0));
   }
+  NoteEnvOverrides(fileSettings);
 
   std::atexit(SaveSettings);
   ApplyLiveSplit();

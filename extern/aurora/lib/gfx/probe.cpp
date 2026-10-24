@@ -55,6 +55,8 @@ uint64_t cube_bytes(uint32_t size, uint32_t mipCount, uint32_t texelSize) {
 }
 constexpr uint32_t FaceCount = 6;
 wgpu::Texture g_texture;
+wgpu::Texture g_mipScratch; // Compatibility: a plain 2D texture the mip chain is downsampled in
+std::array<TextureHandle, MipCount> g_scratchMips;
 wgpu::TextureView g_cubeView;
 wgpu::Sampler g_sampler;
 std::array<std::array<TextureHandle, MipCount>, FaceCount> g_faces;
@@ -179,9 +181,14 @@ void ensure() {
     return;
   }
   const auto format = webgpu::g_graphicsConfig.surfaceConfiguration.format;
+  wgpu::TextureBindingViewDimension cubeBinding;
+  cubeBinding.textureBindingViewDimension = wgpu::TextureViewDimension::Cube;
   const wgpu::TextureDescriptor textureDescriptor{
+      .nextInChain = &cubeBinding,
       .label = "PBR Probe",
-      .usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::RenderAttachment,
+      .usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::RenderAttachment |
+               (webgpu::g_hasCoreFeatures ? wgpu::TextureUsage::None
+                                          : wgpu::TextureUsage::CopySrc | wgpu::TextureUsage::CopyDst),
       .dimension = wgpu::TextureDimension::e2D,
       .size = {Size, Size, FaceCount},
       .format = format,
@@ -401,6 +408,10 @@ void shutdown() {
   g_emptyBrdfLive = {};
   g_sampler = {};
   g_cubeView = {};
+  for (auto& mip : g_scratchMips) {
+    mip.reset();
+  }
+  g_mipScratch = {};
   g_texture = {};
   g_probeLive = {};
 }
@@ -420,9 +431,66 @@ TextureHandle face(uint32_t face) {
   return g_faces[face % FaceCount][0];
 }
 
+// Compatibility devices reject sampling through a 2D view of the Cube-bound probe texture. The same chain, with the
+// same blits, runs in a plain 2D scratch texture instead; the base level is copied in and each mip copied back
+// (copies are exact), so the result matches the 2D-view path bit for bit.
+static void encode_mips_compat(const wgpu::CommandEncoder& cmd, uint32_t face, Range uvRange) {
+  const auto format = webgpu::g_graphicsConfig.surfaceConfiguration.format;
+  if (!g_mipScratch) {
+    const wgpu::TextureDescriptor descriptor{
+        .label = "PBR Probe mip scratch",
+        .usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::RenderAttachment |
+                 wgpu::TextureUsage::CopySrc | wgpu::TextureUsage::CopyDst,
+        .dimension = wgpu::TextureDimension::e2D,
+        .size = {Size, Size, 1},
+        .format = format,
+        .mipLevelCount = MipCount,
+        .sampleCount = 1,
+    };
+    g_mipScratch = g_device.CreateTexture(&descriptor);
+    for (uint32_t m = 0; m < MipCount; ++m) {
+      const wgpu::TextureViewDescriptor viewDescriptor{
+          .label = "PBR Probe mip scratch view",
+          .format = format,
+          .dimension = wgpu::TextureViewDimension::e2D,
+          .baseMipLevel = m,
+          .mipLevelCount = 1,
+          .baseArrayLayer = 0,
+          .arrayLayerCount = 1,
+      };
+      auto view = g_mipScratch.CreateView(&viewDescriptor);
+      const wgpu::Extent3D size{Size >> m, Size >> m, 1};
+      g_scratchMips[m] = std::make_shared<TextureRef>(g_mipScratch, view, view, size, format, 1, GX_TF_RGBA8);
+    }
+  }
+  const auto copyLevel = [&](const wgpu::Texture& from, uint32_t fromMip, uint32_t fromLayer, const wgpu::Texture& to,
+                             uint32_t toMip, uint32_t toLayer) {
+    const wgpu::TexelCopyTextureInfo src{.texture = from, .mipLevel = fromMip, .origin = {0, 0, fromLayer}};
+    const wgpu::TexelCopyTextureInfo dst{.texture = to, .mipLevel = toMip, .origin = {0, 0, toLayer}};
+    const wgpu::Extent3D extent{Size >> fromMip, Size >> fromMip, 1};
+    cmd.CopyTextureToTexture(&src, &dst, &extent);
+  };
+  copyLevel(g_texture, 0, face, g_mipScratch, 0, 0);
+  for (uint32_t m = 1; m < MipCount; ++m) {
+    tex_copy_conv::blit(cmd, tex_copy_conv::ConvRequest{
+                                 .fmt = GX_TF_RGBA8,
+                                 .srcView = g_scratchMips[m - 1]->sampleTextureView,
+                                 .uniformRange = uvRange,
+                                 .dst = g_scratchMips[m],
+                                 .sampleFilter = tex_copy_conv::SampleFilter::Linear,
+                             });
+    copyLevel(g_mipScratch, m, 0, g_texture, m, face);
+  }
+}
+
 void encode_mips(const wgpu::CommandEncoder& cmd, uint32_t face, Range uvRange) {
   ensure();
-  const auto& mips = g_faces[face % FaceCount];
+  face %= FaceCount;
+  if (!webgpu::g_hasCoreFeatures) {
+    encode_mips_compat(cmd, face, uvRange);
+    return;
+  }
+  const auto& mips = g_faces[face];
   for (uint32_t m = 1; m < MipCount; ++m) {
     // A 2:1 bilinear blit is a box filter.
     tex_copy_conv::blit(cmd, tex_copy_conv::ConvRequest{
@@ -451,7 +519,10 @@ void create_cube(uint32_t id, uint32_t size, uint32_t mipCount, const uint8_t* t
   if (id == 0 || size == 0 || mipCount == 0 || length < needed) {
     return;
   }
+  wgpu::TextureBindingViewDimension cubeBinding;
+  cubeBinding.textureBindingViewDimension = wgpu::TextureViewDimension::Cube;
   const wgpu::TextureDescriptor textureDescriptor{
+      .nextInChain = &cubeBinding,
       .label = "PBR room cube",
       .usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst,
       .dimension = wgpu::TextureDimension::e2D,
@@ -556,7 +627,10 @@ bool blend_cubes(uint32_t dst, const uint32_t* src, const float* weights, uint32
     mipCount = std::max(mipCount, 1u);
     auto& target = g_roomCubes[dst];
     if (!target.texture || target.size != size || target.mipCount != mipCount || target.faces.empty()) {
+      wgpu::TextureBindingViewDimension cubeBinding;
+      cubeBinding.textureBindingViewDimension = wgpu::TextureViewDimension::Cube;
       const wgpu::TextureDescriptor textureDescriptor{
+          .nextInChain = &cubeBinding,
           .label = "PBR blended cube",
           .usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::RenderAttachment,
           .dimension = wgpu::TextureDimension::e2D,

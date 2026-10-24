@@ -166,10 +166,25 @@ bool CParticleSwooshDataFactory::CreateWPSM(CSwooshDescription* swoosh, CInputSt
       }
       swoosh->xPortRotZ.reset(CParticleDataFactory::GetRealElement(in));
       break;
+    // Port-only: Remastered's ZTES 0 (xPortNoZTest).
+    case 'PZTS':
+      CParticleDataFactory::GetClassID(in);
+      swoosh->xPortNoZTest = in.ReadLong() == 0;
+      break;
+    // Port-only: Remastered's SHTM (xPortShutdownMode), written for 1 only.
+    case 'PSHM':
+      CParticleDataFactory::GetClassID(in);
+      swoosh->xPortShutdownMode = u8(in.ReadLong());
+      break;
     // Port-only: Remastered's DFOG 1 (xPortUnfogged).
     case 'PDFG':
       CParticleDataFactory::GetClassID(in);
       swoosh->xPortUnfogged = in.ReadLong() != 0;
+      break;
+    // Port-only: Remastered's DBIS (xPortDepthBias), a constant real.
+    case 'PDBS':
+      CParticleDataFactory::GetClassID(in);
+      swoosh->xPortDepthBias = in.ReadFloat();
       break;
     // Port-only Remastered transform mode; only 3 (xPortXfmdFollow) and 4 (xPortXfmdMover) are written.
     case 'XFMD': {

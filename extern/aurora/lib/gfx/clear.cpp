@@ -169,7 +169,8 @@ void render(const DrawData& data, const wgpu::RenderPassEncoder& pass, const wgp
   pass.SetBlendConstant(&data.color);
   pass.SetViewport(0.f, 0.f, static_cast<float>(targetSize.width), static_cast<float>(targetSize.height), data.depth,
                    data.depth);
-  pass.SetScissorRect(0, 0, targetSize.width, targetSize.height);
+  const auto rect = target_rect(data, targetSize);
+  pass.SetScissorRect(rect.x, rect.y, rect.width, rect.height);
   pass.Draw(3);
 }
 
@@ -177,6 +178,8 @@ void render_multiview(const DrawData& data, const wgpu::RenderPassEncoder& pass,
   if (data.multiviewPipeline == PipelineRef{}) {
     return;
   }
-  render(DrawData{.pipeline = data.multiviewPipeline, .color = data.color, .depth = data.depth}, pass, targetSize);
+  DrawData multiview = data;
+  multiview.pipeline = data.multiviewPipeline;
+  render(multiview, pass, targetSize);
 }
 } // namespace aurora::gfx::clear

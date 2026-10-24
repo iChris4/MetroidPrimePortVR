@@ -21,6 +21,7 @@
 #include "port_hints.h"
 #include "port_log.h"
 #include "port_randomizer.h"
+#include "port_room_effects.h"
 #include "port_skip_cutscenes.h"
 
 #include <string>
@@ -1203,6 +1204,13 @@ CEntity* ScriptLoader::LoadEffect(CStateManager& mgr, CInputStream& in, int prop
 
   SScaledActorHead head(in, mgr);
   CAssetId partId = in.Get< CAssetId >();
+#ifdef TARGET_PC
+  // PORT: a retail effect a mod's Remastered effect actor matched takes the actor's PART
+  // (port_room_effects.h); the object itself stays, with its connections.
+  const PortRoomEffects::Override* const over = PortRoomEffects::FindOverride(info.GetEditorId().value);
+  if (over != nullptr && over->part != 0xFFFFFFFF && gpResourceFactory->GetResourceTypeById(over->part) != 0)
+    partId = over->part;
+#endif
   CAssetId elscId = in.Get< CAssetId >();
   bool hotInThermal = in.ReadBool();
   bool noTimerUnlessAreaOccluded = in.ReadBool();
@@ -1232,13 +1240,19 @@ CEntity* ScriptLoader::LoadEffect(CStateManager& mgr, CInputStream& in, int prop
   bool dieWhenSystemsDone = in.ReadBool();
   CLightParameters lParms = LoadLightParameters(in);
 
-  return rs_new CScriptEffect(
+  CScriptEffect* effect = rs_new CScriptEffect(
       mgr.AllocateUniqueId(), head.x0_actorHead.x0_name, info, head.x0_actorHead.x10_transform,
       head.x40_scale, partId, elscId, hotInThermal, noTimerUnlessAreaOccluded,
       rebuildSystemsOnActivate, active, useRateInverseCamDist, rateInverseCamDist,
       rateInverseCamDistRate, duration, durationResetWhileVisible, useRateCamDistRange,
       rateCamDistRangeMin, rateCamDistRangeMax, rateCamDistRangeFarRate, combatVisorVisible,
       thermalVisorVisible, xrayVisorVisible, lParms, dieWhenSystemsDone);
+#ifdef TARGET_PC
+  // PORT: and the actor's values for its system's particle variables (port_room_effects.h).
+  if (over != nullptr && partId == over->part && !over->vars.empty())
+    effect->PortSetExternalVars(PortRoomEffects::ExternalVars(over->vars));
+#endif
+  return effect;
 }
 
 CEntity* ScriptLoader::LoadTimer(CStateManager& mgr, CInputStream& in, int propCount,

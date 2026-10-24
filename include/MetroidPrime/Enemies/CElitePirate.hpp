@@ -102,6 +102,7 @@ private:
 CHECK_SIZEOF(CElitePirateData, 0x120)
 
 class CElitePirate : public CPatterned {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 public:
   CElitePirate(TUniqueId uid, const rstl::string& name, const CEntityInfo& info,
                const CTransform4f& xf, const CModelData& mData, const CPatternedInfo& pInfo,

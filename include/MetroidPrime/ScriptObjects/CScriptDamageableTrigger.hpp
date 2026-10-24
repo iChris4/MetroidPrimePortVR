@@ -13,6 +13,7 @@
 class CVisorParameters;
 
 class CScriptDamageableTrigger : public CActor {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 public:
   enum ECanOrbit {
     kCO_NoOrbit,

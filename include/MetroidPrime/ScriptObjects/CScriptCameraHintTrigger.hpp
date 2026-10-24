@@ -6,6 +6,7 @@
 #include "Collision/COBBox.hpp"
 
 class CScriptCameraHintTrigger : public CActor {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
   COBBox xe8_obb;
   CVector3f x124_scale;
   bool x130_24_deactivateOnEnter : 1;

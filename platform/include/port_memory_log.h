@@ -16,6 +16,10 @@ void Tick(uint64_t nowNs);
 // Android only (false elsewhere): whether the device is short on RAM (under 4096 MiB in
 // total, or ActivityManager.isLowRamDevice()); `why` says which. Issue #162.
 bool LowRamDevice(char* why, size_t whySize);
+// Lazy pipeline cache (issue #187): Tick checks the system's available memory every 5 s and, below
+// moderateMib or severeMib, asks Aurora to release built pipelines no recent frame drew with (idle
+// for 3600 frames, or for 16). 0 turns a level off; both 0 (the default) turns the check off.
+void SetPipelinePressure(int64_t moderateMib, int64_t severeMib);
 
 } // namespace PortMemoryLog
 

@@ -379,7 +379,8 @@ public final class MetroidPrimeActivity extends SDLActivity {
 
     // Called from the debug overlay, on the SDL thread: picks the Remastered
     // .nsp/.xci (which 0), prod.keys (which 1) or a PAL disc image for its
-    // languages (which 2) or a disc image for the full Flaahgra theme (which 3). None has a MIME type of its own.
+    // languages (which 2), a disc image for the full Flaahgra theme (which 3) or a Metroid Dread
+    // .nsp/.xci for the Dread Samus import (which 4). None has a MIME type of its own.
     public void pickRemasteredFile(int which) {
         runOnUiThread(() -> {
             Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT)
@@ -482,7 +483,7 @@ public final class MetroidPrimeActivity extends SDLActivity {
             }
             return;
         }
-        if (requestCode >= REQUEST_REMASTERED && requestCode <= REQUEST_REMASTERED + 3) {
+        if (requestCode >= REQUEST_REMASTERED && requestCode <= REQUEST_REMASTERED + 4) {
             Uri uri = data != null && resultCode == RESULT_OK ? data.getData() : null;
             if (uri != null) {
                 rememberRemasteredPick(requestCode - REQUEST_REMASTERED, uri);

@@ -6,6 +6,7 @@
 #include "MetroidPrime/TCastTo.hpp"
 
 class CRipper : public CPatterned {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
   static const uint skNumProperties;
 
 public:

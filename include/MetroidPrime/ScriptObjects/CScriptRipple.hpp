@@ -6,6 +6,7 @@
 #include "Kyoto/Math/CVector3f.hpp"
 
 class CScriptRipple : public CEntity {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
   float x34_magnitude;
   CVector3f x38_center;
 

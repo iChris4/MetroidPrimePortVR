@@ -7,6 +7,7 @@
 #include "Kyoto/Math/CRelAngle.hpp"
 
 class CScriptCameraPitchVolume : public CActor {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 public:
   CScriptCameraPitchVolume(TUniqueId, bool, const rstl::string&, const CEntityInfo&,
                            const CVector3f&, const CTransform4f&, const CRelAngle&,

@@ -7,6 +7,7 @@
 #include "MetroidPrime/CHealthInfo.hpp"
 #include "MetroidPrime/Player/CPlayerCameraBob.hpp"
 #include "MetroidPrime/Player/CPlayerGun.hpp"
+#include "MetroidPrime/Player/CPlayerVisor.hpp"
 #include "MetroidPrime/Player/CGrappleArm.hpp"
 #include "MetroidPrime/CAxisAngle.hpp"
 #include "MetroidPrime/CGameCollision.hpp"
@@ -36,6 +37,7 @@
 #ifdef TARGET_PC
 #include "vr/vr_view.h"
 #endif
+#include "port_third_person.h"
 
 static const CMaterialList kLineOfSightIncludeList = CMaterialList(kMT_Solid);
 static const CMaterialList kLineOfSightExcludeList =
@@ -618,6 +620,21 @@ static float OrbitZoneIdealNdcY(CPlayer::EPlayerZoneInfo zone) {
          1.f;
 }
 
+#ifdef TARGET_PC
+// Port: pointer aim in the Scan Visor picks scan points through the pointer, as Trilogy does: the
+// scan window follows the pointer (CPlayerVisor::DrawScanEffect), the scan zone moves with it and
+// candidates rank by their distance from it. The pointer
+// is in [-1, 1] of the half view, +y down; returns it in [-1, 1] screen space, +y up. A lock
+// re-centres the pointer, so a held scan lock is unaffected.
+static bool PortScanPointerNdc(CPlayer::EPlayerZoneInfo zone, float& x, float& y) {
+  if (zone != CPlayer::kZI_Scan || !PortDebug::PointerAimPosition(x, y)) {
+    return false;
+  }
+  y = -y;
+  return true;
+}
+#endif
+
 bool CPlayer::WithinOrbitScreenEllipse(const CVector3f& screenCoords, EPlayerZoneInfo zone) const {
   if (screenCoords.GetZ() >= 1.f) {
     return false;
@@ -644,6 +661,34 @@ bool CPlayer::WithinOrbitScreenBox(const CVector3f& screenCoords, EPlayerZoneInf
   case kZT_Box: {
     const float sx = OrbitZoneScaleX();
     const float sy = OrbitZoneScaleY();
+#ifdef TARGET_PC
+    float cx = CCast::LtoF(gpTweakPlayer->GetOrbitZoneCentreX(zone)) * sx;
+    float cy = CCast::LtoF(gpTweakPlayer->GetOrbitZoneCentreY(zone)) * sy;
+    float pointerX = 0.f;
+    float pointerY = 0.f;
+    if (PortScanPointerNdc(zone, pointerX, pointerY)) {
+      // The zone moves with the pointer, but only what is on screen can be picked.
+      const float width = CCast::LtoF(CGraphics::GetViewportWidth());
+      const float height = CCast::LtoF(CGraphics::GetViewportHeight());
+      if (screenCoords.GetX() < 0.f || screenCoords.GetX() > width || screenCoords.GetY() < 0.f ||
+          screenCoords.GetY() > height) {
+        return false;
+      }
+      cx += pointerX * width / 2.f;
+      cy += pointerY * height / 2.f;
+    }
+    float halfWidth = CCast::LtoF(gpTweakPlayer->GetOrbitZoneWidth(zone)) * sx;
+    float halfHeight = CCast::LtoF(gpTweakPlayer->GetOrbitZoneHeight(zone)) * sy;
+    if (zone == kZI_Scan) {
+      // The zone takes the window's shape (CPlayerVisor::PortWindowShapeX).
+      halfWidth *= CPlayerVisor::PortWindowShapeX();
+      halfHeight *= CPlayerVisor::PortWindowShapeY();
+    }
+    if (CMath::AbsF(screenCoords.GetX() - cx) <= halfWidth &&
+        CMath::AbsF(screenCoords.GetY() - cy) <= halfHeight && screenCoords.GetZ() < 1.f) {
+      return true;
+    }
+#else
     const float cx = CCast::LtoF(gpTweakPlayer->GetOrbitZoneCentreX(zone)) * sx;
     const float cy = CCast::LtoF(gpTweakPlayer->GetOrbitZoneCentreY(zone)) * sy;
     if (CMath::AbsF(screenCoords.GetX() - cx) <=
@@ -653,6 +698,7 @@ bool CPlayer::WithinOrbitScreenBox(const CVector3f& screenCoords, EPlayerZoneInf
         screenCoords.GetZ() < 1.f) {
       return true;
     }
+#endif
     break;
   }
   case kZT_Ellipse:
@@ -714,8 +760,19 @@ TUniqueId CPlayer::FindBestOrbitableObject(const rstl::vector< TUniqueId >& ids,
   float minDistance = 10000.f;
   float minScreenDistanceSq = 10000.f;
   TUniqueId bestId = kInvalidUniqueId;
+#ifdef TARGET_PC
+  float boxLeft = OrbitZoneIdealNdcX(zone);
+  float boxTop = OrbitZoneIdealNdcY(zone);
+  float pointerX = 0.f;
+  float pointerY = 0.f;
+  if (PortScanPointerNdc(zone, pointerX, pointerY)) {
+    boxLeft += pointerX;
+    boxTop += pointerY;
+  }
+#else
   const float boxLeft = OrbitZoneIdealNdcX(zone);
   const float boxTop = OrbitZoneIdealNdcY(zone);
+#endif
   const CFirstPersonCamera* const fpCamera = mgr.GetCameraManager()->GetFirstPersonCamera();
   for (AUTO(it, ids.begin()); it != ids.end(); ++it) {
     const CActor* const act = TCastToConstPtr< CActor >(mgr.GetObjectById(*it));
@@ -843,7 +900,12 @@ void CPlayer::UpdateOrbitableObjects(CStateManager& mgr) {
   if (CheckOrbitDisableSourceList(mgr)) {
     return;
   }
+  #ifdef TARGET_PC
+  // Third person: the search volume is the view the reticle is aimed in.
+  const CTransform4f cameraXf = PortThirdPerson::TickView(GetFirstPersonCameraTransform(mgr));
+#else
   const CTransform4f& cameraXf = GetFirstPersonCameraTransform(mgr);
+#endif
   float distance = GetOrbitMaxTargetDistance(mgr);
   if (x9c6_24_extendTargetDistance) {
     distance *= 5.f;
@@ -959,7 +1021,12 @@ TUniqueId CPlayer::CheckEnemiesAgainstOrbitZone(const rstl::reserved_vector< TUn
 }
 
 TUniqueId CPlayer::FindAimTargetId(CStateManager& mgr) {
+  #ifdef TARGET_PC
+  // Third person: the search volume is the view the reticle is aimed in.
+  const CTransform4f cameraXf = PortThirdPerson::TickView(GetFirstPersonCameraTransform(mgr));
+#else
   const CTransform4f& cameraXf = GetFirstPersonCameraTransform(mgr);
+#endif
   float distance = gpTweakPlayer->GetAimMaxDistance();
   if (x9c6_24_extendTargetDistance) {
     distance *= 5.f;
@@ -1136,7 +1203,11 @@ void CPlayer::UpdateAimTarget(CStateManager& mgr) {
 }
 
 void CPlayer::SetOrbitPosition(float distance, CStateManager& mgr) {
+#ifdef TARGET_PC
+  CTransform4f cameraXf = PortThirdPerson::TickView(GetFirstPersonCameraTransform(mgr));
+#else
   CTransform4f cameraXf = GetFirstPersonCameraTransform(mgr);
+#endif
   if (x304_orbitState == kOS_OrbitPoint && x30c_orbitBrokenType == kOB_BadVerticalAngle) {
     cameraXf = GetTransform();
   }

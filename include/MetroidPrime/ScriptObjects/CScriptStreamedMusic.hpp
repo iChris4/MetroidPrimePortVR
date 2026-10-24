@@ -6,6 +6,7 @@
 #include "Kyoto/Audio/CStreamAudioManager.hpp"
 
 class CScriptStreamedMusic : public CEntity {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 public:
   ~CScriptStreamedMusic() {}
   DECLARE_TYPES_MATCH_OR_ACCEPT;
@@ -24,6 +25,13 @@ public:
   bool IsLoopingMusic() const {
     return x46_loop && x47_music && x34_fileName.size() > 2 && x45_fileIsDsp;
   }
+  // Port: a looping software track this object started that is still playing,
+  // and its file (after the tweak override Play applied).
+  bool PortPlayingLoop() const {
+    return x46_loop && x45_fileIsDsp &&
+           CStreamAudioManager::PortIsPlaying(CStreamAudioManager::kSC_Default, x34_fileName);
+  }
+  const rstl::string& PortFileName() const { return x34_fileName; }
 #endif
 
 private:

@@ -89,6 +89,13 @@ void DrawCheats() {
     SetInvulnerable(invulnerable);
   }
   ImGui::SetItemTooltip("Samus takes no damage from anything. Stays on until unticked.");
+  bool phazonBeam = PhazonBeamCheat();
+  if (ImGui::Checkbox("Phazon Beam", &phazonBeam)) {
+    SetPhazonBeamCheat(phazonBeam);
+  }
+  ImGui::SetItemTooltip(
+      "The Phazon Beam takes the Power Beam's place, in any room, without the Phazon Suit. "
+      "Wave, Ice and Plasma leave it; Power enters it again. Stays on until unticked.");
 
   ImGui::SeparatorText("Abilities");
   struct SItemToggle {

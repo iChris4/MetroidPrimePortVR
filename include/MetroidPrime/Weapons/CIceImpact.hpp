@@ -37,6 +37,7 @@ class CGenDescription;
 class COBBTree;
 
 class CIceImpact : public CEffect {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 public:
   ~CIceImpact() override;
   DECLARE_TYPES_MATCH_OR_ACCEPT;

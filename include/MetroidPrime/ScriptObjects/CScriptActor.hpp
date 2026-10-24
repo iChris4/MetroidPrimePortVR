@@ -10,6 +10,7 @@
 class CActorParameters;
 
 class CScriptActor : public CPhysicsActor {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 public:
   CScriptActor(TUniqueId uid, const rstl::string& name, const CEntityInfo& info,
                const CTransform4f& xf, const CModelData& mData, const CAABox& aabb,

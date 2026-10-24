@@ -1002,6 +1002,46 @@ void TestNamedEffect() {
   CHECK_MSG(result.candidates == 1 && result.written == 1, "the named effect is a candidate and written");
   CHECK_MSG(written.size() == 1 && written.count("1EF973EA.PART") == 1, "it replaces the PART of its name");
 }
+
+// The FlickerBat's 0B9E48EB is adopted on a visual A/B, not on a CHPR: the table
+// entry (#visual-inferred) must keep pairing 3b29b0b3 with it.
+void TestVisualInferredEffect() {
+  std::vector<uint8_t> genp(0x3c, 0);
+  std::memcpy(genp.data(), "RFRM", 4);
+  std::memcpy(genp.data() + 0x14, "GENP", 4);
+  PutGenerator(genp, true);
+  PutProperty(genp, "MAXP", 1);
+  PutFourCC(genp, "CNST");
+  Put32(genp, 5);
+  PutProperty(genp, "_END", 4);
+  Put32(genp, 0);
+
+  // 3b29b0b3-0c3d-42b6-9159-f4863f6c3ed9, in pak order.
+  const EffectGuid effectId = {0x3b, 0x29, 0xb0, 0xb3, 0x0c, 0x3d, 0x42, 0xb6,
+                               0x91, 0x59, 0xf4, 0x86, 0x3f, 0x6c, 0x3e, 0xd9};
+  std::map<std::string, std::vector<uint8_t>> written;
+  EffectImportIO io;
+  io.effects = {effectId, Fresh(0x60)};
+  io.read = [&](uint32_t type, const EffectGuid& id, std::vector<uint8_t>& out, std::string& error) {
+    if (type == kGenp && id == effectId) {
+      out = genp;
+      return true;
+    }
+    error = "not in the image";
+    return false;
+  };
+  io.typeOf = [](const EffectGuid&) -> uint32_t { return 0; };
+  io.retailId = [](uint32_t id) { return id == 0x0B9E48EB; };
+  io.freshId = [](uint32_t) { return 0x00ABC000u; };
+  io.write = [&](const std::string& name, const std::vector<uint8_t>& data) {
+    written[name] = data;
+    return true;
+  };
+  const EffectImportResult result = ImportEffects(io);
+  CHECK_MSG(result.candidates == 1 && result.written == 1, "the inferred effect is a candidate and written");
+  CHECK_MSG(written.size() == 1 && written.count("0B9E48EB.PART") == 1,
+            "it replaces retail PART 0B9E48EB");
+}
 } // namespace
 
 int main() {
@@ -1012,6 +1052,7 @@ int main() {
   TestEmbeddedAndExternalIdsDoNotCollide();
   TestLostTexture();
   TestNamedEffect();
+  TestVisualInferredEffect();
   TestVectorField();
   if (port_test::Failures() == 0) {
     std::printf("port_remastered_effect_import: ok\n");

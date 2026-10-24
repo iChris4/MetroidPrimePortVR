@@ -156,7 +156,8 @@ bool record() {
     return false;
   }
   ensure_map();
-  if (env_flag("MP_ACTOR_SHADOW_DEBUG")) {
+  static const bool shadowDebug = env_flag("MP_ACTOR_SHADOW_DEBUG");
+  if (shadowDebug) {
     for (uint32_t l = 0; l < MaxLayers; ++l) {
       if (!g_casters[l].empty()) {
         Log.info("actor shadow record: layer {} casters {}", l, g_casters[l].size());

@@ -10,6 +10,7 @@ class CPatternedInfo;
 class CGenDescription;
 
 class CMetaree : public CPatterned {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 public:
   CMetaree(TUniqueId uid, const rstl::string& name, EFlavorType flavor, const CEntityInfo& info,
            const CTransform4f& xf, const CModelData& mData, const CPatternedInfo& pInfo,

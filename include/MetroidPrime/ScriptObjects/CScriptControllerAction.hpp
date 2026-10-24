@@ -6,6 +6,7 @@
 #include "MetroidPrime/CControlMapper.hpp"
 
 class CScriptControllerAction : public CEntity {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 public:
   enum ECommands {
     kC_Forward,

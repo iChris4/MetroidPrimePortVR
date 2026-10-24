@@ -8,6 +8,7 @@
 #include "Kyoto/CDvdRequest.hpp"
 #include "port_ap_world.h"
 #include "port_custom_res.h"
+#include "port_log.h"
 #include "port_mods.h"
 #include "port_skip_cutscenes.h"
 
@@ -15,6 +16,7 @@
 #include <dolphin/dvd.h>
 #include <dolphin/os.h>
 
+#include <cstdlib>
 #include <cstring>
 #include <map>
 #include <memory>
@@ -227,6 +229,21 @@ bool CResLoader::CacheFromPakForLoad(CPakFile& pak, const CAssetId asset) {
   return true;
 }
 
+#ifdef TARGET_PC
+// Retail loads only what ResourceExists found, so these never miss there. A
+// miss here (a PAK closed or stashed under the load, an order retail never
+// runs) would read through a null or another asset's SResInfo: stop with the
+// asset named instead, and the crash handler's stack shows who asked.
+static void PortCheckLoad(const CPakFile* pak, const SObjectTag& tag) {
+  if (pak != nullptr)
+    return;
+  const uint type = tag.GetType();
+  PortLog::Write("CResLoader: %c%c%c%c %08X is in no loaded PAK\n", (type >> 24) & 0xff,
+                 (type >> 16) & 0xff, (type >> 8) & 0xff, type & 0xff, static_cast< uint >(tag.GetId()));
+  std::abort();
+}
+#endif
+
 CPakFile* CResLoader::FindResourceForLoad(const SObjectTag& tag) {
   return FindResourceForLoad(tag.GetId());
 }
@@ -274,7 +291,14 @@ bool CResLoader::ResourceExists(CAssetId asset) {
 
 bool CResLoader::PortPakResourceExists(CAssetId asset) {
 #endif
+#ifdef TARGET_PC
+  // Port: ClearCache leaves kInvalidAssetId cached with no info, so an object
+  // without an X-ray model (asset -1) made right after it got a null info back
+  // (issue 179: a resume regenerating Metroid Prime Lair's Metroids).
+  if (x4c_cachedResId == asset && x50_cachedResInfo != nullptr) {
+#else
   if (x4c_cachedResId == asset) {
+#endif
     return true;
   }
 
@@ -457,6 +481,9 @@ CDvdRequest* CResLoader::LoadResourceAsync(const SObjectTag& tag, char* extBuf) 
   }
 #endif
   CPakFile* curPak = FindResourceForLoad(tag);
+#ifdef TARGET_PC
+  PortCheckLoad(curPak, tag);
+#endif
   const CPakFile::SResInfo* info = x50_cachedResInfo;
   return curPak->DvdFile().AsyncSeekRead(extBuf, align_size(info->GetSize()), kSO_Begin, info->GetOffset());
 }
@@ -470,6 +497,9 @@ CDvdRequest* CResLoader::LoadResourcePartAsync(const SObjectTag& tag, const int 
   }
 #endif
   CPakFile* curPak = FindResourceForLoad(tag);
+#ifdef TARGET_PC
+  PortCheckLoad(curPak, tag);
+#endif
   const CPakFile::SResInfo* info = x50_cachedResInfo;
   return curPak->DvdFile().AsyncSeekRead(extBuf, length, kSO_Begin, info->GetOffset() + offset);
 }
@@ -485,6 +515,9 @@ CInputStream* CResLoader::LoadNewResourceSync(const SObjectTag& tag, char* extBu
   }
 #endif
   CPakFile* curPak = FindResourceForLoad(tag);
+#ifdef TARGET_PC
+  PortCheckLoad(curPak, tag);
+#endif
   const CPakFile::SResInfo* info = x50_cachedResInfo;
   uint len = align_size(info->GetSize());
   void* dest = extBuf ? extBuf : rs_new char[len];
@@ -510,6 +543,12 @@ CInputStream* CResLoader::LoadResourceFromMemorySync(const SObjectTag& tag, cons
 #endif
   FindResourceForLoad(tag);
   const CPakFile::SResInfo* info = x50_cachedResInfo;
+#ifdef TARGET_PC
+  // A miss here keeps the last lookup's info, as retail does; only none at all
+  // (after ClearCache) is fatal.
+  if (info == nullptr)
+    PortCheckLoad(nullptr, tag);
+#endif
   CInputStream* input = rs_new CMemoryInStream(extBuf, info->GetSize());
 
   if (info->IsCompressed()) {
@@ -531,6 +570,9 @@ void CResLoader::LoadMemResourceSync(const SObjectTag& tag, char** bufOut, int* 
   }
 #endif
   CPakFile* curPak = FindResourceForLoad(tag);
+#ifdef TARGET_PC
+  PortCheckLoad(curPak, tag);
+#endif
   const CPakFile::SResInfo* info = x50_cachedResInfo;
   uint len = align_size(info->GetSize());
   char* buf = rs_new char[len];
@@ -551,6 +593,9 @@ CInputStream* CResLoader::LoadNewResourcePartSync(const SObjectTag& tag, int off
   }
 #endif
   CPakFile* curPak = FindResourceForLoad(tag);
+#ifdef TARGET_PC
+  PortCheckLoad(curPak, tag);
+#endif
   const CPakFile::SResInfo* info = x50_cachedResInfo;
 
   void* dest = extBuf ? extBuf : rs_new char[length];

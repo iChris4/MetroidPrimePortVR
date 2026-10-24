@@ -169,6 +169,10 @@ private:
   void SetupUnderwaterTevs(const CTransform4f& invXf, CStateManager& mgr);
   void SetupDefaultTevSwapMode();
   void BlankFirstSnowflakeMip(CTexture& tex);
+#ifdef TARGET_PC
+  bool PortRenderEnvFx(const CStateManager& mgr, EEnvFxType type, const CTransform4f& xf,
+                       const CTransform4f& invXf, const CTransform4f& camXf);
+#endif
 
   CAABox x0_particleBounds;
   CVector3f x18_focusCellPosition;

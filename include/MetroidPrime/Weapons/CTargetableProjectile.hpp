@@ -4,6 +4,7 @@
 #include "MetroidPrime/Weapons/CEnergyProjectile.hpp"
 
 class CTargetableProjectile : public CEnergyProjectile {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 public:
   CTargetableProjectile(
       const TToken< CWeaponDescription >& desc, const EWeaponType type, const CTransform4f& xf,

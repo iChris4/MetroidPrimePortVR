@@ -27,7 +27,7 @@ TextureFormatInfo format_info(wgpu::TextureFormat format) noexcept {
   case wgpu::TextureFormat::BGRA8Unorm:
   case wgpu::TextureFormat::R32Float:
     return {1, 1, 4, false};
-  case wgpu::TextureFormat::RGBA16Float: // linear scene copies (GXPortCopyScene)
+  case wgpu::TextureFormat::RGBA16Float: // linear scene copies (GXPortCopyScene), HDR mod textures
     return {1, 1, 8, false};
   case wgpu::TextureFormat::BC1RGBAUnorm:
   case wgpu::TextureFormat::BC1RGBAUnormSrgb:
@@ -35,6 +35,8 @@ TextureFormatInfo format_info(wgpu::TextureFormat format) noexcept {
   case wgpu::TextureFormat::BC3RGBAUnorm:
   case wgpu::TextureFormat::BC3RGBAUnormSrgb:
   case wgpu::TextureFormat::BC5RGUnorm:
+  case wgpu::TextureFormat::BC6HRGBUfloat: // HDR mod textures (a Remastered sky)
+  case wgpu::TextureFormat::BC6HRGBFloat:
   case wgpu::TextureFormat::BC7RGBAUnorm:
   case wgpu::TextureFormat::BC7RGBAUnormSrgb:
     return {4, 4, 16, true};

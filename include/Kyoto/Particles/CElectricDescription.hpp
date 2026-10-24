@@ -67,6 +67,7 @@ public:
   CColorElement* xPortNCLR = nullptr;
   bool xPortLLRD = true;
   bool xPortFPLB = false;
+  bool xPortXfmdFollow = false; // XFMD 3: bolts stay emitter-local and follow its live transform
   // port-only Remastered material (VMAT etc.; see CGenDescription::xPortVfx)
   std::unique_ptr< CPortVfxData > xPortVfx;
 #endif

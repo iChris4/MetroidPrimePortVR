@@ -1,4 +1,5 @@
 #include "MetroidPrime/ScriptObjects/CScriptPlayerActor.hpp"
+#include "port_dread_samus_mod.h"
 
 #include "MetroidPrime/CActorLights.hpp"
 #include "MetroidPrime/CActorModelParticles.hpp"
@@ -206,7 +207,9 @@ void CScriptPlayerActor::Render(const CStateManager& mgr) const {
     GXSetDstAlpha(GX_TRUE, 255);
   }
   CPhysicsActor::Render(mgr);
-  if (HasGunModelData() && HasModelData()) {
+  // The Dread Samus body (port_dread_samus_mod.h) carries its own cannon: Prime's is not drawn on it.
+  if (HasGunModelData() && HasModelData() &&
+      !PortDreadSamus::Replaces(PortDreadSamus::CutsceneBody(x2e8_suitRes.GetCharacterNodeId()))) {
     const CTransform4f locator =
         GetModelData()->GetScaledLocatorTransform(rstl::string_l(kGunLocator));
     const CTransform4f modelXf = GetTransform() * locator;

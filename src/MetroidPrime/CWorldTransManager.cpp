@@ -1,6 +1,7 @@
 #include "MetroidPrime/Cameras/CGameCamera.hpp"
 #include "MetroidPrime/Player/CWorldTransManager.hpp"
 #include "port_debug.h"
+#include "port_dread_samus_mod.h"
 
 #include "GuiSys/CGuiTextSupport.hpp"
 #include "Kyoto/CFrameDelayedKiller.hpp"
@@ -353,7 +354,9 @@ void CWorldTransManager::DrawAllModels() const {
     const CTransform4f& samusXf = CTransform4f::Identity();
     data.x1c_samusModelData.AnimationData()->PreRender();
     data.x1c_samusModelData.Render(CModelData::kWM_Normal, samusXf, &lights, CModelFlags::Normal());
-    if (!data.x68_beamModelData.IsNull())
+    // The Dread Samus body (port_dread_samus_mod.h) carries its own cannon: Prime's is not drawn on it.
+    if (!data.x68_beamModelData.IsNull() &&
+        !PortDreadSamus::Replaces(PortDreadSamus::CutsceneBody(GetSuitCharIdx())))
       data.x68_beamModelData.Render(CModelData::kWM_Normal, samusXf * data.x170_gunXf,
                                      &lights, CModelFlags::Normal());
   }

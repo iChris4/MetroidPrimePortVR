@@ -17,6 +17,7 @@ class CEntityInfo;
 class CModelData;
 
 class CScriptDebris : public CPhysicsActor {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 public:
   enum EOrientationType {
     kOT_NotOriented,

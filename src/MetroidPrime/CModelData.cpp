@@ -14,6 +14,9 @@
 #include "MetroidPrime/Factories/CCharacterFactory.hpp"
 #include "MetroidPrime/Factories/CCharacterFactoryBuilder.hpp"
 #include "MetroidPrime/Player/CPlayerState.hpp"
+#ifdef TARGET_PC
+#include "port_retail_placement.h"
+#endif
 
 struct SThermalDrawContext {
   SThermalDrawContext(CSkinnedModel& model, const CColor& mulColor, const CColor& addColor,
@@ -96,6 +99,9 @@ void CModelData::Render(EWhichModel which, const CTransform4f& xf, const CActorL
   }
   CTransform4f scaledXf = xf;
   scaledXf *= CTransform4f::Scale(x0_scale.GetX(), x0_scale.GetY(), x0_scale.GetZ());
+#ifdef TARGET_PC
+  scaledXf = PortScaledXf(which, xf);
+#endif
   gpRender->SetModelMatrix(scaledXf);
   if (lights != nullptr) {
     lights->ActivateLights();
@@ -127,6 +133,9 @@ void CModelData::RenderUnsortedParts(EWhichModel which, const CTransform4f& xf,
   }
   CTransform4f scaledXf =
       xf * CTransform4f::Scale(x0_scale.GetX(), x0_scale.GetY(), x0_scale.GetZ());
+#ifdef TARGET_PC
+  scaledXf = PortScaledXf(which, xf);
+#endif
   gpRender->SetModelMatrix(scaledXf);
   if (lights != nullptr) {
     lights->ActivateLights();
@@ -203,6 +212,9 @@ void CModelData::ThermalDraw(CSkinnedModel& model, const float* positions, const
 void CModelData::RenderThermal(const CTransform4f& xf, const CColor& mulColor,
                                const CColor& addColor, const CModelFlags& flags) const {
   CTransform4f scaledXf = xf * CTransform4f::Scale(x0_scale);
+#ifdef TARGET_PC
+  scaledXf = PortScaledXf(kWM_ThermalHot, xf);
+#endif
   gpRender->SetModelMatrix(scaledXf);
   CGraphics::DisableAllLights();
   if (HasAnimation()) {
@@ -218,6 +230,9 @@ void CModelData::RenderThermal(const CTransform4f& xf, const CColor& mulColor,
 void CModelData::DisintegrateDraw(EWhichModel which, const CTransform4f& xf,
                                   const CTexture& texture, const CColor& color, float t) const {
   CTransform4f scaledXf = xf * CTransform4f::Scale(x0_scale);
+#ifdef TARGET_PC
+  scaledXf = PortScaledXf(which, xf);
+#endif
   gpRender->SetModelMatrix(scaledXf);
   CGraphics::DisableAllLights();
   CAABox bounds = GetBounds(scaledXf);
@@ -239,6 +254,9 @@ void CModelData::DisintegrateDraw(const CStateManager& mgr, const CTransform4f& 
 void CModelData::FlatDraw(EWhichModel which, const CTransform4f& xf, bool unsortedOnly,
                           const CModelFlags& flags) const {
   CTransform4f scaledXf = xf * CTransform4f::Scale(x0_scale);
+#ifdef TARGET_PC
+  scaledXf = PortScaledXf(which, xf);
+#endif
   gpRender->SetModelMatrix(scaledXf);
   CGraphics::DisableAllLights();
   if (HasAnimation()) {
@@ -255,6 +273,9 @@ void CModelData::MultiLightingDraw(EWhichModel which, const CTransform4f& xf,
                                    const CActorLights* lights, const CColor& mulColor,
                                    const CColor& addColor) const {
   CTransform4f scaledXf = xf * CTransform4f::Scale(x0_scale);
+#ifdef TARGET_PC
+  scaledXf = PortScaledXf(which, xf);
+#endif
   gpRender->SetModelMatrix(scaledXf);
   if (HasAnimation()) {
     CSkinnedModel& model = PickAnimatedModel(which);
@@ -271,6 +292,9 @@ void CModelData::MultipassDraw(EWhichModel which, const CTransform4f& xf,
                                const CActorLights* lights, const CModelFlags* flags,
                                int count) const {
   CTransform4f scaledXf = xf * CTransform4f::Scale(x0_scale);
+#ifdef TARGET_PC
+  scaledXf = PortScaledXf(which, xf);
+#endif
   gpRender->SetModelMatrix(scaledXf);
   if (lights != nullptr) {
     lights->ActivateLights();
@@ -363,6 +387,10 @@ CAABox CModelData::GetBounds(const CTransform4f& xf) const {
       xf * CTransform4f::Scale(x0_scale.GetX(), x0_scale.GetY(), x0_scale.GetZ());
   if (HasAnimation())
     return xc_animData->GetBoundingBox(scaledXf);
+#ifdef TARGET_PC
+  if (xPortCorrected != 0)
+    return PortLocalBounds().GetTransformedAABox(scaledXf);
+#endif
   if (!x2c_xrayModel && !x3c_infraModel)
     return (*x1c_normalModel)->GetBoundingBox().GetTransformedAABox(scaledXf);
   CAABox bounds = (*x1c_normalModel)->GetBoundingBox();
@@ -379,6 +407,11 @@ CAABox CModelData::GetBounds() const {
   if (HasAnimation())
     return xc_animData->GetBoundingBox(
         CTransform4f::Scale(x0_scale.GetX(), x0_scale.GetY(), x0_scale.GetZ()));
+#ifdef TARGET_PC
+  if (xPortCorrected != 0)
+    return PortLocalBounds().GetTransformedAABox(
+        CTransform4f::Scale(x0_scale.GetX(), x0_scale.GetY(), x0_scale.GetZ()));
+#endif
   if (!x2c_xrayModel && !x3c_infraModel) {
     const CAABox& bounds = (*x1c_normalModel)->GetBoundingBox();
     return CAABox(CVector3f(bounds.GetMinPoint().GetX() * x0_scale.GetX(),
@@ -568,3 +601,68 @@ int CModelData::GetNumMaterialSets() const {
     return (*x1c_normalModel)->GetNumMaterialSets();
   return 1;
 }
+
+#ifdef TARGET_PC
+int CModelData::PortSlot(EWhichModel which) const {
+  switch (which) {
+  case kWM_Thermal:
+  case kWM_ThermalHot:
+    return x3c_infraModel ? 2 : 0;
+  case kWM_XRay:
+    return x2c_xrayModel ? 1 : 0;
+  default:
+    return 0;
+  }
+}
+
+void CModelData::PortPlace(uint mrea, uint editorId) {
+  xPortCorrected = 0;
+  if (HasAnimation())
+    return;
+  const rstl::optional_object< TLockedToken< CModel > >* slots[3] = {&x1c_normalModel, &x2c_xrayModel,
+                                                                     &x3c_infraModel};
+  for (int i = 0; i < 3; ++i) {
+    if (*slots[i] &&
+        PortRetailPlacement::Find(mrea, editorId, static_cast< uint >((**slots[i]).GetTag().GetId()),
+                                  xPortCorrection[i]))
+      xPortCorrected |= uchar(1 << i);
+  }
+}
+
+CTransform4f CModelData::PortScaledXf(EWhichModel which, const CTransform4f& xf) const {
+  const CTransform4f scaledXf = xf * CTransform4f::Scale(x0_scale);
+  const int slot = PortSlot(which);
+  if (HasAnimation() || (xPortCorrected & (1 << slot)) == 0)
+    return scaledXf;
+  const float m[12] = {xf.Get00(), xf.Get01(), xf.Get02(), xf.Get03(), xf.Get10(), xf.Get11(),
+                       xf.Get12(), xf.Get13(), xf.Get20(), xf.Get21(), xf.Get22(), xf.Get23()};
+  const float scale[3] = {x0_scale.GetX(), x0_scale.GetY(), x0_scale.GetZ()};
+  float o[12];
+  PortRetailPlacement::Compose(m, scale, xPortCorrection[slot], o);
+  return CTransform4f(o[0], o[1], o[2], o[3], o[4], o[5], o[6], o[7], o[8], o[9], o[10], o[11]);
+}
+
+// The models' boxes, each through its own correction, as GetBounds unions them.
+CAABox CModelData::PortLocalBounds() const {
+  const rstl::optional_object< TLockedToken< CModel > >* slots[3] = {&x1c_normalModel, &x2c_xrayModel,
+                                                                     &x3c_infraModel};
+  CAABox bounds = (*x1c_normalModel)->GetBoundingBox();
+  bool first = true;
+  for (int i = 0; i < 3; ++i) {
+    if (!*slots[i])
+      continue;
+    CAABox box = (**slots[i])->GetBoundingBox();
+    if ((xPortCorrected & (1 << i)) != 0) {
+      const float* c = xPortCorrection[i];
+      box = box.GetTransformedAABox(
+          CTransform4f(c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7], c[8], c[9], c[10], c[11]));
+    }
+    if (first)
+      bounds = box;
+    else
+      bounds.Include(box);
+    first = false;
+  }
+  return bounds;
+}
+#endif

@@ -50,7 +50,8 @@ void AddTouchTurn(float yaw, float pitch);
 // L and Z (or the d-pad's up and down) go down and up. Returns true when the input was
 // taken and the player must not see it.
 bool Input(const CFinalInput& input);
-// The view the world is drawn from, blended between ticks; `game` when the camera is off.
+// The view the world is drawn from, blended between ticks; `game` when the camera is off (or
+// the third-person camera's view of it, port_third_person.h).
 CTransform4f View(const CTransform4f& game);
 
 } // namespace PortFreeCam

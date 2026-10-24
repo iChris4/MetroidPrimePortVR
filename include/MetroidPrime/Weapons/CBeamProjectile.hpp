@@ -8,6 +8,7 @@
 #include "rstl/reserved_vector.hpp"
 
 class CBeamProjectile : public CGameProjectile {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 public:
   enum EDamageType {
     kDT_None,

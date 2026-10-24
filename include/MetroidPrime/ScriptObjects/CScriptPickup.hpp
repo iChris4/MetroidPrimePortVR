@@ -9,6 +9,7 @@
 class CGenDescription;
 
 class CScriptPickup : public CPhysicsActor {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
   CPlayerState::EItemType x258_itemType;
   int x25c_amount;
   int x260_capacity;

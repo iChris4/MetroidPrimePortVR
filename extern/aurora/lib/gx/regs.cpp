@@ -133,10 +133,16 @@ void bp_tev_ind(u8 reg, u32 value) noexcept {
 void bp_scissor(u8, u32) noexcept {
   const u32 scis0 = g_gxState.bpRegCache[0x20];
   const u32 scis1 = g_gxState.bpRegCache[0x21];
-  const s32 tp = static_cast<s32>(reg_get(scis0, 12, 0)) - 342;
-  const s32 lf = static_cast<s32>(reg_get(scis0, 12, 12)) - 342;
-  const s32 bm = static_cast<s32>(reg_get(scis1, 12, 0)) - 342;
-  const s32 rt = static_cast<s32>(reg_get(scis1, 12, 12)) - 342;
+
+  const u32 boxOffset = g_gxState.bpRegCache[0x59];
+  // The box offset fields are signed 9-bit values and also halved, like the viewport registers. Sign extend.
+  const s32 offsX = static_cast<s32>(reg_get(boxOffset, 10, 0)) << 23 >> 22;
+  const s32 offsY = static_cast<s32>(reg_get(boxOffset, 10, 10)) << 23 >> 22;
+
+  const s32 tp = static_cast<s32>(reg_get(scis0, 12, 0)) + offsY;
+  const s32 lf = static_cast<s32>(reg_get(scis0, 12, 12)) + offsX;
+  const s32 bm = static_cast<s32>(reg_get(scis1, 12, 0)) + offsY;
+  const s32 rt = static_cast<s32>(reg_get(scis1, 12, 12)) + offsX;
   const s32 wd = std::max(rt - lf + 1, 0);
   const s32 ht = std::max(bm - tp + 1, 0);
   set_logical_scissor({lf, tp, wd, ht});
@@ -536,11 +542,12 @@ constexpr auto kBpRegs = [] {
   regs[0x40] = {bp_z_mode, DirtyPipeline};
   regs[0x41] = {bp_cmode0, DirtyPipeline};
   regs[0x42] = {bp_cmode1, DirtyPipeline};
-  regs[0x43] = {bp_pe_ctrl};
+  regs[0x43] = {bp_pe_ctrl, DirtyPipeline};
   regs[0x4F] = {bp_clear_ra};
   regs[0x50] = {bp_clear_bg};
   regs[0x51] = {bp_clear_depth};
   regs[0x52] = {bp_efb_copy, 0, /* alwaysHandle */ true};
+  regs[0x59] = {bp_scissor};
   regs[0x64] = {}; // TLUT load address; bp_tlut_load reads from shadow
   regs[0x65] = {bp_tlut_load, DirtyTextures, /* alwaysHandle */ true};
   for (u32 base : {0x80u, 0xA0u}) {

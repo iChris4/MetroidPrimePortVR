@@ -31,6 +31,7 @@ struct CPoisonInfo {
 CHECK_SIZEOF(CPoisonInfo, 0x3C);
 
 class CPoisonProjectile : public CEnergyProjectile {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
   CPoisonInfo x3d8_auxData;
 
 public:

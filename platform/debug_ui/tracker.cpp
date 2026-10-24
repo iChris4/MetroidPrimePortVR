@@ -39,8 +39,7 @@ void DrawTrackerLogic() {
   if (ImGui::Checkbox("Colour the map's dots by logic", &colors)) {
     SetMapLogicColors(colors);
   }
-  ItemHelp("Worked out from the items received and the seed's logic options, with the rules of the "
-           "Metroid Prime Archipelago tracker pack. Green is in logic; yellow can be reached with a "
+  ItemHelp("Worked out from your items and the seed's logic. Green is in logic; yellow needs a "
            "trick the seed doesn't count on; blue can be seen but not collected.");
   static const ImVec4 kColors[] = {
       ImVec4(0.95f, 0.30f, 0.30f, 1.f), // out of logic
@@ -123,8 +122,7 @@ void DrawTrackerTab() {
   }
   ImGui::EndDisabled();
   ItemHelp("Shows every world's map as if its map station had been used, and lists every world on "
-           "the star map. Rooms a map station leaves hidden stay hidden, and rooms you haven't "
-           "entered keep the unexplored colour. The save is not changed.");
+           "the star map. Hidden rooms stay hidden. The save isn't changed.");
   // Combo order: Off, Seen, Rooms, All.
   static const EMapPickups kPickupModes[] = {kMapPickups_Off, kMapPickups_Seen, kMapPickups_Rooms,
                                              kMapPickups_All};
@@ -137,11 +135,10 @@ void DrawTrackerTab() {
   if (ImGui::Combo("Pickups on the map", &pickups, "Off\0Seen\0Rooms\0All\0")) {
     SetMapPickups(kPickupModes[pickups]);
   }
-  ItemHelp("Marks item pickups on the map and minimap, until you collect them. Seen: a white dot "
-           "once you have seen the pickup, in the room or through a gap. Rooms: no dots; each "
-           "room the map shows that still holds an uncollected pickup is tinted amber. All: a dot "
-           "for every pickup in the rooms the map shows. In Seen and All an Archipelago game "
-           "colours the dots by what its logic lets you reach.");
+  ItemHelp("Marks uncollected pickups on the map and minimap. Seen: a white dot once you've seen "
+           "the pickup. Rooms: no dots; rooms still holding a pickup are tinted amber. All: a dot "
+           "for every pickup in the rooms the map shows. In Seen and All, Archipelago colours dots "
+           "by what logic lets you reach.");
   const bool dots = sMapPickups == kMapPickups_Seen || sMapPickups == kMapPickups_All;
   ImGui::BeginDisabled(!dots);
   bool kinds = sMapPickupKinds;
@@ -149,30 +146,26 @@ void DrawTrackerTab() {
     SetMapPickupKinds(kinds);
   }
   ImGui::EndDisabled();
-  ItemHelp("A filled dot for a major item (a beam, visor, suit, ball upgrade, artifact, the main "
-           "Power Bomb, or an Archipelago Missile Launcher), a ring for a minor one (a missile or "
-           "power bomb expansion or an energy tank), and a grey cross where a pickup was "
-           "collected. In a randomized game this tells what kind of item each pickup holds. "
-           "Otherwise the Missile Launcher is an ordinary missile pickup, so it shows as minor; in "
-           "Archipelago an item for another game is major when it is progression, and a pickup "
-           "not scouted yet is a dot. Off: one white dot for every item, gone once collected.");
+  ItemHelp("Filled dot: major item. Ring: minor item (expansion or energy tank). Grey cross: "
+           "collected. Randomized games show what each pickup holds; in Archipelago, another "
+           "game's item is major if progression, and an unscouted pickup is a dot. Off: one white "
+           "dot per item, gone once collected.");
   ImGui::BeginDisabled(sMapPickups != kMapPickups_Seen);
   bool station = sMapStationPickups;
   if (ImGui::Checkbox("Map stations show pickups", &station)) {
     SetMapStationPickups(station);
   }
   ImGui::EndDisabled();
-  ItemHelp("In Seen, a map station also marks every pickup in the rooms it maps, as a hint does "
-           "for its room. With Reveal map on, that is every room, as in All.");
+  ItemHelp("In Seen, a map station also marks every pickup in the rooms it maps. With Reveal map "
+           "on, that is every room, as in All.");
   bool extraUi = sMapExtraUi;
   if (ImGui::Checkbox("Extra map UI", &extraUi)) {
     SetMapExtraUi(extraUi);
   }
-  ItemHelp("The port's own lines on the world map screen: legend entries for the pickup shapes in "
-           "use and for the marked-room colour, and the \"X Mark room\" prompt in the map's upper "
-           "right (in Single Player a click or tap on it marks or unmarks the shown room). Off by "
-           "default, so the disc's own legend and prompts are what a first playthrough shows. "
-           "Room marks still work with X and still draw cyan with this off.");
+  ItemHelp(
+      "The port's own lines on the world map: legends for pickup shapes and marked rooms, and the "
+      "\"X Mark room\" prompt (in Single Player a click or tap marks the room). Off by default, so "
+      "a first playthrough shows the disc's own legend. Room marks still work with X.");
 
   DrawTrackerLogic();
 
@@ -183,7 +176,7 @@ void DrawTrackerTab() {
     MarkDirty();
   }
   ItemHelp("Item collection, scans and rooms visited, with what is still missing. Off by default, "
-           "since the counts and lists show how much is left to find.");
+           "since it shows how much is left to find.");
   if (!sTrackerProgress) {
     return;
   }

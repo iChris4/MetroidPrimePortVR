@@ -29,6 +29,11 @@ function(mp_port_test name)
     message(FATAL_ERROR "mp_port_test(${name}): SOURCES is required")
   endif()
   add_executable(${name} ${T_SOURCES})
+  # cl.exe's traditional preprocessor splits a raw string passed to a macro at its
+  # first \" (CHECK_MSG(R"({"a\"b"})")), issue #170; the conforming one does not.
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+    target_compile_options(${name} PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/Zc:preprocessor>)
+  endif()
   if(T_INCLUDES)
     target_include_directories(${name} PRIVATE ${T_INCLUDES})
   endif()

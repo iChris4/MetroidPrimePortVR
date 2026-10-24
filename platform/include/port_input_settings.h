@@ -47,7 +47,7 @@ constexpr float kTouchButtonInsetDefault = 0.f;
 constexpr float kTouchOpacityDefault = 100.f;
 constexpr float kTouchOpacityMin = 10.f;
 constexpr float kTouchOpacityMax = 100.f;
-constexpr std::size_t kTouchLayoutMaxLen = 4096;
+constexpr std::size_t kTouchLayoutMaxLen = 16384; // 64 added buttons fit (issue #92)
 // SDL_SCANCODE_LSHIFT (SDL3), the default beam-shift key; debug_ui.cpp checks it.
 constexpr int kScancodeLShift = 225;
 
@@ -95,9 +95,6 @@ struct Settings {
   // The "Reset aim" action recentres the pointer under pointer aim and levels
   // the camera without it; on, it does both either way.
   bool resetAimBoth = false;
-  // Under direct aim, a lock-on with no target holds the camera pitch it had
-  // instead of levelling the view. Off = retail.
-  bool lockKeepsPitch = false;
   // An old gyro_rate line (aim pixels per rad/s, scaled by the mouse sensitivity)
   // and whether gyro_sensitivity was read since the last PostLoad, which turns the
   // first into the second when only it was there.
@@ -135,6 +132,10 @@ struct Settings {
   bool pointerAim = false; // the mouse moves a pointer; the view turns past the dead box
   int pointerAimBox = kPointerAimBoxDefault;
   int pointerAimTurn = kPointerAimTurnDefault;
+  // Lock-on free aim (Remastered): under a combat lock a pointer moves over the view and
+  // shots follow it while the lock steers the view (any direct aim, with or without
+  // pointer aim).
+  bool lockOnFreeAim = false;
   float mouseSensitivity = 0.0035f; // radians per count; shown on the Source scale
   // With mouseSensitivitySplit on, mouseSensitivityY (radians per count) drives vertical mouse
   // aim and mouseSensitivity only the horizontal.

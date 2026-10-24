@@ -70,7 +70,7 @@ float RawState::Value(const Input& in) const {
   case Device::PadAxis:
     return in.code < kPadAxisCount ? Directed(padAxes[in.code], in.dir) : 0.f;
   case Device::Touch:
-    return Bit(touch, in.code, kTouchCount) ? 1.f : 0.f;
+    return in.code < kTouchCount && touch[in.code] ? 1.f : 0.f;
   case Device::TouchAxis:
     return in.code < kTouchAxisCount ? Directed(touchAxes[in.code], in.dir) : 0.f;
   case Device::Gyro:

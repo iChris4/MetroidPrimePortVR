@@ -45,6 +45,9 @@ public:
   }
   const CCharLayoutNode& GetSegmentData(const CSegId& seg) const { return (*mNodes)[seg]; }
   CSegId GetOriginalParent(const CSegId& seg) const { return GetSegmentData(seg).GetParent(); }
+#ifdef TARGET_PC
+  bool ContainsSegment(const CSegId& seg) const { return mNodes->ContainsDataFor(seg); }
+#endif
 
 private:
   rstl::object_owner< TSegIdMap< CCharLayoutNode > > mNodes;

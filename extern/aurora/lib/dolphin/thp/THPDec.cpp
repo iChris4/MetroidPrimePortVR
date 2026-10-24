@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstddef>
+#include <limits>
 
 namespace {
 // Error codes
@@ -224,8 +226,8 @@ s32 parse_scan_header(const u8* data, size_t size, DecodeContext& context) noexc
   return 0;
 }
 
-s32 parse_headers(const void* file, DecodeContext& context) noexcept {
-  auto reader = aurora::ByteReader::unbounded(file);
+s32 parse_headers(const void* file, size_t size, DecodeContext& context) noexcept {
+  aurora::ByteReader reader{static_cast<const u8*>(file), size};
   while (true) {
     u8 prefix = 0;
     if (!reader.try_read(prefix) || prefix != 0xFF) {
@@ -306,17 +308,29 @@ s32 parse_headers(const void* file, DecodeContext& context) noexcept {
 }
 
 // Bits are consumed MSB first from the raw bytes (THP has no 0xFF stuffing). The buffer is left-aligned
-// and refilled four bytes at a time, so it reads at most 4 bytes past the last bit consumed.
+// and refilled four bytes at a time. Bytes past the end read as zero (a truncated frame decodes as blank
+// blocks rather than reading past its buffer).
 class BitReader {
 public:
-  BitReader(const u8* data, size_t byteOffset) noexcept : mData{data + byteOffset} {}
+  BitReader(const u8* data, size_t byteOffset, size_t size) noexcept
+  : mData{data + byteOffset}, mRemaining{size > byteOffset ? size - byteOffset : 0} {}
 
   // Makes at least 32 bits available.
   void refill() noexcept {
     if (mCount < 32) {
-      const u64 word = (u64{mData[0]} << 24) | (u64{mData[1]} << 16) | (u64{mData[2]} << 8) | u64{mData[3]};
+      u64 word = 0;
+      if (mRemaining >= 4) {
+        word = (u64{mData[0]} << 24) | (u64{mData[1]} << 16) | (u64{mData[2]} << 8) | u64{mData[3]};
+        mData += 4;
+        mRemaining -= 4;
+      } else {
+        for (size_t i = 0; i < 4; ++i) {
+          word = (word << 8) | (i < mRemaining ? u64{mData[i]} : 0);
+        }
+        mData += mRemaining;
+        mRemaining = 0;
+      }
       mBuffer |= word << (32 - mCount);
-      mData += 4;
       mCount += 32;
     }
   }
@@ -342,6 +356,7 @@ public:
 
 private:
   const u8* mData;
+  size_t mRemaining;
   u64 mBuffer = 0; // left-aligned
   u32 mCount = 0;
 };
@@ -388,7 +403,9 @@ bool decode_block(BitReader& reader, DecodeContext& context, size_t componentInd
     return false;
   }
   const u32 encodedDifference = reader.read(bitCount);
-  component.predictedDc += extend_value(encodedDifference, bitCount);
+  // Wraps (as the s16 it is stored to does) instead of overflowing on corrupt data.
+  component.predictedDc = static_cast<s32>(static_cast<u32>(component.predictedDc) +
+                                           static_cast<u32>(extend_value(encodedDifference, bitCount)));
   block[0] = static_cast<s16>(component.predictedDc);
 
   size_t coefficient = 1;
@@ -631,12 +648,9 @@ bool decode_and_write_block(BitReader& reader, DecodeContext& context, size_t co
   write_block(output, width, height, x, y, inverse_dct(coefficients, quantization));
   return true;
 }
-} // namespace
 
-extern "C" {
-BOOL THPInit(void) { return TRUE; }
-
-s32 THPVideoDecode(const void* file, void* tileY, void* tileU, void* tileV, void*) {
+s32 decode_video(const void* file, size_t size, void* tileY, void* tileU, void* tileV, u32 maxWidth,
+                 u32 maxHeight) noexcept {
   if (file == nullptr) {
     return kNoInput;
   }
@@ -645,15 +659,19 @@ s32 THPVideoDecode(const void* file, void* tileY, void* tileU, void* tileV, void
   }
 
   DecodeContext context{};
-  const s32 headerResult = parse_headers(file, context);
+  const s32 headerResult = parse_headers(file, size, context);
   if (headerResult != 0) {
     return headerResult;
+  }
+  // The planes are sized for the caller's picture: a frame claiming a larger one would write past them.
+  if (context.width > maxWidth || context.height > maxHeight) {
+    return kBadSyntax;
   }
 
   const u16 chromaWidth = static_cast<u16>((context.width + 1) / 2);
   const u16 chromaHeight = static_cast<u16>((context.height + 1) / 2);
 
-  BitReader bits{static_cast<const uint8_t*>(file), context.scanOffset};
+  BitReader bits{static_cast<const uint8_t*>(file), context.scanOffset, size};
   const u16 mcuColumns = static_cast<u16>((context.width + 15) / 16);
   const u16 mcuRows = static_cast<u16>((context.height + 15) / 16);
   u32 restartCount = 0;
@@ -686,5 +704,18 @@ s32 THPVideoDecode(const void* file, void* tileY, void* tileU, void* tileV, void
     }
   }
   return 0;
+}
+} // namespace
+
+extern "C" {
+BOOL THPInit(void) { return TRUE; }
+
+s32 THPVideoDecode(const void* file, void* tileY, void* tileU, void* tileV, void*) {
+  return decode_video(file, std::numeric_limits<size_t>::max(), tileY, tileU, tileV, 0xFFFF, 0xFFFF);
+}
+
+s32 THPVideoDecodeBounded(const void* file, size_t size, void* tileY, void* tileU, void* tileV, u32 width,
+                          u32 height) {
+  return decode_video(file, size, tileY, tileU, tileV, width, height);
 }
 }

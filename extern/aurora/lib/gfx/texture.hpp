@@ -1,7 +1,9 @@
 #pragma once
 #include <dolphin/gx.h>
 
+#include <memory>
 #include <utility>
+#include <vector>
 
 #include "types.hpp"
 
@@ -49,6 +51,9 @@ struct TextureRef {
   u32 gxFormat;
   bool hasArbitraryMips = false;
   bool isReplacement = false;
+  // Compatibility devices only, block-compressed formats only: the bytes uploaded (every mip, tightly packed in
+  // block rows), because such a texture can't be copied on the GPU there; the VFX atlas fills its layers from them.
+  std::shared_ptr<const std::vector<uint8_t>> cpuBytes;
   // The creation label (interned, so it outlives the texture), for the live-texture breakdown.
   const char* label = nullptr;
 
@@ -117,7 +122,7 @@ struct GXTexObj_ {
   GXTexWrapMode wrap_t() const noexcept { return static_cast<GXTexWrapMode>(get_bits(mode0, 2, 2)); }
   GXTexFilter min_filter() const noexcept {
     constexpr GXTexFilter kHwToGxFilter[8] = {
-        GX_NEAR, GX_NEAR_MIP_NEAR, GX_LIN_MIP_NEAR, GX_NEAR, GX_LINEAR, GX_NEAR_MIP_LIN, GX_LIN_MIP_LIN, GX_NEAR,
+        GX_NEAR, GX_NEAR_MIP_NEAR, GX_NEAR_MIP_LIN, GX_NEAR, GX_LINEAR, GX_LIN_MIP_NEAR, GX_LIN_MIP_LIN, GX_NEAR,
     };
     return kHwToGxFilter[get_bits(mode0, 3, 5)];
   }

@@ -18,7 +18,7 @@
 // ambient colour.
 //
 // The file is little endian:
-//   'MPEV', u32 version (1 to 22), f32 tonemap[4], u32 probes, u32 cubes
+//   'MPEV', u32 version (1 to 26), f32 tonemap[4], u32 probes, u32 cubes
 //   probe: f32 worldToBox[12], f32 worldToCube[9], s32 layer, u32 cube, f32 scale, f32 padding
 //          and from version 8 on, s32 priority, f32 intensity min, f32 intensity max
 //          (before it the padding is unused, 1 m, and the rest 0, 0, 1). From version 9
@@ -134,12 +134,25 @@
 //   hint: u8 mode (1 active while the camera is inside a fluid, 2 once it has left one), u8 pad[3],
 //         f32 min, f32 max, f32 bias, f32 sigma, f32 static lerp. Remastered's fluid-mode
 //         CAutoExposureHintGOC (see ExposureHints); the plain hint stays in the header fields.
+// Version 25 uses the hint's pad: u8 mode, u8 role (0 ordinary, 1 / 2 the pair hint A / B of a
+//   CAutoExposureHintMP1, which swaps them on the thermal visor), u8 pair (its instance), u8 pad;
+//   a role hint keeps any mode (0, 1, 2, or a script mode that never registers). Older files
+//   have role 0.
 // Version 22 adds, after the hints:
 //   u32 volumes
 //   volume: f32 centre[3], f32 half[3], f32 axes[9] (retail world; axes[3 * i..] is the box's
 //         unit axis i, half[i] its half extent along it). The world's camera volumes (see
 //         WorldVolume); every room of a world has the same table, and link senders
 //         kSenderWorldVolume + k name its entries.
+// Version 23 adds, at the end:
+//   f32 worldShift[3]: the world's origin move (retail world = Remastered's (-x, z, y) plus it;
+//         every room of a world has the same). The fog's noise is looked up in Remastered's world.
+// Version 24 adds to each sun: u8 casts, u8 pad[3] (after the group): LightFlags a103d675, the cast bit
+//   that makes Remastered build a shadow map for the light (none of the shipped lights has it set).
+// Version 26 adds, at the end, f32 envFxIntensity: the colour intensity the area gives its
+//   EnvironmentFX rain, snow and underwater flakes (CEnvFxManagerMP1::SetColorIntensity), from the
+//   CEnvFxDensityControllerMP1 a RelayAutoFire reaches when the area loads (1 when none does; a
+//   controller only a trigger fires is left out). Older files have 1.
 // The tonemap is Remastered's: the exposure value without auto exposure, the radiance
 // that comes out as middle grey once exposed, and how far the curve's toe and shoulder
 // are pulled in.
@@ -212,6 +225,11 @@ constexpr uint32_t kSenderCameraWater = 0xfffffff1;
 // below the two senders above.
 constexpr uint32_t kSenderWorldVolume = 0xfff00000;
 constexpr uint32_t kMaxWorldVolumes = 0x10000;
+// The camera going under water as the player holds item k (an EItemType) or not: a master's
+// InventoryActivator fired by its camera water proxy. kSenderCameraWaterItem + k, state 0 with
+// the item, 1 without; nothing as the camera comes out.
+constexpr uint32_t kSenderCameraWaterItem = 0xffff0000;
+constexpr uint32_t kCameraWaterItems = 64;
 // A sender that is no retail script object (keeps its high bits).
 inline bool PseudoSender(uint32_t sender) { return sender >= kSenderWorldVolume; }
 
@@ -226,6 +244,9 @@ struct Grade {
   float fadeIn = 0.f;
   float fadeOut = 0.f;
   bool on = true;  // requested from the start (Remastered's global hints)
+  // The world's master area's (Over_Master's), not the room's own: shown only while the
+  // room has none on (HintOutranks). The byte after `on`; older imports wrote 0.
+  bool master = false;
   int32_t priority = 0;
   std::vector<GradeLink> links;
   size_t offset = 0; // of the LUT, in File::data
@@ -239,6 +260,7 @@ struct BacklightHint {
   float fadeIn = 1.f;
   float fadeOut = 1.f;
   bool on = false;
+  bool master = false;  // as Grade::master
   int32_t priority = 50;
   float top = 1.f;
   float back = 1.f;
@@ -259,6 +281,7 @@ struct FogHint {
   PortMayaSpline fadeInSpline;
   PortMayaSpline fadeOutSpline;
   bool on = false;
+  bool master = false;  // as Grade::master
   int32_t priority = 50;
   float range = 0.f;
   float scatter = 0.f;
@@ -273,11 +296,28 @@ struct FogHint {
   float wind[3] = {};
   bool useScriptWind = false;
   bool noProbe = false;
+  float worldShift[3] = {}; // the file's (version 23)
   float colorB[4] = {1.f, 1.f, 1.f, 1.f};
   float colorA[4] = {};
   float lut[64] = {};
   std::vector<GradeLink> links;
 };
+
+// Whether a requested hint (grade, backlight or fog), turned on at `order`, replaces `pick`,
+// as CAreaPrioritizedGameHintManager::Update (0x5e4de4) picks: each area keeps its own
+// hint manager and the view area's current hint wins; only when the area has none does it
+// fall back to its parent, the master. Within one area, the highest priority, then the
+// one turned on last.
+template <class Hint>
+bool HintOutranks(const Hint& hint, uint64_t order, const Hint* pick, uint64_t pickOrder) {
+  if (pick == nullptr) {
+    return true;
+  }
+  if (hint.master != pick->master) {
+    return pick->master;
+  }
+  return hint.priority > pick->priority || (hint.priority == pick->priority && order >= pickOrder);
+}
 
 // A VolumetricFogRegion (CVolumetricFogRegionGOC::AddRegion, RebuildPositionalData). The
 // rows of m take a retail world point to 0..1 over the region's box; with l = 2 * that - 1,
@@ -344,6 +384,7 @@ struct SunLight {
   float toSun[3] = {};
   float color[3] = {};
   uint32_t group = 0xffffffff;  // PortRoomGeo::kNoGroup
+  bool casts = false;           // version 24: the cast bit (LightFlags a103d675)
 };
 
 // A point or spot LightDynamic (CLightDynamicGOC). Static: colour, range and cone as stored.
@@ -398,9 +439,12 @@ struct PointLight {
   bool hasSpline[kLightSplines] = {};
 };
 
-// An auto exposure hint with a fluid mode (CAutoExposureHintGOC mode 1 or 2).
+// An auto exposure hint with a fluid mode (CAutoExposureHintGOC mode 1 or 2), or one of the pair a
+// CAutoExposureHintMP1 swaps between (role 1 / 2, `pair` the instance, any mode).
 struct FluidHint {
   uint8_t mode = 1;
+  uint8_t role = 0;  // 0 ordinary, 1 pair hint A (normal view), 2 pair hint B (thermal) (unverified)
+  uint8_t pair = 0;
   float exposure[2] = {};
   float bias = 0.f;
   float sigma = 32.f;
@@ -445,6 +489,8 @@ struct File {
   float staticLerp = 0.5f;
   std::vector<FluidHint> fluidHints; // version 20
   std::vector<WorldVolume> worldVolumes; // version 22
+  float worldShift[3] = {};              // version 23
+  float envFxIntensity = 1.f;            // version 26: EnvironmentFX colour intensity
   float contrast = 0.f;
   float bloomThreshold = 0.9f;
   std::vector<float> bloomTints; // RGBA; empty: the room has no bloom
@@ -566,6 +612,26 @@ struct Convergence {
   void Step(float target);
 };
 
+// CPostFXManager's auto exposure (kb topic/auto-exposure-average.md): L is the largest
+// channel of the newest finished 1x1 readback of the frame's opaque colour (-1 before the
+// first; a failed map keeps the last). UpdateTonemapping 0xaffb18 uses the tonemap's EV
+// without a hint or while L < 0 (a NaN L fails that test too); otherwise the target is
+// clamp(log2(L / grey) + 3 + bias, lo, hi), and the first one creates the Gaussian at the
+// target. A new CStateManager starts over (Reset); doors and area loads do not.
+struct ExposureAverage {
+  float L = -1.f;
+  bool created = false;
+  Convergence ev;
+  float sigma = -1.f;
+  uint32_t serial = 0; // of the last readback taken
+  void Reset();
+  void Take(const float rgb[3]);
+  // The frame's EV. `snap`: a hint registered this frame (type 1), SetValue instead of
+  // stepping; `steps`: 60 Hz steps due. `target` gets the EV aimed at.
+  float Update(bool hint, float tonemapEv, float lo, float hi, float bias, float sigma, bool snap, int steps,
+               float* target);
+};
+
 // --- The game side (port_room_env.cpp) -----------------------------------------
 
 // The areas in memory now. Loads the files of new ones and frees those of areas that left.
@@ -642,6 +708,11 @@ struct ProbeOverrideScope {
 // Whether a model announced for this area would get a volume: false until all of the
 // area's volumes are on the GPU.
 bool HasVolume(uint32_t mrea);
+// An area with a lightmap and no grid (25 rooms, e.g. Energy Core Access): true once the
+// lightmap is on the GPU with a level. Remastered binds an area's lightmap to its world
+// models whenever it has one (CWorldModelRenderable::BindBakedLightingMaterialData), grid
+// or not, so its room geometry is lit as baked.
+bool HasLightmapOnly(uint32_t mrea);
 // MP_ROOM_ENV_VOLUME, the console's `roomenv volume`.
 void SetVolumesEnabled(bool on);
 bool VolumesEnabled();
@@ -663,13 +734,6 @@ void Reset();
 // 0 off, 1 on; the console's `roomenv`.
 void SetEnabled(bool enabled);
 bool Enabled();
-// Whether cubes and ambient are exposed the way Remastered exposes a frame, by the
-// radiance of the room the camera is in and that room's exposure hint, and shaped by its
-// tone curve (MP_ROOM_ENV_EXPOSURE=0 turns it off, as does the console's `roomenv
-// exposure`). Otherwise each cube is exposed to middle grey and the ambient takes the
-// game's level.
-void SetRoomExposed(bool on);
-bool RoomExposed();
 // The frame's bloom (Remastered's CRenderPass_Bloom): the threshold of exposed luminance
 // above which light blooms, and the five tints (rgb), the last for the bright pass and the
 // others for the four levels it is spread over, coarsest first. False when the camera's
@@ -679,7 +743,7 @@ bool Bloom(float& threshold, float tints[5][3]);
 void SetBloomEnabled(bool on);
 bool BloomEnabled();
 // The frame's colour grade (Remastered's ColorGrade + ColorGradeHint): the LUTs to blend,
-// for GXPortPostProcess (0: the identity) and how far towards `b` (0 to 1). `layerActive`
+// for GXPortPostProcessScene (0: the identity) and how far towards `b` (0 to 1). `layerActive`
 // says whether a layer of the camera's area is active. Moving between grades fades over
 // the new one's fade-in, or the old one's fade-out when it was turned off. False when there
 // is nothing to grade, or MP_COLOR_GRADE=0.
@@ -694,18 +758,27 @@ bool ColorGrade(LayerActive layerActive, void* context, uint32_t& a, uint32_t& b
 void UpdateBacklight(LayerActive layerActive, void* context);
 bool Backlight(float& top, float& back);
 // The camera area's sun for real-time shadows: of its directional lights that are on (as its
-// room geometry's script last set them, else as they start), on an active layer and shining
-// down, the strongest. A sun on a story layer (the hangar intro's) only lights its cinematic. `color` is as the PBR shader's lights take it:
-// the light's at the frame's exposure, over pi. False when there is none, no file, the rooms
-// aren't exposed (RoomExposed), or MP_ROOM_ENV is off.
+// room geometry's script last set them, else as they start) and on an active layer, the strongest
+// of those with the cast bit (LightFlags a103d675, the only lights Remastered builds a shadow map
+// for; none of the shipped rooms' has it). A sun on a story layer (the hangar intro's) only lights
+// its cinematic. `color` is as the PBR shader's lights take it: the light's at the frame's
+// exposure, over pi. False when there is none, no file, or MP_ROOM_ENV is off. Which one
+// Remastered shadows when several have the bit is not traced.
 bool Sun(LayerActive layerActive, void* context, bool cinematic, float toSun[3], float color[3]);
+// Whether the camera area is lit by its Remastered file (the conditions of Sun): then the retail
+// world's lights are not what lights or shadows it.
+bool SunOwnsLighting();
+// Every other directional light that shines (the cast-bit one is Sun's), as records of kind 2 in
+// GXPortSetRoomLights' format, appended to `out` (view space: `worldToView` as RoomLights').
+void SunLights(LayerActive layerActive, void* context, bool cinematic, const float worldToView[3][4],
+               std::vector<float>& out);
 // The camera area's suns, one line each, and what the last Sun call made of them (console).
 std::string SunInfo();
 // The loaded areas' point and spot lights that shine now (active, on an active layer, not black),
 // in GXPortSetRoomLights' records: 16 floats each, appended to `out`. `worldToView` holds the
 // view matrix's three rows (retail world -> the view space the PBR shader lights in). Their
-// timelines step in UpdateFog. Nothing when the rooms aren't exposed (see Sun), MP_ROOM_LIGHTS=0
-// or MP_ROOM_ENV is off.
+// timelines step in UpdateFog. Nothing when the area has no file, MP_ROOM_LIGHTS=0 or MP_ROOM_ENV
+// is off.
 void RoomLights(const float worldToView[3][4], std::vector<float>& out);
 // The same lights in the shape Remastered's clustered gather takes them (PortClusteredLights::LightSource:
 // world space, colour x intensity, no exposure and no 1/pi), for PortClusteredLights::MakeLight. The vacated
@@ -721,13 +794,15 @@ std::string RoomLightInfo();
 // since the change, unclamped: scalars and colours lerp, the wind snaps, `noProbe` snaps
 // halfway and the LUT lerps in distance space. A hint without a fade, or a change on the first
 // update after ResetGrades (a fresh state manager, update count 0), changes at once. The
-// fog draws while a hint is picked or an interpolation runs. noiseOffset is the shown wind
-// times the seconds since the start; a hint that uses the world's wind has none here.
+// fog draws while a hint is picked or an interpolation runs. The noise is read, as Remastered
+// does, at (its world position + noiseOffset) * noiseFreq, where its world is retail's minus the
+// world shift, turned to (-x, z, y); noiseOffset is that turn of minus the shift and minus the
+// shown wind times the seconds since the start (a hint that uses the world's wind has none here).
 struct Fog {
   float range, scatter, absorb, density; // density: the decay (0: no fog)
   float attenSlope, attenBias;           // height term over retail world z
   float noiseFreq, noiseStrength, lightCap;
-  float noiseOffset[3]; // wind times elapsed time (world units)
+  float noiseOffset[3]; // in Remastered's world axes (see above)
   bool noProbe;               // lit by Remastered's default white volume, not the probes
   float colorB[4], colorA[3]; // colorB.a scales the volume's light; colorA already times the intensity
   float lut[64];
@@ -759,29 +834,52 @@ std::string FogInfo();
 void OnScriptState(uint32_t mrea, uint32_t sender, int state);
 // The console's `roomenv state`: as if `sender` sent `state` in every loaded area.
 void SendScriptState(uint32_t sender, int state);
-// Once a frame: whether the player and the camera are in a fluid. A change drives the
-// grades of the loaded areas linked to kSenderPlayerFluid / kSenderCameraWater.
-void SetFluid(bool player, bool camera);
+// Once a frame: whether the player and the camera are in a fluid, and the items the player holds
+// (bit k: EItemType k). A change drives the grades of the loaded areas linked to
+// kSenderPlayerFluid / kSenderCameraWater; the camera going in, kSenderCameraWaterItem too.
+void SetFluid(bool player, bool camera, uint64_t items);
 // Once a frame: where the camera is. Going into or out of one of the world's volumes (the table
 // of the last loaded area's file that has one) drives the hints of every loaded area linked to
 // kSenderWorldVolume + k; an area that loads later hears the entries and exits so far
 // (WorldVolumeState::Replay).
 void SetCameraPoint(const float pos[3]);
+// Once a frame: the inputs of the exposure hint swap (CAutoExposureHintMP1GOC): the player is
+// unmorphed, the thermal visor is the active one, a cinematic camera is running. A swap
+// registers a hint in every loaded area (area.hintSnap); an area that loads later starts in
+// the current state.
+void SetExposureState(bool unmorphed, bool thermal, bool cinematic);
 
 // CAutoExposureHintGOC's fluid modes (0x539574 EntityLoaded, 0x539644 InsideFluidStateChanged):
 // the hints of a room are told whether the CAMERA is inside a fluid. Mode 1 is active while it
 // is, mode 2 once it has left one (it starts inactive, even outside). A hint that becomes
 // active registers with the post effects manager as type 1, which snaps the exposure; one
 // that stops unregisters. Of the registered hints the newest wins at equal priority.
+//
+// CAutoExposureHintMP1GOC swaps a pair of hints (role 1 = A, 2 = B) on the thermal visor: state
+// = (unmorphed && thermal) ? inCinematic : 1; state 1 enables A and disables B, state 0 the
+// reverse. A disabled hint is out of the pick whatever its mode; a pair hint of mode 0 is
+// registered from the load, one of a mode above 2 (script driven, not modelled) never.
 struct ExposureHints {
   bool inside = false; // the last fluid state told (the GOC's +0x48)
+  bool seen = false; // the fluid state has changed once (mode 2 may be active)
+  uint8_t pairState = 1; // the swap's state, see above
   std::vector<uint8_t> active; // per FluidHint
+  std::vector<uint8_t> disabled; // per FluidHint: externally disabled by the swap
   std::vector<uint64_t> order; // per FluidHint: registration number, 0 when unregistered
   uint64_t next = 1;
-  // Starts the room's hints as EntityLoaded does with the camera's current state.
-  bool Load(const std::vector<FluidHint>& hints, bool cameraInside);
+  // Starts the room's hints as EntityLoaded does with the camera's current state. The pair
+  // hints start in `pairState` (without a snap: ConnectAreaFunctors' initial disable is type 0;
+  // what it reads at +0xb70 is not traced (unverified)).
+  bool Load(const std::vector<FluidHint>& hints, bool cameraInside, uint8_t pairState = 1);
   // The camera entered or left a fluid. True when a hint registered, which snaps.
   bool Set(const std::vector<FluidHint>& hints, bool cameraInside);
+  // The swap's state of the frame (see SwapState). True when a hint registered, which snaps.
+  bool SetPair(const std::vector<FluidHint>& hints, uint8_t state);
+  static uint8_t SwapState(bool unmorphed, bool thermal, bool cinematic) {
+    return (unmorphed && thermal) ? (cinematic ? 1 : 0) : 1;
+  }
+  // Applies the flags to every hint; true when one registered (mode 0 only when `snapMode0`).
+  bool Update(const std::vector<FluidHint>& hints, bool snapMode0);
   // The registered hint that wins, or -1 for the room's plain hint.
   int Pick(size_t count) const;
 };
@@ -800,6 +898,8 @@ struct ParamTransition {
 };
 // A new game: every grade back to how it starts.
 void ResetGrades();
+// A new CStateManager: no measurement and no Gaussian yet (ExposureAverage::Reset).
+void ResetExposure();
 // The console's `roomenv grades`: the camera area's grades and which are on.
 std::string GradeInfo();
 void SetViewGradesOn(bool on); // debug: every grade request of the viewed room on or off
@@ -808,28 +908,31 @@ void SetColorGradeEnabled(bool on);
 bool ColorGradeEnabled();
 // The area the camera is in: its exposure and tone curve are the frame's.
 void SetViewArea(uint32_t mrea);
+// The EnvironmentFX colour intensity of the area the camera is in (File::envFxIntensity), 1 when
+// the area has no room environment.
+float EnvFxIntensity();
 // Once a frame, after SetViewArea: moves the frame's exposure and tone curve on
 // (CPostFXManager::UpdateTonemapping). The tonemap moves linearly to the camera room's
-// over a second; with an auto exposure hint, the exposure value eases through a
-// Convergence towards the one measured from the last frames' average radiance
-// (GXPortFrameRadiance) when `roomGeoDrawing` (only then does the picture follow the
-// exposure, so measuring it can settle), else towards the one of the room's probes. It
-// jumps when the camera's previous room is gone (a world load or a teleport). Also hands
-// one cube or volume the worker has finished to the GPU.
-void UpdateFrame(bool roomGeoDrawing);
+// over a second; with an auto exposure hint the exposure is the tonemap's EV until the
+// first measurement of the frame's average radiance (GXPortFrameRadiance), then eases
+// through the ExposureAverage's Gaussian, measured every frame the room has a hint, as
+// Remastered does whatever geometry is drawn. The tonemap jumps when the
+// camera's previous room is gone (a world load or a teleport); the Gaussian does not. Also
+// hands one cube or volume the worker has finished to the GPU.
+void UpdateFrame();
 // How long the player's power bomb has been going off, or a negative value for none; the next
 // UpdateFrame tints the baked light with it (PowerBombBakedLight) unless
 // MP_REMASTERED_BOMB_TINT=0.
 void SetPowerBombTime(float seconds);
 // The baked light's modulation the last UpdateFrame set (GXSetPBRBakedLightModulation).
 void BakedLightModulation(float rgb[3]);
-// The exposure to measure the frame at, for GXPortPostProcess; 0 when nothing would use
-// the measurement.
+// The exposure the frame is drawn at, for GXPortMeasureScene (the measurement is divided
+// by it); 0 when nothing would use the measurement.
 float MeasureExposure();
 // The frame's exposure (2^(3 - EV)); 0 before it has one.
 float FrameExposure();
 // Whether the exposure follows the frame (MP_ROOM_ENV_AUTO_EXPOSURE, the console's
-// `roomenv auto`); otherwise it follows the room's probes.
+// `roomenv auto`); otherwise it is the tonemap's EV.
 void SetAutoExposure(bool on);
 bool AutoExposure();
 // What emissive and unlit light in the opaque pass is multiplied by: Remastered draws it

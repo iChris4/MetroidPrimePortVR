@@ -11,6 +11,11 @@
 
 #include "rstl/math.hpp"
 
+#ifdef TARGET_PC
+#include "port_mods.h"
+#include "port_room_env.h"
+#endif
+
 const float CRainSplashGenerator::SSplashLine::skInitialSpeed = 4.f;
 const float CRainSplashGenerator::SSplashLine::skInitialHeight = 0.015625f;
 const uchar CRainSplashGenerator::SSplashLine::skInitialWidth = 3;
@@ -153,6 +158,14 @@ void CRainSplashGenerator::Draw(const CTransform4f& xf) const {
   if (!x48_25_raining) {
     return;
   }
+#ifdef TARGET_PC
+  // Remastered draws no splash lines: CRainSplashGenMP1::Render 0xfaa67c is a bare ret, though
+  // the simulation still runs (kb topic/rain-snow-splash-render.md). Skip them wherever the
+  // Remastered room environment renders the frame (the same test CMFGame uses for the HDR scene).
+  if (PortRoomEnv::Enabled() && PortMods::RoomEnvLoaded()) {
+    return;
+  }
+#endif
 
   DoDraw(xf);
 }

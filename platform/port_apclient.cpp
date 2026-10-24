@@ -1622,6 +1622,41 @@ bool RandomizedGame() {
   }
 }
 
+bool ChargeBeamRule(int beam) {
+  namespace Prime = MetroidPrime;
+  try {
+    Runtime& runtime = GetRuntime();
+    std::lock_guard<std::mutex> lock(runtime.mutex);
+    // Not an AP seed with progressive beams (or its slot_data has not arrived):
+    // owning the Charge Beam is enough, as in retail.
+    if (!runtime.enabled || !runtime.config.builtin || runtime.session == nullptr ||
+        !runtime.session->GetSlotData().received ||
+        !runtime.session->GetSlotData().progressiveBeamUpgrades)
+      return true;
+    // Each beam's second upgrade is its Charge Beam.
+    int64_t item = 0;
+    switch (beam) {
+    case CPlayerState::kBI_Power:
+      item = Prime::kProgressivePowerBeam;
+      break;
+    case CPlayerState::kBI_Ice:
+      item = Prime::kProgressiveIceBeam;
+      break;
+    case CPlayerState::kBI_Wave:
+      item = Prime::kProgressiveWaveBeam;
+      break;
+    case CPlayerState::kBI_Plasma:
+      item = Prime::kProgressivePlasmaBeam;
+      break;
+    default:
+      return true; // the Phazon Beam
+    }
+    return runtime.session->ReceivedCount(Prime::kItemBase + item) >= 2;
+  } catch (...) {
+    return true;
+  }
+}
+
 int SpringBallRule() {
   namespace Prime = MetroidPrime;
   try {

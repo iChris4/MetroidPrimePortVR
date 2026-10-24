@@ -73,6 +73,9 @@ struct FlipbookAtlas {
 };
 
 struct EffectConvertIO {
+  // A PART under XFMD 2 or 5 with no ITPE gets Remastered's default 1 (a PITP flagged as the
+  // default). The import sets it; left false, an absent ITPE writes nothing.
+  bool spreadDefault = false;
   // The retail id an asset id stands for, as the type it is read as ('TXTR',
   // 'CMDL', 'PART', 'SWHC', 'ELSC'), or 0 when it has none. Left empty, only
   // ids carried over from retail (EffectRetailId) resolve.

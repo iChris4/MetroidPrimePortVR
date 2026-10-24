@@ -523,6 +523,7 @@ public:
   const CVector3f& GetAdditiveTargetVector() const { return x24_additiveTarget; }
 
 private:
+  friend struct PortStateCodec; // save states (platform/port_savestate_fields.cpp)
   CVector3f x0_move;
   CVector3f xc_face;
   CVector3f x18_target;

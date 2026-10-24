@@ -69,6 +69,10 @@ public:
 CHECK_SIZEOF(CRidleyData, 0x418)
 
 class CRidley : public CPatterned {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
+#ifdef TARGET_PC
+  friend struct PortBossState; // save-state fight state (platform/port_savestate_boss.h)
+#endif
 public:
   ~CRidley() override;
   DECLARE_TYPES_MATCH_OR_ACCEPT;
@@ -140,6 +144,10 @@ private:
   void SetupCollisionManagers(CStateManager& mgr);
   void SetStage2Vulnerability(CStateManager& mgr);
   void SetStage3Immunity(CStateManager& mgr);
+#ifdef TARGET_PC
+  // Wing effects of the stage 3 switch (skWingEffects is file-local); save-state restore.
+  void PortStage3WingEffects(CStateManager& mgr);
+#endif
   void SetStage3BreastVulnerability(CStateManager& mgr);
   void SetStage3ThroatVulnerability(CStateManager& mgr);
   void ScaleCollisionSpheres(CStateManager& mgr, float scale) const;

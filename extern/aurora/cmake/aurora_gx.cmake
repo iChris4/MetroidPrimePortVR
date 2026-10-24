@@ -8,6 +8,7 @@ add_library(aurora_gx STATIC
         lib/gfx/shadow_cascade.cpp
         lib/gfx/vfx.cpp
         lib/gfx/water.cpp
+        lib/gfx/envfx.cpp
         lib/gfx/clear.cpp
         lib/gfx/depth_peek.cpp
         lib/gfx/encoding.cpp

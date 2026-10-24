@@ -47,6 +47,7 @@ public:
   virtual bool IsStrafing(CBodyController& bc) const;
 
 protected:
+  friend struct PortStateCodec; // save states (platform/port_savestate_fields.cpp)
   static const float skMinWalkPercent;
 
   rstl::reserved_vector< rstl::reserved_vector< rstl::pair< int, float >, 8 >, 14 > x8_anims;
@@ -103,6 +104,7 @@ public:
   float UpdateLocomotionAnimation(float dt, float velMag, CBodyController& bc, bool init) override;
 
 private:
+  friend struct PortStateCodec; // save states (platform/port_savestate_fields.cpp)
   rstl::reserved_vector< int, 14 > x8_anims;
   pas::ELocomotionAnim x44_anim;
 };

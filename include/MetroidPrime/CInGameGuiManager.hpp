@@ -90,6 +90,11 @@ public:
   // (main.cpp keeps a menu brought into view on the virtual screen meanwhile).
   bool PortVrAreaTexturesDumped() const { return !x12c_dumpedTextures.empty(); }
 #endif
+  // The HUD's damage tint when Draw would draw the HUD this frame (same prerequisites), for the
+  // bloom composite to add; see CSamusHud::PortCompositeTint.
+  bool PortCompositeTint(const CStateManager& mgr, float rgba[4]) const;
+  // Likewise the HUD's radial damage fan; see CSamusHud::PortCompositeRadial.
+  bool PortCompositeRadial(const CStateManager& mgr, float c0[4], float c1[4], float c2[4]) const;
   bool IsInSaveUI() const { return x1f8_27_inSaveUI; }
 
 private:

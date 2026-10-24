@@ -27,6 +27,14 @@ namespace fs = std::filesystem;
 namespace PortStorageReport {
 namespace {
 
+// The folders come as UTF-8; a narrow path is the ANSI code page on Windows.
+fs::path FromUtf8(const std::string& text) { return fs::path(std::u8string(text.begin(), text.end())); }
+
+std::string ToUtf8(const fs::path& path) {
+  const std::u8string text = path.u8string();
+  return std::string(text.begin(), text.end());
+}
+
 struct Totals {
   uint64_t bytes = 0;
   uint64_t files = 0;
@@ -92,11 +100,11 @@ struct Walker {
       children.push_back(it->path());
     }
     if (ec) {
-      PortLog::Write("port: storage: cannot list %s: %s\n", root.string().c_str(), ec.message().c_str());
+      PortLog::Write("port: storage: cannot list %s: %s\n", ToUtf8(root).c_str(), ec.message().c_str());
     }
     for (const fs::path& child : children) {
       const Totals totals = Measure(child);
-      PortLog::Write("port: storage: %s %llu MiB (%llu files)\n", child.string().c_str(),
+      PortLog::Write("port: storage: %s %llu MiB (%llu files)\n", ToUtf8(child).c_str(),
                      static_cast<unsigned long long>(totals.bytes >> 20),
                      static_cast<unsigned long long>(totals.files));
     }
@@ -122,7 +130,7 @@ void Run() {
   }
 #endif
   const std::string importText = PortRemastered::ImportRootFolder();
-  fs::path importRoot = importText.empty() ? fs::path() : fs::weakly_canonical(fs::path(importText), ec);
+  fs::path importRoot = importText.empty() ? fs::path() : fs::weakly_canonical(FromUtf8(importText), ec);
   // The root comes with a trailing separator; without it the path compares equal to a listed child.
   if (!importRoot.empty() && importRoot.filename().empty()) {
     importRoot = importRoot.parent_path();
@@ -130,7 +138,7 @@ void Run() {
   fs::path dataRoot;
   const std::string mods = PortMods::Folder();
   if (!mods.empty()) {
-    dataRoot = fs::weakly_canonical(fs::path(mods), ec).parent_path();
+    dataRoot = fs::weakly_canonical(FromUtf8(mods), ec).parent_path();
   }
 
   Walker walker;

@@ -52,6 +52,11 @@ public:
                               unsigned char volume);
 
   static void fn_803653F8(float fadeTime);
+#ifdef TARGET_PC
+  // Port: whether `fileName` plays on `chan` or is queued to (a track fading
+  // out to stop is not playing; one faded down by kSM_Decrement still is).
+  static bool PortIsPlaying(ESoftwareChannel chan, const rstl::string& fileName);
+#endif
   static void fn_80365424(float fadeTime);
 
 private:

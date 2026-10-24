@@ -17,6 +17,7 @@
 #include <math.h>
 #ifdef TARGET_PC
 #include <map>
+#include "port_apclient.h"
 
 // Scans the save does not track (a randomized pickup's made-up SCAN): kept
 // until the next new game or load, like an unsaved retail scan, but never
@@ -325,6 +326,12 @@ const bool CPlayerState::HasPowerUp(const CPlayerState::EItemType type) const {
   if (type < 0 || kIT_Max - 1 < type) {
     return false;
   }
+#ifdef TARGET_PC
+  // An AP seed with progressive beams charges only the beams that have their
+  // Charge Beam upgrade.
+  if (type == kIT_ChargeBeam && x24_powerups[uint(type)].x4_capacity > 0)
+    return PortAp::ChargeBeamRule(GetCurrentBeam());
+#endif
   return x24_powerups[uint(type)].x4_capacity > 0;
 }
 

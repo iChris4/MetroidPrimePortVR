@@ -12,12 +12,15 @@
 #include "gfx/resources.hpp"
 #include "gfx/tex_copy_conv.hpp"
 #include "gfx/texture.hpp"
+#include "gfx/thermal.hpp"
 #include "gfx/volfog.hpp"
+#include "gfx/xray.hpp"
 #include "gx/gx.hpp"
 #include "webgpu/gpu.hpp"
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstring>
 #include <deque>
 #include <string>
@@ -213,20 +216,12 @@ TEST_F(SceneHdrTest, OffKeepsTheLdrLayoutAndKey) {
   EXPECT_EQ(frame.renderPasses.front().target_layout().key, ldr_layout(1).key);
 }
 
-TEST_F(SceneHdrTest, NoCoreDeviceFailsClosedAndAllocatesNothing) {
+TEST_F(SceneHdrTest, CompatibilityDeviceStillGetsTheHdrTarget) {
   webgpu::g_hasCoreFeatures = false;
-  EXPECT_FALSE(webgpu::scene_hdr_supported());
-  EXPECT_FALSE(webgpu::ensure_scene_hdr_target());
-  EXPECT_FALSE(set_scene_hdr(true));
-  EXPECT_FALSE(scene_hdr_active());
-  EXPECT_FALSE(webgpu::g_sceneHdr.texture);
-  EXPECT_FALSE(webgpu::g_sceneHdrResolved.texture);
-  EXPECT_EQ(webgpu::scene_hdr_sample_count(), 0u);
-  EXPECT_EQ(frame.renderPasses.size(), 1u);
-  EXPECT_EQ(current_pass().colorAttachments[SceneColorAttachmentIndex].format, ColorFormat);
-  // Turning it off when it is already off is a no-op that succeeds.
-  EXPECT_TRUE(set_scene_hdr(false));
-  EXPECT_EQ(frame.renderPasses.size(), 1u);
+  EXPECT_TRUE(webgpu::scene_hdr_supported());
+  EXPECT_TRUE(webgpu::ensure_scene_hdr_target());
+  EXPECT_TRUE(webgpu::g_sceneHdr.texture && webgpu::g_sceneHdrResolved.texture);
+  EXPECT_EQ(webgpu::scene_hdr_sample_count(), 1u);
 }
 
 TEST_F(SceneHdrTest, AllocatesRealTexturesAtTheEfbSampleCount) {
@@ -583,33 +578,47 @@ TEST_F(SceneHdrTest, GxWriterVariantsCompileInBothModes) {
   EXPECT_TRUE(g_uncapturedErrors.empty());
 }
 
-// Water and the full-screen fog's apply pass compile in both domains (stage 3B).
-TEST_F(SceneHdrTest, WaterAndFogApplyCompileInBothDomains) {
+// Water and the full-screen fog's apply pass compile on the HDR scene (stage 3B).
+TEST_F(SceneHdrTest, WaterAndFogApplyCompile) {
   size_t compiled = 0;
   for (const uint32_t flags : {0u, 1u, 2u, 3u}) {
-    for (const bool hdr : {false, true}) {
-      SCOPED_TRACE(testing::Message() << "water flags " << flags << " hdr " << hdr);
-      water::PipelineConfig config{};
-      config.colorAttachmentCount = 1;
-      config.colorFormats[0] = hdr ? webgpu::SceneHdrFormat : wgpu::TextureFormat::RGBA8Unorm;
-      config.depthStencilFormat = wgpu::TextureFormat::Depth24Plus;
-      config.flags = flags | (hdr ? water::WaterSceneHdr : 0u);
-      const std::string source = water::pipeline_source(config);
-      ASSERT_FALSE(source.empty());
-      EXPECT_EQ(module_error(source), "");
-      ++compiled;
-    }
+    SCOPED_TRACE(testing::Message() << "water flags " << flags);
+    water::PipelineConfig config{};
+    config.colorAttachmentCount = 1;
+    config.colorFormats[0] = webgpu::SceneHdrFormat;
+    config.depthStencilFormat = wgpu::TextureFormat::Depth24Plus;
+    config.flags = flags | water::WaterSceneHdr;
+    const std::string source = water::pipeline_source(config);
+    ASSERT_FALSE(source.empty());
+    EXPECT_EQ(module_error(source), "");
+    ++compiled;
   }
-  for (const auto domain : {volfog::Domain::Ldr, volfog::Domain::Hdr}) {
-    for (const uint32_t samples : {1u, 4u}) {
-      SCOPED_TRACE(testing::Message() << "volfog hdr " << (domain == volfog::Domain::Hdr) << " samples " << samples);
-      const std::string source = volfog::apply_source(domain, samples);
-      ASSERT_FALSE(source.empty());
-      EXPECT_EQ(module_error(source), "");
-      ++compiled;
-    }
+  for (const uint32_t samples : {1u, 4u}) {
+    SCOPED_TRACE(testing::Message() << "volfog samples " << samples);
+    const std::string source = volfog::apply_source(samples);
+    ASSERT_FALSE(source.empty());
+    EXPECT_EQ(module_error(source), "");
+    ++compiled;
   }
-  EXPECT_EQ(compiled, 8u + 4u);
+  // The visor posts read and write the HDR scene's exposed linear light as it is (kb
+  // topic/visor-hdr-pipeline.md).
+  {
+    SCOPED_TRACE("thermal");
+    const std::string source = thermal::source();
+    ASSERT_FALSE(source.empty());
+    EXPECT_EQ(module_error(source), "");
+    EXPECT_EQ(source.find("untone"), std::string::npos);
+    ++compiled;
+  }
+  for (const uint32_t samples : {1u, 4u}) {
+    SCOPED_TRACE(testing::Message() << "xray samples " << samples);
+    const std::string source = xray::source_for(samples);
+    ASSERT_FALSE(source.empty());
+    EXPECT_EQ(module_error(source), "");
+    EXPECT_EQ(source.find("untone"), std::string::npos);
+    ++compiled;
+  }
+  EXPECT_EQ(compiled, 4u + 2u + 1u + 2u);
   EXPECT_TRUE(g_uncapturedErrors.empty());
 }
 
@@ -618,7 +627,8 @@ TEST_F(SceneHdrTest, WaterAndFogApplyCompileInBothDomains) {
 constexpr hdr::Tone CopyTone{{{20.f, 3.f, 0.5f, 1.5f}, {0.8f, 0.02f, 0.1f, 1.f}, {0.18f, 1.f, -1.f, 0.82f}}};
 
 TEST_F(SceneHdrTest, CopiesCarryTheirDomainAndClearInTheirScene) {
-  const ClipRect rect{0, 0, 64, 32};
+  // The whole target: the clear is the continuation's load op.
+  const ClipRect rect{0, 0, 640, 480};
   const Vec4<float> clear{0.5f, 0.25f, 0.f, 0.75f};
   const ResolveHdr display{.tone = CopyTone, .linear = false};
   const ResolveHdr linear{.tone = CopyTone, .linear = true};
@@ -661,6 +671,10 @@ TEST_F(SceneHdrTest, CopiesCarryTheirDomainAndClearInTheirScene) {
   EXPECT_EQ(clearValue().z(), 0.f);
   EXPECT_EQ(clearValue().w(), 0.f);
   EXPECT_TRUE(set_scene_hdr(false));
+
+  // Part of it: the load op keeps the rest, a clear draw clears the rectangle.
+  resolve_pass_into({}, {0, 0, 64, 32}, true, true, false, clear, 1.f, GX_TF_RGB565, -1, false, nullptr);
+  EXPECT_FALSE(current_pass().colorAttachments[SceneColorAttachmentIndex].clear);
 }
 
 TEST_F(SceneHdrTest, SnapshotsTakeTheActiveAttachmentsFormat) {
@@ -717,7 +731,7 @@ TEST_F(SceneHdrTest, CopyDomainPipelinesValidate) {
     const tex_copy_conv::ConvRequest req{
         .fmt = fmt,
         .srcView = srcView,
-        .uniformRange = {0, 16},
+        .uniformRange = {0, sizeof(tex_copy_conv::Uniforms)},
         .dst = new_conv_texture(64, 32, fmt, "HDR copy test"),
         .domain = tex_copy_conv::CopyDomain::HdrDisplay,
         .toneRange = {256, sizeof(hdr::Tone)},
@@ -728,7 +742,7 @@ TEST_F(SceneHdrTest, CopyDomainPipelinesValidate) {
   const tex_copy_conv::ConvRequest display{
       .fmt = GX_TF_RGBA8,
       .srcView = srcView,
-      .uniformRange = {0, 16},
+      .uniformRange = {0, sizeof(tex_copy_conv::Uniforms)},
       .dst = new_render_texture(64, 32, GX_TF_RGBA8, "HDR copy test"),
       .domain = tex_copy_conv::CopyDomain::HdrDisplay,
       .toneRange = {256, sizeof(hdr::Tone)},
@@ -739,7 +753,7 @@ TEST_F(SceneHdrTest, CopyDomainPipelinesValidate) {
     const tex_copy_conv::ConvRequest req{
         .fmt = fmt,
         .srcView = srcView,
-        .uniformRange = {0, 16},
+        .uniformRange = {0, sizeof(tex_copy_conv::Uniforms)},
         .dst = new_render_texture(64, 32, fmt, "Linear copy test", 1, webgpu::SceneHdrFormat),
         .domain = tex_copy_conv::CopyDomain::Linear,
     };
@@ -777,6 +791,49 @@ size_t count(std::string_view source, std::string_view what) {
 constexpr std::string_view ScreenDecodes[] = {"srgb_dec(pbr_gs)", "srgb_dec(pbr_hg)", "srgb_dec(pbr_sfb)",
                                               "srgb_dec(textureSampleLevel(tex7, tex7_samp,"};
 
+// The screen-copy kinds fog in HDR as their Remastered fog perms do (kb topic/hdr-pbr-pass.md): the frame a
+// blend keeps (23/30 transmission, 29 dual and 11's o1) is never dimmed, each kind weights the in-scatter its own
+// way, and 14 (no fog perm) is not fogged. LDR keeps its single form.
+TEST_F(SceneHdrTest, ScreenKindsFogAsTheirFogPermsInHdr) {
+  for (const int kind : {8, 11, 14, 23, 29, 30}) {
+    SCOPED_TRACE(kind);
+    auto ldrConfig = screen_config(kind, false);
+    auto hdrConfig = screen_config(kind, true);
+    ldrConfig.volFog = hdrConfig.volFog = kind == 23 || kind == 30 ? gx::VolFogOpaque : gx::VolFogBlended;
+    const std::string ldr = gx::build_shader_source(ldrConfig);
+    const std::string hdr = gx::build_shader_source(hdrConfig);
+    EXPECT_EQ(count(ldr, "pbr_keep"), 0u);
+    EXPECT_EQ(count(hdr, "select(vec3f(1.0), pbr_vfw, pbr_vfk);"), 1u);
+    EXPECT_EQ(count(hdr, "pbr_vf = vec4f(0.0, 0.0, 0.0, 1.0);"), 1u);
+    EXPECT_EQ(count(hdr, "prev = vec4f(pbr_lin + pbr_pass + pbr_keep, pbr_alpha);"), 1u);
+    if (kind == 14) {
+      EXPECT_EQ(count(hdr, "pbr_vfon = false;"), 1u);
+    }
+    if (kind == 23 || kind == 30) {
+      EXPECT_EQ(count(hdr, "pbr_keep = pbr_xw * pbr_xscene;"), 1u);
+      EXPECT_EQ(count(hdr, "pbr_vfw = vec3f(1.0) - pbr_xw;"), 1u);
+    }
+    if (kind == 11) {
+      // MFC0 on (03407341's MTRL tail, as 2f95a061's): the blend is One / InvSrc1Color, o1 = DIFC.a k, so the
+      // frame is kept by 1 - o1, never by o1, and DIFC scales the lit and bent terms.
+      EXPECT_EQ(count(hdr, "pbr_pass = pbr_hg * ubuf.pbr_emissive.rgb * ubuf.pbr_param.w * pbr_df.rgb * pbr_df.a;"), 1u);
+      EXPECT_EQ(count(hdr, "pbr_vfw = pbr_df.a * (vec3f(1.0) - ubuf.pbr_emissive.rgb * (1.0 - pbr_vraw.a));"), 1u);
+      // Kinds 11 and 29 share one source (branched on pbr_kind), each with its own keep line.
+      EXPECT_EQ(count(hdr, "pbr_keep = pbr_sdst * (vec3f(1.0) - pbr_vfw);"), 2u);
+      EXPECT_EQ(count(ldr, "pbr_sdst * (vec3f(1.0) - pbr_df.a * (vec3f(1.0) - ubuf.pbr_emissive.rgb * (1.0 - pbr_vraw.a)));"),
+                1u);
+      EXPECT_EQ(count(ldr, "pbr_sdst * (pbr_df.a *"), 0u);
+    }
+    if (kind == 29) {
+      // Kinds 11 and 29 share one source (branched on pbr_kind), each with its own keep line.
+      EXPECT_EQ(count(hdr, "pbr_keep = pbr_sdst * (vec3f(1.0) - pbr_vfw);"), 2u);
+    }
+    EXPECT_EQ(module_error(ldr), "");
+    EXPECT_EQ(module_error(hdr), "");
+  }
+  EXPECT_TRUE(g_uncapturedErrors.empty());
+}
+
 TEST_F(SceneHdrTest, ScreenReadsAreRawOnlyInHdr) {
   for (const int kind : {8, 11, 14, 23, 29, 30, 34, 36}) {
     SCOPED_TRACE(kind);
@@ -791,6 +848,7 @@ TEST_F(SceneHdrTest, ScreenReadsAreRawOnlyInHdr) {
     EXPECT_GT(screen, 0u) << "the kind reads map 7";
     // Every other decode stays (base and cube maps).
     EXPECT_EQ(count(hdr, "srgb_dec("), count(ldr, "srgb_dec(") - screen);
+    // Kind 11 reads the frame its blend keeps (unbent, at the fragment) in both, as 29's dual does.
     EXPECT_EQ(count(hdr, "textureSampleLevel(tex7, tex7_samp,"), count(ldr, "textureSampleLevel(tex7, tex7_samp,"));
     EXPECT_EQ(module_error(ldr), "");
     EXPECT_EQ(module_error(hdr), "");
@@ -848,9 +906,126 @@ TEST_F(SceneHdrTest, LitVfxPipelineBuildsInBothTargets) {
 
 // The HDR scene's post (GXPortPostProcessScene): what it records and where the FIFO goes on after it.
 bloom::Params scene_post() {
-  bloom::Params params{};
-  params.bloom = bloom::ForceScene;
-  return params;
+  return bloom::Params{};
+}
+
+// The composite's damage-tint term (Remastered UberPost 0007259, slot A): clamp(frame) +
+// clamp(c).rgb * clamp(c).a in linear light. The Null backend runs no shader, so this checks the
+// shared WGSL through Tint and the wire layout, and the term itself against a CPU mirror.
+TEST_F(SceneHdrTest, CompositeAddTermCompilesAndKeepsItsWireLayout) {
+  static_assert(sizeof(bloom::Params) == 49 * sizeof(uint32_t));
+  static_assert(offsetof(bloom::Params, add) == 32 * sizeof(uint32_t));
+  static_assert(offsetof(bloom::Params, radial) == 36 * sizeof(uint32_t));
+  static_assert(offsetof(bloom::Params, radialOn) == 48 * sizeof(uint32_t));
+  const std::string source = std::string{bloom::CompositeAddWgsl} +
+                             "@compute @workgroup_size(1) fn main() { let v = composite_add(vec3f(0.5), vec4f(1.0, 0.5, 0.0, 0.5)); _ = v; }";
+  EXPECT_EQ(module_error(source), "");
+  EXPECT_NE(std::string{bloom::CompositeAddWgsl}.find("clamp(frame, vec3f(0.0), vec3f(1.0)) + t.rgb * t.a"),
+            std::string::npos);
+  // No tint recorded: the default params add nothing (alpha 0), so the shader leaves the frame alone.
+  EXPECT_EQ(scene_post().add[3], 0.f);
+}
+
+TEST(CompositeAddMath, MatchesTheTracedShader) {
+  const auto term = [](const float frame[3], const float c[4], float out[3]) {
+    const auto clamp01 = [](float v) { return std::min(std::max(v, 0.f), 1.f); };
+    const float a = clamp01(c[3]);
+    for (int i = 0; i < 3; ++i) {
+      out[i] = clamp01(frame[i]) + clamp01(c[i]) * a;
+    }
+  };
+  float out[3];
+  // The frame is clamped before the add, so it can exceed 1 only by the tint.
+  const float f1[3] = {1.4f, 0.2f, -0.1f};
+  const float c1[4] = {1.f, 0.5f, 0.25f, 0.5f};
+  term(f1, c1, out);
+  EXPECT_FLOAT_EQ(out[0], 1.5f);
+  EXPECT_FLOAT_EQ(out[1], 0.45f);
+  EXPECT_FLOAT_EQ(out[2], 0.125f);
+  // The colour clamps before it is weighted by its alpha.
+  const float f2[3] = {0.f, 0.f, 0.f};
+  const float c2[4] = {2.f, -1.f, 0.5f, 3.f};
+  term(f2, c2, out);
+  EXPECT_FLOAT_EQ(out[0], 1.f);
+  EXPECT_FLOAT_EQ(out[1], 0.f);
+  EXPECT_FLOAT_EQ(out[2], 0.5f);
+}
+
+TEST_F(SceneHdrTest, CompositeRadialTermCompiles) {
+  const std::string source =
+      std::string{bloom::CompositeRadialWgsl} +
+      "@compute @workgroup_size(1) fn main() { let v = composite_radial(vec4f(0.5), vec2f(0.1, -0.2), "
+      "vec4f(1.0), vec4f(0.0), vec4f(1.0)); _ = v; }";
+  EXPECT_EQ(module_error(source), "");
+  // No fan recorded: the default params leave the radial term off.
+  EXPECT_EQ(scene_post().radialOn, 0u);
+}
+
+// CompositeRadialWgsl line for line on the CPU (module_error only compiles WGSL), checked against
+// the trace: apex c0 at the centre, rim c1 at (6.25 sin a, 3.6 cos a), the clamped frame times c2.
+TEST(CompositeRadialMath, MatchesTheTracedFan) {
+  const std::string wgsl{bloom::CompositeRadialWgsl};
+  EXPECT_NE(wgsl.find("let q = ndc / vec2f(6.25, 3.6);"), std::string::npos);
+  EXPECT_NE(wgsl.find("clamp(frame.rgb, vec3f(0.0), vec3f(1.0)) * m.rgb + v.rgb * v.a, frame.a * m.a"),
+            std::string::npos);
+  const float pi = 3.14159265358979f;
+  const auto clamp01 = [](float v) { return std::min(std::max(v, 0.f), 1.f); };
+  const auto term = [&](const float ndc[2], const float frame[4], const float c0[4], const float c1[4],
+                        const float c2[4], float out[4]) {
+    const float sector = pi / 8.f;
+    const float q[2] = {ndc[0] / 6.25f, ndc[1] / 3.6f};
+    float a = std::atan2(q[0], q[1]);
+    if (a < 0.f) {
+      a += 2.f * pi;
+    }
+    const float k = std::min(std::floor(a / sector), 15.f);
+    const float mid = (k + 0.5f) * sector;
+    const float t = (q[0] * std::sin(mid) + q[1] * std::cos(mid)) / std::cos(sector * 0.5f);
+    float v[4] = {};
+    if (t <= 1.f) {
+      for (int i = 0; i < 4; ++i) {
+        v[i] = clamp01(c0[i] + (c1[i] - c0[i]) * t);
+      }
+    }
+    for (int i = 0; i < 3; ++i) {
+      out[i] = clamp01(frame[i]) * clamp01(c2[i]) + v[i] * v[3];
+    }
+    out[3] = frame[3] * clamp01(c2[3]);
+  };
+  struct Case {
+    float ndc[2];
+    float frame[4];
+    float c0[4], c1[4], c2[4];
+    float want[4];
+  };
+  const float apothem = std::cos(pi / 16.f);
+  const Case cases[] = {
+      // The centre is the apex: c0 by its alpha, the frame clamped.
+      {{0.f, 0.f}, {2.f, 0.5f, -1.f, 1.f}, {1.f, 0.5f, 0.f, 0.5f}, {0.f, 0.f, 1.f, 1.f}, {1.f, 1.f, 1.f, 1.f},
+       {1.5f, 0.75f, 0.f, 1.f}},
+      // A rim vertex (a = 0: (0, 3.6)) is c1; so is a = 5 pi/8 at (6.25 sin a, 3.6 cos a).
+      {{0.f, 3.6f}, {0.f, 0.f, 0.f, 1.f}, {1.f, 0.f, 0.f, 1.f}, {0.f, 1.f, 0.f, 0.5f}, {1.f, 1.f, 1.f, 1.f},
+       {0.f, 0.5f, 0.f, 1.f}},
+      {{6.25f * std::sin(5.f * pi / 8.f), 3.6f * std::cos(5.f * pi / 8.f)}, {0.f, 0.f, 0.f, 1.f},
+       {1.f, 0.f, 0.f, 1.f}, {0.f, 1.f, 0.f, 0.5f}, {1.f, 1.f, 1.f, 1.f}, {0.f, 0.5f, 0.f, 1.f}},
+      // Half way to the middle of an edge (a = pi/16): an even mix of c0 and c1.
+      {{0.5f * apothem * 6.25f * std::sin(pi / 16.f), 0.5f * apothem * 3.6f * std::cos(pi / 16.f)},
+       {0.f, 0.f, 0.f, 1.f}, {1.f, 0.f, 0.f, 1.f}, {0.f, 1.f, 0.f, 1.f}, {1.f, 1.f, 1.f, 1.f},
+       {0.5f, 0.5f, 0.f, 1.f}},
+      // The mixed colour clamps after the interpolation (c0 below 0, as VEMC's -0.1 blue).
+      {{0.f, 0.f}, {0.f, 0.f, 0.f, 1.f}, {0.f, 0.f, -0.1f, 1.f}, {0.f, 0.f, 0.f, 1.f}, {1.f, 1.f, 1.f, 1.f},
+       {0.f, 0.f, 0.f, 1.f}},
+      // c2 multiplies the clamped frame (and its alpha) before the fan is added.
+      {{0.f, 0.f}, {0.8f, 1.5f, 0.4f, 0.5f}, {0.f, 0.f, 0.f, 0.f}, {0.f, 0.f, 0.f, 0.f}, {0.5f, 2.f, -1.f, 0.5f},
+       {0.4f, 1.f, 0.f, 0.25f}},
+  };
+  for (const Case& c : cases) {
+    float out[4];
+    term(c.ndc, c.frame, c.c0, c.c1, c.c2, out);
+    for (int i = 0; i < 4; ++i) {
+      EXPECT_NEAR(out[i], c.want[i], 1e-4f) << "case at (" << c.ndc[0] << ", " << c.ndc[1] << ") [" << i << "]";
+    }
+  }
 }
 
 TEST_F(SceneHdrTest, ScenePostHandsTheSceneToTheDisplayEfb) {
@@ -902,31 +1077,18 @@ TEST_F(SceneHdrTest, ScenePostStartsTheNextWorldSceneWithFreshBlack) {
   bloom::shutdown();
 }
 
-TEST_F(SceneHdrTest, ScenePostWithNothingToDoOnTheDisplayEfbRecordsNothing) {
+TEST_F(SceneHdrTest, ScenePostOnTheDisplayEfbRecordsNothing) {
   bloom::shutdown();
   ASSERT_TRUE(bloom::ensure_task());
   const size_t passes = frame.renderPasses.size();
   const size_t tasks = frame.encoderTasks.size();
-  EXPECT_TRUE(bloom::record(scene_post()));
+  EXPECT_FALSE(bloom::record(scene_post()));
   EXPECT_EQ(frame.renderPasses.size(), passes);
   EXPECT_EQ(frame.encoderTasks.size(), tasks);
   bloom::shutdown();
 }
 
-TEST_F(SceneHdrTest, PlainPushIsRefusedInTheHdrScene) {
-  bloom::shutdown();
-  ASSERT_TRUE(bloom::ensure_task());
-  ASSERT_TRUE(set_scene_hdr(true));
-  const size_t tasks = frame.encoderTasks.size();
-  bloom::Params params{};
-  params.bloom = 1;
-  EXPECT_FALSE(bloom::push(params));
-  EXPECT_EQ(frame.encoderTasks.size(), tasks);
-  EXPECT_TRUE(scene_hdr_active());
-  bloom::shutdown();
-}
-
-TEST_F(SceneHdrTest, ThirdHdrSegmentFallsBackToTheDisplayEfb) {
+TEST_F(SceneHdrTest, ThirdHdrSegmentIsRefused) {
   bloom::shutdown();
   ASSERT_TRUE(bloom::ensure_task());
   EXPECT_TRUE(bloom::scene_post_available());
@@ -941,7 +1103,7 @@ TEST_F(SceneHdrTest, ThirdHdrSegmentFallsBackToTheDisplayEfb) {
   EXPECT_FALSE(scene_hdr_active());
   const size_t tasks = frame.encoderTasks.size();
   const size_t passes = frame.renderPasses.size();
-  EXPECT_TRUE(bloom::record(scene_post())); // ForceScene is a no-op on the display EFB.
+  EXPECT_FALSE(bloom::record(scene_post())); // No post outside the HDR scene.
   EXPECT_EQ(frame.encoderTasks.size(), tasks);
   EXPECT_EQ(frame.renderPasses.size(), passes);
   EXPECT_FALSE(scene_hdr_active());

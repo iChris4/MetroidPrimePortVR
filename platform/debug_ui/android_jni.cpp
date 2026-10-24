@@ -8,6 +8,7 @@
 #include "port_pointer.h"
 #include "port_log.h"
 #include "port_paths.h"
+#include "port_input_bindings.h"
 #include "port_input_devices.h"
 #include "port_prompts.h"
 #include "port_savestate.h"
@@ -23,6 +24,8 @@
 
 #include <atomic>
 #include <mutex>
+#include <string>
+#include <vector>
 
 #if defined(__ANDROID__)
 // The touch overlay covers the display and consumes every touch before SDL
@@ -90,6 +93,34 @@ Java_org_metroidprime_port_TouchControlsView_nativeTouchControl(JNIEnv*, jclass,
 extern "C" JNIEXPORT jboolean JNICALL
 Java_org_metroidprime_port_TouchControlsView_nativeTouchControlBound(JNIEnv*, jclass, jint control) {
   return PortInputDevices::TouchControlBound(static_cast< int >(control)) ? JNI_TRUE : JNI_FALSE;
+}
+
+// The actions a layout editor button can take, as key, label, key, label... in
+// the action list's order (pad buttons, beams, visors, morph, the port's own).
+extern "C" JNIEXPORT jobjectArray JNICALL
+Java_org_metroidprime_port_TouchControlsView_nativeTouchButtonActions(JNIEnv* env, jclass) {
+  std::vector< std::string > items;
+  for (int i = 0; i < PortInput::kActionCount; ++i) {
+    const auto a = static_cast< PortInput::Action >(i);
+    if (!PortInput::TouchButtonAction(a)) {
+      continue;
+    }
+    const PortInput::ActionInfo& info = PortInput::Info(a);
+    items.emplace_back(info.key);
+    items.emplace_back(info.label);
+  }
+  jclass stringClass = env->FindClass("java/lang/String");
+  if (stringClass == nullptr) {
+    return nullptr;
+  }
+  jobjectArray out = env->NewObjectArray(static_cast< jsize >(items.size()), stringClass, nullptr);
+  for (size_t i = 0; out != nullptr && i < items.size(); ++i) {
+    jstring s = env->NewStringUTF(items[i].c_str());
+    env->SetObjectArrayElement(out, static_cast< jsize >(i), s);
+    env->DeleteLocalRef(s);
+  }
+  env->DeleteLocalRef(stringClass);
+  return out;
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -379,6 +410,8 @@ Java_org_metroidprime_port_MetroidPrimeActivity_nativeRemasteredPicked(JNIEnv* e
       PortDebug::sPalLanguagesPick = chars;
     } else if (which == PortDebug::kFlaahgraPick) {
       PortDebug::sFlaahgraPick = chars;
+    } else if (which == PortDebug::kDreadPick) {
+      PortDebug::sDreadPick = chars;
     } else {
       PortDebug::sRemasteredPicks.emplace_back(int(which), chars);
     }

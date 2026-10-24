@@ -120,14 +120,19 @@ public:
     mPortPointerAimValid = valid;
     mPortPointerAimPoint = point;
   }
+  // Port: lock-on free aim with the pointer off the centre. Shots go where the pointer is
+  // and nothing homes them back onto the locked target.
+  bool PortShotOffLock(CStateManager& mgr) const;
+  // Port: the target a shot homes on (none for a shot sent off the lock).
+  TUniqueId PortHomingTargetId(CStateManager& mgr);
   // Port: moves a shot's start to where the muzzle is drawn when the gun is drawn at the
   // retail FOV under a wider or narrower view.
   // `aim` false moves only the start (where only the start is used: a combo's muzzle effect).
   void PortFireStackedBeams(float dt, CStateManager& mgr, const CTransform4f& xf,
                             uint targetHoming);
   void PortReleaseStackedBeams();
-  float PortShotCoolDown(const CStateManager& mgr) const;
   void PortShotFromDrawnMuzzle(const CStateManager&, CTransform4f& xf, bool aim = true) const;
+  void PortShotFromThirdPersonCannon(const CStateManager&, CTransform4f& xf, bool aim) const;
   // Port: where a shot from `from` along `dir` would arrive (the aim target at its depth, else
   // the first thing on the line, else far ahead), for re-aiming a moved shot at it.
   CVector3f PortShotAimPoint(const CStateManager&, const CVector3f& from, const CVector3f& dir) const;
@@ -154,6 +159,11 @@ public:
   void StartPhazonBeamTransition(bool, CStateManager&, CPlayerState&);
   // Port: console `phazongun`: sets the same flags standing in phazon with the Phazon Suit does.
   void PortForcePhazonBeam(bool on);
+#ifdef TARGET_PC
+  // Port: the Phazon Beam cheat (PortDebug::PhazonBeamCheat), applied once a frame from
+  // HandleWeaponChange.
+  void PortApplyPhazonCheat(const CFinalInput&, CStateManager&);
+#endif
   void HandleWeaponChange(const CFinalInput&, CStateManager&);
   void HandleBeamChange(const CFinalInput&, CStateManager&);
 #ifdef TARGET_PC
@@ -489,6 +499,10 @@ private:
   void PortStartRapidCharge();
   bool PortRapidChargeShot(float dt, CStateManager& mgr);
   bool mPortRapidCharge;
+  // Phazon Beam cheat: it was on last frame (so turning it off releases the beam), and the
+  // beam picked while in the Phazon Beam, switched to once the exit morph is done (-1: none).
+  bool mPortPhazonCheat = false;
+  int mPortPhazonPendingBeam = -1;
   int mPortRapidShots;
   float mPortRapidTimer;
   bool mPortPointerAimValid;

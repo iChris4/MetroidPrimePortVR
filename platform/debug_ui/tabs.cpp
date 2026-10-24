@@ -190,13 +190,11 @@ void DrawOriginalSection() {
   if (ImGui::Checkbox("Original experience", &original)) {
     SetOriginalExperience(original);
   }
-  ItemHelp("Plays the game as on the GameCube: 640x480 at 4:3, 60 Hz with no interpolation, no "
-           "mods, the retail HUD, font, button icons, FOV and cutscenes, and none of the gameplay extras (spring ball, "
-           "fast morph, charge and lock-on options, turbo fire, unlocks). The other settings keep "
-           "their values and come back when it's turned off. Controls, cheats, save states, the "
-           "randomizer, Archipelago and the timer still work."
-           // PortVr: OriginalOverridesComfort.
-           " In the headset, the helmet and the frame interpolation keep their own settings.");
+  ItemHelp("Plays the game as on the GameCube: 4:3, 60 Hz, no mods, retail HUD and cutscenes, and "
+           "none of the gameplay extras (spring ball, fast morph, charge and lock-on options, "
+           "turbo fire, unlocks). Other settings return when it's turned off. Controls, cheats, "
+           "save states, the randomizer, Archipelago and the timer still work. "
+           "In the headset, the helmet and frame interpolation keep their own settings.");
 }
 
 void DrawGameTab() {
@@ -272,6 +270,7 @@ void DrawSystemTab() {
   PortDataFolder::DrawPanel();
 #endif
   DrawLogSection();
+  DrawDiscCheckSection();
   DrawDiscordSection();
   DrawUpdateSection();
   ImGui::SeparatorText("About");

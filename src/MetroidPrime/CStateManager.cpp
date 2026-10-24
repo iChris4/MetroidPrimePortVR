@@ -11,7 +11,9 @@
 #include "MetroidPrime/Enemies/CAi.hpp"
 #include "vr/vr_view.h"
 #endif
+#include "port_third_person.h"
 #include "port_photo.h"
+#include "port_pipeline_context.h"
 #include "port_discord.h"
 #include "port_hold_toggle.h"
 #include "port_livesplit.h"
@@ -24,6 +26,7 @@
 #include "port_skip_cutscenes.h"
 #include "port_viewmodel.h"
 #include "port_console.h"
+#include "port_room_effects.h"
 #ifdef MP_ENABLE_SMOKE_DRIVER
 #include "port_smoke.h"
 #endif
@@ -76,6 +79,7 @@
 #include "MetroidPrime/ScriptObjects/CSnakeWeedSwarm.hpp"
 #include "MetroidPrime/ScriptObjects/CScriptSpawnPoint.hpp"
 #include "MetroidPrime/ScriptObjects/CScriptSpecialFunction.hpp"
+#include "MetroidPrime/ScriptObjects/CScriptMidi.hpp"
 #include "MetroidPrime/ScriptObjects/CScriptStreamedMusic.hpp"
 #include "MetroidPrime/ScriptObjects/CScriptTrigger.hpp"
 #include "MetroidPrime/ScriptObjects/CScriptWater.hpp"
@@ -126,6 +130,7 @@
 #include "rstl/math.hpp"
 
 #include "Kyoto/CFrameDelayedKiller.hpp"
+#include "MetroidPrime/ScriptObjects/CHUDBillboardEffect.hpp"
 
 const int gkPVSEnabled = 1;
 
@@ -247,7 +252,7 @@ CEntity* PortTempleObject(CStateManager& mgr, uint id) {
 // and stops it only if the destination room has no music at all.
 bool sPortWarpMusicPending = false;
 
-// The active streamed music `ent` plays from `state` (any state when
+// The active streamed music or MIDI `ent` plays from `state` (any state when
 // `anyState`), or null.
 CEntity* PortPlayedMusic(CStateManager& mgr, const CEntity& ent, EScriptObjectState state,
                          bool anyState) {
@@ -261,6 +266,9 @@ CEntity* PortPlayedMusic(CStateManager& mgr, const CEntity& ent, EScriptObjectSt
       CScriptStreamedMusic* const music = dynamic_cast< CScriptStreamedMusic* >(ent);
       if (music != nullptr && music->GetActive() && music->IsLoopingMusic())
         return music;
+      CScriptMidi* const midi = dynamic_cast< CScriptMidi* >(ent);
+      if (midi != nullptr && midi->GetActive())
+        return midi;
     }
   }
   return nullptr;
@@ -335,6 +343,9 @@ void PortStartStateLoadMusic(CStateManager& mgr) {
   if (!PortStartAreaMusic(mgr) && !sPortStateLoadSameWorld)
     CStreamAudioManager::StopAll();
 }
+
+// The room restore played the saved music itself.
+void PortEndStateLoadMusic() { sPortStateLoadMusic = false; }
 
 namespace {
 
@@ -579,6 +590,7 @@ CStateManager::CStateManager(const rstl::ncrc_ptr< CScriptMailbox >& mailbox,
 {
   PortRoomGeo::ResetScriptState();
   PortRoomEnv::ResetGrades();
+  PortRoomEnv::ResetExposure();
   x808_objectLists[0] = rs_new CObjectList(kOL_All);
   x808_objectLists[1] = rs_new CActorList();
   x808_objectLists[2] = rs_new CPhysicsActorList();
@@ -987,7 +999,11 @@ void CStateManager::BuildNearList(TEntityList& nearList, const CVector3f& pos, c
 }
 
 void CStateManager::AreaLoaded(TAreaId aid) {
-  x8bc_mailbox->SendMsgs(aid, *this);
+#ifdef TARGET_PC
+  // PORT: a save state's room state carries what the mailbox's messages did (see RoomRestoreOwnsArea).
+  if (!PortSaveState::RoomRestoreOwnsArea(*this, aid.Value()))
+#endif
+    x8bc_mailbox->SendMsgs(aid, *this);
   x880_envFxManager->AreaLoaded();
 }
 
@@ -1528,6 +1544,10 @@ void CStateManager::Update(float dt) {
   UpdateThermalVisor();
   nullsub_34(this);
   UpdateGameState();
+#ifdef TARGET_PC
+  // Remastered's CVisorEffectManagerMP1::Update; where it runs in the frame is (unverified).
+  CHUDBillboardEffect::PortUpdateVisorOverrides(*this, dt);
+#endif
 #ifdef MP_ENABLE_SMOKE_DRIVER
   PortSmokeAreaReload(*this);
   PortSmokeWorldTeleport(*this);
@@ -1684,6 +1704,9 @@ void CStateManager::Update(float dt) {
 
   if (x904_gameState != kGS_SoftPaused) {
     x870_cameraManager->Update(dt, *this);
+#ifdef TARGET_PC
+    PortThirdPerson::Update(*this, dt);
+#endif
   }
 
   while (xf76_lastRelay != kInvalidUniqueId) {
@@ -2340,6 +2363,14 @@ CStateManager::LoadScriptObject(TAreaId aid, EScriptObjectType type, unsigned in
   uint bytesLeft = length;
   bool failed = false;
   const TEditorId eid = in.ReadLong();
+#ifdef TARGET_PC
+  // PORT: an effect a mod's Remastered effect actor replaces (port_room_effects.h).
+  if (PortRoomEffects::Skips(eid.value)) {
+    for (uint b = 4; b < length; ++b)
+      in.ReadChar();
+    return rstl::pair< TEditorId, TUniqueId >(kInvalidEditorId, kInvalidUniqueId);
+  }
+#endif
 
   rstl::vector< SConnection > conns;
   const int connCount = in.Get< int >();
@@ -2372,6 +2403,16 @@ CStateManager::LoadScriptObject(TAreaId aid, EScriptObjectType type, unsigned in
   }
 
   if (ent != nullptr) {
+#ifdef TARGET_PC
+    // PORT: a Remastered retail model converted once, in its own model space, is placed per
+    // object (port_retail_placement.h).
+    if (CActor* actor = TCastToPtr< CActor >(ent)) {
+      if (CModelData* modelData = actor->ModelData()) {
+        modelData->PortPlace(static_cast< uint >(World()->GetArea(aid)->GetAreaAssetId()),
+                             eid.value);
+      }
+    }
+#endif
     AddObject(*ent);
   } else {
     failed = true;
@@ -2917,6 +2958,21 @@ static bool PortRoomSun(const CGameArea& area, CScriptLayerManager* layers, bool
       &l, cinematic, dir, color);
 }
 
+// The room's other directional lights, which light without a shadow, as room light records.
+static void PortRoomSunLights(const CGameArea& area, CScriptLayerManager* layers, bool cinematic,
+                              const float worldToView[3][4], std::vector< float >& out) {
+  struct Layers {
+    CScriptLayerManager* layers;
+    TAreaId area;
+  } l{layers, area.GetId()};
+  PortRoomEnv::SunLights(
+      [](int32_t layer, void* context) {
+        const Layers& l = *static_cast< const Layers* >(context);
+        return l.layers == nullptr || l.layers->IsLayerActive(l.area, TLayerId(layer));
+      },
+      &l, cinematic, worldToView, out);
+}
+
 static bool PortSetupShadow(const CTransform4f& view, const CGameArea* area, CScriptLayerManager* layers,
                             bool cinematic, bool enabled, bool roomLights) {
   static const bool sOn = port::EnvFlag("MP_SHADOWS", true);
@@ -2934,7 +2990,9 @@ static bool PortSetupShadow(const CTransform4f& view, const CGameArea* area, CSc
       for (int i = 0; i < 3; ++i) {
         dir[i] = -dir[i]; // the way the light travels, as a CLight's direction
       }
-    } else if (area != nullptr && area->IsPostConstructed()) {
+    } else if (area != nullptr && !PortRoomEnv::SunOwnsLighting() && area->IsPostConstructed()) {
+      // Retail lighting only: a Remastered room's directional lights are its file's, and cast
+      // only with the cast bit.
       const rstl::vector< CWorldLight >& lights = area->GetLightsA();
       for (int i = 0; i < lights.size(); ++i) {
         const CLight light = lights[i].GetAsCGraphicsLight();
@@ -2979,6 +3037,9 @@ static bool PortSetupShadow(const CTransform4f& view, const CGameArea* area, CSc
   sRoomLights.clear();
   if (roomLights) {
     PortRoomEnv::RoomLights(worldToView, sRoomLights);
+    if (area != nullptr) {
+      PortRoomSunLights(*area, layers, cinematic, worldToView, sRoomLights);
+    }
   }
   GXPortSetRoomLights(sRoomLights.data(), u32(sRoomLights.size() / 16));
   return distance > 0.f;
@@ -3025,8 +3086,8 @@ static void PortDrawVolumetricFog(const CStateManager& mgr, const CTransform4f& 
   p.shape[2] = fog.noiseFreq;
   p.shape[3] = fog.noiseStrength;
   for (int i = 0; i < 3; ++i) {
-    // Remastered offsets the noise by minus the wind's travel: it drifts with the wind.
-    p.noise[i] = -fog.noiseOffset[i];
+    // Remastered's world axes and origin, offset by minus the wind's travel (PortRoomEnv::Fog).
+    p.noise[i] = fog.noiseOffset[i];
     p.colorB[i] = fog.colorB[i];
     p.colorA[i] = fog.colorA[i];
   }
@@ -3123,8 +3184,21 @@ void CStateManager::PortCaptureProbeFace() const {
     PortRoomEnv::SetViewArea(x850_world->GetArea(x8cc_nextAreaId)->GetAreaAssetId());
   }
   // Remastered's grade hints that follow the player in a fluid and the camera under water.
-  PortRoomEnv::SetFluid(x84c_player != nullptr && x84c_player->IsInFluid(),
-                        x870_cameraManager->GetFluidCounter() > 0);
+  {
+    uint64_t items = 0;
+    for (int i = 0; i < CPlayerState::kIT_Max && i < int(PortRoomEnv::kCameraWaterItems); ++i) {
+      if (GetPlayerState()->HasPowerUp(static_cast< CPlayerState::EItemType >(i))) {
+        items |= uint64_t(1) << i;
+      }
+    }
+    PortRoomEnv::SetFluid(x84c_player != nullptr && x84c_player->IsInFluid(),
+                          x870_cameraManager->GetFluidCounter() > 0, items);
+    // CAutoExposureHintMP1GOC's inputs: unmorphed, thermal visor active, cinematic camera.
+    PortRoomEnv::SetExposureState(
+        x84c_player != nullptr && x84c_player->GetMorphballTransitionState() == CPlayer::kMS_Unmorphed,
+        x8b8_playerState->GetActiveVisor(*this) == CPlayerState::kPV_Thermal,
+        x870_cameraManager->IsInCinematicCamera());
+  }
   {
     // And the world's hints that follow the camera through the master's trigger volumes (the
     // game camera, as the room geometry's camera volumes see it).
@@ -3135,10 +3209,6 @@ void CStateManager::PortCaptureProbeFace() const {
   PortRoomGeo::SetLoadedAreas(mreas, mreaCount);
   PortRoomLiquid::SetLoadedAreas(mreas, mreaCount);
   {
-    // The frame's exposure eases on; it is measured from the picture only while room
-    // geometry, which follows it, is on screen.
-    int geoAreas, instances, models, loaded, drawn;
-    PortRoomGeo::Stats(geoAreas, instances, models, loaded, drawn);
     // Remastered tints the baked light orange in a power bomb's flash.
     const CPowerBomb* bomb = NULL;
     if (x84c_player != nullptr && x84c_player->GetPlayerGun() != nullptr &&
@@ -3146,7 +3216,7 @@ void CStateManager::PortCaptureProbeFace() const {
       bomb = static_cast< const CPowerBomb* >(GetObjectById(x84c_player->GetPlayerGun()->GetPowerBombId()));
     }
     PortRoomEnv::SetPowerBombTime(bomb != NULL ? bomb->GetCurTime() : -1.f);
-    PortRoomEnv::UpdateFrame(PortRoomGeo::GetMode() != PortRoomGeo::Mode::Off && drawn > 0);
+    PortRoomEnv::UpdateFrame();
   }
   {
     // The room's reflection probes blend around the camera, as Remastered's do.
@@ -3617,6 +3687,15 @@ void CStateManager::DrawWorld() const {
 #ifdef TARGET_PC
   // Opaque world, opaque models, sky and decals are all down (port_scene_copy.h).
   PortSceneCopyPoint();
+  // Remastered's auto-exposure measure: the opaque colour copy, before the transparents
+  // (kb topic/auto-exposure-average.md), measured in every visor too: Remastered measures the
+  // visor target's opaque frame, before X-ray pass A or the thermal cold blend
+  // (kb topic/visor-hdr-pipeline.md, step 5). The port draws the world at full size, so it
+  // measures the frame's own opaque copy. The visor-change exposure hint A/B swap
+  // (CAutoExposureHintMP1GOC) is PortRoomEnv::SetExposureState.
+  if (portSceneHdrRequested && !portZoomed) {
+    GXPortMeasureScene(PortRoomEnv::MeasureExposure());
+  }
   // Pass B: each area's sorted drawables and world surfaces, in the same order and with the
   // fog, light fade, PVS, draw token and room-geometry state pass A had for that area.
   for (int i = 0; i < areas.size(); ++i) {
@@ -3660,6 +3739,7 @@ void CStateManager::DrawWorld() const {
   if (morphingPlayerVisible) {
 #ifdef TARGET_PC
     CPortActorRenderScope presented(*x84c_player);
+    CPortPipelineContextScope globalPipelines(AURORA_PIPELINE_CONTEXT_GLOBAL);
 #endif
     x84c_player->Render(*this);
   }
@@ -3762,9 +3842,14 @@ void CStateManager::DrawWorld() const {
     }
 #endif
 #ifdef TARGET_PC
-    if (!PortViewModel::Active() && !PortFreeCam::Active())
+    if (!PortViewModel::Active() && !PortFreeCam::Active() && !PortThirdPerson::Active())
 #endif
-    x84c_player->RenderGun(*this, x870_cameraManager->GetGlobalCameraTranslation(*this));
+    {
+#ifdef TARGET_PC
+      CPortPipelineContextScope globalPipelines(AURORA_PIPELINE_CONTEXT_GLOBAL);
+#endif
+      x84c_player->RenderGun(*this, x870_cameraManager->GetGlobalCameraTranslation(*this));
+    }
 #ifdef TARGET_PC
     if (gunFov) {
       CGraphics::SetProjectionState(gunProj);
@@ -3799,6 +3884,9 @@ void CStateManager::DrawWorld() const {
   }
 
   DrawDebugStuff();
+#ifdef TARGET_PC
+  CPortPipelineContextScope globalPipelines(AURORA_PIPELINE_CONTEXT_GLOBAL);
+#endif
   RenderCamerasAndAreaLights();
   ResetViewAfterDraw(backupViewport, backupViewMatrix);
   DrawE3DeathEffect();

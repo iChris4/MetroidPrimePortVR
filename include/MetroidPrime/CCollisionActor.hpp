@@ -15,6 +15,7 @@ class CCollidableAABox;
 class CCollidableSphere;
 
 class CCollisionActor : public CPhysicsActor {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 public:
   enum EPrimitiveType {
     kPT_OBBTreeGroup,

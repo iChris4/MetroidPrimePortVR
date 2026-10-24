@@ -61,6 +61,43 @@ TEST(SceneHdrTone, SrcAlphaAdditiveWeightsDisplayBeforeTheInverse) {
   EXPECT_EQ(gfx::hdr::tev_srcalpha_add(1.f, 2.f, RainTone), gfx::hdr::exposed(1.f, RainTone));
 }
 
+TEST(SceneHdrTone, AlphaOverWeightsTheSourceLikeAdditive) {
+  // SRCALPHA/INVSRCALPHA draws src * a + dst * (1 - a). Over black the converted source draws as LDR's
+  // a * c; the plain inverse drew a white at alpha 0.3 as white.
+  for (const float a : {0.1f, 0.3f, 0.5f}) {
+    const float h = gfx::hdr::tev_srcalpha_add(1.f, a, RainTone);
+    EXPECT_NEAR(gfx::hdr::post_tone(a * h, RainTone), a, 2e-3f) << a;
+    EXPECT_GT(gfx::hdr::post_tone(a * gfx::hdr::exposed(1.f, RainTone), RainTone), 0.99f) << a;
+  }
+  // Over a nonblack background it is not LDR's display blend (the curve is nonlinear): a layer over its
+  // own colour draws somewhat darker, never brighter.
+  for (const float c : {0.25f, 0.5f, 0.8f}) {
+    for (const float a : {0.3f, 0.5f, 0.7f}) {
+      const float dst = gfx::hdr::exposed(c, RainTone);
+      const float out = gfx::hdr::post_tone(a * gfx::hdr::tev_srcalpha_add(c, a, RainTone) + (1.f - a) * dst, RainTone);
+      EXPECT_LE(out, c + 2e-3f) << c << " " << a;
+      EXPECT_GT(out, c - 0.12f) << c << " " << a;
+    }
+  }
+}
+
+TEST(SceneHdrTone, DstFactorBlendsScaleTheSceneLinearly) {
+  // A multiply factor is a gain on the light, never the inverse curve's white (65504).
+  EXPECT_EQ(gfx::hdr::tev_dst_factor(1.f, 1), 1.f);
+  EXPECT_EQ(gfx::hdr::tev_dst_factor(0.f, 1), 0.f);
+  EXPECT_EQ(gfx::hdr::tev_dst_factor(-1.f, 1), 0.f);
+  EXPECT_EQ(gfx::hdr::tev_dst_factor(4.f, 1), 1.f);
+  EXPECT_NEAR(gfx::hdr::tev_dst_factor(0.5f, 1), 0.214f, 1e-3f);
+  EXPECT_EQ(gfx::hdr::tev_dst_factor(0.f, 2), 0.f);
+  EXPECT_NEAR(gfx::hdr::tev_dst_factor(1.f, 2), std::pow(2.f, 2.2f) - 1.f, 1e-5f);
+  float prev = -1.f;
+  for (const float c : {0.f, 0.1f, 0.25f, 0.5f, 0.75f, 1.f}) {
+    const float f = gfx::hdr::tev_dst_factor(c, 1);
+    EXPECT_GT(f, prev);
+    prev = f;
+  }
+}
+
 TEST(SceneHdrTone, TheCurveIsContinuousAndUntoneInvertsIt) {
   for (const float x : {0.1f, 1.f}) {
     EXPECT_NEAR(gfx::hdr::tone_fwd(x - 1e-5f, RoomTone), gfx::hdr::tone_fwd(x + 1e-5f, RoomTone), 1e-4f) << x;
@@ -292,7 +329,8 @@ bool has_pbr_lin(std::string_view s) {
 
 bool hdr_line(std::string_view line) {
   return line.find("hdr_") != std::string_view::npos || has_pbr_lin(line) ||
-         line.find("HDR") != std::string_view::npos;
+         line.find("HDR") != std::string_view::npos || line.find("pbr_keep") != std::string_view::npos ||
+         line.find("pbr_vf") != std::string_view::npos;
 }
 
 // A line of an output statement the HDR branch rewrites (prev = vec4f(...), possibly wrapped).
@@ -335,12 +373,16 @@ TEST(SceneHdrGx, PbrSourcesSkipTheEncodeOnlyInHdr) {
     EXPECT_EQ(ldr.find("hdr_exposed"), std::string::npos);
     EXPECT_FALSE(has_pbr_lin(ldr));
     EXPECT_NE(ldr.find("prev = vec4f(srgb_enc(pbr_tm + pbr_pass), pbr_alpha);"), std::string::npos);
-    EXPECT_NE(hdr.find("prev = vec4f(pbr_lin + pbr_pass, pbr_alpha);"), std::string::npos);
+    EXPECT_NE(hdr.find("prev = vec4f(pbr_lin + pbr_pass + pbr_keep, pbr_alpha);"), std::string::npos);
+    EXPECT_EQ(ldr.find("pbr_keep"), std::string::npos);
+    EXPECT_EQ(ldr.find("pbr_vfw"), std::string::npos);
     EXPECT_EQ(hdr.find("srgb_enc(pbr_tm + pbr_pass)"), std::string::npos);
     EXPECT_NE(hdr.find("fn hdr_untone("), std::string::npos);
     EXPECT_NE(hdr.find("var pbr_lin = pbr_out;"), std::string::npos);
     if (kind == 36) {
-      EXPECT_NE(hdr.find("pbr_lin *= inv_c;"), std::string::npos);
+      // C is in pbr_out, before the tone, so pbr_lin carries it without a second scale.
+      EXPECT_NE(hdr.find("let pbr_out = max(pbr_lo + pbr_glow, vec3f(0.0)) * inv_c;"), std::string::npos);
+      EXPECT_EQ(hdr.find("*= inv_c"), std::string::npos);
     }
 
     // Every line HDR adds is about HDR; every LDR line it drops is an output it replaced.
@@ -370,7 +412,8 @@ TEST(SceneHdrGx, PbrSourcesSkipTheEncodeOnlyInHdr) {
       if (line.find("pbr_alpha") != std::string::npos && line.find("prev = vec4f(") == std::string::npos)
         la.push_back(line);
     for (const auto& line : h)
-      if (line.find("pbr_alpha") != std::string::npos && line.find("prev = vec4f(") == std::string::npos)
+      if (line.find("pbr_alpha") != std::string::npos && line.find("prev = vec4f(") == std::string::npos &&
+          line.find("pbr_vfw") == std::string::npos)
         ha.push_back(line);
     EXPECT_FALSE(la.empty());
     EXPECT_EQ(la, ha);
@@ -398,6 +441,9 @@ TEST(SceneHdrGx, TevSourcesTakeTheDisplayColourBackThroughTheCurve) {
   EXPECT_NE(hdr.find("if (ubuf.hdr_tev_blend.x > 0.5)"), std::string::npos);
   EXPECT_NE(hdr.find("prev = vec4f(hdr_tev_srcalpha_add(prev.rgb, prev.a, ubuf.hdr_tone[0], ubuf.hdr_tone[1], "
                      "ubuf.hdr_tone[2]), prev.a);"),
+            std::string::npos);
+  EXPECT_NE(hdr.find("} else if (ubuf.hdr_tev_blend.y > 0.5) {\n"
+                     "        prev = vec4f(hdr_tev_dst_factor(prev.rgb, ubuf.hdr_tev_blend.y), prev.a);"),
             std::string::npos);
   EXPECT_NE(hdr.find(gfx::hdr::TevBlendWgsl), std::string::npos);
   EXPECT_NE(gfx::hdr::TevBlendWgsl.find("if (a <= 0.0)"), std::string_view::npos);
@@ -536,7 +582,9 @@ TEST(SceneHdrGx, ActualBlendFlagFollowsToneRowsWithinTheBindingWindow) {
         ASSERT_LE(at + sizeof(RainTone) + 16, range.offset + range.size);
         std::array<float, 4> flag{};
         std::memcpy(flag.data(), frame.uniforms.data() + at + sizeof(RainTone), sizeof(flag));
-        EXPECT_EQ(flag[0], mode == GX_BM_BLEND && src == GX_BL_SRCALPHA && dst == GX_BL_ONE ? 1.f : 0.f);
+        EXPECT_EQ(flag[0],
+                  mode == GX_BM_BLEND && src == GX_BL_SRCALPHA && (dst == GX_BL_ONE || dst == GX_BL_INVSRCALPHA) ? 1.f
+                                                                                                                : 0.f);
         EXPECT_EQ(flag[1], 0.f);
         EXPECT_EQ(flag[2], 0.f);
         EXPECT_EQ(flag[3], 0.f);
@@ -608,7 +656,7 @@ TEST(SceneHdrVfx, HdrSourcesWriteExposedLinear) {
     const std::string body = hdr.substr(tail, tone - tail);
     EXPECT_NE(body.find("var lin = max(rgb, vec3f(0.0));"), std::string::npos);
     EXPECT_NE(body.find("if (u.tone1.x > 0.0 && u.tone0.w > 0.0) { lin = lin * u.tone0.w; }"), std::string::npos);
-    EXPECT_NE(body.find("if ((BLEND == 0u || BLEND == 3u) && (FEAT & 1048576u) == 0u && (FEAT & 4194304u) == 0u) {"), std::string::npos);
+    EXPECT_NE(body.find("if ((BLEND == 0u || BLEND == 3u || (FEAT & 134217728u) != 0u) && (FEAT & 1048576u) == 0u && (FEAT & 4194304u) == 0u) {"), std::string::npos);
     EXPECT_NE(body.find("hdr_exposed(u.fogColor.rgb, u.tone0, u.tone1, u.tone2)"), std::string::npos);
     EXPECT_NE(body.find("return vec4f(lin, alpha);"), std::string::npos);
     EXPECT_EQ(body.find("tone("), std::string::npos);

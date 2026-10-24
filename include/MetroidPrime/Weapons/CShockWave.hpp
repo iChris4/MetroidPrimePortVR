@@ -49,6 +49,7 @@ private:
 CHECK_SIZEOF(CShockWaveInfo, 0x3c)
 
 class CShockWave : public CActor {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 public:
   CShockWave(const TUniqueId uid, const rstl::string& name, const CEntityInfo& info,
              const CTransform4f& xf, const TUniqueId parent, const CShockWaveInfo& data,

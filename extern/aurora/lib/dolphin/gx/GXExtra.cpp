@@ -96,17 +96,21 @@ struct PBRMaterialWrite {
 } // namespace
 
 namespace {
+// GXPortPostCompositeAdd's colour, for the next HDR scene post only (game thread).
+f32 sPostAdd[4] = {};
+// GXPortPostCompositeRadial's c0, c1, c2, likewise; sPostRadialOn false: none.
+f32 sPostRadial[3][4] = {};
+bool sPostRadialOn = false;
+
 aurora::gfx::bloom::Params post_process_params(GXBool bloom, f32 threshold, const f32 tints[5][3],
                                                const f32 tone[3][4], u32 gradeA, u32 gradeB, f32 gradeWeight,
                                                f32 exposure) {
   aurora::gfx::bloom::Params params{};
-  // Cost tests 12-14 price the bloom, the frame copy and the depth reload after the break; 15
-  // always reloads the depth, to price clearing it when the HUD doesn't need it.
+  // Cost tests 12 and 14 price the bloom and the depth reload after the break; 15 always reloads
+  // the depth, to price clearing it when the HUD doesn't need it.
   const u32 costTest = GXGetPBRCostTest();
   params.bloom = bloom && costTest != 12 ? 1 : 0;
-  if (costTest == 13) {
-    params.bloom |= aurora::gfx::bloom::CostNoFrameCopy;
-  } else if (costTest == 14) {
+  if (costTest == 14) {
     params.bloom |= aurora::gfx::bloom::CostNoDepthReload;
   } else if (costTest == 15) {
     params.bloom |= aurora::gfx::bloom::CostKeepDepth;
@@ -121,8 +125,8 @@ aurora::gfx::bloom::Params post_process_params(GXBool bloom, f32 threshold, cons
   params.gradeA = gradeA;
   params.gradeB = gradeB;
   params.gradeWeight = gradeWeight;
-  // The curve's toe has no use for row 0's w; it carries the exposure (see bloom.hpp).
-  params.tone[0][3] = tone != nullptr && exposure > 0.f ? exposure : 0.f;
+  // Row 0's w is unused: the exposure it carried went to GXPortMeasureScene, so `exposure` is ignored.
+  params.tone[0][3] = 0.f;
   return params;
 }
 
@@ -132,8 +136,8 @@ bool write_post_process(const aurora::gfx::bloom::Params& params) {
   }
   // Through the FIFO: recording it directly would first wait for the FIFO thread to finish
   // everything the frame has drawn so far.
-  static_assert(sizeof(params) == 32 * sizeof(u32));
-  u32 words[32];
+  static_assert(sizeof(params) == 49 * sizeof(u32));
+  u32 words[49];
   std::memcpy(words, &params, sizeof(words));
   GX_WRITE_AURORA(GX_AURORA_PORT_POST_PROCESS);
   for (const u32 word : words) {
@@ -144,22 +148,37 @@ bool write_post_process(const aurora::gfx::bloom::Params& params) {
 } // namespace
 
 extern "C" {
-GXBool GXPortPostProcess(GXBool bloom, f32 threshold, const f32 tints[5][3], const f32 tone[3][4], u32 gradeA,
-                         u32 gradeB, f32 gradeWeight, f32 exposure) {
-  if (GXGetPBRCostTest() == 10 || sDrawIdMode) {
-    return true;
+void GXPortPostCompositeAdd(const f32 rgba[4]) {
+  if (rgba == nullptr) {
+    std::memset(sPostAdd, 0, sizeof(sPostAdd));
+  } else {
+    std::memcpy(sPostAdd, rgba, sizeof(sPostAdd));
   }
-  const auto params = post_process_params(bloom, threshold, tints, tone, gradeA, gradeB, gradeWeight, exposure);
-  if (!params.bloom && gradeA == 0 && gradeB == 0 && params.tone[0][3] == 0.f) {
-    return true;
+}
+
+void GXPortPostCompositeRadial(const f32 c0[4], const f32 c1[4], const f32 c2[4]) {
+  if (c0 == nullptr || c1 == nullptr || c2 == nullptr) {
+    std::memset(sPostRadial, 0, sizeof(sPostRadial));
+    sPostRadialOn = false;
+    return;
   }
-  return write_post_process(params);
+  std::memcpy(sPostRadial[0], c0, sizeof(sPostRadial[0]));
+  std::memcpy(sPostRadial[1], c1, sizeof(sPostRadial[1]));
+  std::memcpy(sPostRadial[2], c2, sizeof(sPostRadial[2]));
+  sPostRadialOn = true;
 }
 
 GXBool GXPortPostProcessScene(GXBool bloom, f32 threshold, const f32 tints[5][3], const f32 tone[3][4], u32 gradeA,
                               u32 gradeB, f32 gradeWeight, f32 exposure) {
   // The EFB the copies saw is about to change target (the HDR scene ends here).
   __GXPortInvalidateCopySerial();
+  f32 add[4];
+  std::memcpy(add, sPostAdd, sizeof(add));
+  GXPortPostCompositeAdd(nullptr);
+  f32 radial[3][4];
+  std::memcpy(radial, sPostRadial, sizeof(radial));
+  const bool radialOn = sPostRadialOn;
+  GXPortPostCompositeRadial(nullptr, nullptr, nullptr);
   if (sDrawIdMode) {
     return true;
   }
@@ -167,7 +186,9 @@ GXBool GXPortPostProcessScene(GXBool bloom, f32 threshold, const f32 tints[5][3]
   const bool noPost = GXGetPBRCostTest() == 10;
   auto params = noPost ? post_process_params(false, threshold, tints, tone, 0, 0, 0.f, 0.f)
                        : post_process_params(bloom, threshold, tints, tone, gradeA, gradeB, gradeWeight, exposure);
-  params.bloom |= aurora::gfx::bloom::ForceScene;
+  std::memcpy(params.add, add, sizeof(add));
+  std::memcpy(params.radial, radial, sizeof(radial));
+  params.radialOn = radialOn ? 1 : 0;
   return write_post_process(params);
 }
 
@@ -377,6 +398,13 @@ GXBool GXPortActorShadowRender() {
 }
 
 void GXPortColorGradeLut(u32 id, const u8* rgba) { aurora::gfx::bloom::set_grade_lut(id, rgba); }
+
+GXBool GXPortMeasureScene(f32 exposure) {
+  if (sDrawIdMode) {
+    return false;
+  }
+  return aurora::gfx::bloom::measure_scene(exposure);
+}
 
 GXBool GXPortFrameRadiance(f32 out[3], u32* serial) {
   uint32_t count = 0;

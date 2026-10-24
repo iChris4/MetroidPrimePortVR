@@ -102,6 +102,7 @@ private:
 CHECK_SIZEOF(CScriptGunTurretData, 0xa4)
 
 class CScriptGunTurret : public CPhysicsActor {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 public:
   enum ETurretComponent {
     kTC_Base,

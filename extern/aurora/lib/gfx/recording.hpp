@@ -179,9 +179,11 @@ struct ResolveHdr {
 };
 // In an HDR scene pass the copy is HdrDisplay (hdr, or no tone data: the plain sRGB encode) or
 // Linear (hdr->linear), and clearColorValue, a display colour, clears the scene as hdr::exposed of it.
+// opaqueAlpha: the source has no alpha (an RGB8 EFB), so a converted copy reads it as 1.
 void resolve_pass_into(TextureHandle texture, ClipRect rect, bool clearColor, bool clearAlpha, bool clearDepth,
                        Vec4<float> clearColorValue, float clearDepthValue, GXTexFmt resolveFormat = GX_TF_RGBA8,
-                       int probeFace = -1, bool resolveMips = false, const ResolveHdr* hdr = nullptr);
+                       int probeFace = -1, bool resolveMips = false, const ResolveHdr* hdr = nullptr,
+                       bool opaqueAlpha = false);
 // The scene copy point (vfx::capture_scene): one break of the EFB pass that resolves its colour into
 // color (the whole target, scaled to color's size, its mips built; hdr as for resolve_pass_into) and,
 // where the device can, snapshots its raw depth (R32Float, this frame slot's pool) into depth. The

@@ -91,6 +91,7 @@ private:
 CHECK_SIZEOF(CBabygothData, 0x178)
 
 class CBabygoth : public CPatterned {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 public:
   enum EPathFindMode { kPFM_Normal, kPFM_Approach };
   enum EShellCrackState { kSCS_Default, kSCS_CrackOne, kSCS_CrackTwo, kSCS_Destroyed };

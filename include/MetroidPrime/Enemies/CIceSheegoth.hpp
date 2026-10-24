@@ -99,6 +99,7 @@ private:
 CHECK_SIZEOF(CIceSheegothData, 0x1f4)
 
 class CIceSheegoth : public CPatterned {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 public:
   enum EPathFindMode {
     kPFM_Normal,

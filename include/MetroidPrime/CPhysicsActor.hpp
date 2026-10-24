@@ -73,6 +73,7 @@ CHECK_SIZEOF(CMotionState, 0x34)
 class CCollisionInfoList;
 
 class CPhysicsActor : public CActor {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 protected:
   static const float kGravityAccel;
 

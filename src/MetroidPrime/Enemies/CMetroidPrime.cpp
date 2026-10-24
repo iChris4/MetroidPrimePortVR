@@ -256,7 +256,12 @@ CMetroidPrime::CMetroidPrime(
 , x143c_(rs_new CProjectedShadow(128, 128, true))
 , x1440_(-1)
 , x1444_24_(false)
-, x1444_25_(false) {
+, x1444_25_(false)
+#ifdef TARGET_PC
+, mPortFaceHits(-1)
+, mPortFaceHP(0.f)
+#endif
+{
   for (int i = 0; i < breathAttacks.size(); ++i) {
     const CMetroidPrimeParasiteQueenAttack& attack = breathAttacks[i];
     x96c_.push_back(attack.x0_beamInfo);
@@ -1875,6 +1880,16 @@ void CMetroidPrime::InActive(CStateManager& mgr, EStateMsg msg, float arg) {
     x1088_ = x1084_;
     mgr.SetBossParams(GetUniqueId(), 2860.f, 91);
     x8d0_ = x8d4_;
+#ifdef TARGET_PC
+    if (mPortFaceHits > 0) {
+      x8d0_ = mPortFaceHits;
+      if (CCollisionActor* const actor =
+              TCastToPtr< CCollisionActor >(mgr.ObjectById(x8cc_headColActor))) {
+        actor->HealthInfo(mgr)->SetHP(mPortFaceHP);
+      }
+      mPortFaceHits = -1;
+    }
+#endif
     break;
   }
 }

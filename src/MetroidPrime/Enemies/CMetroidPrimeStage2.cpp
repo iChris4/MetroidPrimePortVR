@@ -469,7 +469,18 @@ void CMetroidPrimeStage2::Generate(CStateManager& mgr, EStateMsg msg, float dt) 
     break;
   }
   case kStateMsg_Deactivate:
+#ifdef TARGET_PC
+    {
+      // A save-state load replays the intro with the saved health: the bar is full at the
+      // spawn health (x6c4 = 1 / spawn health), not at what is left.
+      float maxHp = HealthInfo(mgr)->GetHP();
+      if (x6c4_hpFraction > 0.f && maxHp * x6c4_hpFraction < 0.999f)
+        maxHp = 1.f / x6c4_hpFraction;
+      mgr.SetBossParams(GetUniqueId(), maxHp, 91);
+    }
+#else
     mgr.SetBossParams(GetUniqueId(), HealthInfo(mgr)->GetHP(), 91);
+#endif
     ActivateHeadFx(mgr, true);
     break;
   }

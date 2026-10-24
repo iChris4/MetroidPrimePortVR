@@ -31,6 +31,7 @@ private:
 CHECK_SIZEOF(CProjectileTouchResult, 0x38)
 
 class CGameProjectile : public CWeapon {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 public:
   CGameProjectile(const bool active, const TToken< CWeaponDescription >&, const rstl::string& name,
                   const EWeaponType wType, const CTransform4f& xf, const EMaterialTypes excludeMat,

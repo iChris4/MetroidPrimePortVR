@@ -254,14 +254,28 @@ s32 readFromHandle(CommandDataBase* handle, void* out, s32 length, s32 offset, u
   u8* writePtr = static_cast<u8*>(out);
   s32 totalRead = 0;
   s32 remaining = length;
+  bool retried = false;
   while (remaining > 0) {
     const int64_t read = handle->read(writePtr + totalRead, static_cast<size_t>(remaining));
     if (read < 0) {
       return DVD_RESULT_FATAL_ERROR;
     }
     if (read == 0) {
-      break;
+      // Port: 0 is end of file only at the file's end. Short of it (a failed
+      // block fetch), it used to finish the read as a silent success with the
+      // buffer unfilled; retry once from where it stopped, then fail.
+      const int64_t end = handle->seek(0, 2);
+      const int64_t at = static_cast<int64_t>(offset) + totalRead;
+      if (end >= 0 && at >= end) {
+        break;
+      }
+      if (retried || end < 0 || handle->seek(at, 0) != at) {
+        return DVD_RESULT_FATAL_ERROR;
+      }
+      retried = true;
+      continue;
     }
+    retried = false;
     totalRead += static_cast<s32>(read);
     remaining -= static_cast<s32>(read);
   }

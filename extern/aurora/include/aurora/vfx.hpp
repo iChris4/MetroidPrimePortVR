@@ -70,6 +70,26 @@ enum Feature : uint32_t {
   // s-tiledlight-20261020/REPORT.md sections 3 to 5). Set with IceChargeCollision's slots (colorSlot,
   // normalSlot, envSlot) and its 7 params rows, and a DrawDesc::lit for the ambient and the probe.
   IceChargeCollisionLit = 1u << 25,
+  // The lit perm of a VFX_*_Lit sprite shader (20e149b2 VFX_Color_Opacity_Lit and the converter's
+  // IsLitTailShader list; perms 080_0..091_0): whatever the recipe's colour is, rgb x (AMBS + the baked
+  // probe + the clustered lights) x BLCM / pi, alpha unchanged. N is the view normal from vec (toward the
+  // eye for a sprite). Takes DrawDesc::lit and DrawDesc::cluster as IceChargeCollisionLit does.
+  ParticleLit = 1u << 26,
+  // Fogged whatever the blend: the fog follows the generator's PBDM/SBDM/EBDM row (SetupFogFromBlendMode), the
+  // factors its MATI's EBlendMode, so a MATI additive or premultiplied draw over a fogged row keeps the fog.
+  Fogged = 1u << 27,
+  // VFX_VisorRain (0ec41df0, FS perm 000): the visor's rain splash, a sprite. TCH0 (colorSlot) is a
+  // two-channel noise map read twice, at a per-particle patch (offset by PMTR row 0's xy, scaled by
+  // CCH0.y) and at the constant texel (0, 0) (the roundEven sample lands on it across the whole
+  // quad). The two channels warp a sum of sines into the drop mask H; 0.5 < H < 1 is inside the
+  // drop, whose height Z = (H - 0.5) x 1.8 + 0.1 gives the normal n that offsets the scene copy
+  // (capture_scene) at the fragment by (1 - fade) x CCH0.w x near / view depth, and the edge
+  // darkening f = Z^4 x 10 + 0.75 + 0.25 x fade; elsewhere the fragment is discarded. The bigger
+  // drops ("runners": PMTR row 1's y < CCH0.z and size > row 2's y) slide the pattern down by
+  // min(2 x row 1's x, 0.5) x 0.33 and take their own fade (row 1's z; row 0's z otherwise).
+  // rgb = f x scene x vc.rgb x PCMD, alpha vc.a. params = CCH0 (SMTR-animated), extra 0..2 = PMTR
+  // rows 0..2. Unfogged: the visor composite pass has no fog.
+  VisorRain = 1u << 28,
   // Not a shader feature: a VMAT blob's exposure policy, carried in its features word. The loader moves
   // it to DrawDesc::alreadyExposed; a draw ignores it in `features` (no shader or pipeline key sees it).
   AlreadyExposed = 1u << 31
@@ -77,11 +97,23 @@ enum Feature : uint32_t {
 // Multiply is port-only: the stand-in for the FrameBuffer_* shaders without a SceneWarp recipe
 // (3db95827). The warp is dropped and the target is multiplied by mix(1, rgb, a) instead.
 // AdditiveOne is the wave orb's model blend: RGB One/One, alpha Zero/One, drawn with depth write off.
-// The values are serialised in VMAT blobs (0..4 older, 5 new) and form part of the pipeline key.
-enum class Blend : uint32_t { Alpha = 0, Premultiplied = 1, Additive = 2, Opaque = 3, Multiply = 4, AdditiveOne = 5 };
+// PremultipliedAlpha and AdditiveAlpha are Remastered's EBlendMode 5 and 6 (SBlendModeState 0xf0164, tables
+// 0x1d0cc48/0x1d0cd38): One/InvSrcAlpha and SrcAlpha/One for colour and alpha alike, where the PBDM rows
+// Premultiplied and Additive keep the target's alpha (Zero/One).
+// The values are serialised in VMAT blobs (0..4 older, 5..7 new) and form part of the pipeline key.
+enum class Blend : uint32_t {
+  Alpha = 0,
+  Premultiplied = 1,
+  Additive = 2,
+  Opaque = 3,
+  Multiply = 4,
+  AdditiveOne = 5,
+  PremultipliedAlpha = 6,
+  AdditiveAlpha = 7
+};
 
 // The highest Blend value a VMAT blob may carry.
-inline constexpr uint32_t MaxBlend = uint32_t(Blend::AdditiveOne);
+inline constexpr uint32_t MaxBlend = uint32_t(Blend::AdditiveAlpha);
 
 // A model draw of this blend never writes depth and always depth-tests (LEqual), whatever its generator asked for.
 inline constexpr bool forces_depth_write_off(Blend blend) { return blend == Blend::AdditiveOne; }
@@ -221,10 +253,10 @@ struct DrawDesc {
   int8_t envSlot = -1; // IceChargeCollision: TCH0, the reflection map
   float params[7][4] = {};
   float time = 0.f;
-  // IceChargeCollisionLit: the clustered light gather's block and mask (see ClusterView). Ignored by every
-  // other feature.
+  // IceChargeCollisionLit, ParticleLit: the clustered light gather's block and mask (see ClusterView).
+  // Ignored by every other feature.
   ClusterView cluster;
-  // IceChargeCollisionLit: the baked ambient and probe (see LitAmbient). Ignored by every other feature.
+  // IceChargeCollisionLit, ParticleLit: the baked ambient and probe (see LitAmbient). Ignored by every other feature.
   LitAmbient lit;
 };
 

@@ -270,6 +270,11 @@ bool VariaOnlyHeatProtection();
 // the seed has Spring Ball off, so the port's own setting applies.
 int SpringBallRule();
 
+// Whether an owned Charge Beam charges `beam` (a CPlayerState::EBeamId). On a seed with
+// progressive_beam_upgrades only the beams whose second upgrade has arrived
+// charge; anything else (AP off, slot_data not yet in, the Phazon Beam) is true.
+bool ChargeBeamRule(int beam);
+
 // The connected seed's pre_scan_elevators: 1 on, 0 off (or AP off), -1 while
 // the client is on but its slot_data has not arrived yet.
 int PreScanElevators();

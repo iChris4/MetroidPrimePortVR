@@ -6,6 +6,7 @@
 #include "MetroidPrime/Cameras/CGameCamera.hpp"
 
 class CCinematicCamera : public CGameCamera {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 public:
   CCinematicCamera(const TUniqueId uid, const rstl::string& name, const CEntityInfo& info,
                    const CTransform4f& xf, bool active, const float shotDuration, const float fovy,
@@ -38,6 +39,14 @@ public:
   static bool PickRandomActiveConnection(const rstl::vector< SConnection >& conns,
                                          SConnection& randConn, CStateManager& mgr);
   void CalculateWaypoints(CStateManager& mgr);
+#ifdef TARGET_PC
+  // Save states: the running shot's progress, and resuming it without the Arrived messages
+  // already sent (platform/port_savestate_room.cpp).
+  float PortElapsed() const { return x1ec_t; }
+  int PortPassedViewPoint() const { return x1f4_passedViewPoint; }
+  int PortPassedTarget() const { return x1f8_passedTarget; }
+  void PortResumeCinematic(float t, int passedViewPoint, int passedTarget, CStateManager& mgr);
+#endif
 
 private:
   rstl::vector< CVector3f > x188_viewPoints;

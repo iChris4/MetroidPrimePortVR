@@ -325,10 +325,16 @@ void TestTxtrGarbage() {
 // A 16x16 RGBA8 texture whose 64 KB surface comes in two stored buffers: the
 // first holds the top mip (and more), the second the rest. `second` is that
 // buffer's bytes as written, mode word included, so it can be made undecodable.
-Blob Texture(const Blob& first, const Blob& second, uint32_t secondSize) {
+// A 16x16 texture of `format` (RGBA8 by default) with the given mip sizes, whose surface is
+// two stored buffers.
+Blob Texture(const Blob& first, const Blob& second, uint32_t secondSize, uint32_t format = 12,
+             std::vector<uint32_t> mipSizes = {1024u}) {
   Blob head;
-  for (uint32_t v : {0u, 12u, 16u, 16u, 1u, 0u, 0u, 1u, 1024u}) {
-    Little32(head, v); // kind, format (RGBA8), width, height, layers, tile, swizzle, mips, mip size
+  for (uint32_t v : {0u, format, 16u, 16u, 1u, 0u, 0u, uint32_t(mipSizes.size())}) {
+    Little32(head, v); // kind, format, width, height, layers, tile, swizzle, mips
+  }
+  for (uint32_t v : mipSizes) {
+    Little32(head, v);
   }
   Blob body;
   Chunk(body, "HEAD", head);
@@ -396,6 +402,69 @@ void TestTxtrTopMipOnly() {
   const Blob noFirst = Texture(broken, Stored(Sample(secondSize, 22)), 32768);
   CHECK_MSG(!DecodeTxtr(noFirst.data(), noFirst.size(), b, error), "a broken top-mip buffer still fails");
 }
+// A BC6H mode 11 block (one region, 10-bit endpoints) whose two endpoints are both x in every
+// channel, so each texel decodes to the same half.
+std::array<uint8_t, 16> FlatBc6h(uint32_t x) {
+  std::array<uint8_t, 16> block{};
+  const auto put = [&](uint32_t at, uint32_t bits, uint32_t value) {
+    for (uint32_t i = 0; i < bits; ++i) {
+      if ((value >> i) & 1) {
+        block[(at + i) / 8] |= uint8_t(1u << ((at + i) % 8));
+      }
+    }
+  };
+  put(0, 5, 0b00011);
+  for (uint32_t e = 0; e < 6; ++e) {
+    put(5 + e * 10, 10, x);
+  }
+  return block;
+}
+
+// BC6H's 8-bit form is its value clamped to [0, 1], not the half's high byte; and a plain 2D
+// BC6H texture's mips come out as the blocks they are, for writing on as BC6H.
+void TestBc6h() {
+  const auto one = FlatBc6h(495), mid = FlatBc6h(462), bright = FlatBc6h(700);
+  uint16_t rgba[64];
+  DecodeBc6hImage(one.data(), 4, 4, false, rgba);
+  CHECK_MSG(rgba[0] == 0x3C00 && rgba[5] == 0x3C00 && rgba[63] == 0x3C00, "the synthetic block is 1.0");
+  DecodeBc6hImage(mid.data(), 4, 4, false, rgba);
+  CHECK_MSG(rgba[0] >= 0x37FF && rgba[0] <= 0x3802, "the second synthetic block is 0.5");
+  uint8_t px[64];
+  DecodeBc6hBlockRgba8(one.data(), false, px);
+  CHECK_MSG(px[0] == 255 && px[1] == 255 && px[2] == 255 && px[3] == 255 && px[60] == 255, "1.0 is 255");
+  DecodeBc6hBlockRgba8(mid.data(), false, px);
+  CHECK_MSG(px[0] == 128 && px[2] == 128 && px[3] == 255, "0.5 is 128 (the high byte gave 56)");
+  DecodeBc6hBlockRgba8(bright.data(), false, px);
+  CHECK_MSG(px[0] == 255, "over 1 clamps to 255");
+  CHECK_MSG(HalfToUnormByte(0x3800) == 128 && HalfToUnormByte(0x3400) == 64 && HalfToUnormByte(0x0000) == 0 &&
+                HalfToUnormByte(0xBC00) == 0 && HalfToUnormByte(0x7C00) == 255 && HalfToUnormByte(0x7E00) == 255,
+            "half to byte: by value, negatives to 0, clamped at 1 (inf and NaN read as the largest half)");
+
+  // 16x16, two mips: each mip's surface is one GOB (512 bytes) of the same block, so the
+  // tiling cannot move anything.
+  Blob mip0, mip1;
+  for (int i = 0; i < 32; ++i) {
+    mip0.insert(mip0.end(), one.begin(), one.end());
+    mip1.insert(mip1.end(), mid.begin(), mid.end());
+  }
+  const Blob tex = Texture(Stored(mip0), Stored(mip1), 512, kTxtrFormatBc6hUfloat, {512u, 512u});
+  TxtrImage image;
+  std::string error;
+  CHECK_MSG(DecodeTxtr(tex.data(), tex.size(), image, error), "a BC6H texture decodes");
+  CHECK_MSG(image.width == 16 && image.rgba.size() == 16 * 16 * 4 && image.rgba[0] == 255 && !image.srgb,
+            "its 8-bit form is 1.0 as 255, linear");
+  TxtrMipsBc6h mips;
+  CHECK_MSG(ReadTxtrMipsBc6h(tex.data(), tex.size(), mips, error), "its mips read");
+  CHECK_MSG(mips.width == 16 && mips.height == 16 && !mips.isSigned && mips.mips.size() == 2, "both mips");
+  if (mips.mips.size() == 2) {
+    CHECK_MSG(mips.mips[0].size() == 16 * 16 && mips.mips[1].size() == 4 * 16, "the mips' block counts");
+    CHECK_MSG(std::equal(one.begin(), one.end(), mips.mips[0].begin()) &&
+                  std::equal(mid.begin(), mid.end(), mips.mips[1].begin() + 48),
+              "each mip's blocks pass through as stored");
+  }
+  const Blob rgba8 = Texture(Stored(Sample(1024, 3)), Stored(Sample(16, 4)), 16);
+  CHECK_MSG(!ReadTxtrMipsBc6h(rgba8.data(), rgba8.size(), mips, error), "an RGBA8 texture is not BC6H");
+}
 } // namespace
 
 int main() {
@@ -403,6 +472,7 @@ int main() {
   TestPakRead();
   TestTxtrGarbage();
   TestTxtrTopMipOnly();
+  TestBc6h();
   if (port_test::Failures() == 0) {
     std::printf("port_remastered_parsers: ok\n");
   }

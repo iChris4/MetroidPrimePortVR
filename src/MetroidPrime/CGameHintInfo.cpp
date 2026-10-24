@@ -11,6 +11,8 @@
 #include "Kyoto/Streams/COutputStream.hpp"
 #include "rstl/math.hpp"
 
+#include "port_debug.h"
+
 const float CGameHintInfo::skHintTextTime = 3.f;
 
 uint CHintOptions::GetBitCount(uint value) {
@@ -98,6 +100,32 @@ void CHintOptions::InitializeMemoryState() {
 }
 
 void CHintOptions::Update(float dt, const CStateManager& mgr) {
+  // Port: "Show current hint" (F1, `hint show`): re-show the displaying hint, else bring the soonest
+  // waiting one due now.
+  if (PortDebug::ConsumeShowHintRequest()) {
+    int showIdx = -1;
+    for (int i = 0; i < x0_hintStates.size(); ++i) {
+      if (x0_hintStates[i].x0_state == kHS_Displaying) {
+        showIdx = i;
+        break;
+      }
+    }
+    if (showIdx != -1) {
+      x0_hintStates[showIdx].x8_dismissed = false;
+      x0_hintStates[showIdx].x4_time = gpMemoryCard->GetHints()[showIdx].GetTextTime();
+    } else {
+      for (int i = 0; i < x0_hintStates.size(); ++i) {
+        if (x0_hintStates[i].x0_state == kHS_Waiting &&
+            (showIdx == -1 || x0_hintStates[i].x4_time < x0_hintStates[showIdx].x4_time)) {
+          showIdx = i;
+        }
+      }
+      if (showIdx != -1) {
+        x0_hintStates[showIdx].x4_time = 0.f;
+      }
+    }
+  }
+  const float hintDelay = PortDebug::HintDelaySeconds(); // Port: Hint delay setting
   x10_nextHintIdx = -1;
   for (int i = 0; i < x0_hintStates.size(); ++i) {
     SHintState& state = x0_hintStates[i];
@@ -107,6 +135,9 @@ void CHintOptions::Update(float dt, const CStateManager& mgr) {
     case kHS_Delayed:
       break;
     case kHS_Waiting:
+      if (hintDelay > 0.f && state.x4_time > hintDelay) {
+        state.x4_time = hintDelay;
+      }
       state.x4_time -= dt;
       if (state.x4_time <= 0.f) {
         state.x0_state = kHS_Displaying;

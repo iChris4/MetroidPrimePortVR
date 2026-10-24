@@ -9,6 +9,7 @@
 #include "Kyoto/Math/CTransform4f.hpp"
 
 class CTryclops : public CPatterned {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 public:
   CTryclops(TUniqueId uid, const rstl::string& name, const CEntityInfo& info,
             const CTransform4f& xf, const CModelData& mData, const CPatternedInfo& pInfo,

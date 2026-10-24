@@ -500,7 +500,7 @@ std::u16string Utf16(const std::string& text) {
     }
     const uint32_t least = extra == 1 ? 0x80 : extra == 2 ? 0x800 : extra == 3 ? 0x10000 : 0;
     if (!ok || code < least || code > 0x10FFFF || (code >= 0xD800 && code <= 0xDFFF)) {
-      out.push_back(u'�');
+      out.push_back(u'\uFFFD');
       ++i;
       continue;
     }

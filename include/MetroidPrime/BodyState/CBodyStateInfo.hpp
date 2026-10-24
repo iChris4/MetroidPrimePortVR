@@ -40,6 +40,7 @@ public:
 
 private:
   friend class CBodyController;
+  friend struct PortStateCodec; // save states (platform/port_savestate_fields.cpp)
   rstl::map< int, CBodyState* > x0_stateMap;
   pas::EAnimationState x14_state;
   CBodyController* x18_bodyController;

@@ -163,7 +163,7 @@ void GXSetPBRDebugView(u32 view);
 // 5 no normal maps, 6 no metal/roughness and emissive maps, 7 flat but with every map
 // still read, 8 full shading with the maps' anisotropy off, 9 as 8 with nearest mips.
 // Takes effect at the next GXSetPBR(GX_TRUE). Two leave the shading alone and measure the
-// frame around it: 10 no post-processing (GXPortPostProcess does nothing), 11 no screen
+// frame around it: 10 no post-processing (GXPortPostProcessScene only converts the scene), 11 no screen
 // copies (GXCopyTex without a clear copies nothing, so the frame stays one render pass;
 // what samples the copy sees stale texels).
 void GXSetPBRCostTest(u32 test);
@@ -239,35 +239,37 @@ void GXSetPBRLightScale(f32 diffuse, f32 f0, f32 alpha, GXBool alphaReplaces);
 // neutral coverage.
 void GXSetPBRModelModulation(const f32 diffuse[4], const f32 incan[4], f32 coverage);
 
-// Aurora extension: Remastered's bloom over what the EFB holds now (see lib/gfx/bloom.cpp).
-// The EFB is taken as drawn through the tone curve `tone` (as GXSetPBRTone); light above
-// `threshold` (exposed luminance) blooms, tints 0 to 3 weight the levels from the coarsest
-// and tint 4 the bright pass. Not a FIFO command: it ends the current pass. False when it
-// could not be recorded. Then the colour grade: the LUTs gradeA and gradeB (ids from
-// GXPortColorGradeLut, 0 = none) over the tone-mapped colour, mixed by gradeWeight (1 = B).
-// Without bloom (bloom false) only the grade runs, and nothing when there is none either.
-// Before both, with an `exposure` above 0 (and a tone curve), the frame is averaged for auto
-// exposure: the mean exposed level, undone by the curve and divided by `exposure`, comes
-// back through GXPortFrameRadiance a few frames later.
-GXBool GXPortPostProcess(GXBool bloom, f32 threshold, const f32 tints[5][3], const f32 tone[3][4], u32 gradeA,
-                         u32 gradeB, f32 gradeWeight, f32 exposure);
-// Port extension: GXPortPostProcess as the end of the HDR scene (GXPortSceneHdr). Same parameters.
+// Port extension: Remastered's bloom and colour grade at the end of the HDR scene (GXPortSceneHdr;
+// see lib/gfx/bloom.cpp). Light above `threshold` (exposed luminance) blooms, tints 0 to 3 weight
+// the levels from the coarsest and tint 4 the bright pass; then the colour grade: the LUTs gradeA
+// and gradeB (ids from GXPortColorGradeLut, 0 = none) over the tone-mapped colour, mixed by
+// gradeWeight (1 = B). `exposure` is unused (auto exposure measures through GXPortMeasureScene).
+// Not a FIFO command: it ends the current pass. False when it could not be recorded.
 // In the HDR scene's pass it reads the linear RGBA16F scene as it is (no decode, no inverse curve,
 // no cap), tones it once through `tone` (none: clamped to 1), grades and blooms it into the display
 // EFB, and the frame goes on in the display EFB (the HDR scene ends; a later GXPortSceneHdr starts
 // it again). It always records there, with no bloom, grade or exposure too, as the scene must be
-// converted. On the display EFB it is GXPortPostProcess, and nothing when there is nothing to do.
-// At most two posts (either call) a frame. Plain GXPortPostProcess in the HDR scene is not this
-// contract: it does nothing without an effect and leaves the conversion to chance; use this one.
-// Cost test 10 keeps the conversion (bloom and grades off).
+// converted. Outside the HDR scene's pass (the HDR target could not be had) it records nothing and
+// returns false. At most two posts a frame. Cost test 10 keeps the conversion (bloom and grades off).
 GXBool GXPortPostProcessScene(GXBool bloom, f32 threshold, const f32 tints[5][3], const f32 tone[3][4],
                               u32 gradeA, u32 gradeB, f32 gradeWeight, f32 exposure);
+// Port extension: a colour the next GXPortPostProcessScene adds in its composite, in linear light
+// before the sRGB encode: out = clamp(frame) + clamp(rgba).rgb * clamp(rgba).a (Remastered's
+// UberPost material 0007259, the HUD's damage filter folded in). Taken by that post and cleared;
+// NULL or alpha 0 adds nothing. Outside the HDR scene there is no composite to take it.
+void GXPortPostCompositeAdd(const f32 rgba[4]);
+// Port extension: Remastered's radial damage fan (shader 00075d2, the HUD's radial filter folded
+// in) for the next GXPortPostProcessScene's composite, after any GXPortPostCompositeAdd term: v is
+// the 16-triangle fan (apex c0 at the centre, rim c1 at NDC (6.25 sin a, 3.6 cos a)) clamped to
+// [0, 1], and out.rgb = clamp(frame) * clamp(c2).rgb + v.rgb * v.a, out.a = frame.a * clamp(c2).a.
+// Taken by that post and cleared; any NULL clears it.
+void GXPortPostCompositeRadial(const f32 c0[4], const f32 c1[4], const f32 c2[4]);
 // Port extension: Remastered's volumetric fog over the EFB as drawn so far: a froxel grid
 // (16x16 pixels by 64 slices out to `fog[0]`) of height and noise shaped density, lit by the
 // ambient volume's mean light, integrated front to back and applied to every pixel at the
 // world's depth (the viewmodel, drawn nearer than depth[2], is left alone). The EFB is undone
 // through the tone curve and exposure the frame was drawn with, fogged, and drawn through them
-// again. Call it before GXPortPostProcess. View space is GX's (x right, y up, z towards the camera).
+// again. Call it before GXPortPostProcessScene. View space is GX's (x right, y up, z towards the camera).
 typedef struct {
   f32 viewToWorld[3][4];   // rows: world = row . (view, 1)
   f32 worldToVolume[3][4]; // rows: world -> the ambient volume's texture coordinates
@@ -328,8 +330,14 @@ GXBool GXPortSceneHdr(GXBool on);
 void GXPortCopyScene(void* dest, GXBool clear);
 // Stores a 33x33x33 RGBA8 colour grade LUT (red fastest) under a non-zero id.
 void GXPortColorGradeLut(u32 id, const u8* rgba);
-// The average radiance (linear rgb) of the latest frame measured by GXPortPostProcess, and a
-// count that goes up with each new one. False before the first.
+// Port extension: Remastered's auto-exposure measure (lib/gfx/bloom.cpp), at the opaque/sorted
+// boundary of the HDR scene's pass: the scene to a pow2 half-size mip chain down to 1x1, read back
+// at least a frame later. `exposure` is the one the scene is drawn at; the readback is divided by
+// it. Once a frame; false (nothing recorded) outside the HDR scene's pass or for exposure <= 0.
+// Ends the current pass, as a post does.
+GXBool GXPortMeasureScene(f32 exposure);
+// The radiance (linear rgb) of the newest finished GXPortMeasureScene, and a count that goes up
+// with each new one. False before the first.
 GXBool GXPortFrameRadiance(f32 out[3], u32* serial);
 // The sun's shadow. Each frame, GXPortSetShadowFrame gives the view (world -> view rows), the camera's
 // frustum (left, right, top, bottom on the near plane, near, far), the sun's direction (world, the
@@ -364,7 +372,7 @@ GXBool GXPortActorShadowRender(void);
 // The room's Remastered point and spot lights for the rest of the frame, added on every PBR draw
 // (lit, lightmapped or not) as the sun is. Each record is 16 f32: view-space position, A; colour
 // (linear, scaled), B; view-space axis toward the light, cone scale; cone bias, falloff (0 none,
-// 1 linear, 2 squared, 3 smooth), spot (0/1), 0. The distance falloff runs on
+// 1 linear, 2 squared, 3 smooth), spot (0 point, 1 spot, 2 directional: only the colour and the axis count), 0. The distance falloff runs on
 // t = clamp(dist * A + B, 0, 1), the cone on clamp(dot(L, axis) * scale + bias, 0, 1).
 void GXPortSetRoomLights(const f32* records, u32 count);
 

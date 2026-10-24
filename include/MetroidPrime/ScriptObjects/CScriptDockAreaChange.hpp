@@ -4,6 +4,7 @@
 #include "MetroidPrime/CEntity.hpp"
 
 class CScriptDockAreaChange : public CEntity {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
   int x34_dockReference;
 
 public:

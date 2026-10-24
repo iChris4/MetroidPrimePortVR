@@ -317,15 +317,6 @@ GXTexWrapMode GXGetTexObjWrapT(GXTexObj* tex_obj) { return reinterpret_cast<cons
 GXBool GXGetTexObjMipMap(GXTexObj* tex_obj) { return reinterpret_cast<const GXTexObj_*>(tex_obj)->has_mips(); }
 
 // TODO GXGetTexObjAll
-// TODO GXGetTexObjMinFilt
-// TODO GXGetTexObjMagFilt
-// TODO GXGetTexObjMinLOD
-// TODO GXGetTexObjMaxLOD
-// TODO GXGetTexObjLODBias
-// TODO GXGetTexObjBiasClamp
-// TODO GXGetTexObjEdgeLOD
-// TODO GXGetTexObjMaxAniso
-// TODO GXGetTexObjLODAll
 u32 GXGetTexObjTlut(const GXTexObj* tex_obj) { return reinterpret_cast<const GXTexObj_*>(tex_obj)->tlut; }
 // TODO GXGetTlutObjData
 // TODO GXGetTlutObjFmt

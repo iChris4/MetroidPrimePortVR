@@ -70,11 +70,9 @@ void DrawFlaahgraTheme() {
     OpenRemasteredDialog(kFlaahgraPick);
   }
   ImGui::EndDisabled();
-  ItemHelp("The NTSC discs have the Flaahgra theme cut to its first 36 s, so the fight loops that. "
-           "Pick your own PAL or Japanese GameCube disc, or Metroid Prime Trilogy (Wii), to add its whole "
-           "114 s track as a mod (flaahgra-full-theme). Use Reload mods (F1 > Mods) or restart to hear it. "
-           "Only these two audio files are taken. Adding a PAL disc's languages (F1 > Game > Language) "
-           "adds this too.");
+  ItemHelp("The NTSC discs cut the Flaahgra theme to 36 s. Pick a PAL or Japanese GameCube disc, "
+           "or Metroid Prime Trilogy (Wii), to add the full 114 s track as a mod. Reload mods (F1 "
+           "> Mods) or restart to hear it.");
   if (installed && !state.running) {
     ImGui::SameLine();
     if (ImGui::Button("Remove##flaahgra")) {
@@ -114,11 +112,9 @@ void DrawVoices() {
   ImGui::Checkbox("Freeze list", &freeze);
   ImGui::SameLine();
   ImGui::TextUnformatted("(hold the current list so its rows stay put)");
-  ImGui::SetItemTooltip("Freezing keeps the samples and levels shown right now, so the rows\n"
-                        "stay readable while you look for one. Mute still applies: the\n"
-                        "checkbox reads and writes the live mute state, so you can silence\n"
-                        "a sample whether or not it is still playing. Untick to follow the\n"
-                        "live voices again. Not saved between runs.");
+  ImGui::SetItemTooltip(
+      "Freezing keeps the rows shown right now so you can read them. Mute still works\n"
+      "on any sample, playing or not. Untick to follow live voices again. Not saved.");
 
   if (!freeze) {
     aggs.clear();

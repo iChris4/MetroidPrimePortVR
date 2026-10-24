@@ -438,8 +438,13 @@ std::vector<WeightKey> SkinWeights(const std::vector<double>& P, size_t n, const
       }
     }
   }
+  return QuantiseWeights(weights);
+}
+
+std::vector<WeightKey> QuantiseWeights(std::vector<std::vector<std::pair<uint32_t, double>>>& weights) {
   // Quantise to 1/64 and renormalise, so vertices that differ by noise share a
   // weight group.
+  const size_t n = weights.size();
   std::vector<WeightKey> out(n);
   for (size_t v = 0; v < n; ++v) {
     auto& ws = weights[v];

@@ -11,6 +11,7 @@ class CPatternedInfo;
 class CGenDescription;
 
 class CFlaahgraPlants : public CActor {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 public:
   CFlaahgraPlants(const TToken< CGenDescription >&, const CActorParameters&, TUniqueId, TAreaId,
                   TUniqueId, const CTransform4f&, const CDamageInfo&, const CVector3f&);

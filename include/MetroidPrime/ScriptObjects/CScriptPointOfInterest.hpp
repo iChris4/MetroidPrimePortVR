@@ -6,6 +6,7 @@
 class CScannableParameters;
 
 class CScriptPointOfInterest : public CActor {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 private:
   float xe8_pointSize;
 

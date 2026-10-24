@@ -527,7 +527,8 @@ bool Start() {
     return false;
   }
   std::error_code ec;
-  const std::filesystem::path file(path);
+  // UTF-8, as Path() is: a narrow path is the ANSI code page on Windows.
+  const std::filesystem::path file(std::u8string(path.begin(), path.end()));
   // On a first start the user folder may not exist yet, and that run is the one
   // most likely to need a log.
   std::filesystem::create_directories(file.parent_path(), ec);

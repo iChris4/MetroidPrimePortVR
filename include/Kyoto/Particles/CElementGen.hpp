@@ -121,6 +121,15 @@ public:
   virtual void SetGlobalScale(const CVector3f& scale) override;
   virtual void SetLocalScale(const CVector3f& scale) override;
   virtual void SetParticleEmission(const bool emission) override;
+#ifdef TARGET_PC
+  // SHTM/SHTT (PSHM/PSHT). ShutdownEffect starts the countdown if the description has one, else
+  // acts at once; PortDoShutdownBehavior(0xff) uses the description's mode.
+  void ShutdownEffect() override;
+  void PortDoShutdownBehavior(u32 mode) override;
+  void PortSetSpawnSpread(const CVector3f& spread, const CVector3f& origin) override;
+  // SDTR: the countdown's remaining over its total, 1 when none is running.
+  float PortShutdownTimeRemaining() const;
+#endif
   virtual void SetModulationColor(const CColor& col) override;
   virtual void SetGeneratorRate(float rate) override;
 #ifdef TARGET_PC
@@ -292,6 +301,7 @@ public:
   // particles at the given local positions, at rest, the PART children first.
   void PortCreateParticlesAtPositions(int n, const CVector3f* pos);
   const CGenDescription* PortDesc() const { return x28_loadedGenDesc; }
+  int PortCurFrame() const { return x74_curFrame; }
   void PortCreateParticlesAtPositionsIncludingChildren(int n, const CVector3f* pos);
   // Remastered particle variables (PVRT): a handle is looked up once and then binds are cheap.
   // Binds are generator-wide, persist until rebound, and are no-ops when the variable is absent.
@@ -313,6 +323,7 @@ public:
   void PortBindVector(const PortGuid& g, const CVector3f& v) {
     xPortVars.BindVector(PortGetVectorHandle(g), v);
   }
+  void PortBindExternal(const SPortExternalVar& v) { xPortVars.BindExternal(v); }
   const CPortVarMemory& PortVars() const { return xPortVars; }
   // The global translation just set is already the presented one (placed from
   // the presented camera on every drawn frame): draw it as is, unblended.
@@ -392,6 +403,8 @@ private:
   CModVectorElement* x280_VELSources[4];
 #ifdef TARGET_PC
   bool xPortVelFinalizes = false;
+  int xPortShutdownCountdown = -1; // ticks to the delayed shutdown, -1 = not counting
+  int xPortShutdownTotal = 0;
 #endif
   rstl::vector< CParticleGen* > x290_activePartChildren;
   int x2a0_CSSD;
@@ -521,6 +534,8 @@ public:
   bool xPortPemvStarted = false;
   void PortStepPemv();
   const CVector3f& PortEmitterVelocity() const { return xPortPemvDelta; }
+  // PZTS (Remastered ZTES 0): the depth test passes everywhere (static render state compare 1 = ALWAYS)
+  bool PortNoZTest() const { return x28_loadedGenDesc->xPortNoZTest; }
 
 private:
   bool PortHasMover() const;
@@ -539,6 +554,8 @@ private:
   // A PINR or PINT outside XFMD 4 (whose mover overrides them): the setters keep the owner's
   // orientations and local translation here, which EXTR/EXTT and the getters read.
   bool xPortIntFrame = false;
+  CVector3f xPortSpawnSpread{1.f, 1.f, 1.f};
+  CVector3f PortSpreadSpawn(const CVector3f& rel) const;
   CTransform4f xPortExtOrientation = CTransform4f::Identity();
   CTransform4f xPortExtGlobalOrientation = CTransform4f::Identity();
   CVector3f xPortExtTranslation{0.f, 0.f, 0.f};

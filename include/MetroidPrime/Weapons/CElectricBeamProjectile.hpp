@@ -26,6 +26,7 @@ struct SElectricBeamInfo {
 };
 
 class CElectricBeamProjectile : public CBeamProjectile {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 public:
   CElectricBeamProjectile(const TToken< CWeaponDescription >&, EWeaponType,
                           const SElectricBeamInfo&, const CTransform4f&, EMaterialTypes,

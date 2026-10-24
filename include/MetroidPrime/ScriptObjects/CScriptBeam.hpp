@@ -8,6 +8,7 @@
 
 class CWeaponDescription;
 class CScriptBeam : public CActor {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
   TLockedToken< CWeaponDescription > xe8_weaponDescription;
   CBeamInfo xf4_beamInfo;
   CDamageInfo x138_damageInfo;

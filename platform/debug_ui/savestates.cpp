@@ -18,10 +18,9 @@ namespace PortDebug {
 
 void DrawSaveStatesTab() {
   ImGui::TextDisabled("Save anywhere and load back to the same spot.");
-  ItemHelp("A state holds what a memory card save holds (items, health, ammo, map, scans, doors and "
-           "puzzles already solved, in-game time) plus where Samus stands and whether she is in "
-           "morph ball. Loading rebuilds the room as a memory card load does, so enemies and moving "
-           "parts start over. While the game is paused, a save or load waits until you unpause.");
+  ItemHelp("A state holds what a memory card save does, plus where Samus stands and whether she's "
+           "in morph ball. Loading rebuilds the room, so enemies and moving parts start over. "
+           "While paused, a save or load waits until you unpause.");
   bool hotkeys = sSaveStateHotkeys;
   const std::string saveKeys = PortInputRemap::BindingsText(PortInput::Action::SaveState, " / ");
   const std::string loadKeys = PortInputRemap::BindingsText(PortInput::Action::LoadState, " / ");
@@ -38,21 +37,19 @@ void DrawSaveStatesTab() {
     sSaveStateRoomState = roomState;
     MarkDirty();
   }
-  ItemHelp("Save states (and quick resume) also store the enemies, doors, platforms, timers and "
-           "other objects of the loaded rooms: a killed enemy stays dead and the rest resume with "
-           "their health, place and behaviour. Off, or for states saved without it, the room "
-           "starts over as after a memory card load. Boss fights resume with generic data only "
-           "(see docs/SETTINGS.md).");
+  ItemHelp("Save states and quick resume also store the loaded rooms' enemies, doors and objects, "
+           "so a killed enemy stays dead. Off, the room starts over as after a memory card load. "
+           "Boss fights resume with generic data only (docs/SETTINGS.md).");
   bool quickResume = sQuickResume;
   if (ImGui::Checkbox("Quick resume###quick-resume", &quickResume)) {
     sQuickResume = quickResume;
     MarkDirty();
   }
-  ItemHelp("When the app goes to the background (Android) or you quit (desktop) during play, a "
-           "resume state is written. The next launch asks \"Resume where you left off?\" at the "
-           "title screen. Yes loads the same save file and puts Samus back, like a save state "
-           "(enemies and the room come back too unless \"Keep enemies and room objects\" is off). No deletes it. Nothing "
-           "is written in cutscenes, elevator rides, while Samus is dead or on the title screen.");
+  ItemHelp("On leaving the app (Android) or quitting (desktop) during play, a resume state is "
+           "written, and the next launch asks \"Resume where you left off?\" Yes restores it like "
+           "a save state (room and enemies too, unless \"Keep enemies and room objects\" is off); "
+           "No deletes it. Nothing is written in cutscenes, elevator rides, while Samus is dead or "
+           "on the title screen.");
   const bool running = sStateManager != nullptr;
   if (!running) {
     ImGui::TextDisabled("Saving and loading need a running game.");

@@ -5,6 +5,7 @@
 #include "MetroidPrime/Cameras/CGameCamera.hpp"
 
 class CPathCamera : public CGameCamera {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 public:
   enum EInitialSplinePosition {
     kISP_BallCamBasis,

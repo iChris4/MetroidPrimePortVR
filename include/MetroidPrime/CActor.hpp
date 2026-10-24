@@ -36,6 +36,7 @@ class CWeaponMode;
 class CInt32POINode;
 
 class CActor : public CEntity {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 public:
   enum EThermalFlags {
     kTF_None = 0,

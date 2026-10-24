@@ -135,7 +135,11 @@ void CProjectedShadow::RenderShadowBuffer(CStateManager& mgr, const CModelData& 
   for (int i = 0; i < count; ++i) {
     const CModelData& modelData = *models[i];
     const CTransform4f& xf = *transforms[i];
+#ifdef TARGET_PC
+    CGraphics::SetModelMatrix(modelData.PortScaledXf(CModelData::kWM_Normal, xf));
+#else
     CGraphics::SetModelMatrix(xf * CTransform4f::Scale(CVector3f(modelData.GetScale())));
+#endif
     if (const CAnimData* animData = modelData.GetAnimationData()) {
       CSkinnedModel& model = modelData.PickAnimatedModel(CModelData::kWM_Normal);
       animData->SetupRender(model, rstl::optional_object< CVertexMorphEffect >(), nullptr);
@@ -245,8 +249,13 @@ void CProjectedShadow::Render(const CStateManager& mgr) const {
     const CActor* actor = static_cast< const CActor* >(mgr.GetObjectById(*it));
     if (actor && actor->CanDrawStatic()) {
       const CModelData& modelData = *actor->GetModelData();
+#ifdef TARGET_PC
+      const CTransform4f modelXf =
+          modelData.PortScaledXf(CModelData::kWM_Normal, actor->GetTransform());
+#else
       const CTransform4f modelXf =
           actor->GetTransform() * CTransform4f::Scale(CVector3f(modelData.GetScale()));
+#endif
       gpRender->SetModelMatrix(modelXf);
       const CTransform4f modelTextureXf = textureXf * modelXf;
       CGX::LoadTexMtxImm(modelTextureXf.GetCStyleMatrix(), GX_TEXMTX0, GX_MTX3x4);

@@ -6,12 +6,12 @@
 // as before: the sRGB decode, then the curve's inverse. Without tone data (row 1 x <= 0) the curve is
 // Remastered's static straight line at exposure 1: the decode alone.
 //
-// The inverse is bloom.cpp's untone where that one is exact (shoulder offset t2.z = -t2.y * t1.w and
+// The inverse is the one bloom.cpp had where that one is exact (shoulder offset t2.z = -t2.y * t1.w and
 // shoulder base t2.w = the line's end, as port_room_env.cpp writes them), in its general form
 // otherwise (the shoulder from where the line ends, through its own offset t2.z), and kept finite for
 // an RGBA16F target:
 // slopes below MinSlope count as MinSlope, the shoulder's asymptote is approached but never divided
-// by zero, and the reconstructed level is clamped to [0, HdrMax] (bloom caps it at 4.0 instead).
+// by zero, and the reconstructed level is clamped to [0, HdrMax].
 // Display white sits at the shoulder's asymptote, so it comes back as a large bounded level: that is
 // what an opaque white write needs to post-tone as white, not a claim that blends of it match LDR's.
 // Only this reconstruction is capped; genuine HDR writers (VFX's exposed tail) keep their values.
@@ -78,11 +78,17 @@ fn hdr_exposed(c: vec3f, t0: vec4f, t1: vec4f, t2: vec4f) -> vec3f {
 }
 )""";
 
-// Legacy GX SRCALPHA/ONE only: weight in display space BEFORE the nonlinear inverse.
+// Legacy GX SRCALPHA/ONE and SRCALPHA/INVSRCALPHA (retail particles' and glass's alpha blend): the
+// source term is a * c in both, so weight it in display space BEFORE the nonlinear inverse. The plain
+// inverse sent an alpha-blended white to the shoulder's asymptote, and a * that stayed in the hundreds
+// (Elite Quarters' tank glass drew flat saturated blue). ONE/INVSRCALPHA needs no conversion: its source
+// is premultiplied, so the plain inverse already gives the source term exactly.
 // With local a = clamp(alpha,0,1), post_tone(a * H_add(c,alpha)) equals clamp(c,0,1) * a,
 // within inverse/target precision. Hardware multiplies by the preserved TEV alpha once, so
 // this over-black display identity assumes normalized alpha in [0,1] and an isolated,
 // unfogged contribution: TEV alpha can slightly exceed 1, and later volumetric fog attenuates light.
+// Over a nonblack background an alpha-over layer draws darker than LDR's display blend (mid grey at
+// alpha 0.5 over itself: about 0.43 for 0.5), where the plain inverse drew it brighter over dark ones.
 // Other legacy SRCALPHA/ONE effects intentionally share this policy; this is not full visual
 // certification, exact LDR compositing over nonblack backgrounds (the curve is nonlinear),
 // or Remastered parity.
@@ -94,6 +100,19 @@ fn hdr_tev_srcalpha_add(c: vec3f, alpha: f32, t0: vec4f, t1: vec4f, t2: vec4f) -
     return vec3f(0.0);
   }
   return hdr_exposed(clamp(c, vec3f(0.0), vec3f(1.0)) * a, t0, t1, t2) / a;
+}
+
+// Legacy GX blends where the source colour scales the destination (hdr_tev_blend.y): 1 is
+// dst * src (ZERO/SRCCLR, DSTCLR/ZERO), 2 is dst * (1 + src) (DSTCLR/ONE). The source is a factor,
+// not light: a display factor k on the encoded picture is about k^2.2 on its linear light, and the
+// exposed scene is that light scaled, so the factor goes over linear, not through the inverse curve
+// (which made it depend on the room's exposure and takes white to the shoulder's asymptote).
+fn hdr_tev_dst_factor(c: vec3f, mode: f32) -> vec3f {
+  let k = clamp(c, vec3f(0.0), vec3f(1.0));
+  if (mode > 1.5) {
+    return pow(vec3f(1.0) + k, vec3f(2.2)) - vec3f(1.0);
+  }
+  return hdr_srgb_dec(k);
 }
 )""";
 
@@ -107,11 +126,13 @@ fn hdr_srgb_enc(l: vec3f) -> vec3f {
 }
 
 // Exposed scene light as linear display light in [0, 1]: the curve, or without tone data its static
-// line at exposure 1 (the identity, clamped to 1). The input is held to the finite RGBA16F range first.
+// line at exposure 1 (the identity, clamped to 1). The input is held to the finite RGBA16F range first,
+// signed: Remastered's tonemap (matglsl/00718a4) does not clamp its input, so a negative level (X-ray
+// pass A's sky) takes the toe cubic and only the output is clamped (kb topic/xray-post-shader-00089f0.md).
 fn hdr_display_linear(x: vec3f, t0: vec4f, t1: vec4f, t2: vec4f) -> vec3f {
-  let v = clamp(x, vec3f(0.0), vec3f(hdr_f16_max));
+  let v = clamp(x, vec3f(-hdr_f16_max), vec3f(hdr_f16_max));
   if (t1.x <= 0.0) {
-    return min(v, vec3f(1.0));
+    return clamp(v, vec3f(0.0), vec3f(1.0));
   }
   let y = vec3f(hdr_tone_fwd(v.r, t0, t1, t2), hdr_tone_fwd(v.g, t0, t1, t2), hdr_tone_fwd(v.b, t0, t1, t2));
   return clamp(y, vec3f(0.0), vec3f(1.0));
@@ -181,12 +202,18 @@ inline float tev_srcalpha_add(float c, float alpha, const Tone& t) noexcept {
   return exposed(std::clamp(c, 0.f, 1.f) * a, t) / a;
 }
 
+// CPU reference for hdr_tev_dst_factor (mode 1: dst * src, 2: dst * (1 + src)).
+inline float tev_dst_factor(float c, int mode) noexcept {
+  const float k = std::clamp(c, 0.f, 1.f);
+  return mode == 2 ? std::pow(1.f + k, 2.2f) - 1.f : srgb_dec(k);
+}
+
 // What the single post-tone after the HDR scene draws for an exposed level: the LDR PBR encode
 // (tone, clamp, sRGB) applied once, there.
 // Exposed light as linear display light (hdr_display_linear): the curve, or the identity line, in [0, 1].
 inline float display_linear(float x, const Tone& t) noexcept {
-  const float v = std::clamp(x, 0.f, HdrMax);
-  return t[1][0] > 0.f ? std::clamp(tone_fwd(v, t), 0.f, 1.f) : std::min(v, 1.f);
+  const float v = std::clamp(x, -HdrMax, HdrMax);
+  return std::clamp(t[1][0] > 0.f ? tone_fwd(v, t) : v, 0.f, 1.f);
 }
 
 inline float post_tone(float x, const Tone& t) noexcept { return srgb_enc(display_linear(x, t)); }

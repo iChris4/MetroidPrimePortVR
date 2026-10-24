@@ -40,6 +40,7 @@ enum EPlayerMovementState {
 };
 
 class CPlayer : public CPhysicsActor, public TOneStatic< CPlayer > {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
   friend class CMorphBall;
 
   struct CVisorSteam {
@@ -379,7 +380,9 @@ public:
   void Update(float dt, CStateManager& mgr);
   bool MouseControlsAllowed(const CStateManager& mgr) const;
   bool MouseLookIsFree(const CStateManager& mgr) const;
-  // port: direct aim, "empty lock-on keeps pitch" set, locked onto an empty orbit point.
+  // port: lock-on free aim, a combat lock a pointer moves under.
+  bool PortLockFreeAim(const CStateManager& mgr) const;
+  // port: direct aim, locked onto an empty orbit point (keeps the camera pitch).
   bool PortEmptyLockKeepsPitch(const CStateManager& mgr) const;
   void UpdateMouseAim(CStateManager& mgr);
   void UpdateTouchLook(float dt, CStateManager& mgr); // port

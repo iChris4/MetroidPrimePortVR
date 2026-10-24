@@ -10,6 +10,7 @@
 #include "Kyoto/Graphics/CTexture.hpp"
 #include "Kyoto/Math/CAABox.hpp"
 #include "Kyoto/Math/CRelAngle.hpp"
+#include "Kyoto/Particles/CParticleDepthBias.hpp"
 #include "Kyoto/Particles/CParticleGlobals.hpp"
 #include "Kyoto/Particles/CSwooshDescription.hpp"
 
@@ -244,6 +245,8 @@ const bool CParticleSwoosh::Update(double dt) {
         if (x1c_desc->xPortRotateOffset) {
           x15c_swooshes[x158_curParticle].mOffset = x44_orientation * x15c_swooshes[x158_curParticle].mOffset;
         }
+        x15c_swooshes[x158_curParticle].mOffset =
+            CVector3f::ByElementMultiply(x15c_swooshes[x158_curParticle].mOffset, xPortSpawnSpread);
 #endif
       }
       x15c_swooshes[x158_curParticle].mUseOffset = x15c_swooshes[x158_curParticle].mOffset;
@@ -293,6 +296,11 @@ void CParticleSwoosh::SetOrientation(const CTransform4f& orientation) {
 #ifdef TARGET_PC
   // KPIN freezes a PRAZ point's rotation at its birth; PROZ sets its own.
   if (x1c_desc->xPortRazyAxis || x1c_desc->xPortRotZ) {
+    return;
+  }
+  // An undersized swoosh (!IsLargeEnough) never fills the ring; retail wrote
+  // through the empty vector into low memory.
+  if (x15c_swooshes.empty()) {
     return;
   }
 #endif
@@ -520,6 +528,16 @@ void CParticleSwoosh::SetGlobalOrientation(const CTransform4f& orientation) {
 
 void CParticleSwoosh::SetLocalScale(const CVector3f& scale) { x14c_localScale = scale; }
 
+#ifdef TARGET_PC
+// A point is born at the system translation plus POFS, both in the system's axes. Spreading POFS
+// and the translation's offset from the parent's (SSPO) moves where the trail starts without
+// widening its ribbon.
+void CParticleSwoosh::PortSetSpawnSpread(const CVector3f& spread, const CVector3f& origin) {
+  xPortSpawnSpread = spread;
+  xPortSpawnOrigin = origin;
+}
+#endif
+
 int CParticleSwoosh::GetParticleCount() const { return x1ac_particleCount; }
 
 void CParticleSwoosh::SetModulationColor(const CColor& col) { x20c_moduColor = col; }
@@ -541,6 +559,7 @@ bool CParticleSwoosh::IsSystemDeletable() const {
 void CParticleSwoosh::Render() {
 #ifdef TARGET_PC
   PortFx::RenderScope fxScope(x1c_desc->xPortUnfogged);
+  CPortParticleDepthBias portDepthBias(*this, x1c_desc->xPortDepthBias);
   if (PortFx::gMuteActive && PortFx::IsMuted(*this)) {
     return;
   }
@@ -562,7 +581,7 @@ void CParticleSwoosh::Render() {
     CParticleGlobals::SetParticleLifetime(x1b4_LENG);
     CGlobalRandom random(x1c0_rand);
     CGraphics::DisableAllLights();
-    CGraphics::SetDepthWriteMode(true, kE_LEqual, x1c_desc->x45_24_ZBUF);
+    CGraphics::SetDepthWriteMode(true, x1c_desc->xPortNoZTest ? kE_Always : kE_LEqual, x1c_desc->x45_24_ZBUF);
     if (x1d0_25_AALP) {
       CGraphics::SetBlendMode(kBM_Blend, kBF_SrcAlpha, kBF_One, kLO_Clear);
     } else {
@@ -1706,7 +1725,22 @@ CLight CParticleSwoosh::GetLight() const {
 uint CParticleSwoosh::Get4CharId() const { return 'SWHC'; }
 
 void CParticleSwoosh::UpdateSwooshTranslation(const CVector3f& translation) {
+#ifdef TARGET_PC
+  // SetTranslation reaches here for an undersized swoosh too (see SetOrientation).
+  if (x15c_swooshes.empty()) {
+    return;
+  }
+#endif
+#ifdef TARGET_PC
+  const CVector3f spawn =
+      xPortSpawnSpread == CVector3f(1.f, 1.f, 1.f)
+          ? translation
+          : xPortSpawnOrigin +
+                CVector3f::ByElementMultiply(translation - xPortSpawnOrigin, xPortSpawnSpread);
+  x15c_swooshes[x158_curParticle].mTranslation = x11c_invScaleXf * spawn;
+#else
   x15c_swooshes[x158_curParticle].mTranslation = x11c_invScaleXf * translation;
+#endif
 }
 
 void CParticleSwoosh::SetGlobalScale(const CVector3f& scale) {
@@ -1725,6 +1759,26 @@ bool CParticleSwoosh::SystemHasLight() const { return false; }
 void CParticleSwoosh::DestroyParticles() {}
 bool CParticleSwoosh::GetParticleEmission() const { return x1d0_24_emitting; }
 #ifdef TARGET_PC
+// CParticleGen::ShutdownEffect (0x27a66c) -> DoShutdownBehavior (0x27b88c) with the description's
+// SHTM: 0 stops the emission, 1 also runs Remastered's CParticleSwoosh::DestroyParticles (0x27f744),
+// which empties the segment ring (current index, live counts to 0), so the trail vanishes at once.
+// The retail DestroyParticles stays empty.
+void CParticleSwoosh::ShutdownEffect() { PortDoShutdownBehavior(0xff); }
+
+void CParticleSwoosh::PortDoShutdownBehavior(u32 mode) {
+  const u32 use = mode == 0xff ? x1c_desc->xPortShutdownMode : (mode & 0xff);
+  if (use >= 2) {
+    return;
+  }
+  SetParticleEmission(false);
+  if (use == 1) {
+    x158_curParticle = 0;
+    x1ac_particleCount = 0;
+    for (int i = 0; i < x15c_swooshes.capacity(); ++i) {
+      x15c_swooshes.data()[i].mActive = false;
+    }
+  }
+}
 // XFMD 3: the getters read the one system var too (MPT_GetTranslation 0x27fb54).
 const CTransform4f& CParticleSwoosh::GetOrientation() const {
   return x1c_desc->xPortXfmdFollow ? xb0_globalOrientation : x44_orientation;

@@ -291,8 +291,8 @@ void CNewFlameThrower::Reset(CStateManager& mgr, bool deactivate) {
     x374_flameState = kFS_FireStopTimer;
   }
   x37c_25_firing = false;
-  x358_mainFireGen->SetParticleEmission(false);
-  x35c_mainSmokeGen->SetParticleEmission(false);
+  x358_mainFireGen->ShutdownEffect();
+  x35c_mainSmokeGen->ShutdownEffect();
   x36c_swooshCenterGen->SetParticleEmission(false);
   x370_swooshFireGen->SetParticleEmission(false);
 #ifdef TARGET_PC

@@ -16,6 +16,7 @@ class CElectricDescription;
 class CWeaponDescription;
 
 class CAtomicBeta : public CPatterned {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 public:
   CAtomicBeta(TUniqueId uid, const rstl::string& name, const CEntityInfo& info,
               const CTransform4f& xf, CModelData mData, const CActorParameters& actParms,

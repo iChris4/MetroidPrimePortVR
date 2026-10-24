@@ -466,8 +466,12 @@ ECardResult CardRawFile::fileRead(FileHandle& fh, void* dst, size_t size) {
     return ECardResult::NOFILE;
   }
   File* file = m_dirs[m_currentDir].getFile(fh.idx);
-  if (!file)
+  if (!file || file->m_game[0] == 0xFF)
     return ECardResult::NOFILE;
+  const size_t dataSize = static_cast<size_t>(file->m_blockCount) * BlockSize;
+  if (fh.offset < 0 || static_cast<size_t>(fh.offset) > dataSize || size > dataSize - fh.offset) {
+    return ECardResult::LIMIT;
+  }
   /* Block handling is a little different from cache handling,
    * since each block can be in an arbitrary location we must
    * first find our starting block.
@@ -484,6 +488,8 @@ ECardResult CardRawFile::fileRead(FileHandle& fh, void* dst, size_t size) {
   while (rem) {
     if (curBlock == 0xFFFF)
       return ECardResult::NOFILE;
+    if (curBlock < FSTBlocks || curBlock >= m_maxBlock)
+      return ECardResult::BROKEN;
 
     size_t cacheSize = rem;
     if (cacheSize + blockOffset > BlockSize)

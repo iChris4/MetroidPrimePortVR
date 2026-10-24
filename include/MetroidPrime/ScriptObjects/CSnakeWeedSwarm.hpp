@@ -11,6 +11,7 @@ class CElementGen;
 class CGenDescription;
 
 class CSnakeWeedSwarm : public CActor {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 public:
   ~CSnakeWeedSwarm() override;
   DECLARE_TYPES_MATCH_OR_ACCEPT;

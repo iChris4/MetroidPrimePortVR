@@ -40,6 +40,7 @@ CHECK_SIZEOF(CSpindleCameraInterpolant, 0x18)
 CSpindleCameraInterpolant LoadSpindleSegment(CInputStream& in);
 
 class CScriptSpindleCamera : public CGameCamera {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 public:
   CScriptSpindleCamera(
       TUniqueId uid, const rstl::string& name, const CEntityInfo& info, const CTransform4f& xf,

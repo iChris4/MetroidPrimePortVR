@@ -163,6 +163,13 @@ public:
   bool xPortVisorData = false;
   float xPortVisorMinScale = 1.4f;
   float xPortVisorMaxScale = 2.1f;
+  // port-only PVSC/PVMC/PVTC/PVBS/PVDT: VESC/VEMC/VETC, VEBS and VEDT (ticks, -1 = never
+  // expires), read by the visor effect override manager (PortVisorOverrides). Owned here.
+  CColorElement* xPortVisorStartColor = nullptr;
+  CColorElement* xPortVisorMidColor = nullptr;
+  CColorElement* xPortVisorEndColor = nullptr;
+  CRealElement* xPortVisorBlend = nullptr;
+  int xPortVisorTicks = -1;
   // port-only PGID: the first word of a converted Remastered PART's GUID (CElementGen::PortChildSeed)
   u32 xPortGuidWord = 0;
   // Nested Remastered point-light metadata (PHDR/PIR0/POR0/PHFO). The
@@ -205,6 +212,38 @@ public:
   // port-only PDFG: Remastered's DFOG 1, the static render state's "no fog" flag (0x8000): the
   // particles are not volumetric-fogged whatever their blend (PortFx::RenderScope)
   bool xPortUnfogged = false;
+  // port-only PZTS: Remastered's ZTES 0 (static render state ctor 0x28c2fc: depth compare 1, which
+  // the GPU table 0x1d0c3a8 maps to ALWAYS, instead of 4 = LEQUAL). The depth test passes everywhere;
+  // writes (ZBUF) are as authored.
+  bool xPortNoZTest = false;
+  // port-only PIVS: Remastered's IVSE 0 (desc+0x2fa bit 2 clear, CreateNewParticles 0x24a9fc): the
+  // emitter's velocity is not turned by the system orientation (retail always turns it).
+  bool xPortNoIvse = false;
+  // port-only PISV: Remastered's ISVF, the factor of the system's per-tick translation change
+  // (PEMV's delta, no time step) added to a new particle's velocity. Owned here; null = none.
+  CRealElement* xPortInheritVel = nullptr;
+  // port-only PITP: Remastered's ITPE 1: with several particles born in a tick and a moving system,
+  // their positions are spread back along the change of translation (CreateNewParticles 0x24a630).
+  bool xPortSpread = false;
+  // port-only PDBS: Remastered's DBIS (desc+0xd4), the depth bias in world units, negative toward the
+  // camera (CPortParticleDepthBias). 0 = none.
+  float xPortDepthBias = 0.f;
+  // port-only PSHM: Remastered's SHTM, what a shutdown does (CParticleGen::DoShutdownBehavior
+  // 0x27b88c): 0 stops emission, 1 also destroys the live particles. Other values do neither.
+  u8 xPortShutdownMode = 0;
+  // port-only PSHT: Remastered's SHTT, the shutdown countdown in ticks (ShutdownEffect 0x27a66c,
+  // UpdateCountdownTimerForShutdown 0x27b864). Owned; null = a shutdown acts at once.
+  CIntElement* xPortShutdownTime = nullptr;
+  // port-only PISD 0: Remastered's ISDT (desc+0x6c bit 1), on by default. On, a shutdown reaches the
+  // children as DoShutdownBehavior(mode) (their own SHTM at once, no SHTT); off, as ShutdownEffect.
+  bool xPortChildShutdownByMode = true;
+  // port-only PBLT 1: Remastered's BLIT (static-state bit 0x4000). A lit sprite takes the room's baked
+  // probe only with it (CParticleSceneNode::AppendBakedLightingIfRequested 0x2b12a8).
+  bool xPortBakedLighting = false;
+  // port-only PMOV/PMPV: Remastered's per-particle model orientation direction and pivot offset
+  // (SolveParticleTransform 0x246f14), in the port's space. Owned; null = none.
+  CVectorElement* xPortPmov = nullptr;
+  CVectorElement* xPortPmpv = nullptr;
   // port-only PSWX: swooshes started beyond SSWH's one, each with its start frame
   struct PortExtraSwoosh {
     TCachedToken< CSwooshDescription > swoosh;

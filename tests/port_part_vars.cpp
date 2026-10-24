@@ -101,9 +101,38 @@ void TestRealAdvSlot() {
   vars.items.clear();
 }
 
+// An owner's value record: each variable of its guid takes the value of its own type.
+void TestBindExternal() {
+  CPortVarTable table;
+  PortGuid g, other;
+  g.bytes[0] = 1;
+  other.bytes[0] = 2;
+  table.vars.resize(4);
+  table.vars[0] = {g, EPortVarType::Real, {9.f}};
+  table.vars[1] = {g, EPortVarType::Color, {1.f, 1.f, 1.f, 1.f}};
+  table.vars[2] = {other, EPortVarType::Real, {9.f}};
+  table.vars[3] = {g, EPortVarType::Vector, {}};
+  CPortVarMemory mem;
+  mem.Init(&table);
+  SPortExternalVar e;
+  e.guid = g;
+  e.real = 0.65f;
+  e.color[0] = 0.59f;
+  e.vec[2] = 0.5f;
+  mem.BindExternal(e);
+  CHECK((*mem.Value(0, EPortVarType::Real))[0] == 0.65f);
+  CHECK((*mem.Value(1, EPortVarType::Color))[0] == 0.59f && (*mem.Value(1, EPortVarType::Color))[3] == 1.f);
+  CHECK((*mem.Value(2, EPortVarType::Real))[0] == 9.f);
+  CHECK((*mem.Value(3, EPortVarType::Vector))[2] == 0.5f);
+  CPortVarMemory none;
+  none.BindExternal(e);  // no table: nothing to set
+  CHECK(none.Empty());
+}
+
 }  // namespace
 
 int main() {
+  TestBindExternal();
   TestIntBits();
   TestSpawnThenFrames();
   TestRealAdvSlot();

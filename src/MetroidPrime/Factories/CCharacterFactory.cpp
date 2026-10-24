@@ -14,6 +14,10 @@
 #include "Kyoto/Graphics/CModel.hpp"
 #include "rstl/algorithm.hpp"
 
+#ifdef TARGET_PC
+#include "port_dread_samus_mod.h"
+#endif
+
 inline CAnimationManager::CAnimationManager(const TToken< CAnimationDatabase >& animDB,
                                           const CAnimSysContext& sysCtx)
 : x0_animDB(animDB)
@@ -27,14 +31,22 @@ rstl::auto_ptr< IObj > CCharacterFactory::CDummyFactory::Build(const SObjectTag&
   const CCharacterInfo& charInfo =
       **static_cast< const TObjOwnerParam< const CCharacterInfo* const >& >(*paramCopy);
   switch (tag.GetType()) {
-  case 0:
+  case 0: {
+#ifdef TARGET_PC
+    // A Dread Samus body is bound to its own Dread-proportioned skeleton (port_dread_samus_mod.h).
+    const CAssetId dreadCinf = PortDreadSamus::Skeleton(charInfo.GetModelId());
+    const CAssetId cinf = dreadCinf != 0 ? dreadCinf : charInfo.GetCharLayoutInfoId();
+#else
+    const CAssetId cinf = charInfo.GetCharLayoutInfoId();
+#endif
     return CFactoryFnReturn(
                rs_new CSkinnedModel(
                    gpSimplePool->GetObj(SObjectTag('CMDL', charInfo.GetModelId())),
                    gpSimplePool->GetObj(SObjectTag('CSKR', charInfo.GetSkinRulesId())),
-                   gpSimplePool->GetObj(SObjectTag('CINF', charInfo.GetCharLayoutInfoId())),
+                   gpSimplePool->GetObj(SObjectTag('CINF', cinf)),
                    CSkinnedModel::kDO_Owned))
         .GetObjForTransfer();
+  }
   case 1:
     return CFactoryFnReturn(
                rs_new CSkinnedModelWithAvgNormals(CSkinnedModel(

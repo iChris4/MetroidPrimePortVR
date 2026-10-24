@@ -5,6 +5,7 @@
 #include "port_remastered_image.h"
 #include "port_test.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -174,6 +175,49 @@ int main() {
       exact = exact && ScaleSrgbByte(uint8_t(i), 1.0) == i;
     }
     CHECK_MSG(exact, "sRGB byte round trip");
+  }
+
+  // HDR: BC6H blocks pass through to a DX10 .dds with the BC6H DXGI code, every mip as given.
+  {
+    const auto le32 = [](const std::vector<uint8_t>& d, size_t at) {
+      return uint32_t(d[at]) | uint32_t(d[at + 1]) << 8 | uint32_t(d[at + 2]) << 16 | uint32_t(d[at + 3]) << 24;
+    };
+    std::vector<std::vector<uint8_t>> mips;
+    for (uint32_t w = 16, h = 8; w > 0 || h > 0; w >>= 1, h >>= 1) {
+      const size_t blocks = size_t((std::max(w, 1u) + 3) / 4) * ((std::max(h, 1u) + 3) / 4);
+      mips.emplace_back(blocks * 16, uint8_t(mips.size() + 1));
+      if (w <= 1 && h <= 1) {
+        break;
+      }
+    }
+    CHECK_MSG(mips.size() == 5, "16x8 has five levels");
+    const std::vector<uint8_t> dds = EncodeDdsBc6h(16, 8, false, mips);
+    CHECK_MSG(dds.size() == 148 + (8 + 2 + 1 + 1 + 1) * 16, "header plus every level's blocks");
+    if (dds.size() >= 148) {
+      CHECK_MSG(dds[0] == 'D' && dds[84] == 'D' && dds[85] == 'X' && dds[86] == '1' && dds[87] == '0', "DX10 FourCC");
+      CHECK_MSG(le32(dds, 12) == 8 && le32(dds, 16) == 16 && le32(dds, 20) == 8 * 16 && le32(dds, 28) == 5,
+                "height, width, linear size, mip count");
+      CHECK_MSG(le32(dds, 128) == 95 && le32(dds, 132) == 3 && le32(dds, 140) == 1, "BC6H_UF16, 2D, one");
+      CHECK_MSG(dds[148] == 1 && dds[148 + 128] == 2 && dds.back() == 5, "the levels in order, as given");
+    }
+    const std::vector<uint8_t> sf = EncodeDdsBc6h(16, 8, true, mips);
+    CHECK_MSG(sf.size() > 148 && le32(sf, 128) == 96, "signed: BC6H_SF16");
+    mips[1].pop_back();
+    CHECK_MSG(EncodeDdsBc6h(16, 8, false, mips).empty(), "a level of the wrong size writes nothing");
+
+    // Without BC: RGBA16F, DXGI 10, with a pitch rather than a linear size.
+    std::vector<std::vector<uint16_t>> half{std::vector<uint16_t>(4 * 2 * 4, 0x3C00)};
+    half[0][0] = 0x4800;  // 8.0: kept over 1
+    half.push_back(HalveRgba16f(half[0], 4, 2));
+    half.push_back(HalveRgba16f(half[1], 2, 1));
+    CHECK_MSG(half[1].size() == 2 * 1 * 4 && half[2].size() == 4, "halved levels' sizes");
+    CHECK_MSG(half[1][0] == 0x4180 && half[1][4] == 0x3C00, "a 2x2 box in float: (8 + 1 + 1 + 1) / 4 = 2.75");
+    const std::vector<uint8_t> f16 = EncodeDdsRgba16f(4, 2, half);
+    CHECK_MSG(f16.size() == 148 + (8 + 2 + 1) * 8, "RGBA16F header plus levels");
+    if (f16.size() >= 152) {
+      CHECK_MSG(le32(f16, 128) == 10 && le32(f16, 20) == 4 * 8 && (le32(f16, 8) & 0x8) != 0, "DXGI 10, pitch");
+      CHECK_MSG(f16[148] == 0x00 && f16[149] == 0x48, "the halves little-endian, unclamped");
+    }
   }
 
   if (port_test::Failures() == 0) {

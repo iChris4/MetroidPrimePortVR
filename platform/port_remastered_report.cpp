@@ -40,7 +40,8 @@ using port::Split;
 const char* const kMaterialColumns[] = {"cmdl",   "mat",      "source",    "srcmat",   "shader",  "role",
                                         "flags",  "tag",      "kind",      "mode",     "path",    "pathReason",
                                         "kindReason", "emissive", "backlight", "strength", "p0",   "p1",
-                                        "p2",     "p3",       "cube",     "retail"};
+                                        "p2",     "p3",       "cube",     "retail",  "class",  "blend",
+                                        "classBlend", "uv"};
 const char* const kEffectColumns[] = {"genp",    "retail",  "result",  "method",      "reason",
                                       "kinds",   "dropped", "droppedList", "approximated"};
 
@@ -91,7 +92,9 @@ std::string FormatMaterialRow(const MaterialDecision& r) {
                                       Num(r.backlight),   Num(r.strength),
                                       Num(r.p[0]),        Num(r.p[1]),
                                       Num(r.p[2]),        Num(r.p[3]),
-                                      Clean(r.cube),      Clean(r.retail)};
+                                      Clean(r.cube),      Clean(r.retail),
+                                      Clean(r.meshClass), Clean(r.blend),
+                                      Clean(r.classBlend), Clean(r.uv)};
   std::string out;
   for (size_t i = 0; i < f.size(); ++i) {
     out += (i ? "\t" : "") + f[i];

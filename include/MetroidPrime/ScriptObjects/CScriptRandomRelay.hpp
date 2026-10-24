@@ -4,6 +4,7 @@
 #include "MetroidPrime/CEntity.hpp"
 
 class CScriptRandomRelay : public CEntity {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 public:
   CScriptRandomRelay(TUniqueId uid, const rstl::string& name, const CEntityInfo& info,
                      int sendSetSize, int sendSetVariance, bool percentSize, bool active);

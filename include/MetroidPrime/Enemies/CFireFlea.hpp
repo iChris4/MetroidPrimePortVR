@@ -6,8 +6,10 @@
 #include "MetroidPrime/PathFinding/CPathFindSearch.hpp"
 
 class CFireFlea : public CPatterned {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 public:
   class CDeathCameraEffect : public CEntity {
+    friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
   public:
     ~CDeathCameraEffect() {}
     void PreThink(float, CStateManager& mgr) override;

@@ -8,6 +8,7 @@
 #include "port_debug.h"
 #include "port_gyro_motion.h"
 #include "port_photo.h"
+#include "port_third_person.h"
 #include "port_pointer.h"
 #include "port_room_geo.h"
 #include "port_log.h"
@@ -15,12 +16,14 @@
 #include "port_input_devices.h"
 #include "port_gci.h"
 #include "port_discord.h"
+#include "port_suit_colours.h"
 
 #include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <map>
@@ -52,6 +55,12 @@ struct SettingKey {
 
 void WriteBool(std::ostream& out, bool value) { out << (value ? 1 : 0); }
 
+// dynamic_res, the old key, was saved as 1 with auto render scale too, where it did
+// nothing; with auto it now runs. Read apart, and settled in ApplySettingsText once the
+// whole text (and its render_scale) is in: only on a fixed scale does it stay on.
+int sLegacyDynamicRes = -1; // -1: not in the text
+bool sDynamicResRead = false; // dynamic_resolution, the new key, was
+
 // hud_opacity_*: a percent, or "visor" to follow the game's Visor Opacity.
 void ReadHudOpacity(PortDebug::HudOpacityPart part, const std::string& value) {
   if (value == "visor") {
@@ -70,6 +79,17 @@ void WriteHudOpacity(std::ostream& out, PortDebug::HudOpacityPart part) {
   } else {
     out << sHudOpacity[part];
   }
+}
+
+// suit_colour_<suit>: PortSuitColours::PicksKey, a slot each ("FFD000,-").
+template < int Suit >
+void ReadSuitColours(const std::string& value) {
+  PortSuitColours::SetPicksKey(Suit, value);
+}
+
+template < int Suit >
+void WriteSuitColours(std::ostream& out) {
+  out << PortSuitColours::PicksKey(Suit);
 }
 
 // A key that is one bool: read with ParseBool, written as 1 or 0, sampled with both.
@@ -100,6 +120,14 @@ const SettingKey kSettingKeys[] = {
     BoolKey< &sCinemaBars >("cinema_bars"),
     BoolKey< &sSharpScanWindow >("sharp_scan_window"),
     BoolKey< &sGeneratedBallLooks >("power_spider_ball"),
+    {"suit_colour_power", &ReadSuitColours< 0 >, &WriteSuitColours< 0 >, true, "FF4000,-", "-,2050FF"},
+    {"suit_colour_gravity", &ReadSuitColours< 1 >, &WriteSuitColours< 1 >, true, "FF4000,-,-", "-,-,2050FF"},
+    {"suit_colour_varia", &ReadSuitColours< 2 >, &WriteSuitColours< 2 >, true, "FF4000,-", "-,2050FF"},
+    {"suit_colour_phazon", &ReadSuitColours< 3 >, &WriteSuitColours< 3 >, true, "FF4000,-", "-,2050FF"},
+    {"suit_colour_fusion", &ReadSuitColours< 4 >, &WriteSuitColours< 4 >, true, "FF4000,-,-", "-,-,2050FF"},
+    {"suit_colour_fusion_gravity", &ReadSuitColours< 5 >, &WriteSuitColours< 5 >, true, "FF4000,-,-", "-,-,2050FF"},
+    {"suit_colour_fusion_varia", &ReadSuitColours< 6 >, &WriteSuitColours< 6 >, true, "FF4000,-,-", "-,-,2050FF"},
+    {"suit_colour_fusion_phazon", &ReadSuitColours< 7 >, &WriteSuitColours< 7 >, true, "FF4000,-,-", "-,-,2050FF"},
     BoolKey< &sAutoAim >("auto_aim"),
     {"scan_speed",
      [](const std::string& value) {
@@ -109,6 +137,14 @@ const SettingKey kSettingKeys[] = {
        }
      },
      [](std::ostream& out) { out << sScanSpeed; }, false, "100", "500"},
+    {"hint_delay",
+     [](const std::string& value) {
+       const int m = std::atoi(value.c_str());
+       if (m >= PortDebug::kHintDelayMin && m <= PortDebug::kHintDelayMax) {
+         sHintDelay = m;
+       }
+     },
+     [](std::ostream& out) { out << sHintDelay; }, false, "0", "30"},
     BoolKey< &sSecondaryCrosshairs >("secondary_crosshairs"),
     BoolKey< &sMenuStandardButtons >("menu_standard_buttons"),
     {"pointer_menus", [](const std::string& value) { PortPointer::SetEnabled(ParseBool(value)); },
@@ -195,6 +231,17 @@ const SettingKey kSettingKeys[] = {
      },
      false, "ff8000", ""},
     BoolKey< &sHideHelmet >("hide_helmet"),
+    {"third_person", [](const std::string& value) { PortThirdPerson::SetEnabled(ParseBool(value)); },
+     [](std::ostream& out) { WriteBool(out, PortThirdPerson::Enabled()); }, false, "1", "0"},
+    {"third_person_distance",
+     [](const std::string& value) { PortThirdPerson::SetDistance(std::strtof(value.c_str(), nullptr)); },
+     [](std::ostream& out) { out << PortThirdPerson::GetParams().distance; }, false, "2.5", "4"},
+    {"third_person_shoulder",
+     [](const std::string& value) { PortThirdPerson::SetShoulder(std::strtof(value.c_str(), nullptr)); },
+     [](std::ostream& out) { out << PortThirdPerson::GetParams().shoulder; }, false, "0.5", "-0.5"},
+    {"third_person_height",
+     [](const std::string& value) { PortThirdPerson::SetHeight(std::strtof(value.c_str(), nullptr)); },
+     [](std::ostream& out) { out << PortThirdPerson::GetParams().height; }, false, "0.5", "0"},
     BoolKey< &sHideVisorEffects >("hide_visor_effects"),
     BoolKey< &sHideMinimap >("hide_minimap"),
     BoolKey< &sDrawTags >("draw_tags"),
@@ -223,6 +270,14 @@ const SettingKey kSettingKeys[] = {
     BoolKey< &sSkippableCutscenes >("skippable_cutscenes"),
     BoolKey< &sBeamDoorsStayUnlocked >("beam_doors_stay_unlocked"),
     BoolKey< &sStackBeams >("stack_beams"),
+    {"walk_speed",
+     [](const std::string& value) {
+       const int s = std::atoi(value.c_str());
+       if (s >= PortDebug::kWalkSpeedMin && s <= PortDebug::kWalkSpeedMax) {
+         sWalkSpeed = s;
+       }
+     },
+     [](std::ostream& out) { out << sWalkSpeed; }, false, "50", "200"},
     BoolKey< &sRevision100Compatibility >("revision_100_compatibility"),
     // Normalised on the way in (NormalizeEmulatorFolder), so not sampled.
     {"emulator_folder", [](const std::string& value) { PortGci::SetEmulatorFolder(value); },
@@ -382,15 +437,22 @@ const SettingKey kSettingKeys[] = {
        }
      },
      [](std::ostream& out) { out << sRenderScale; }, false, "0.5", "2"},
-    BoolKey< &sDynamicRes >("dynamic_res"),
+    {"dynamic_resolution",
+     [](const std::string& value) {
+       sDynamicRes = ParseBool(value);
+       sDynamicResRead = true;
+     },
+     [](std::ostream& out) { WriteBool(out, sDynamicRes); }, false, "1", "0"},
+    {"dynamic_res", [](const std::string& value) { sLegacyDynamicRes = ParseBool(value) ? 1 : 0; }, nullptr, false,
+     nullptr, nullptr},
     {"dynamic_res_target",
-     [](const std::string& value) { sDynamicResTarget = std::clamp(std::atoi(value.c_str()), 0, 240); },
+     [](const std::string& value) { sDynamicResTarget = std::clamp(std::atoi(value.c_str()), 0, kFpsCapMax); },
      [](std::ostream& out) { out << sDynamicResTarget; }, false, "0", "60"},
     {"dynamic_res_min",
      [](const std::string& value) {
        const float f = static_cast< float >(std::atof(value.c_str()));
        if (std::isfinite(f)) {
-         sDynamicResMin = std::clamp(f, 0.5f, 1.f);
+         sDynamicResMin = std::clamp(f, PortDebug::kDynamicResMinLowest, 4.f);
        }
      },
      [](std::ostream& out) { out << sDynamicResMin; }, false, "0.5", "0.75"},
@@ -433,6 +495,7 @@ const SettingKey kSettingKeys[] = {
      [](std::ostream& out) { out << PortRoomGeo::LodDistance(); }, false, "0.5", "2"},
     {nullptr, nullptr, [](std::ostream& out) { PortInput::WriteControlSettings(out); }, false, nullptr, nullptr},
     BoolKey< &sInvulnerable >("invulnerable"),
+    BoolKey< &sPhazonBeamCheat >("cheat_phazon_beam"),
     // Not "log_file": builds from before the log was on by default wrote
     // log_file=0 into every settings file, which kept it off after an update.
     BoolKey< &sLogFile >("logging"),
@@ -483,6 +546,8 @@ bool ApplyStoredSetting(const std::string& key, const std::string& value) {
 // Applies the key=value lines of a settings file. Only whole-line comments:
 // values are written raw, and a path may contain '#'.
 void ApplySettingsText(std::istream& text) {
+  sLegacyDynamicRes = -1;
+  sDynamicResRead = false;
   std::string line;
   while (std::getline(text, line)) {
     const size_t first = line.find_first_not_of(" \t");
@@ -498,6 +563,9 @@ void ApplySettingsText(std::istream& text) {
     if (!key.empty()) {
       ApplyStoredSetting(key, value);
     }
+  }
+  if (sLegacyDynamicRes >= 0 && !sDynamicResRead) {
+    sDynamicRes = sLegacyDynamicRes == 1 && sRenderScale > 0.f;
   }
 }
 
@@ -559,7 +627,7 @@ std::string SettingsText() {
 
 void LoadSettings() {
   const std::string path = SettingsFilePath();
-  std::ifstream file(path);
+  std::ifstream file(PortPaths::detail::FromUtf8(path));
   if (!file.is_open()) {
     return;
   }
@@ -610,12 +678,51 @@ void LogSettingChanges(const std::string& text) {
   sLoggedSettings = std::move(values);
 }
 
+// Settings an MP_* variable changed this run: key -> (file value, override value).
+std::map< std::string, std::pair< std::string, std::string > > sEnvOverrides;
+
+void NoteEnvOverrides(const std::string& fileText) {
+  const auto before = SettingsValues(fileText);
+  for (const auto& [key, value] : SettingsValues(SettingsText())) {
+    const auto old = before.find(key);
+    if (old != before.end() && old->second != value) {
+      sEnvOverrides[key] = {old->second, value};
+    }
+  }
+}
+
+// The text to store: a setting still at its MP_* override keeps the file's
+// value, so a per-run variable (MP_ORIGINAL=1 in a launcher) never becomes a
+// saved setting when something else is saved. One changed since is stored.
+std::string StoredSettingsText() {
+  std::string text = SettingsText();
+  if (sEnvOverrides.empty()) {
+    return text;
+  }
+  std::string stored;
+  std::istringstream lines(text);
+  std::string line;
+  while (std::getline(lines, line)) {
+    const size_t separator = line.find('=');
+    if (!line.empty() && line[0] != '#' && separator != std::string::npos) {
+      const auto found = sEnvOverrides.find(line.substr(0, separator));
+      if (found != sEnvOverrides.end() && line.compare(separator + 1, std::string::npos, found->second.second) == 0) {
+        line.resize(separator + 1);
+        line += found->second.first;
+      }
+    }
+    stored += line;
+    stored += '\n';
+  }
+  return stored;
+}
+
 void SaveSettings() {
   if (!sInitialized || !sSettingsDirty || sConfigReset) {
     return;
   }
-  const std::string text = SettingsText();
-  LogSettingChanges(text);
+  LogSettingChanges(SettingsText());
+  const std::string text = StoredSettingsText();
   const std::string path = SettingsFilePath();
   // Port: the text is written to a temporary file that replaces the old one, so an
   // app killed mid-write (Android) keeps the previous settings.

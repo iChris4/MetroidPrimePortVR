@@ -57,6 +57,7 @@ void increment_merged_draw_count(uint32_t) noexcept {}
 
 namespace aurora::webgpu {
 GraphicsConfig g_graphicsConfig{};
+bool g_dualSourceBlendingSupported = false;
 // Tests clear it to see GXPortSceneHdr fail closed.
 bool g_testSceneHdrSupported = true;
 bool scene_hdr_supported() noexcept { return g_testSceneHdrSupported; }
@@ -177,7 +178,8 @@ bool g_testUniformCompatSrcAlphaAdditive = false;
 gfx::Range build_uniform(const ShaderInfo& info) noexcept {
   ++g_testUniformBuildCount;
   g_testUniformCompatSrcAlphaAdditive = info.usesHdrTone && g_gxState.blendMode == GX_BM_BLEND &&
-                                        g_gxState.blendFacSrc == GX_BL_SRCALPHA && g_gxState.blendFacDst == GX_BL_ONE;
+                                        g_gxState.blendFacSrc == GX_BL_SRCALPHA &&
+                                        (g_gxState.blendFacDst == GX_BL_ONE || g_gxState.blendFacDst == GX_BL_INVSRCALPHA);
   return {.offset = g_testUniformBuildCount, .size = 1};
 }
 
@@ -218,6 +220,9 @@ extern "C" {
 void aurora_set_pipeline_eviction(uint32_t) {}
 void aurora_trim_pipelines(uint32_t) {}
 uint32_t aurora_get_pipeline_count(void) { return 0; }
+uint64_t aurora_pipeline_set_context(uint64_t) { return AURORA_PIPELINE_CONTEXT_FRONTEND; }
+void aurora_pipeline_prefetch(uint64_t) {}
+void aurora_get_pipeline_stats(AuroraPipelineStats* out) { *out = {}; }
 }
 
 // --- Stereo replay stubs (the FIFO never runs immersive here) ---
@@ -434,7 +439,7 @@ bool lastResolveMips = false;
 
 void resolve_pass_into(TextureHandle texture, ClipRect rect, bool clearColor, bool clearAlpha, bool clearDepth,
                        Vec4<float> clearColorValue, float clearDepthValue, GXTexFmt resolveFormat, int probeFace,
-                       bool resolveMips, const ResolveHdr* hdr) {
+                       bool resolveMips, const ResolveHdr* hdr, bool opaqueAlpha) {
   testing::resolvePassCount.fetch_add(1, std::memory_order_release);
   testing::lastResolveHasHdr = hdr != nullptr;
   testing::lastResolveHdr = hdr != nullptr ? *hdr : ResolveHdr{};
@@ -474,7 +479,6 @@ uint32_t records = 0;
 Params lastRecord{};
 bool leaveScene = false; // record leaves the HDR scene, as the real one does
 } // namespace testing
-bool push(const Params& params) { return false; }
 bool ensure_task() { return testing::task; }
 bool record(const Params& params) {
   ++testing::records;
@@ -485,6 +489,7 @@ bool record(const Params& params) {
   return testing::task;
 }
 void set_grade_lut(uint32_t id, const uint8_t* rgba) {}
+bool measure_scene(float exposure) { return false; }
 void after_submit() noexcept {}
 bool frame_radiance(float out[3], uint32_t& serial) { return false; }
 void shutdown() {}

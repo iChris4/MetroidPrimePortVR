@@ -305,6 +305,23 @@ ShaderInfo build_shader_info(const ShaderConfig& config) noexcept {
     }
   }
 
+  // Texgens can consume a color channel even when TEV never reads it directly.
+  // Include these channels before calculating lighting and uniform requirements.
+  for (int i = 0; i < info.sampledTexCoords.size(); ++i) {
+    if (!info.sampledTexCoords.test(i)) {
+      continue;
+    }
+    const auto& tcg = config.tcgs[i];
+    if (tcg.type >= GX_TG_BUMP0 && tcg.type <= GX_TG_BUMP7) {
+      continue;
+    }
+    if (tcg.src == GX_TG_COLOR0) {
+      info.sampledColorChannels.set(0);
+    } else if (tcg.src == GX_TG_COLOR1) {
+      info.sampledColorChannels.set(1);
+    }
+  }
+
   info.uniformSize += info.loadsTevReg.count() * sizeof(Vec4<float>);
   for (int i = 0; i < info.sampledColorChannels.size(); ++i) {
     if (info.sampledColorChannels.test(i)) {
@@ -538,9 +555,24 @@ static void fill_uniform(ByteBuffer& buf, const ShaderInfo& info) noexcept {
     for (const auto& v : g_gxState.pbrTone) {
       buf.append(v);
     }
-    const bool compatSrcAlphaAdditive = g_gxState.blendMode == GX_BM_BLEND && g_gxState.blendFacSrc == GX_BL_SRCALPHA &&
-                                        g_gxState.blendFacDst == GX_BL_ONE;
-    buf.append(Vec4<float>{compatSrcAlphaAdditive ? 1.f : 0.f, 0.f, 0.f, 0.f});
+    // x: a source weighted by its alpha, SRCALPHA/ONE (additive) or SRCALPHA/INVSRCALPHA (alpha over), goes
+    // through the inverse curve already weighted (hdr_tev_srcalpha_add). ONE/INVSRCALPHA needs nothing: its
+    // source is premultiplied, so the plain inverse already gives the source term exactly.
+    const bool compatSrcAlphaAdditive =
+        g_gxState.blendMode == GX_BM_BLEND && g_gxState.blendFacSrc == GX_BL_SRCALPHA &&
+        (g_gxState.blendFacDst == GX_BL_ONE || g_gxState.blendFacDst == GX_BL_INVSRCALPHA);
+    // y: the source colour scales the destination (hdr_tev_dst_factor): 1 dst * src, 2 dst * (1 + src).
+    float dstFactor = 0.f;
+    if (g_gxState.blendMode == GX_BM_BLEND) {
+      const auto src = g_gxState.blendFacSrc;
+      const auto dst = g_gxState.blendFacDst;
+      if ((src == GX_BL_ZERO && dst == GX_BL_SRCCLR) || (src == GX_BL_DSTCLR && dst == GX_BL_ZERO)) {
+        dstFactor = 1.f;
+      } else if (src == GX_BL_DSTCLR && dst == GX_BL_ONE) {
+        dstFactor = 2.f;
+      }
+    }
+    buf.append(Vec4<float>{compatSrcAlphaAdditive ? 1.f : 0.f, dstFactor, 0.f, 0.f});
   }
   if (info.usesHudDyin) {
     buf.append(g_gxState.hudDyin);

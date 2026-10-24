@@ -71,6 +71,7 @@ extern bool g_astcTexturesSupported;
 extern bool g_textureComponentSwizzleSupported;
 // The device has PrimedGun's Vulkan multiview (quest/dawn patches, gfx/stereo_multiview.hpp).
 extern bool g_multiviewSupported;
+extern bool g_dualSourceBlendingSupported;
 
 bool initialize(AuroraBackend backend, bool allowCpu);
 void shutdown();
@@ -85,9 +86,9 @@ void set_quality(uint32_t msaaSamples, uint16_t anisotropy);
 // format Undefined means the surface format.
 TextureWithSampler create_render_texture(uint32_t width, uint32_t height, bool multisampled,
                                          wgpu::TextureFormat format = wgpu::TextureFormat::Undefined);
-// Conservative policy, not a format probe: RGBA16Float as a blendable, multisampled, resolvable
-// attachment is core WebGPU, but only devices with CoreFeaturesAndLimits get the HDR scene. Compatibility
-// devices (many Android GLES / older Vulkan ones) stay LDR even where the format would work.
+// True with a live device. RGBA16Float as a blendable, multisampled, resolvable attachment is core WebGPU,
+// so Compatibility devices (no CoreFeaturesAndLimits) try the HDR scene too; ensure_scene_hdr_target()
+// falls back to LDR when the allocation raises an error.
 bool scene_hdr_supported() noexcept;
 // Allocates g_sceneHdr/g_sceneHdrResolved for the current g_frameBuffer size and sample count if
 // needed, under Validation/OutOfMemory/Internal error scopes. True only with both textures and views

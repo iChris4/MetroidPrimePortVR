@@ -89,29 +89,41 @@ bool ReadAll(const fs::path& path, std::vector<uint8_t>& out, std::string& error
 
 // Written beside the target and renamed over it, so a failed write leaves no
 // half file. The temporary name does not end in .gci: a card never reads it.
-bool WriteAll(const fs::path& path, const std::vector<uint8_t>& data, std::string& error) {
+fs::path TempOf(const fs::path& path) {
   fs::path temp = path;
   temp += ".tmp";
-  {
-    std::ofstream out(temp, std::ios::binary | std::ios::trunc);
-    out.write(reinterpret_cast< const char* >(data.data()),
-              static_cast< std::streamsize >(data.size()));
-    out.close();
-    if (!out) {
-      std::error_code ignored;
-      fs::remove(temp, ignored);
-      error = "cannot write " + PathString(path);
-      return false;
-    }
-  }
-  std::error_code ec;
-  fs::rename(temp, path, ec);
-  if (ec) {
-    fs::remove(temp, ec);
+  return temp;
+}
+
+bool WriteTemp(const fs::path& path, const std::vector<uint8_t>& data, std::string& error) {
+  const fs::path temp = TempOf(path);
+  std::ofstream out(temp, std::ios::binary | std::ios::trunc);
+  out.write(reinterpret_cast< const char* >(data.data()), static_cast< std::streamsize >(data.size()));
+  out.close();
+  if (!out) {
+    std::error_code ignored;
+    fs::remove(temp, ignored);
     error = "cannot write " + PathString(path);
     return false;
   }
   return true;
+}
+
+bool CommitTemp(const fs::path& path, std::string& error) {
+  const fs::path temp = TempOf(path);
+  std::error_code ec;
+  fs::rename(temp, path, ec);
+  if (ec) {
+    error = "cannot write " + PathString(path) + ": " + ec.message();
+    std::error_code ignored;
+    fs::remove(temp, ignored);
+    return false;
+  }
+  return true;
+}
+
+bool WriteAll(const fs::path& path, const std::vector<uint8_t>& data, std::string& error) {
+  return WriteTemp(path, data, error) && CommitTemp(path, error);
 }
 
 bool ReadHeader(const fs::path& path, Header& out) {
@@ -146,8 +158,11 @@ std::string Timestamp() {
   return buffer;
 }
 
+// A file moved into _replaced, and where it came from.
+using Moved = std::vector< std::pair< fs::path, fs::path > >;
+
 // Moves a file into <folder>/_replaced under a name that is not taken yet.
-bool MoveAside(const fs::path& file, std::string& error) {
+bool MoveAside(const fs::path& file, std::string& error, Moved* moved = nullptr) {
   std::error_code ec;
   const fs::path dir = file.parent_path() / "_replaced";
   fs::create_directories(dir, ec);
@@ -161,7 +176,19 @@ bool MoveAside(const fs::path& file, std::string& error) {
     error = "cannot move " + PathString(file) + " aside: " + ec.message();
     return false;
   }
+  if (moved != nullptr) {
+    moved->emplace_back(file, target);
+  }
   return true;
+}
+
+// Puts files moved aside back where they were, after the write that was to
+// replace them failed: a failed import must not leave the card without its save.
+void Restore(const Moved& moved) {
+  for (auto it = moved.rbegin(); it != moved.rend(); ++it) {
+    std::error_code ec;
+    fs::rename(it->second, it->first, ec);
+  }
 }
 
 void AddError(Report& report, std::string error) {
@@ -261,8 +288,13 @@ std::string Report::Summary(const char* verb) const {
   return text;
 }
 
-bool InstallGci(const fs::path& folder, const std::vector<uint8_t>& gci, std::string& error,
-                bool* replacedOut) {
+namespace {
+
+// Written to a temporary file before anything is moved aside, so a write that
+// fails (full disk, read-only folder) leaves the card as it was. Files moved
+// aside are added to *moved, the file written to *written.
+bool Install(const fs::path& folder, const std::vector<uint8_t>& gci, std::string& error,
+             Moved& moved, fs::path* written) {
   Header header;
   if (!ParseHeader(gci.data(), gci.size(), header, error)) {
     return false;
@@ -274,7 +306,17 @@ bool InstallGci(const fs::path& folder, const std::vector<uint8_t>& gci, std::st
     return false;
   }
   const fs::path target = folder / PathFromString(DiskName(header));
-  bool replaced = false;
+  if (!WriteTemp(target, gci, error)) {
+    return false;
+  }
+  const size_t movedBefore = moved.size();
+  const auto fail = [&] {
+    std::error_code ignored;
+    fs::remove(TempOf(target), ignored);
+    Restore(Moved(moved.begin() + static_cast< std::ptrdiff_t >(movedBefore), moved.end()));
+    moved.resize(movedBefore);
+    return false;
+  };
   // A card refuses two files with one identity, whatever they are called, and
   // the file at the target name has to go even if it is something else.
   // Listed first, then moved: the listing's error is the only one that means
@@ -288,7 +330,7 @@ bool InstallGci(const fs::path& folder, const std::vector<uint8_t>& gci, std::st
   }
   if (ec) {
     error = "cannot list " + PathString(folder) + ": " + ec.message();
-    return false;
+    return fail();
   }
   for (const fs::path& path : candidates) {
     Header existing;
@@ -296,54 +338,71 @@ bool InstallGci(const fs::path& folder, const std::vector<uint8_t>& gci, std::st
     const bool sameIdentity = ReadHeader(path, existing) && existing.game == header.game &&
                               existing.maker == header.maker &&
                               existing.fileName == header.fileName;
-    if (sameName || sameIdentity) {
-      if (!MoveAside(path, error)) {
-        return false;
-      }
-      replaced = true;
+    if ((sameName || sameIdentity) && !MoveAside(path, error, &moved)) {
+      return fail();
     }
   }
-  if (!WriteAll(target, gci, error)) {
+  if (!CommitTemp(target, error)) {
+    return fail();
+  }
+  if (written != nullptr) {
+    *written = target;
+  }
+  return true;
+}
+
+} // namespace
+
+bool InstallGci(const fs::path& folder, const std::vector<uint8_t>& gci, std::string& error,
+                bool* replacedOut) {
+  Moved moved;
+  if (!Install(folder, gci, error, moved, nullptr)) {
     return false;
   }
   if (replacedOut != nullptr) {
-    *replacedOut = replaced;
+    *replacedOut = !moved.empty();
   }
   return true;
 }
 
 namespace {
 
-void Install(Report& report, const fs::path& folder, const std::vector<uint8_t>& gci) {
-  std::string error;
-  bool replaced = false;
-  if (InstallGci(folder, gci, error, &replaced)) {
-    ++report.copied;
-    report.replaced += replaced ? 1 : 0;
-  } else {
-    AddError(report, error);
-  }
-}
-
 // The game keeps one save as "MetroidPrime A" or "B" and loads whichever is
 // newer, so an imported A beside a newer B would be ignored. A save therefore
-// moves as a set: every game file already there is moved aside first.
+// moves as a set: every game file already there is moved aside first. If any
+// file of the set fails, the ones written are removed and the old set is put
+// back, so the card keeps a save it can load.
 void InstallSet(Report& report, const fs::path& folder, const std::vector<std::vector<uint8_t>>& set,
                 const std::string& code = sGameCode) {
   if (set.empty()) {
     return;
   }
+  Moved moved;
   for (const fs::path& old : FilesOf(folder, code)) {
     std::string error;
-    if (!MoveAside(old, error)) {
+    if (!MoveAside(old, error, &moved)) {
+      Restore(moved);
       AddError(report, error);
       return;
     }
-    ++report.replaced;
   }
+  std::vector< fs::path > written;
   for (const auto& gci : set) {
-    Install(report, folder, gci);
+    std::string error;
+    fs::path target;
+    if (!Install(folder, gci, error, moved, &target)) {
+      for (const fs::path& path : written) {
+        std::error_code ignored;
+        fs::remove(path, ignored);
+      }
+      Restore(moved);
+      AddError(report, error + " (nothing was replaced)");
+      return;
+    }
+    written.push_back(target);
   }
+  report.copied += static_cast< int >(written.size());
+  report.replaced += static_cast< int >(moved.size());
 }
 
 void CollectName(const char* fileName, void* userData) {

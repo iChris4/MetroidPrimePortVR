@@ -12,6 +12,7 @@
 #include "rstl/vector.hpp"
 
 class CEntity {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 public:
   virtual ~CEntity();
 #ifndef HAS_TYPES_MATCH

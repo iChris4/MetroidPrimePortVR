@@ -110,9 +110,17 @@ CGenDescription::~CGenDescription() {
 #ifdef TARGET_PC
   delete xPortNestedLightInnerRadius;
   delete xPortNestedLightOuterRadius;
+  delete xPortVisorStartColor;
+  delete xPortVisorMidColor;
+  delete xPortVisorEndColor;
+  delete xPortVisorBlend;
   delete xPortIntScale;
+  delete xPortInheritVel;
   delete xPortIntRotation;
   delete xPortIntTranslation;
+  delete xPortShutdownTime;
+  delete xPortPmov;
+  delete xPortPmpv;
 #endif
 }
 

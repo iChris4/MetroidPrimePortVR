@@ -4,6 +4,7 @@
 #include "MetroidPrime/CEntity.hpp"
 
 class CScriptPlayerStateChange : public CEntity {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 public:
   enum EControl { kC_Unfiltered, kC_Filtered };
   enum EControlCommandOption { kCCO_Unfiltered, kCCO_Filtered };

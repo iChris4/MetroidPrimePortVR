@@ -70,6 +70,7 @@ public:
   void StopElectrocution();
 
 private:
+  friend struct PortStateCodec; // save states (platform/port_savestate_fields.cpp)
   CActor* x0_actor;
   CBodyStateCmdMgr x4_cmdMgr;
   CBodyStateInfo x2a4_bodyStateInfo;

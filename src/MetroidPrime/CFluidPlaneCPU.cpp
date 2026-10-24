@@ -359,6 +359,11 @@ const bool UpdatePatch(float time, CFluidPlaneCPURender::SPatchInfo& info,
   DCZeroRange(static_cast< uchar* >(LCGetBase()) + 0x40, 0x51);
 
   rstl::reserved_vector< SRippleInfo, 32 > rippleInfos;
+#ifdef TARGET_PC
+  // Port: the presented copies of the ripples (below). Declared here because the
+  // infos point at them and ApplyRipples reads them after the ripple loop.
+  rstl::reserved_vector< CRipple, 32 > presented;
+#endif
   bool noRipples = true;
 
   if (rippleManager) {
@@ -368,7 +373,6 @@ const bool UpdatePatch(float time, CFluidPlaneCPURender::SPatchInfo& info,
     // the presented lag), so their rings spread between ticks. The infos
     // point at these copies.
     const float lag = CFluidPlaneManager::PortPresentLag();
-    rstl::reserved_vector< CRipple, 32 > presented;
 #endif
     for (AUTO(ripple, ripples.begin()); ripple != ripples.end(); ++ripple) {
 #ifdef TARGET_PC

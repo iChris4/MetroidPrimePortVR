@@ -173,6 +173,7 @@ struct SlotData {
   bool requireMissileLauncher = false;
   bool requireMainPowerBomb = false;
   int requiredArtifacts = 12;
+  bool progressiveBeamUpgrades = false;
   // Only the Varia Suit keeps out heat (retail: any suit past the Power Suit).
   bool variaOnlyHeat = false;
   // spring_ball: 0 none, 1 with the Morph Ball Bombs, 2 its own item (Spring

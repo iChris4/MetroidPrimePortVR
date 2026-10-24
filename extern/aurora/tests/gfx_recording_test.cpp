@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "gfx/frame_packet.hpp"
+#include "gfx/clear.hpp"
 #include "gfx/recording.hpp"
 #include "gfx/texture.hpp"
 #include "gfx/resources.hpp"
@@ -336,3 +337,23 @@ TEST_F(GfxRecordingTest, FinalizedPassesAreSealedOrDeliberatelyDiscarded) {
 
 } // namespace
 } // namespace aurora::gfx
+
+TEST(StereoClearRect, ScalesPartialClearToEyeResolution) {
+  aurora::gfx::clear::DrawData data{};
+  data.rect = {160, 120, 320, 240};
+  data.rectReferenceWidth = 640;
+  data.rectReferenceHeight = 480;
+  const auto rect = aurora::gfx::clear::target_rect(data, wgpu::Extent3D{1280, 960, 1});
+  EXPECT_EQ(rect.x, 320);
+  EXPECT_EQ(rect.y, 240);
+  EXPECT_EQ(rect.width, 640);
+  EXPECT_EQ(rect.height, 480);
+}
+
+TEST(StereoClearRect, EmptyRectClearsTheWholeEye) {
+  const auto rect = aurora::gfx::clear::target_rect({}, wgpu::Extent3D{2000, 2100, 1});
+  EXPECT_EQ(rect.x, 0);
+  EXPECT_EQ(rect.y, 0);
+  EXPECT_EQ(rect.width, 2000);
+  EXPECT_EQ(rect.height, 2100);
+}

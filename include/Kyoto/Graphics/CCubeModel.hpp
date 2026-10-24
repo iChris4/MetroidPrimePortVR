@@ -217,7 +217,8 @@ public:
   }
   // The flags a surface is drawn with. The visor's own PBR draw is shaded as opaque and tests
   // depth without writing it (Remastered's visor does not occlude what is drawn after it, and
-  // the doll's flags would write it); a solid alpha blend is shaded as opaque; else the doll's.
+  // the doll's flags would write it); a solid alpha blend and an opaque PBR tint (kT_One,
+  // Two, Three: Remastered's ColorModulate/ColorAdd) are shaded as opaque; else the doll's.
   static CModelFlags PortDrawFlags(bool inventory, bool solidBlend, const CModelFlags& opaque,
                                    const CModelFlags& model) {
     if (inventory) {

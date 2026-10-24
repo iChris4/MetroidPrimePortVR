@@ -12,7 +12,7 @@ namespace PortRoomGeo {
 namespace {
 
 constexpr uint32_t kMagic = 0x4752504D; // 'MPRG'
-constexpr uint32_t kVersion = 12;
+constexpr uint32_t kVersion = 13;
 constexpr size_t kHeaderBytes = 12;
 constexpr size_t kInstanceBytes = 4 + 12 * 4; // version 1; version 2 adds 4 + links
 constexpr size_t kPlatformBytes = 4 + 3 * 4;   // version 3's, after version 2's 4
@@ -241,7 +241,7 @@ bool ParseAnim(const std::vector<uint8_t>& data, size_t& at, uint32_t version, s
 // The sky section at `at`, which is moved past it.
 bool ParseSky(const std::vector<uint8_t>& data, size_t& at, uint32_t version, std::vector<Instance>& instances,
               std::string& error) {
-  const size_t stride = version >= 7 ? 16 : 4;
+  const size_t stride = version >= 13 ? 20 : version >= 7 ? 16 : 4;
   if (data.size() - at < 8 || ReadLE32(data.data() + at + 4) > (data.size() - at - 8) / stride) {
     error = "truncated sky";
     return false;
@@ -256,10 +256,11 @@ bool ParseSky(const std::vector<uint8_t>& data, size_t& at, uint32_t version, st
     }
     Instance& instance = instances[index];
     instance.sky = true;
-    for (size_t j = 0; j < 3 && stride == 16; ++j) {
+    for (size_t j = 0; j < 3 && stride >= 16; ++j) {
       float v = 0.f;
       instance.skyRadiance[j] = ReadF32(data.data() + at + 4 + 4 * j, v) && v > 0.f ? v : 0.f;
     }
+    instance.worldSky = stride == 20 && (ReadLE32(data.data() + at + 16) & 1) != 0;
   }
   return true;
 }
@@ -586,6 +587,7 @@ std::vector<uint8_t> Write(const std::vector<Instance>& instances, const Script*
         for (float v : instances[i].skyRadiance) {
           AppendLEFloat(out, v);
         }
+        AppendLE32(out, instances[i].worldSky ? 1u : 0u);
       }
     }
   }

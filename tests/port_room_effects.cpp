@@ -1,0 +1,287 @@
+#include "port_room_effects.h"
+#include "port_test.h"
+
+#include <cstring>
+#include <string>
+#include <vector>
+
+namespace {
+
+using PortRoomEffects::Effect;
+using PortRoomEffects::File;
+
+Effect MakeEffect(uint32_t layer, uint32_t index) {
+  Effect e;
+  e.id = PortRoomEffects::AddOnId(layer, 0x1A, index);
+  e.name = "Remastered effect " + std::to_string(index);
+  e.pos[0] = -120.5f;
+  e.pos[2] = 33.f;
+  e.rot[1] = 90.f;
+  e.scale[0] = 2.f;
+  e.part = 0xFE123456;
+  e.active = index % 2 == 0;
+  e.noTimerUnlessAreaOccluded = true;
+  e.thermalVisorVisible = false;
+  e.rateCamDistRangeFarRate = 0.25f;
+  return e;
+}
+
+void TestIds() {
+  CHECK(PortRoomEffects::AddOnId(1, 0x1A, 0) == 0x041AF000);
+  CHECK(PortRoomEffects::AddOnId(63, 0x3FF, PortRoomEffects::kMaxAddOns - 1) == 0xFFFFFFFF);
+  CHECK(PortRoomEffects::IsAddOnId(0x041AF000));
+  CHECK(PortRoomEffects::IsAddOnId(0x001AFFFE));
+  CHECK(!PortRoomEffects::IsAddOnId(0x041AEFFF));
+  CHECK(!PortRoomEffects::IsAddOnId(0x000001CA));
+  CHECK(PortRoomEffects::kMaxAddOns == 0x1000);
+}
+
+void TestEffect() {
+  const Effect in = MakeEffect(2, 7);
+  std::vector<uint8_t> bytes;
+  PortRoomEffects::AppendEffect(in, bytes);
+  // Type, length, then the body (id, no connections, 24 properties).
+  REQUIRE(bytes.size() > 17);
+  CHECK(bytes[0] == 7);
+  const uint32_t length = uint32_t(bytes[1]) << 24 | uint32_t(bytes[2]) << 16 | uint32_t(bytes[3]) << 8 | bytes[4];
+  CHECK(length == bytes.size() - 5);
+  CHECK(bytes[5] == 0x08 && bytes[6] == 0x1A && bytes[7] == 0xF0 && bytes[8] == 0x07);
+  CHECK(bytes[16] == 24);
+  Effect out;
+  size_t used = 0;
+  REQUIRE(PortRoomEffects::ReadEffect(bytes.data(), bytes.size(), out, used));
+  CHECK(used == bytes.size());
+  CHECK(out.id == in.id && out.name == in.name && out.part == in.part);
+  CHECK(out.pos[0] == -120.5f && out.pos[2] == 33.f && out.rot[1] == 90.f && out.scale[0] == 2.f);
+  CHECK(out.active == in.active && out.noTimerUnlessAreaOccluded && !out.thermalVisorVisible && out.xrayVisorVisible);
+  CHECK(out.rateCamDistRangeFarRate == 0.25f && out.duration == 0.2f && out.rateCamDistRangeMax == 30.f);
+  // 4 + 4 + 4 + name + 36 + 8 + 4 + 1 + 16 + 1 + 12 + 4 + 71 light bytes.
+  CHECK(length == 12 + in.name.size() + 1 + 36 + 8 + 4 + 1 + 16 + 1 + 12 + 4 + 71);
+  CHECK(!PortRoomEffects::ReadEffect(bytes.data(), bytes.size() - 1, out, used));
+}
+
+void TestFile() {
+  File in;
+  in.skips = {0x040001CA, 0x040001CB, 0x040001CC};
+  in.connected = 5;
+  for (uint32_t l : {0u, 1u}) {
+    PortRoomEffects::Layer layer;
+    layer.layer = l;
+    for (uint32_t i = 0; i < 3; ++i) {
+      PortRoomEffects::AppendEffect(MakeEffect(l, l * 3 + i), layer.objects);
+      ++layer.count;
+    }
+    in.layers.push_back(layer);
+  }
+  const std::vector<uint8_t> data = PortRoomEffects::Write(in);
+  File out;
+  std::string error;
+  REQUIRE_MSG(PortRoomEffects::Parse(data, out, error), error.c_str());
+  CHECK(out.skips == in.skips && out.connected == 5 && out.layers.size() == 2);
+  CHECK(out.layers[1].layer == 1 && out.layers[1].count == 3 && out.layers[1].objects == in.layers[1].objects);
+
+  std::vector<uint8_t> bad = data;
+  bad.pop_back();
+  CHECK_MSG(!PortRoomEffects::Parse(bad, out, error), "truncated");
+  bad = data;
+  bad.push_back(0);
+  CHECK_MSG(!PortRoomEffects::Parse(bad, out, error), "trailing bytes");
+  bad = data;
+  bad[4] = 4;
+  CHECK_MSG(!PortRoomEffects::Parse(bad, out, error), "version");
+
+  // An object outside the add-on range, or on another layer than its own, is refused.
+  File wrong;
+  PortRoomEffects::Layer layer;
+  Effect retail = MakeEffect(0, 0);
+  retail.id = 0x001A01CA;
+  PortRoomEffects::AppendEffect(retail, layer.objects);
+  layer.count = 1;
+  wrong.layers.push_back(layer);
+  CHECK_MSG(!PortRoomEffects::Parse(PortRoomEffects::Write(wrong), out, error), "retail id refused");
+  wrong.layers[0].objects.clear();
+  PortRoomEffects::AppendEffect(MakeEffect(3, 0), wrong.layers[0].objects);
+  CHECK_MSG(!PortRoomEffects::Parse(PortRoomEffects::Write(wrong), out, error), "layer mismatch refused");
+
+  File empty;
+  CHECK(PortRoomEffects::Parse(PortRoomEffects::Write(empty), out, error) && out.layers.empty());
+}
+
+PortRoomEffects::Variable MakeVariable(uint8_t tag) {
+  PortRoomEffects::Variable v;
+  for (size_t i = 0; i < v.guid.size(); ++i) {
+    v.guid[i] = uint8_t(tag + i);
+  }
+  v.color[0] = 0.59f;
+  v.color[3] = 0.25f;
+  v.vec[2] = 0.5f;
+  v.real = -0.0025f;
+  v.integer = -3;
+  return v;
+}
+
+// Version 2 carries each object's variables; a version 1 file (none) still loads.
+void TestFileVariables() {
+  File in;
+  PortRoomEffects::Layer layer;
+  layer.layer = 0;
+  for (uint32_t i = 0; i < 3; ++i) {
+    PortRoomEffects::AppendEffect(MakeEffect(0, i), layer.objects);
+    ++layer.count;
+  }
+  layer.vars = {{MakeVariable(1), MakeVariable(2)}, {}, {MakeVariable(9)}};
+  in.layers.push_back(layer);
+  const std::vector<uint8_t> data = PortRoomEffects::Write(in);
+  File out;
+  std::string error;
+  REQUIRE_MSG(PortRoomEffects::Parse(data, out, error), error.c_str());
+  REQUIRE(out.layers.size() == 1 && out.layers[0].vars.size() == 3);
+  const auto& vars = out.layers[0].vars;
+  CHECK(vars[0].size() == 2 && vars[1].empty() && vars[2].size() == 1);
+  const PortRoomEffects::Variable& v = vars[2][0];
+  CHECK(v.guid == MakeVariable(9).guid && v.color[0] == 0.59f && v.color[1] == 1.f && v.color[3] == 0.25f);
+  CHECK(v.vec[2] == 0.5f && v.real == -0.0025f && v.integer == -3);
+
+  // Three u32 counts and three records follow the objects, then the override count.
+  const size_t tail = 3 * 4 + 3 * PortRoomEffects::kVariableBytes;
+  std::vector<uint8_t> bad = data;
+  bad.resize(bad.size() - tail + 4);
+  CHECK_MSG(!PortRoomEffects::Parse(bad, out, error), "truncated variables");
+
+  // The same file as version 1: the objects, no variable blocks and no overrides.
+  std::vector<uint8_t> v1(data.begin(), data.end() - tail - 4);
+  v1[4] = 1;
+  REQUIRE_MSG(PortRoomEffects::Parse(v1, out, error), error.c_str());
+  CHECK(out.layers.size() == 1 && out.layers[0].count == 3 && out.layers[0].vars.size() == 3);
+  CHECK(out.layers[0].vars[0].empty() && out.layers[0].vars[2].empty() && out.overrides.empty());
+}
+
+// Version 3 carries the overrides: the PART and the particle variables a matched retail Effect
+// object takes from its Remastered actor. They live outside the layers, so a file may have them
+// alone.
+void TestFileOverrides() {
+  File in;
+  in.skips = {0x040001CA};
+  in.connected = 2;
+  PortRoomEffects::Override over;
+  over.id = 0x04000210;
+  over.part = 0xFE123456;
+  over.vars = {MakeVariable(4), MakeVariable(5)};
+  in.overrides.push_back(over);
+  in.overrides.push_back({0x04000211, 0xFFFFFFFF, {}});
+  const std::vector<uint8_t> data = PortRoomEffects::Write(in);
+  File out;
+  std::string error;
+  REQUIRE_MSG(PortRoomEffects::Parse(data, out, error), error.c_str());
+  CHECK(out.layers.empty() && out.skips == in.skips && out.connected == 2);
+  REQUIRE(out.overrides.size() == 2);
+  CHECK(out.overrides[0].id == 0x04000210 && out.overrides[0].part == 0xFE123456);
+  REQUIRE(out.overrides[0].vars.size() == 2);
+  const PortRoomEffects::Variable& v = out.overrides[0].vars[1];
+  CHECK(v.guid == MakeVariable(5).guid && v.color[0] == 0.59f && v.color[3] == 0.25f && v.vec[2] == 0.5f);
+  CHECK(v.real == -0.0025f && v.integer == -3);
+  CHECK(out.overrides[1].id == 0x04000211 && out.overrides[1].part == 0xFFFFFFFF && out.overrides[1].vars.empty());
+
+  // The override block: its count, two ids, two parts, two counts and two records.
+  const size_t block = 4 + 2 * 12 + 2 * PortRoomEffects::kVariableBytes;
+  std::vector<uint8_t> v2(data.begin(), data.end() - block);
+  v2[4] = 2;
+  REQUIRE_MSG(PortRoomEffects::Parse(v2, out, error), error.c_str());
+  CHECK(out.overrides.empty() && out.skips == in.skips && out.layers.empty());
+
+  for (size_t cut = 1; cut < block; cut += 3) {
+    const std::vector<uint8_t> bad(data.begin(), data.end() - std::ptrdiff_t(cut));
+    CHECK_MSG(!PortRoomEffects::Parse(bad, out, error), "truncated overrides");
+  }
+  std::vector<uint8_t> many(data.begin(), data.end() - block);
+  for (uint8_t b : {0xFF, 0x00, 0x00, 0x00}) {
+    many.push_back(b);
+  }
+  CHECK_MSG(!PortRoomEffects::Parse(many, out, error), "override count");
+}
+
+void PutLE16(std::vector<uint8_t>& b, uint32_t v) {
+  b.push_back(uint8_t(v));
+  b.push_back(uint8_t(v >> 8));
+}
+void PutLE32(std::vector<uint8_t>& b, uint32_t v) {
+  PutLE16(b, v & 0xffff);
+  PutLE16(b, v >> 16);
+}
+void PutProp(std::vector<uint8_t>& b, uint32_t id, const std::vector<uint8_t>& data) {
+  PutLE32(b, id);
+  PutLE16(b, uint32_t(data.size()));
+  b.insert(b.end(), data.begin(), data.end());
+}
+std::vector<uint8_t> Floats(std::initializer_list<float> fs) {
+  std::vector<uint8_t> b;
+  for (float f : fs) {
+    uint32_t v;
+    std::memcpy(&v, &f, 4);
+    PutLE32(b, v);
+  }
+  return b;
+}
+// One entry of property 3def0de6, laid out as Landing Site's mist actors have them.
+std::vector<uint8_t> Entry(uint8_t tag, uint32_t valueId, const std::vector<uint8_t>& value, bool guid = true) {
+  std::vector<uint8_t> info;
+  PutLE16(info, guid ? 1 : 0);
+  if (guid) {
+    const auto id = MakeVariable(tag).guid;
+    PutProp(info, 0x82dde61c, std::vector<uint8_t>(id.begin(), id.end()));
+  }
+  std::vector<uint8_t> e;
+  PutLE16(e, value.empty() ? 1 : 2);
+  PutProp(e, 0xae893172, info);
+  if (!value.empty()) {
+    PutProp(e, valueId, value);
+  }
+  return e;
+}
+
+void TestExternalVariables() {
+  std::vector<uint8_t> b;
+  PutLE32(b, 5);
+  for (const auto& e : {Entry(1, 0xfd41dc4b, Floats({0.65f})), Entry(2, 0x45eff31d, Floats({0.59f, 0.72f, 0.75f, 1.f})),
+                        Entry(3, 0x282df928, Floats({0.f, 0.f, 0.25f})), Entry(4, 0xcd774f7a, {7, 0, 0, 0}),
+                        Entry(5, 0, {})}) {
+    b.insert(b.end(), e.begin(), e.end());
+  }
+  std::vector<PortRoomEffects::Variable> vars;
+  REQUIRE(PortRoomEffects::ReadExternalVariables(b.data(), b.size(), vars));
+  REQUIRE(vars.size() == 5);
+  CHECK(vars[0].guid == MakeVariable(1).guid && vars[0].real == 0.65f && vars[0].color[0] == 1.f);
+  CHECK(vars[1].color[0] == 0.59f && vars[1].color[3] == 1.f && vars[1].real == 0.f);
+  CHECK(vars[2].vec[2] == 0.25f);
+  CHECK(vars[3].integer == 7);
+  // No value: the loader's defaults (white, zero).
+  CHECK(vars[4].guid == MakeVariable(5).guid && vars[4].color[1] == 1.f && vars[4].real == 0.f && vars[4].integer == 0);
+
+  for (size_t cut = 1; cut < b.size(); cut += 7) {
+    CHECK_MSG(!PortRoomEffects::ReadExternalVariables(b.data(), b.size() - cut, vars), "truncated");
+  }
+  std::vector<uint8_t> noGuid;
+  PutLE32(noGuid, 1);
+  const auto e = Entry(1, 0xfd41dc4b, Floats({1.f}), false);
+  noGuid.insert(noGuid.end(), e.begin(), e.end());
+  CHECK_MSG(!PortRoomEffects::ReadExternalVariables(noGuid.data(), noGuid.size(), vars), "no guid");
+  std::vector<uint8_t> none;
+  PutLE32(none, 0);
+  CHECK(PortRoomEffects::ReadExternalVariables(none.data(), none.size(), vars) && vars.empty());
+}
+
+}  // namespace
+
+int main() {
+  TestIds();
+  TestEffect();
+  TestFile();
+  TestFileVariables();
+  TestFileOverrides();
+  TestExternalVariables();
+  uint32_t id = 0;
+  CHECK_MSG(PortRoomEffects::ParseFileName("1a2B3c4D.ROOMFX", id) && id == 0x1A2B3C4D, "file name");
+  CHECK(!PortRoomEffects::ParseFileName("1A2B3C4D.roomgeo", id));
+  CHECK(!PortRoomEffects::ParseFileName("1A2B3C4.roomfx", id));
+  return PORT_TEST_RESULT();
+}

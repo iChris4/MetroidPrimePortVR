@@ -24,6 +24,8 @@ constexpr char kRoomMagic[4] = {'R', 'M', 'S', 'T'};
 constexpr uint32_t kRoomVersionLegacy = 1;
 constexpr uint32_t kRoomVersion = 2;
 constexpr uint32_t kRoomVersionLayers = 3;  // version 2 plus the spawn layer section
+// Version 3 with 16-bit block lengths (an enemy's kTagFields block runs to kilobytes).
+constexpr uint32_t kRoomVersionWide = 4;
 constexpr uint32_t kMaxRoomBytes = 8u << 20;
 constexpr uint32_t kMaxRoomCount = 1u << 16;
 constexpr uint32_t kMaxBlocks = 64;
@@ -187,7 +189,9 @@ std::string EncodeRoom(const RoomState& room) {
     // The present set is the objects' ids; a block count byte carries the active flag.
     AppendDelta(body, last, obj.editorId);
     // At most kMaxBlocks, the most DecodeRoom accepts (the count byte has 7 bits).
-    auto fits = [](const RoomBlock& block) { return block.tag < 256 && block.data.size() < 256; };
+    auto fits = [layers](const RoomBlock& block) {
+      return block.tag < 256 && block.data.size() < (layers ? kMaxBlockBytes : 256u);
+    };
     size_t count = 0;
     for (const RoomBlock& block : obj.blocks)
       count += fits(block) ? 1 : 0;
@@ -201,11 +205,13 @@ std::string EncodeRoom(const RoomState& room) {
         break;
       body += static_cast< char >(block.tag);
       body += static_cast< char >(block.data.size());
+      if (layers)
+        body += static_cast< char >(block.data.size() >> 8);
       body += block.data;
     }
   }
   std::string out(kRoomMagic, 4);
-  AppendLE32(out, layers ? kRoomVersionLayers : (recorded ? kRoomVersion : kRoomVersionLegacy));
+  AppendLE32(out, layers ? kRoomVersionWide : (recorded ? kRoomVersion : kRoomVersionLegacy));
   AppendLE32(out, static_cast< uint32_t >(body.size()));
   return out + body;
 }
@@ -223,8 +229,10 @@ bool DecodeRoom(Reader& in, RoomState& room) {
   const uint32_t size = in.U32();
   if (size > kMaxRoomBytes || !in.Need(size) || in.pos + size != in.data.size())
     return false;
-  if (version != kRoomVersionLegacy && version != kRoomVersion && version != kRoomVersionLayers)
+  if (version != kRoomVersionLegacy && version != kRoomVersion && version != kRoomVersionLayers &&
+      version != kRoomVersionWide)
     return true;
+  const bool wide = version >= kRoomVersionWide;
   RoomState r;
   const uint32_t areaCount = in.U32();
   if (areaCount > kMaxRoomCount)
@@ -307,10 +315,12 @@ bool DecodeRoom(Reader& in, RoomState& room) {
       return false;
     for (uint32_t b = 0; b < blockCount && in.ok; ++b) {
       RoomBlock block;
-      if (!in.Need(2))
+      if (!in.Need(wide ? 3 : 2))
         return false;
       block.tag = static_cast< uint8_t >(in.data[in.pos++]);
-      const uint32_t len = static_cast< uint8_t >(in.data[in.pos++]);
+      uint32_t len = static_cast< uint8_t >(in.data[in.pos++]);
+      if (wide)
+        len |= static_cast< uint32_t >(static_cast< uint8_t >(in.data[in.pos++])) << 8;
       if (!in.Need(len))
         return false;
       block.data = in.data.substr(in.pos, len);

@@ -14,6 +14,10 @@
 
 #include "MetroidPrime/Cameras/CCameraManager.hpp"
 #include "MetroidPrime/Player/CGameState.hpp"
+#include "MetroidPrime/CStateManager.hpp"
+#include "MetroidPrime/Player/CMorphBall.hpp"
+#include "MetroidPrime/Player/CPlayer.hpp"
+#include "MetroidPrime/Player/CPlayerState.hpp"
 
 #include <aurora/imgui.h>
 #include <imgui_internal.h>
@@ -39,8 +43,8 @@ void DrawCutscenesSection() {
   if (ImGui::Checkbox("Skippable cutscenes", &skippable)) {
     SetSkippableCutscenes(skippable);
   }
-  ItemHelp("Every cutscene can be skipped with Start or A, including the ones the game never "
-           "lets you skip (randomprime's room patches). Applies to rooms loaded after the change.");
+  ItemHelp("Skip any cutscene with Start or A, even ones the game never lets you skip. Applies to "
+           "rooms loaded afterwards.");
   if (PortSkipCutscenes::Forced()) {
     SameLineAfterHelp();
     ImGui::TextDisabled("(on in randomized games)");
@@ -49,40 +53,54 @@ void DrawCutscenesSection() {
   if (ImGui::Combo("Elevator ride", &elevatorRide, "Original\0Fast\0Skip\0")) {
     SetElevatorRide(static_cast< EElevatorRide >(elevatorRide));
   }
-  ItemHelp("The ride shown between worlds. Original lasts at least 5 s even though the port loads "
-           "far faster; Fast ends it about 2 s in, once the next area is loaded; Skip shows black "
-           "until the area is loaded. The cinematic played in the elevator room before the ride is "
-           "not affected.");
+  ItemHelp("The ride between worlds. Original lasts at least 5 s; Fast ends about 2 s in, once the "
+           "next area has loaded; Skip shows black until then.");
   int bootLogos = sBootLogos;
   if (ImGui::Combo("Boot logos", &bootLogos, "Show\0Skip with A or Start\0Off\0")) {
     SetBootLogos(static_cast< EBootLogos >(bootLogos));
   }
-  ItemHelp("The Nintendo, Retro and Dolby logos at launch. Skip with A or Start ends the current "
-           "logo with a short fade; Off goes straight to the opening (which A or Start skips to "
-           "the title). Applies at the next launch.");
+  ItemHelp("The logos at launch. Skip with A or Start ends the current logo; Off goes straight to "
+           "the opening. Applies at the next launch.");
   if (ImGui::SliderInt("Scan speed", &sScanSpeed, kScanSpeedMin, kScanSpeedMax, "%d%%",
                        ImGuiSliderFlags_AlwaysClamp)) {
     MarkDirty();
   }
-  ItemHelp("How fast the scan visor fills its progress bar. 100% is the original; 200% scans in "
-           "half the time. What a scan records is unchanged.");
+  ItemHelp("How fast the scan visor fills its bar: 200% scans in half the time. What a scan "
+           "records is unchanged.");
+  if (ImGui::SliderInt("Hint delay", &sHintDelay, kHintDelayMin, kHintDelayMax,
+                       sHintDelay == 0 ? "Game default" : "%d min", ImGuiSliderFlags_AlwaysClamp)) {
+    MarkDirty();
+  }
+  ItemHelp("The longest a hint waits before it first shows. Game default keeps the game's own "
+           "timing; a shorter wait also applies to hints already waiting in your save. Needs the "
+           "in-game hint system on.");
+  ImGui::BeginDisabled(gpGameState == nullptr || !gpGameState->GameOptions().GetIsHintSystemEnabled());
+  if (ImGui::Button("Show current hint")) {
+    RequestShowHint();
+  }
+  ImGui::EndDisabled();
+  ItemHelp("Shows the hint the game would show next, now: the one on screen again, or the one "
+           "due soonest. Needs the in-game hint system on.");
   bool beamDoors = sBeamDoorsStayUnlocked;
   if (ImGui::Checkbox("Unlock beam doors once opened", &beamDoors)) {
     SetBeamDoorsStayUnlocked(beamDoors);
   }
-  ItemHelp("A Wave, Ice, Plasma or Power Beam door you have opened by breaking its force field "
-           "stays a plain blue door, on both sides, for the rest of the save: blue look, any beam "
-           "opens it, blue map icon and scan. Missile, Bomb and Disabled doors and blast shields "
-           "are not affected. Takes effect from the next door you open; turning it off shows the "
-           "colours again in rooms loaded afterwards.");
+  ItemHelp("A beam door you've opened stays a plain blue door for the rest of the save, on both "
+           "sides, so any beam opens it. Missile, Bomb and Disabled doors and blast shields are "
+           "unaffected. Applies from the next door you open.");
   bool stackBeams = sStackBeams;
   if (ImGui::Checkbox("Stack beams", &stackBeams)) {
     SetStackBeams(stackBeams);
   }
-  ItemHelp("Every normal or charged shot also fires the shots of each other beam you own, from "
-           "the same spot at the same time. Only the projectiles are added: charge combos, "
-           "missiles and the Phazon Beam are unchanged, and a beam whose shot data is still "
-           "loading is skipped for that shot.");
+  ItemHelp("Each normal or charged shot also fires every other beam you own. Charge combos, "
+           "missiles and the Phazon Beam are unchanged.");
+  int walkSpeed = sWalkSpeed;
+  if (ImGui::SliderInt("Walk speed", &walkSpeed, kWalkSpeedMin, kWalkSpeedMax, "%d%%",
+                       ImGuiSliderFlags_AlwaysClamp)) {
+    SetWalkSpeed(walkSpeed);
+  }
+  ItemHelp("How fast Samus moves on foot, walking, strafing and circle-strafing, in percent of "
+           "the original speed. Jumps, dashes, turning and the Morph Ball are unchanged.");
   EndOriginalLocked(locked);
 
   // Not under the Original experience lock: the stored choice applies there too.
@@ -94,11 +112,22 @@ void DrawCutscenesSection() {
     SetRevision100Compatibility(revisionCompat);
   }
   ImGui::EndDisabled();
-  ItemHelp("Restores supported revision-specific sequence-break behavior on newer/PAL discs. "
-           "Requires reloading the game. Automatically enabled for randomizer and Archipelago games.");
+  ItemHelp(
+      "Restores revision-specific sequence breaks on newer and PAL discs. Needs a game reload.");
   if (revisionForced) {
     SameLineAfterHelp();
     ImGui::TextDisabled("(automatic in randomizer and Archipelago games)");
+  }
+}
+
+void WearFusionSuit(CStateManager& mgr, bool wearing) {
+  if (gpGameState != nullptr) {
+    gpGameState->SystemState().SetHasFusion(wearing);
+  }
+  mgr.PlayerState()->SetIsFusionEnabled(wearing);
+  mgr.Player()->AsyncLoadSuit(mgr);
+  if (mgr.Player()->GetMorphballTransitionState() != CPlayer::kMS_Unmorphed) {
+    mgr.Player()->MorphBall()->LoadMorphBallModel(mgr);
   }
 }
 
@@ -125,6 +154,23 @@ void DrawUnlocksSection() {
   }
   ImGui::SetItemTooltip("Under Fusion Bonus; retail needs a GBA link to Metroid Fusion.");
   ImGui::SameLine();
+  // The Fusion Bonus menu's choice, switched in game: the suit, arm and ball
+  // load again as after a suit pickup.
+  {
+    CStateManager* mgr = StateManager();
+    const bool available = gpGameState != nullptr &&
+                           (UnlockFusionSuit() || (gpGameState->SystemState().GetFusionLinked() &&
+                                                   gpGameState->SystemState().GetNormalModeBeat()));
+    bool wearing = gpGameState != nullptr && gpGameState->PlayerState()->GetIsFusionEnabled();
+    ImGui::BeginDisabled(!available || mgr == nullptr);
+    if (ImGui::Checkbox("Wear Fusion Suit", &wearing)) {
+      WearFusionSuit(*mgr, wearing);
+    }
+    ImGui::EndDisabled();
+    ImGui::SetItemTooltip("Switches between the Fusion Suit and the normal suits now.\nNeeds the "
+                          "Fusion Suit unlocked and a game running.");
+  }
+  ImGui::SameLine();
   bool galleries = sUnlockGalleries;
   if (ImGui::Checkbox("Image galleries", &galleries)) {
     SetUnlockGalleries(galleries);
@@ -148,9 +194,8 @@ void DrawSpeedrunSection() {
   if (ImGui::Checkbox("LiveSplit", &liveSplit)) {
     SetLiveSplit(liveSplit);
   }
-  ItemHelp("In LiveSplit: right-click, Control > Start TCP Server (port 16834), and compare against "
-           "Game Time. A new file resets and starts the timer, the game time follows the in-game "
-           "time, and it splits on the final blow.");
+  ItemHelp("In LiveSplit: right-click, Control > Start TCP Server (port 16834), and compare "
+           "against Game Time. A new file starts the timer; it splits on the final blow.");
   SameLineAfterHelp();
   switch (PortLiveSplit::Status()) {
   case PortLiveSplit::kStatus_Off:
@@ -286,8 +331,8 @@ void DrawOverlaySection() {
       sUiTheme = theme;
       MarkDirty();
     }
-    ItemHelp("The look of this overlay. Auto uses the Remastered style while the Remastered import is "
-             "loaded and the Metroid Prime pause-screen style otherwise; Plain is stock Dear ImGui.");
+    ItemHelp("The overlay's look. Auto uses the Remastered style while the Remastered import is "
+             "loaded, else the Metroid Prime style; Plain is stock Dear ImGui.");
     if (ImGui::Checkbox("Menu sounds", &sUiSounds)) {
       MarkDirty();
     }

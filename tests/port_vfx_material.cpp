@@ -71,7 +71,7 @@ void TestParsing() {
       Check(vfx.mat.version == 0, "known versions reject short/long tails");
     }
     for (int field : {11, 15}) { // invalid blend or texture count, before loading any texture
-      auto b = Blob(version); b[field] = 6;
+      auto b = Blob(version); b[field] = 8;
       Parse(vfx, b);
       Check(vfx.mat.version == 0, "bad headers leave fallback");
     }

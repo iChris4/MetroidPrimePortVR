@@ -170,6 +170,12 @@ void Load(uint32_t mrea, Area& area) {
                  area.items.size(), missing, area.filters.size());
 }
 
+// Where the surface lies in the world as Remastered placed it: a lava model's origin, a water
+// mesh's top (its bounds' top, y up).
+float SurfaceTop(const Placed& item) {
+  return item.type == 2 ? item.xf.Get23() : (item.xf * CVector3f(0.f, item.water.boundsMax[1], 0.f)).GetZ();
+}
+
 // The area's file, read and placed in the world; null when it is off.
 Area* Prepare(const CGameArea& gameArea) {
   if (!Enabled()) {
@@ -270,7 +276,13 @@ bool DrawWater(Placed& item, const CStateManager& mgr, uint32_t mrea, const CTra
   S[4][0] = flow[0];
   S[4][1] = -flow[1];
   S[4][2] = 1.f / std::max(flow[3], 0.001f);
-  S[4][3] = b[8] != 0 ? flow[4] : 0.f;
+  // The flow simulation's displacement scale. b8 turns Remastered's CFluidSurfaceDynamicsSim on
+  // (node+0x608), and the vertex shader lifts the mesh by (height + source flow w - 1) * this. The
+  // sim rests at height 1 - w (1 in the water, where w is 0; 0 on land), so a still surface is
+  // flat. The port runs no sim and binds black for its height, which would sink every surface
+  // whose flow map marks the water with w = 0 (Phendrana Shorelines' by 2.2, under its shelf).
+  // So it is 0, as SetupSurfaceParamsData (0x39c09c) leaves it with the sim off.
+  S[4][3] = 0.f;
   S[6][0] = S[6][1] = S[6][2] = 1.f;
   S[6][3] = mat[4];
   S[7][0] = w.fogColor[0];
@@ -575,10 +587,11 @@ bool Draw(const CStateManager& mgr, const CGameArea& gameArea, uint32_t uid, con
         bestDistance = distance;
       }
     }
-    PortLog::Write("room liquid: %08X: object %u (fluid %d) at (%.1f, %.1f, %.1f), surface at %.1f: %s, %.2f away\n",
+    PortLog::Write("room liquid: %08X: object %u (fluid %d) at (%.1f, %.1f, %.1f), surface at %.1f: %s, %.2f away"
+                   ", its own top at %.2f\n",
                    mrea, uid, fluidType, position.GetX(), position.GetY(), position.GetZ(), surfaceZ,
                    best < 0 ? "no surface" : bestDistance > kReach ? "nearest surface too far" : "surface found",
-                   best < 0 ? 0.f : bestDistance);
+                   best < 0 ? 0.f : bestDistance, best < 0 ? 0.f : SurfaceTop(area.items[size_t(best)]));
     if (bestDistance > kReach) {
       best = -1;
     }
@@ -594,8 +607,7 @@ bool Draw(const CStateManager& mgr, const CGameArea& gameArea, uint32_t uid, con
   // The surface lies where the game has its own, which a script may raise or drain: a lava
   // model's origin, a water mesh's top (its bounds' top, y up).
   CTransform4f xf(item.xf);
-  const float top = item.type == 2 ? xf.Get23() : (xf * CVector3f(0.f, item.water.boundsMax[1], 0.f)).GetZ();
-  xf.AddTranslationZ(surfaceZ - top);
+  xf.AddTranslationZ(surfaceZ - SurfaceTop(item));
   if (item.type == 2 ? !DrawLava(item, mgr, gameArea, mrea, xf) : !DrawWater(item, mgr, mrea, xf)) {
     return false;
   }

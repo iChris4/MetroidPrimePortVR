@@ -18,6 +18,7 @@
 
 #include "MetroidPrime/Cameras/CCameraManager.hpp"
 
+#include <aurora/aurora.h>
 #include <aurora/gfx.h>
 #include <aurora/imgui.h>
 #include <dolphin/vi.h>
@@ -412,6 +413,9 @@ void DrawUI() {
     ApplyVsync();
     // The saved upscale sharpening, which nothing else sends until the scale changes.
     ApplyPresentSharpness();
+    // Saved per-pixel lighting: AuroraConfig has no field for it, and the setters
+    // only send it on change.
+    aurora_set_per_pixel_lighting(sPerPixelLighting && !sOriginalExperience);
   } else if (EffectiveVsync() != sAppliedVsync) {
     ApplyVsync();
   }

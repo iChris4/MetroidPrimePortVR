@@ -3,6 +3,10 @@
 #include "Kyoto/Streams/CInputStream.hpp"
 #include "rstl/set.hpp"
 
+#ifdef TARGET_PC
+#include "port_dread_samus_mod.h"
+#endif
+
 CCharacterInfo::CParticleResData::CParticleResData(CInputStream& in, ushort tableCount)
 : x0_part(in)
 , x10_swhc(in)
@@ -40,6 +44,15 @@ CCharacterInfo::CCharacterInfo(CInputStream& in)
   if (x0_tableCount > 4) {
     xb0_animIdxs = rstl::vector< uint >(in);
   }
+#ifdef TARGET_PC
+  // A Remastered install replaces the Samus ANCS with its own skin ids, whose weights fit its mesh:
+  // the Dread body it is paired with would stay in a T-pose. Bind the body to the mod's own skin.
+  if (PortDreadSamus::Replaces(x14_cmdl)) {
+    if (const uint32_t skin = PortDreadSamus::CutsceneSkin(x14_cmdl)) {
+      x18_cksr = skin;
+    }
+  }
+#endif
 }
 
 int CCharacterInfo::GetAnimationIndex(const rstl::string& name) const {

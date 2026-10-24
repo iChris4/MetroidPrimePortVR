@@ -68,6 +68,7 @@ struct EffectDelayInfo {
 };
 
 class CScriptRoomAcoustics : public CEntity {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 public:
   CScriptRoomAcoustics(TUniqueId uid, const rstl::string& name, const CEntityInfo& info,
                        bool active, uint volScale, bool revHi, bool revHiDis, float revHiColoration,

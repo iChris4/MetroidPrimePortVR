@@ -940,6 +940,14 @@ bool BoxLineTest(const CAABox& aabb, const CVector3f& point, const CVector3f& di
   const float* dirPtr = reinterpret_cast< const float* >(&dir);
   tMin = -999999.f;
   tMax = 999999.f;
+#ifdef TARGET_PC
+  // Retail leaves axis and sign unset when no slab beats the -999999 sentinel
+  // (a zero, NaN or vanishingly small dir) yet still reports a hit, and
+  // MovingSphereAABox then indexes vectors with the stale axis (#181, Meta
+  // Ridley). Treat that as no hit.
+  axis = -1;
+  sign = false;
+#endif
 
   for (int i = 0; i < 3; ++i) {
     float dirI = *dirPtr;
@@ -976,6 +984,11 @@ bool BoxLineTest(const CAABox& aabb, const CVector3f& point, const CVector3f& di
     ++maxPt;
   }
 
+#ifdef TARGET_PC
+  if (axis < 0) {
+    return false;
+  }
+#endif
   return tMin <= tMax;
 }
 

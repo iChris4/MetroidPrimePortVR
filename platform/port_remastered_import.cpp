@@ -1,4 +1,7 @@
 #include "port_remastered_import_internal.h"
+#include "port_remastered_effect_convert.h"
+#include "port_envfx_file.h"
+#include "port_retail_placement.h"
 
 namespace PortRemastered {
 namespace ImportDetail {
@@ -736,6 +739,51 @@ int ImportMovies(const Remastered& remastered, const fs::path& folder, const Mov
   return written;
 }
 
+// A plain 2D BC6H texture as the .dds the converter writes for it (ConvertIO::hdrDds): under BC
+// its blocks as they are, from the first mip within maxEdge; without BC (ASTC phones) RGBA16F,
+// at most 2048 on its longest edge, each level decoded from the source's own mip and any the
+// file lacks halved from the last. Linear either way, as BC6H is.
+bool EncodeHdrDds(const TxtrMipsBc6h& tex, int maxEdge, TextureFormat format, std::vector<uint8_t>& dds,
+                  std::string& error) {
+  uint32_t limit = maxEdge > 0 ? uint32_t(maxEdge) : 0xFFFFFFFFu;
+  if (format != TextureFormat::BC) {
+    limit = std::min(limit, 2048u);
+  }
+  size_t start = 0;
+  while (start + 1 < tex.mips.size() && std::max(tex.width >> start, tex.height >> start) > limit) {
+    ++start;
+  }
+  const uint32_t w = std::max(tex.width >> start, 1u), h = std::max(tex.height >> start, 1u);
+  if (w % 4 != 0 || h % 4 != 0) {
+    error = std::to_string(w) + "x" + std::to_string(h) + " is not whole blocks";
+    return false;
+  }
+  if (format == TextureFormat::BC) {
+    const std::vector<std::vector<uint8_t>> mips(tex.mips.begin() + std::ptrdiff_t(start), tex.mips.end());
+    dds = EncodeDdsBc6h(w, h, tex.isSigned, mips);
+  } else {
+    std::vector<std::vector<uint16_t>> mips;
+    for (uint32_t m = 0;; ++m) {
+      const uint32_t mw = std::max(w >> m, 1u), mh = std::max(h >> m, 1u);
+      if (start + m < tex.mips.size()) {
+        mips.emplace_back(size_t(mw) * mh * 4);
+        DecodeBc6hImage(tex.mips[start + m].data(), mw, mh, tex.isSigned, mips.back().data());
+      } else {
+        mips.push_back(HalveRgba16f(mips.back(), std::max(w >> (m - 1), 1u), std::max(h >> (m - 1), 1u)));
+      }
+      if (mw == 1 && mh == 1) {
+        break;
+      }
+    }
+    dds = EncodeDdsRgba16f(w, h, mips);
+  }
+  if (dds.empty()) {
+    error = "the mips do not match the texture's size";
+    return false;
+  }
+  return true;
+}
+
 // Each worker holds a whole model, its decoded buffers and a few RGBA
 // textures at once, so the count is bounded by memory as much as by cores.
 int DefaultThreads() {
@@ -751,7 +799,8 @@ int ImportGallery(const Remastered& remastered, const fs::path& target, int thre
   std::error_code ec;
   // Written beside the live folder and swapped in only if a picture came out, so a failed or
   // cancelled re-run keeps the old gallery.
-  const fs::path folder = target.string() + ".new";
+  fs::path folder = target;
+  folder += ".new";
   fs::remove_all(folder, ec);
   fs::create_directories(folder, ec);
   std::atomic<int> written{0};
@@ -761,28 +810,36 @@ int ImportGallery(const Remastered& remastered, const fs::path& target, int thre
     std::string error;
     TxtrImage image;
     std::vector<uint8_t> jpeg;
-    bool ok = DecodeTxtr(raw.data(), raw.size(), image, error);
-    ok = ok && PortGallery::EncodeGalleryJpeg(image.rgba.data(), int(image.width), int(image.height), jpeg);
-    if (ok) {
-      std::error_code fileError;
-      const fs::path tmp = folder / (std::string(name) + ".tmp");
-      {
-        std::ofstream file(tmp, std::ios::binary | std::ios::trunc);
-        file.write(reinterpret_cast<const char*>(jpeg.data()), std::streamsize(jpeg.size()));
-        file.close();
-        ok = bool(file);
-      }
-      // Renamed, so a picture cut short never has the name.
+    bool ok = false;
+    // On a worker thread: an exception out of here (bad_alloc on a huge
+    // picture) would end the program, as the other stages' workers guard.
+    try {
+      ok = DecodeTxtr(raw.data(), raw.size(), image, error);
+      ok = ok && PortGallery::EncodeGalleryJpeg(image.rgba.data(), int(image.width), int(image.height), jpeg);
       if (ok) {
-        fs::rename(tmp, folder / name, fileError);
-        ok = !fileError;
+        std::error_code fileError;
+        const fs::path tmp = folder / (std::string(name) + ".tmp");
+        {
+          std::ofstream file(tmp, std::ios::binary | std::ios::trunc);
+          file.write(reinterpret_cast<const char*>(jpeg.data()), std::streamsize(jpeg.size()));
+          file.close();
+          ok = bool(file);
+        }
+        // Renamed, so a picture cut short never has the name.
+        if (ok) {
+          fs::rename(tmp, folder / name, fileError);
+          ok = !fileError;
+        }
+        if (!ok) {
+          fs::remove(tmp, fileError);
+          error = "cannot write to the mod folder";
+        }
+      } else if (error.empty()) {
+        error = "cannot encode";
       }
-      if (!ok) {
-        fs::remove(tmp, fileError);
-        error = "cannot write to the mod folder";
-      }
-    } else if (error.empty()) {
-      error = "cannot encode";
+    } catch (const std::exception& e) {
+      ok = false;
+      error = e.what();
     }
     if (ok) {
       ++written;
@@ -1518,9 +1575,11 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
     if (reuse && !requiredFile.empty()) {
       reuse = std::find(old->second.files.begin(), old->second.files.end(), requiredFile) != old->second.files.end();
     }
+    // Said only once its files are in: a stage whose files are gone is made again.
     if (reuse) {
-      SetMessage("Reusing the previous import's " + name);
       reuse = LinkFiles(source, staging, old->second.files);
+      SetMessage(reuse ? "Reusing the previous import's " + name
+                       : "Making the " + name + " again: the previous import's files are gone");
     }
     if (reuse) {
       StageRecord& kept = made[name] = old->second;
@@ -1633,8 +1692,17 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
         decoded.height = int(image.height);
         decoded.rgba = std::move(image.rgba);
         decoded.srgb = image.srgb;
+        decoded.hdr = image.format == kTxtrFormatBc6hUfloat || image.format == kTxtrFormatBc6hSfloat;
         return true;
       });
+    };
+    io.hdrDds = [&](const ModelUuid& id, int maxEdge, std::vector<uint8_t>& dds, std::string& hdrError) {
+      std::vector<uint8_t> raw;
+      TxtrMipsBc6h tex;
+      if (!remastered.ReadTexture(id, raw, hdrError) || !ReadTxtrMipsBc6h(raw.data(), raw.size(), tex, hdrError)) {
+        return false;
+      }
+      return EncodeHdrDds(tex, maxEdge, WantedTextureFormat(), dds, hdrError);
     };
     io.volume = [&](const ModelUuid& id, Image& out, std::string& volumeError) {
       std::vector<uint8_t> raw, slices;
@@ -2068,6 +2136,7 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
     effectIO.typeOf = [&](const EffectGuid& id) { return remastered.EffectAssetType(id); };
     effectIO.retailId = [&](uint32_t id) { return retail.HasId(id); };
     effectIO.retail = [&](uint32_t type, uint32_t id, std::vector<uint8_t>& out) { return retail.Read(type, id, out); };
+    effectIO.retailHas = [&](uint32_t type, uint32_t id) { return retail.HasResource(type, id); };
     effectIO.freshId = [&](uint32_t seed) {
       std::lock_guard<std::mutex> lock(takenMutex);
       uint32_t id = seed;
@@ -2184,6 +2253,44 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
         PortLog::Write("remastered import: projectile %s\n", line.c_str());
       }
       AddLine("effects: " + std::to_string(effectIO.pairings.size()) + " projectile effects paired");
+
+      // The GENPs of the rooms' own effect actors, under ids no disc resource, other synthetic
+      // effect or other such GENP has (the rooms' .roomfx files name them).
+      std::unordered_set<uint32_t> synthetic;
+      for (const char* name : kSyntheticEffectNames) {
+        synthetic.insert(SyntheticEffectId(name));
+      }
+      for (const EffectIdRemap& remap : remaps) {
+        synthetic.insert(remap.synthetic);
+      }
+      for (const WpscSwoosh& addition : wpscSwooshes) {
+        synthetic.insert(addition.synthetic);
+      }
+      size_t roomGenps = 0, collisions = 0;
+      for (const RoomWorld& world : RoomWorlds()) {
+        RoomPak master;
+        std::vector<RoomPak> rooms;
+        remastered.World(world.dir, master, rooms);
+        rooms.push_back(master);
+        for (const EffectGuid& genp : RoomEffectGenps(rooms)) {
+          if (std::find(effectIO.roomOnly.begin(), effectIO.roomOnly.end(), genp) != effectIO.roomOnly.end()) {
+            continue;
+          }
+          ++roomGenps;
+          const uint32_t id = RoomEffectId(genp);
+          if (retail.HasId(id) || !synthetic.insert(id).second) {
+            ++collisions;
+            PortLog::Write("remastered import: room effect %s: its id %s is taken, left out\n",
+                           EffectGuidString(genp).c_str(), Hex8(id).c_str());
+            continue;
+          }
+          effectIO.roomOnly.push_back(genp);
+          std::lock_guard<std::mutex> lock(takenMutex);
+          taken.insert(id);
+        }
+      }
+      AddLine("effects: " + std::to_string(roomGenps) + " effects of the rooms' own effect actors, " +
+              std::to_string(collisions) + " left out (id taken)");
     }
     std::set<std::string> effectWritten;  // the files the effects wrote (the converters write on every thread)
     {
@@ -2286,6 +2393,9 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
   std::vector<RoomLiquid> liquids;
   std::vector<GeometryModel> geometry;
   std::unordered_map<ModelUuid, uint32_t, PakIdHash> geometryIds;
+  // Where the rooms put the retail models Remastered keeps under their retail ids.
+  std::mutex retailMutex;
+  std::vector<RetailPlacement> retailPlacements;
   auto geometryId = [&](const ModelUuid& uuid, uint32_t& id) {
     std::lock_guard<std::mutex> lock(takenMutex);
     const auto known = geometryIds.find(uuid);
@@ -2512,7 +2622,40 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
       io.piece = pieceId;
       io.liquid = liquidId;
       io.water = waterSurface;
+      // A room effect actor's PART: the one the effects step wrote for its GENP, else the disc's
+      // it carries the id of.
+      io.effect = [&](const std::array<uint8_t, 16>& genp) -> uint32_t {
+        std::error_code ec;
+        const uint32_t own = RoomEffectId(genp);
+        if (fs::exists(staging / PathFromString(Hex8(own) + ".PART"), ec)) {
+          return own;
+        }
+        std::array<uint8_t, 16> property = genp;
+        std::swap(property[0], property[3]);
+        std::swap(property[1], property[2]);
+        std::swap(property[4], property[5]);
+        std::swap(property[6], property[7]);
+        const std::optional<uint32_t> carried = EffectRetailId(property);
+        return carried && retail.HasId(*carried) ? *carried : 0;
+      };
+      // The retail PARTs the effects step wrote this GENP under by its own table (one GENP can
+      // stand for two, the lava spit's): only those the mod has a PART for, or the retail object
+      // would be pointed at nothing.
+      io.matched = [&](const std::array<uint8_t, 16>& genp) {
+        std::vector<uint32_t> out;
+        for (uint32_t id : MatchedRetailEffects(genp)) {
+          std::error_code ec;
+          if (fs::exists(staging / PathFromString(Hex8(id) + ".PART"), ec)) {
+            out.push_back(id);
+          }
+        }
+        return out;
+      };
       io.wantsGeometry = WantsGeometry;
+      io.retailModel = [&](const RetailPlacement& placement) {
+        std::lock_guard<std::mutex> lock(retailMutex);
+        retailPlacements.push_back(placement);
+      };
       io.cancelled = [] { return sCancel.load(); };
       // One line a room (what was left out and why): too many for the panel, so the log.
       io.log = [](const std::string& line) {
@@ -2536,7 +2679,9 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
     }
   };
   // What the room models stage needs from this one, as the record's `extra` lines:
-  // "g <uuid> <id> <joint> <liquid>" a model, "l <lava values>" a lava pool, in order.
+  // "g <uuid> <id> <joint> <liquid>" a model, "l <lava values>" a lava pool, in order;
+  // "r <uuid> <retail> <mrea> <object> <ok> <entity> <orient, 9> <offset x y z> <room>" a retail
+  // model's placement.
   if (roomsReused) {
     StageRecord& kept = made["rooms"];
     roomFiles = int(kept.counts["files"]);
@@ -2552,6 +2697,24 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
           g.uuid[b] = uint8_t(std::strtoul(uuid.substr(b * 2, 2).c_str(), nullptr, 16));
         }
         geometry.push_back(g);
+      } else if (tag == "r") {
+        std::string uuid;
+        std::string orient[9], offset[3];
+        RetailPlacement& p = retailPlacements.emplace_back();
+        in >> uuid >> std::hex >> p.retail >> p.mrea >> p.object >> std::dec >> p.ok >> p.entity;
+        for (std::string& value : orient) {
+          in >> value;
+        }
+        in >> offset[0] >> offset[1] >> offset[2] >> p.room;
+        for (size_t b = 0; b < p.model.size() && b * 2 + 1 < uuid.size(); ++b) {
+          p.model[b] = uint8_t(std::strtoul(uuid.substr(b * 2, 2).c_str(), nullptr, 16));
+        }
+        for (int i = 0; i < 9; ++i) {
+          p.orient[i / 3][i % 3] = std::strtod(orient[i].c_str(), nullptr);
+        }
+        for (int i = 0; i < 3; ++i) {
+          p.offset[i] = std::strtod(offset[i].c_str(), nullptr);
+        }
       } else if (tag == "l") {
         RoomLiquid& liquid = liquids.emplace_back();
         for (float& value : liquid.lava) {
@@ -2590,9 +2753,283 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
       }
       stage.extra.push_back(line);
     }
+    for (const RetailPlacement& p : retailPlacements) {
+      char line[256];
+      std::snprintf(line, sizeof(line), "r %s %08X %08X %08X %d %d", UuidText(p.model).c_str(), p.retail, p.mrea,
+                    p.object, int(p.ok), p.entity);
+      std::string text = line;
+      for (int i = 0; i < 12; ++i) {
+        std::snprintf(line, sizeof(line), " %a", i < 9 ? p.orient[i / 3][i % 3] : p.offset[i - 9]);
+        text += line;
+      }
+      stage.extra.push_back(text + " " + p.room);
+    }
     endStage();
     if (brdfMissing) {
       made.erase("rooms");
+    }
+  }
+
+  // The retail models Remastered keeps under their retail ids that the table doesn't pair. The
+  // orient and offset are the model's own (where its vertices sit against retail's), so one
+  // replaces its retail model when the retail objects paired with their entities (RetailPlacement)
+  // all found it at one transform: "paired", or "partial" when other objects naming it are in an
+  // area whose count of them differs from its room's entities. One whose placements differ
+  // ("per-instance": Remastered moved some of its objects on their own), or that no object paired
+  // with ("unpaired"), stays retail. reports/retailmodels.tsv lists each with its placements. Other
+  // assets share the id prefix (textures, effects), so only Remastered's models count.
+  {
+    std::sort(retailPlacements.begin(), retailPlacements.end(), [](const RetailPlacement& a, const RetailPlacement& b) {
+      return std::tie(a.retail, a.mrea, a.object, a.room) < std::tie(b.retail, b.mrea, b.object, b.room);
+    });
+    size_t tableCount = 0;
+    const TableEntry* tableEntries = Table(tableCount);
+    std::unordered_map<uint32_t, const TableEntry*> inTable;
+    for (size_t i = 0; i < tableCount; ++i) {
+      inTable.emplace(tableEntries[i].retail, &tableEntries[i]);
+    }
+    struct RetailModel {
+      ModelUuid uuid;
+      uint32_t retail;
+      double orient[3][3];
+      double offset[3];
+      bool modelSpace = false;  // per-instance: converted untransformed, placed per object
+    };
+    std::vector<PortRetailPlacement::Record> placementRecords;
+    // Per-instance models: the largest difference between two of a model's placements, by
+    // decade, so the report shows whether they differ by float noise or by real moves.
+    std::map<int, int> orientSpread, offsetSpread;
+    int mirrored = 0;
+    std::string spreadReport = "retail\tplacements\torient spread\toffset spread\tmirrored\n";
+    const auto decade = [](double v) { return v <= 0 ? -99 : int(std::floor(std::log10(v))); };
+    std::vector<RetailModel> retailModels;
+    std::string report = "retail\tstatus\torient\toffset\ttable orient\ttable offset\t"
+                         "placements (room object entity ok orient offset)\n";
+    std::map<std::string, int> statusCount;
+    const auto offsetText = [](const double* o) {
+      char text[96];
+      std::snprintf(text, sizeof(text), "%.3f,%.3f,%.3f", o[0], o[1], o[2]);
+      return std::string(text);
+    };
+    const auto orientText = [](const double (*m)[3]) {
+      std::string text;
+      for (int i = 0; i < 9; ++i) {
+        char value[32];
+        std::snprintf(value, sizeof(value), "%s%.3f", i == 0 ? "" : ",", m[i / 3][i % 3] + 0.0);
+        text += value;
+      }
+      return text;
+    };
+    // Placements agree only when every component is the same float: ROOM and SCLY store their
+    // transforms as float, so a difference there is an object Remastered placed on its own.
+    const auto same = [](const RetailPlacement& a, const RetailPlacement& b) {
+      for (int i = 0; i < 9; ++i) {
+        if (float(a.orient[i / 3][i % 3]) != float(b.orient[i / 3][i % 3])) {
+          return false;
+        }
+      }
+      return float(a.offset[0]) == float(b.offset[0]) && float(a.offset[1]) == float(b.offset[1]) &&
+             float(a.offset[2]) == float(b.offset[2]);
+    };
+    for (auto first = retailPlacements.begin(); first != retailPlacements.end();) {
+      const auto last = std::find_if(first, retailPlacements.end(),
+                                     [&](const RetailPlacement& p) { return p.retail != first->retail; });
+      if (!remastered.HasModel(first->model)) {
+        first = last;
+        continue;
+      }
+      const auto ok = std::find_if(first, last, [](const RetailPlacement& p) { return p.ok; });
+      const bool all = std::all_of(first, last, [](const RetailPlacement& p) { return p.ok; });
+      const bool agree =
+          ok != last && std::all_of(first, last, [&](const RetailPlacement& p) { return !p.ok || same(p, *ok); });
+      const auto table = inTable.find(first->retail);
+      const bool perInstance = ok != last && !agree;
+      const char* status = ok == last                  ? "unpaired"
+                           : perInstance && !all       ? "per-instance unplaced"
+                           : perInstance && table != inTable.end() ? "per-instance table"
+                           : perInstance               ? "per-instance"
+                           : table != inTable.end()    ? "table"
+                           : all                       ? "paired"
+                                                       : "partial";
+      ++statusCount[status];
+      char head[32];
+      std::snprintf(head, sizeof(head), "%08X\t", first->retail);
+      report += head + std::string(status) + "\t" + (agree ? orientText(ok->orient) : "-") + "\t" +
+                (agree ? offsetText(ok->offset) : "-") + "\t";
+      if (table != inTable.end()) {
+        double orient[3][3];
+        for (int i = 0; i < 9; ++i) {
+          orient[i / 3][i % 3] = table->second->orient[i];
+        }
+        report += orientText(orient) + "\t" + offsetText(table->second->offset) + "\t";
+      } else {
+        report += "-\t-\t";
+      }
+      for (auto p = first; p != last; ++p) {
+        char text[64];
+        std::snprintf(text, sizeof(text), " %08X #%d %d ", p->object, p->entity, int(p->ok));
+        report += (p == first ? "" : "; ") + p->room + text + orientText(p->orient) + " " + offsetText(p->offset);
+      }
+      report += '\n';
+      int flips = 0;
+      if (perInstance) {
+        double maxOrient = 0, maxOffset = 0;
+        for (auto a = first; a != last; ++a) {
+          const double(*o)[3] = a->orient;
+          const double det = o[0][0] * (o[1][1] * o[2][2] - o[1][2] * o[2][1]) -
+                             o[0][1] * (o[1][0] * o[2][2] - o[1][2] * o[2][0]) +
+                             o[0][2] * (o[1][0] * o[2][1] - o[1][1] * o[2][0]);
+          flips += a->ok && det < 0;
+          for (auto b = a + 1; b != last; ++b) {
+            if (!a->ok || !b->ok) {
+              continue;
+            }
+            for (int i = 0; i < 9; ++i) {
+              maxOrient = std::max(maxOrient, std::fabs(a->orient[i / 3][i % 3] - b->orient[i / 3][i % 3]));
+            }
+            for (int i = 0; i < 3; ++i) {
+              maxOffset = std::max(maxOffset, std::fabs(a->offset[i] - b->offset[i]));
+            }
+          }
+        }
+        ++orientSpread[decade(maxOrient)];
+        ++offsetSpread[decade(maxOffset)];
+        mirrored += flips;
+        if (all && flips != 0 && table == inTable.end()) {
+          // No runtime path for it (below) and no single placement to bake: it stays retail.
+          --statusCount[status];
+          ++statusCount["per-instance mirrored"];
+        }
+        char line[160];
+        std::snprintf(line, sizeof(line), "%08X\t%d\t%.3g\t%.3g\t%d\n", first->retail, int(last - first),
+                      maxOrient, maxOffset, flips);
+        spreadReport += line;
+      }
+      if (perInstance && all && flips == 0 && table == inTable.end()) {
+        // Remastered moved some of this model's objects on their own: the model converts once,
+        // untransformed, and each object's draw goes through its own placement. A mirrored
+        // placement stays out: the baked conversion swaps its winding, a runtime one could not.
+        RetailModel& m = retailModels.emplace_back();
+        std::copy(first->model.begin(), first->model.end(), m.uuid.begin());
+        m.retail = first->retail;
+        m.modelSpace = true;
+        for (auto p = first; p != last; ++p) {
+          PortRetailPlacement::Record& r = placementRecords.emplace_back();
+          r.mrea = p->mrea;
+          r.editorId = p->object;
+          r.model = p->retail;
+          for (int row = 0; row < 3; ++row) {
+            for (int c = 0; c < 3; ++c) {
+              r.correction[row * 4 + c] = float(p->orient[row][c]);
+            }
+            r.correction[row * 4 + 3] = float(p->offset[row]);
+          }
+        }
+      } else if (agree && table == inTable.end()) {
+        RetailModel& m = retailModels.emplace_back();
+        std::copy(first->model.begin(), first->model.end(), m.uuid.begin());
+        m.retail = first->retail;
+        std::copy(&ok->orient[0][0], &ok->orient[0][0] + 9, &m.orient[0][0]);
+        std::copy(ok->offset, ok->offset + 3, m.offset);
+      }
+      first = last;
+    }
+    std::string list;
+    for (const RetailModel& m : retailModels) {
+      list += UuidText(m.uuid) + " " + Hex8(m.retail) + " " +
+              (m.modelSpace ? std::string("model space") : orientText(m.orient) + " " + offsetText(m.offset)) + "\n";
+    }
+    const std::vector<uint8_t> placementFile = PortRetailPlacement::Encode(placementRecords);
+    list += "placements " + Hex64(Hash64(std::string(placementFile.begin(), placementFile.end()))) + "\n";
+    {
+      std::string counts;
+      for (const auto& [status, n] : statusCount) {
+        counts += " " + status + " " + std::to_string(n);
+      }
+      PortLog::Write("remastered import: retail models placed by the rooms:%s\n", counts.c_str());
+      std::string spreads;
+      for (const auto& [d, n] : orientSpread) {
+        spreads += " 1e" + std::to_string(d) + ":" + std::to_string(n);
+      }
+      spreads += "; offset";
+      for (const auto& [d, n] : offsetSpread) {
+        spreads += " 1e" + std::to_string(d) + ":" + std::to_string(n);
+      }
+      PortLog::Write("remastered import: per-instance spread by decade, orient%s; %d mirrored placements; "
+                     "%zu placements\n",
+                     spreads.c_str(), mirrored, placementRecords.size());
+    }
+    if (!beginStage("retailmodels", std::to_string(ImportStage::kModels) + " list " + Hex64(Hash64(list)) + keyConverter,
+                    false, "reports/parts/retailmodels.materials.tsv")) {
+      std::error_code reportError;
+      fs::create_directories(staging / "reports", reportError);
+      writeFile(staging / "reports" / "retailmodels.tsv", std::vector<uint8_t>(report.begin(), report.end()));
+      writeFile(staging / "reports" / "retailmodels.spread.tsv",
+                std::vector<uint8_t>(spreadReport.begin(), spreadReport.end()));
+      writeFile(staging / PortRetailPlacement::kFileName, placementFile);
+      std::atomic<size_t> nextRetail{0};
+      std::atomic<int> retailDone{0};
+      std::mutex retailClaimMutex;
+      std::unordered_set<uint32_t> retailClaimed;
+      auto retailWork = [&](int worker) {
+        YieldToGame();
+        ConvertIO io = makeIO(worker, staging);
+        io.claim = [&](uint32_t id) {
+          std::lock_guard<std::mutex> lock(retailClaimMutex);
+          return retailClaimed.insert(id).second;
+        };
+        Converter converter(std::move(io));
+        for (size_t i = nextRetail++; i < retailModels.size() && !sCancel; i = nextRetail++) {
+          const RetailModel& m = retailModels[i];
+          ConvertOptions options;
+          options.retail = m.retail;
+          options.source = UuidText(m.uuid);
+          // The placement's orient after kR2G, the default orient; a per-instance model keeps
+          // the default, its placement applied at draw time.
+          const ConvertOptions defaults;
+          for (int r = 0; r < 3 && !m.modelSpace; ++r) {
+            for (int c = 0; c < 3; ++c) {
+              options.orient[r][c] = m.orient[r][0] * defaults.orient[0][c] + m.orient[r][1] * defaults.orient[1][c] +
+                                     m.orient[r][2] * defaults.orient[2][c];
+            }
+          }
+          if (!m.modelSpace) {
+            std::copy(m.offset, m.offset + 3, options.offset);
+          }
+          options.pbr = true;
+          std::string modelError;
+          bool ok = false;
+          // As for the models: an exception here would terminate the game.
+          try {
+            std::vector<uint8_t> raw;
+            Model model;
+            ok = remastered.ReadModel(m.uuid, raw, modelError) && ParseModel(raw.data(), raw.size(), model, modelError) &&
+                 converter.Convert(model, options, modelError);
+          } catch (const std::exception& e) {
+            modelError = e.what();
+          }
+          if (ok) {
+            ++retailDone;
+          } else {
+            AddLine("retail model " + Hex8(m.retail) + ": " + modelError);
+          }
+        }
+      };
+      workers.clear();
+      for (int i = 1; i < std::max(threads, DefaultThreads()); ++i) {
+        workers.emplace_back(retailWork, i);
+      }
+      retailWork(0);
+      for (std::thread& worker : workers) {
+        worker.join();
+      }
+      if (sCancel) {
+        fail("Cancelled.");
+        return;
+      }
+      made["retailmodels"].counts["models"] = retailDone.load();
+      writeReportPart("retailmodels", false);
+      endStage();
     }
   }
 
@@ -2962,6 +3399,85 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
         }
       } else {
         AddLine("thermal visor gradient: " + (lutError.empty() ? std::string("unexpected size") : lutError));
+      }
+    }
+    // The EnvironmentFX textures (port_envfx_file.h) as envfx.bin: the rain, snow and underwater
+    // flakes and the fade gradient the native EnvFX draw samples. All four or no file.
+    {
+      // A GUID string as the bytes of a ModelUuid, in the order written, else the mixed-endian one.
+      const auto uuids = [](const char* text, ModelUuid& plain, ModelUuid& swapped) {
+        size_t n = 0;
+        for (const char* c = text; *c != 0 && n < 16; ++c) {
+          if (*c == '-') {
+            continue;
+          }
+          const auto hex = [](char h) { return h <= '9' ? h - '0' : (h | 0x20) - 'a' + 10; };
+          plain[n++] = uint8_t(hex(c[0]) << 4 | hex(c[1]));
+          ++c;
+        }
+        swapped = plain;
+        std::swap(swapped[0], swapped[3]);
+        std::swap(swapped[1], swapped[2]);
+        std::swap(swapped[4], swapped[5]);
+        std::swap(swapped[6], swapped[7]);
+      };
+      PortEnvFx::Assets envfx;
+      std::string envfxError;
+      for (int i = 0; i < 4 && envfxError.empty(); ++i) {
+        const char* guid = i == 0 ? PortEnvFx::kGradientGuid : PortEnvFx::kFlakeGuid[i - 1];
+        PortEnvFx::Image& image = i == 0 ? envfx.gradient : envfx.flake[i - 1];
+        ModelUuid plain{};
+        ModelUuid swapped{};
+        uuids(guid, plain, swapped);
+        std::vector<uint8_t> raw;
+        std::string error;
+        if (!remastered.ReadTexture(plain, raw, error) && !remastered.ReadTexture(swapped, raw, error)) {
+          envfxError = std::string(guid) + ": " + error;
+          break;
+        }
+        if (i == 0) {
+          TxtrImage gradient;
+          if (!DecodeTxtr(raw.data(), raw.size(), gradient, error)) {
+            envfxError = std::string(guid) + ": " + error;
+            break;
+          }
+          // DecodeTxtr's R8 is already (v, v, v, 255) or (v, 0, 0, 255); the draw reads .r.
+          image.width = gradient.width;
+          image.height = gradient.height;
+          image.layers = 1;
+          image.rgba.assign(gradient.rgba.size(), 0);
+          for (size_t p = 0; p + 3 < gradient.rgba.size(); p += 4) {
+            image.rgba[p] = gradient.rgba[p];
+            image.rgba[p + 3] = 255;
+          }
+          continue;
+        }
+        if (!DecodeTxtrLayersRgba8(raw.data(), raw.size(), image.width, image.height, image.layers, image.rgba,
+                                   error)) {
+          // The underwater flake may be a plain 2D texture: one layer.
+          TxtrImage single;
+          if (!DecodeTxtr(raw.data(), raw.size(), single, error)) {
+            envfxError = std::string(guid) + ": " + error;
+            break;
+          }
+          image.width = single.width;
+          image.height = single.height;
+          image.layers = 1;
+          image.rgba = std::move(single.rgba);
+        }
+      }
+      PortEnvFx::Assets check;
+      std::vector<uint8_t> file;
+      if (envfxError.empty()) {
+        file = PortEnvFx::Serialize(envfx);
+        if (!PortEnvFx::Parse(file.data(), file.size(), check, envfxError)) {  // the sizes the draw expects
+          envfxError = "unexpected size: " + envfxError;
+        }
+      }
+      if (!envfxError.empty()) {
+        AddLine("EnvironmentFX textures: " + envfxError);
+      } else if (!makeIO(0, hudFolder).write("envfx.bin", file)) {
+        AddLine("EnvironmentFX textures: cannot write");
       }
     }
     if (hudFrames == 0 && compassModels == 0) {
@@ -3502,10 +4018,14 @@ bool StartInstall() {
 bool ApplyPendingImport() {
   const fs::path staging = StagingFolder();
   // A running import is still writing there.
-  if (staging.empty() || ImportStatus().running) {
+  if (ImportStatus().running) {
     return false;
   }
-  return MoveIntoPlace(staging);
+  const bool dread = ApplyPendingDreadImport();
+  if (staging.empty()) {
+    return dread;
+  }
+  return MoveIntoPlace(staging) || dread;
 }
 
 void RemoveLegacyImport() {

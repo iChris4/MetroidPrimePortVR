@@ -8,6 +8,7 @@
 #include <Kyoto/Graphics/CModelFlags.hpp>
 
 class CScriptColorModulate : public CEntity {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 public:
   enum EBlendMode {
     kBM_Alpha,

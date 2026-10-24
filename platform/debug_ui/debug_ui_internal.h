@@ -94,6 +94,7 @@ extern bool sSharpScanWindow;
 extern bool sGeneratedBallLooks;
 extern bool sAutoAim;
 extern int sScanSpeed;
+extern int sHintDelay;
 extern bool sSecondaryCrosshairs;
 extern bool sMenuStandardButtons;
 extern std::atomic< int > sPromptGlyphs; // index into kPromptGlyphs
@@ -122,6 +123,7 @@ extern bool sCheats;
 extern bool sSkippableCutscenes;
 extern bool sBeamDoorsStayUnlocked;
 extern bool sStackBeams;
+extern int sWalkSpeed;
 extern bool sRevision100Compatibility;
 extern std::string sTextLanguage;
 extern int sElevatorRide;
@@ -132,6 +134,7 @@ extern bool sSaveStateRoomState;
 extern std::atomic< bool > sTouchBeamShift;
 extern std::atomic< bool > sTouchTurboFire;
 extern bool sInvulnerable;
+extern bool sPhazonBeamCheat;
 extern int sInvulnerableRun;
 extern bool sLogFile;
 extern std::mutex sRandoMutex;
@@ -300,6 +303,9 @@ void StoreSetting(T& setting, const V& value) {
 void LoadSettings();
 void SaveSettings();
 std::string SettingsText();
+// Records which settings the MP_* overrides changed from fileText (SettingsText
+// before they were applied), so SaveSettings keeps the file's values for them.
+void NoteEnvOverrides(const std::string& fileText);
 std::string LoggedSettingValue(const std::string& key, const std::string& value);
 void LogSettingChanges(const std::string& text);
 extern std::map< std::string, std::string > sLoggedSettings;
@@ -336,6 +342,8 @@ extern char sSearch[128];
 int TakeJumpPage();
 void DrawPageBody(const DebugPage& page);
 bool SubTab(const char* page, const char* name);
+// A page's section, opened when MP_DEBUG_TAB names it.
+bool StartSection(const char* page, const char* name);
 void BeginSearchJump();
 void EndSearchJump();
 void DrawSearchField();
@@ -368,6 +376,9 @@ extern PortDynamicRes::Controller sDynController;
 extern double sDynGpuMs;
 float EffectiveRenderScale();
 void ApplyGraphicsQuality();
+float DynamicResTop();
+// Lines of the frame buffer drawn at `scale` (0 = auto) in the current window.
+int DrawnLines(float scale);
 int EffectiveMsaa();
 void ApplyPresentSharpness();
 double DynamicResTargetFps();
@@ -389,6 +400,12 @@ extern std::string sPalLanguagesPick;
 // Which 3 of the same picker: a PAL/JP GameCube or Trilogy image for the full Flaahgra theme.
 inline constexpr int kFlaahgraPick = 3;
 extern std::string sFlaahgraPick;
+// Which 4 of the same picker: the Metroid Dread image for the Dread Samus import (desktop).
+inline constexpr int kDreadPick = 4;
+// Not a picker: OpenRemasteredPick's descriptor slot for the Remastered key file the Dread import
+// opens again, so the Remastered panel's own descriptor stays open (Android).
+inline constexpr int kDreadKeysSlot = 5;
+extern std::string sDreadPick;
 std::string RemasteredPickFile(int which);
 void TakeRemasteredPickFiles();
 void OpenRemasteredDialog(int which);
@@ -421,8 +438,12 @@ void DrawMenuHintToast();
 void DrawDiscReadFailedAlert();
 
 // mods.cpp
+void DrawImportKeys();
 void DrawRemasteredImport();
+void DrawDreadSamusImport();
 void DrawMods();
+// remastered.cpp: the Mods page's built-in mods (Remastered's models, Dread's Samus).
+void DrawBuiltinMods();
 
 // game_sections.cpp
 void DrawCutscenesSection();
@@ -457,10 +478,10 @@ void DrawCheats();
 void DrawFreeCam();
 void DrawRendering();
 void DrawLogSection();
+void DrawDiscCheckSection();
 void DrawDebugTab();
 void DrawPerformanceTab();
 void DrawLanguageSection();
-void DrawRemasteredTab();
 void DrawRemasteredDebug();
 void DrawSaveStatesTab();
 void DrawTrackerTab();

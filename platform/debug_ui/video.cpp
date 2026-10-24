@@ -5,6 +5,7 @@
 
 #include "port_env.h"
 #include "port_debug.h"
+#include "port_third_person.h"
 #include "port_graphics_backend.h"
 #include "port_gyro_motion.h"
 #include "port_dynamic_res.h"
@@ -14,6 +15,9 @@
 #include "port_config_reset.h"
 #include "port_textures.h"
 #include "port_gpu_driver.h"
+#include "port_mods.h"
+#include "port_savestate.h"
+#include "port_suit_colours.h"
 
 #include "MetroidPrime/Cameras/CCameraManager.hpp"
 
@@ -31,6 +35,7 @@
 #include <cstdio>
 #include <mutex>
 #include <optional>
+#include <random>
 #include <string>
 #include <utility>
 #include <vector>
@@ -50,7 +55,6 @@ void DrawVideoDisplay() {
   bool vsync = sVsyncEnabled;
   if (ImGui::Checkbox("Vsync", &vsync)) {
     SetVsyncEnabled(vsync);
-    MarkDirty();
   }
   ImGui::SetItemTooltip("Holds frames to the display's refresh rate.\n"
                         "Off while the headset runs: the window only mirrors it.");
@@ -80,11 +84,71 @@ void DrawVideoDisplay() {
   if (ImGui::Checkbox("Suit-coloured morph balls", &ballLooks)) {
     SetGeneratedBallLooks(ballLooks);
   }
-  ImGui::SetItemTooltip("On: every suit's morph ball takes its suit's colours, made from Varia's\n"
-                        "and recoloured from your disc at boot: a Power Suit spider ball, and\n"
-                        "Gravity and Phazon Suit balls before the Spider Ball.\n"
-                        "Off: the original, where the Power Suit's spider ball is the Gravity\n"
-                        "Suit's, and the Gravity and Phazon Suits use the Power Suit's ball.");
+  ImGui::SetItemTooltip(
+      "On: every suit's morph ball takes its suit's colours, recoloured from your disc at\n"
+      "boot, including a Power Suit spider ball.\nOff: the original, where suits borrow each "
+      "other's balls.");
+
+  ImGui::SeparatorText("Suit colours");
+  {
+    static int sSuitColoursSuit = 0;
+    const PortSuitColours::Suit& suit = PortSuitColours::SuitInfo(sSuitColoursSuit);
+    if (ImGui::BeginCombo("Suit", suit.name)) {
+      for (int i = 0; i < PortSuitColours::kSuitCount; ++i) {
+        const bool custom = !PortSuitColours::PicksKey(i).empty();
+        const std::string label = std::string(PortSuitColours::SuitInfo(i).name) + (custom ? " *" : "");
+        if (ImGui::Selectable(label.c_str(), i == sSuitColoursSuit)) {
+          sSuitColoursSuit = i;
+        }
+      }
+      ImGui::EndCombo();
+    }
+    ImGui::SetItemTooltip(
+        "Each suit's colours, saved per suit (* = changed). Recoloured from your disc, so\n"
+        "the change shows everywhere: cutscenes, pause screen, arm cannon, morph ball.\nA mod's "
+        "own suit textures (the Remastered import) are left alone.");
+    for (int slot = 0; slot < suit.slots; ++slot) {
+      ImGui::PushID(slot);
+      const std::optional< uint32_t > picked = PortSuitColours::Colour(sSuitColoursSuit, slot);
+      const uint32_t shown = picked ? *picked : PortSuitColours::DefaultColour(sSuitColoursSuit, slot);
+      float rgb[3] = {float((shown >> 16) & 255) / 255.f, float((shown >> 8) & 255) / 255.f,
+                      float(shown & 255) / 255.f};
+      if (ImGui::ColorEdit3(suit.slotNames[slot], rgb, ImGuiColorEditFlags_NoInputs)) {
+        uint32_t value = 0;
+        for (const float c : rgb) {
+          value = (value << 8) | uint32_t(std::clamp(std::lround(c * 255.f), 0l, 255l));
+        }
+        PortSuitColours::SetColour(sSuitColoursSuit, slot, value);
+        MarkDirty();
+      }
+      if (sSuitColoursSuit == 3) {
+        ImGui::SetItemTooltip("The Phazon Suit's body is nearly black: only its glow and accent change.");
+      }
+      ImGui::SameLine();
+      ImGui::BeginDisabled(!picked);
+      if (ImGui::SmallButton("Reset")) {
+        PortSuitColours::SetColour(sSuitColoursSuit, slot, std::nullopt);
+        MarkDirty();
+      }
+      ImGui::EndDisabled();
+      ImGui::PopID();
+    }
+    if (ImGui::Button("Random")) {
+      PortSuitColours::Randomise(sSuitColoursSuit, std::random_device{}());
+      MarkDirty();
+    }
+    ImGui::SetItemTooltip("Random colours for every slot of this suit; Apply to see them.");
+    ImGui::SameLine();
+    const bool pending = PortSuitColours::Pending(!sOriginalExperience);
+    ImGui::BeginDisabled(!pending || PortMods::Suspended());
+    if (ImGui::Button("Apply suit colours")) {
+      PortSaveState::RequestModReload();
+    }
+    ImGui::EndDisabled();
+    ImGui::SetItemTooltip(
+        "Rebuilds the recoloured textures and reloads the mods (a moment; the game\n"
+        "carries on). Original experience uses the original colours.");
+  }
 
   ImGui::SeparatorText("HUD and view");
   bool hudWide = sHudWide;
@@ -104,9 +168,10 @@ void DrawVideoDisplay() {
   if (ImGui::SliderInt("Scan image spread", &scanSpread, kScanSpreadMin, kScanSpreadMax, "%d%%")) {
     SetScanSpread(scanSpread);
   }
-  ImGui::SetItemTooltip("How far the widescreen HUD moves the scan visor's side panels and images\n"
-                        "toward the screen edges. 0%% keeps them where they are at 4:3, clear of\n"
-                        "touch controls; 100%% puts them at the edges with the rest of the HUD.");
+  ImGui::SetItemTooltip(
+      "How far the widescreen HUD moves the scan visor's side panels toward the screen\n"
+      "edges. 0%% keeps them at the 4:3 position, clear of touch controls; 100%% puts\n"
+      "them at the edges.");
   // Issue #144: the game's Visor Opacity is one value for every visor and never reaches the
   // energy readout.
   static const char* const kHudOpacityLabels[kHudOpacityPartCount] = {
@@ -127,12 +192,12 @@ void DrawVideoDisplay() {
       SetHudOpacity(part, percent);
     }
     ImGui::EndDisabled();
-    ImGui::SetItemTooltip(part == kHudOpacityEnergy
-                              ? "The energy bar, tanks, digits and low-energy warning. The game draws\n"
-                                "them at full strength whatever Visor Opacity is; tick the box to have\n"
-                                "them follow it. The ENERGY label and its frame belong to the visor's HUD."
-                              : "This visor's HUD, the visor and beam menus and the minimap while it is\n"
-                                "on. Tick the box to use the game's Visor Opacity, as the game does.");
+    ImGui::SetItemTooltip(
+        part == kHudOpacityEnergy
+            ? "The energy bar, tanks, digits and low-energy warning. The game draws\nthem at full "
+              "strength whatever Visor Opacity is; tick the box to follow it."
+            : "This visor's HUD, the visor and beam menus and the minimap.\nTick the box to use "
+              "the game's Visor Opacity.");
     ImGui::PopID();
   }
   if (ImGui::SliderInt("Crosshair opacity", &sCrosshairOpacity, kCrosshairOpacityMin,
@@ -148,9 +213,9 @@ void DrawVideoDisplay() {
       sCrosshairStyle = static_cast< PortDebug::ECrosshairStyle >(style);
       MarkDirty();
     }
-    ImGui::SetItemTooltip("Classic: the game's own crosshair model. Remastered: rings and three spikes\n"
-                          "in the Remastered design, drawn by the port. Same size, colour and opacity\n"
-                          "settings. Original experience uses Classic.");
+    ImGui::SetItemTooltip(
+        "Classic: the game's own crosshair model. Remastered: rings and three spikes in\n"
+        "the Remastered design. Original experience uses Classic.");
   }
   if (ImGui::Checkbox("Custom crosshair colour", &sCrosshairCustomColor)) {
     MarkDirty();
@@ -166,14 +231,23 @@ void DrawVideoDisplay() {
   if (ImGui::Checkbox("Secondary crosshairs", &sSecondaryCrosshairs)) {
     MarkDirty();
   }
-  ImGui::SetItemTooltip("The reticle on the target Lock-On would pick (combat visor), and the ring or\n"
-                        "crosshair on it in the X-Ray and Thermal visors. Off hides them; the lock-on\n"
-                        "reticle and the scan visor's target boxes stay.");
+  ImGui::SetItemTooltip(
+      "The reticle on Lock-On's target (combat visor), and the ring or crosshair on it\n"
+      "in X-Ray and Thermal. Off hides them; the lock-on reticle and scan target\n"
+      "boxes stay.");
   bool hideHelmet = sHideHelmet;
   if (ImGui::Checkbox("Hide helmet", &hideHelmet)) {
     SetHideHelmet(hideHelmet);
   }
-  ImGui::SameLine();
+  bool thirdPerson = PortThirdPerson::Enabled();
+  if (ImGui::Checkbox("Third-person camera", &thirdPerson)) {
+    PortThirdPerson::SetEnabled(thirdPerson);
+    MarkDirty();
+  }
+  ImGui::SetItemTooltip(
+      "Plays from behind Samus's shoulder (not the morph ball or cutscenes), showing her\n"
+      "body and hiding the arm cannon and helmet. Distance, shoulder and height:\n"
+      "console `thirdperson`, or third_person_* in the settings file.");
   bool hideVisorFx = sHideVisorEffects;
   if (ImGui::Checkbox("Hide visor effects", &hideVisorFx)) {
     SetHideVisorEffects(hideVisorFx);
@@ -314,10 +388,10 @@ void DrawGpuDriver() {
     }
     ImGui::EndCombo();
   }
-  ImGui::SetItemTooltip("Loads a custom Vulkan driver instead of the phone's, such as Mesa Turnip for\n"
-                        "Adreno GPUs. Install one from a driver zip (the kind Android emulators use).\n"
-                        "Takes effect after a restart; if it crashes starting, the next start goes\n"
-                        "back to the system driver.");
+  ImGui::SetItemTooltip(
+      "Loads a custom Vulkan driver instead of the phone's, such as Mesa Turnip for\n"
+      "Adreno GPUs, from a driver zip. Restart to apply; if it crashes at start, the\n"
+      "next start goes back to the system driver.");
   // main() already switched a driver that crashed back to System: nothing to restart for.
   const bool crashedBack = sGpuDriver.empty() && !PortGpuDriver::LoadError().empty();
   if (sGpuDriver != sGpuDriverAtStart && !crashedBack) {
@@ -345,8 +419,8 @@ void DrawGpuDriver() {
                        PortGpuDriver::LoadError().c_str());
   }
   ImGui::TextDisabled("Running: %s", aurora_get_gpu_driver());
-  ImGui::SetItemTooltip("What the GPU reports right now. A loaded custom driver says so here\n"
-                        "(Turnip: \"Mesa Turnip ...\"); otherwise the phone's driver is in use.");
+  ImGui::SetItemTooltip("What the GPU reports now. A loaded custom driver says so here\n"
+                        "(Turnip: \"Mesa Turnip ...\").");
   if (!sGpuDriverStatus.empty()) {
     ImGui::TextWrapped("%s", sGpuDriverStatus.c_str());
   }
@@ -386,35 +460,62 @@ void DrawVideoQuality() {
     if (ImGui::Checkbox("Per-pixel lighting", &perPixel)) {
       SetPerPixelLighting(perPixel);
     }
-    ImGui::SetItemTooltip("Sums the game's lights per pixel instead of per vertex, like Dolphin's option:\n"
-                          "smoother lighting on low-poly models. Not the original look. Remastered models\n"
-                          "shade per pixel already.");
+    ImGui::SetItemTooltip(
+        "Sums the game's lights per pixel instead of per vertex, like Dolphin: smoother\n"
+        "on low-poly models, not the original look. Remastered models already shade per\n"
+        "pixel.");
     bool sunShadows = sSunShadows;
     if (ImGui::Checkbox("Sun shadows", &sunShadows)) {
       SetSunShadows(sunShadows);
     }
-    ImGui::SetItemTooltip("Sun shadows: the port's shadow from the sun (outdoor rooms). Remastered does not\n"
-                          "draw sun shadows; turn off for the Remastered look.");
+    ImGui::SetItemTooltip(
+        "The port's sun shadow in outdoor rooms. Remastered has none: turn off for its look.");
     bool projShadows = sProjectedShadows;
     if (ImGui::Checkbox("Projected actor shadows", &projShadows)) {
       SetProjectedShadows(projShadows);
     }
-    ImGui::SetItemTooltip("Remastered's actor shadow: each actor casts a depth map straight down onto the\n"
-                          "floor, multiplied over it. Needs the Remastered world geometry; otherwise the\n"
-                          "original blob shadow is drawn.");
+    ImGui::SetItemTooltip(
+        "Remastered's actor shadow: each actor casts a shadow straight down onto the\n"
+        "floor. Needs the Remastered world geometry; otherwise the original blob shadow\n"
+        "is drawn.");
   }
 
-  bool autoScale = sRenderScale <= 0.f;
-  if (ImGui::Checkbox("Auto render scale (native)", &autoScale)) {
-    SetRenderScale(autoScale ? 0.f : 1.f);
+  // Dynamic resolution's mode is the two saved settings together: Auto draws up to the
+  // window's own scale (auto render scale), User up to the resolution scale set.
+  int dynMode = !sDynamicRes ? 0 : sRenderScale <= 0.f ? 1 : 2;
+  if (ImGui::Combo("Dynamic resolution", &dynMode, "Off\0" "Auto\0" "User\0")) {
+    sDynamicRes = dynMode != 0;
+    if (dynMode == 1) {
+      SetRenderScale(0.f);
+    } else if (dynMode == 2 && sRenderScale <= 0.f) {
+      SetRenderScale(std::clamp(std::round(BaseRenderScale() * 4.f) / 4.f, 1.f, 4.f));
+    }
+    ResetDynamicRes();
     MarkDirty();
   }
-  if (!autoScale) {
-    // Applied when the slider is let go: each new scale reallocates the EFB targets, which
-    // a drag would otherwise do every frame.
-    static float sPendingScale = 0.f;
+  ImGui::SetItemTooltip(
+      "Lowers the resolution scale while the GPU can't hold the target frame rate, and\n"
+      "raises it back when there is room. Each change stutters for a frame, so it moves\n"
+      "only when that is worth it.\n"
+      "Auto: up to the window's own resolution. User: between a minimum and a maximum.");
+  // Applied when a slider is let go: each new scale reallocates the EFB targets, which
+  // a drag would otherwise do every frame.
+  static float sPendingScale = 0.f;
+  static float sPendingMin = 0.f;
+  static int sPendingTarget = -1;
+  if (dynMode == 0) {
+    bool autoScale = sRenderScale <= 0.f;
+    if (ImGui::Checkbox("Auto render scale (native)", &autoScale)) {
+      SetRenderScale(autoScale ? 0.f : 1.f);
+      MarkDirty();
+    }
+    ImGui::SetItemTooltip("Draws at the window's own resolution.");
+  }
+  if (dynMode != 1 && sRenderScale > 0.f) {
     float scale = sPendingScale > 0.f ? sPendingScale : sRenderScale;
-    if (ImGui::SliderFloat("EFB scale", &scale, 1.f, 4.f, "%.2fx")) {
+    char label[32];
+    std::snprintf(label, sizeof(label), "%.2fx (%dp)", scale, DrawnLines(scale));
+    if (ImGui::SliderFloat(dynMode == 2 ? "Maximum resolution scale" : "Resolution scale", &scale, 1.f, 4.f, label)) {
       sPendingScale = scale;
     }
     if (sPendingScale > 0.f && !ImGui::IsItemActive()) {
@@ -422,73 +523,81 @@ void DrawVideoQuality() {
       MarkDirty();
       sPendingScale = 0.f;
     }
-    ImGui::SetItemTooltip("Scales the internal EFB; higher values use more GPU memory.\n"
-                          "Above 2x it supersamples, and each step costs much more GPU time.");
-    if (ImGui::Checkbox("Dynamic resolution", &sDynamicRes)) {
+    ImGui::SetItemTooltip("The resolution the game draws at, as a multiple of the GameCube's 480 lines;\n"
+                          "higher values use more GPU memory. Above 2x it supersamples, and each step\n"
+                          "costs much more GPU time.");
+  } else if (sRenderScale <= 0.f) {
+    ImGui::TextDisabled("Window resolution: %.2fx (%dp)", BaseRenderScale(), DrawnLines(0.f));
+  }
+  if (dynMode != 0) {
+    float lowest = sPendingMin > 0.f ? sPendingMin : sDynamicResMin;
+    const float top = std::max(DynamicResTop(), PortDebug::kDynamicResMinLowest);
+    char label[32];
+    std::snprintf(label, sizeof(label), "%.2fx (%dp)", lowest, DrawnLines(lowest));
+    if (ImGui::SliderFloat("Minimum resolution scale", &lowest, PortDebug::kDynamicResMinLowest, top, label,
+                           ImGuiSliderFlags_AlwaysClamp)) {
+      sPendingMin = lowest;
+    }
+    if (sPendingMin > 0.f && !ImGui::IsItemActive()) {
+      sDynamicResMin = sPendingMin;
+      sPendingMin = 0.f;
       ResetDynamicRes();
       MarkDirty();
     }
-    ImGui::SetItemTooltip("Lowers the EFB scale, down to the lowest scale below, while the GPU cannot\n"
-                          "hold the target frame rate, and raises it back toward the scale above when\n"
-                          "there is room. It times the GPU to tell whether pixels are what is slow (a\n"
-                          "CPU-heavy scene is left alone) and goes straight to the scale that fits.\n"
-                          "Each change stutters for a frame, so it moves only when that is worth it.");
-    if (sDynamicRes) {
-      static const int kTargets[] = {0, 30, 60, 90, 120};
-      int target = 0;
-      for (int i = 0; i < 5; ++i) {
-        if (kTargets[i] == sDynamicResTarget) {
-          target = i;
-        }
-      }
-      ImGui::SameLine();
-      ImGui::SetNextItemWidth(ImGui::GetFontSize() * 7.f);
-      if (ImGui::Combo("Target", &target, "Display\0" "30 fps\0" "60 fps\0" "90 fps\0" "120 fps\0")) {
-        sDynamicResTarget = kTargets[target];
-        ResetDynamicRes();
-        MarkDirty();
-      }
-      ImGui::SetItemTooltip("Display: the screen's refresh rate, or 60 with the 60 FPS cap on.");
-      static const float kLowest[] = {0.5f, 0.75f, 1.f};
-      int lowest = 2;
-      for (int i = 0; i < 3; ++i) {
-        if (kLowest[i] == sDynamicResMin) {
-          lowest = i;
-        }
-      }
-      ImGui::SetNextItemWidth(ImGui::GetFontSize() * 7.f);
-      if (ImGui::Combo("Lowest scale", &lowest, "0.5x\0" "0.75x\0" "1x\0")) {
-        sDynamicResMin = kLowest[lowest];
-        ResetDynamicRes();
-        MarkDirty();
-      }
-      ImGui::SetItemTooltip("Below 1x it draws fewer pixels than the GameCube did and looks softer,\n"
-                            "which lets a phone reach 90 or 120 fps.");
-      ImGui::Text("Drawing at %.2fx (target %.0f fps)", sDynScale > 0.f ? sDynScale : sRenderScale,
-                  DynamicResTargetFps());
-      ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-      const char* reason = PortDynamicRes::ReasonText(sDynController.LastReason());
-      if (sDynController.GpuTimesDropped()) {
-        ImGui::Text("GPU times not used (none arrived, or lowering on them gained nothing): %s", reason);
-      } else if (sDynGpuMs > 0.0) {
-        ImGui::Text("GPU %.1f of %.1f ms a frame: %s", sDynGpuMs, 1000.0 / DynamicResTargetFps(), reason);
-      } else if (sDynGpuMs < 0.0) {
-        ImGui::Text("No GPU times (unsupported, or MP_DYNRES_GPU_TIMES=0); following the frame rate: %s", reason);
-      } else {
-        ImGui::Text("%s", reason);
-      }
-      ImGui::PopStyleColor();
+    ImGui::SetItemTooltip("The lowest it drops to. Below 1x it draws fewer pixels than the GameCube did\n"
+                          "and looks softer, which lets a phone reach 90 or 120 fps; the lowest values are\n"
+                          "for very high resolution displays.");
+    // The left end is "Display" (saved as 0).
+    constexpr int kTargetMin = 30;
+    constexpr int kTargetMax = kFpsCapMax;
+    const int saved = sPendingTarget >= 0 ? sPendingTarget : sDynamicResTarget;
+    int target = saved > 0 ? std::clamp(saved, kTargetMin, kTargetMax) : kTargetMin - 1;
+    if (ImGui::SliderInt("Frame rate target", &target, kTargetMin - 1, kTargetMax,
+                         target < kTargetMin ? "Display" : "%d fps", ImGuiSliderFlags_AlwaysClamp)) {
+      sPendingTarget = target < kTargetMin ? 0 : target;
     }
+    // Applied when let go, like the scales: a change starts the controller over.
+    if (sPendingTarget >= 0 && !ImGui::IsItemActive()) {
+      sDynamicResTarget = sPendingTarget;
+      sPendingTarget = -1;
+      ResetDynamicRes();
+      MarkDirty();
+    }
+    ImGui::SetItemTooltip("Display (all the way left): the screen's refresh rate. Never above the frame\n"
+                          "rate cap: with the 60 FPS cap on it aims for 60. Ctrl+click to type a value.");
+    if (DynamicResTop() <= sDynamicResMin) {
+      ImGui::PushTextWrapPos(0.f);
+      ImGui::TextColored(ThemeWarnColor(), "Not lowering: the minimum is not below the top scale (%.2fx). "
+                         "Lower the minimum%s.", DynamicResTop(), dynMode == 1 ? " or enlarge the window" : "");
+      ImGui::PopTextWrapPos();
+    }
+    const float drawing = sDynScale > 0.f ? sDynScale : DynamicResTop();
+    ImGui::Text("Drawing at %.2fx (%dp), target %.0f fps", drawing,
+                DrawnLines(sDynScale > 0.f ? sDynScale : sRenderScale), DynamicResTargetFps());
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    const char* reason = PortDynamicRes::ReasonText(sDynController.LastReason());
+    if (sDynController.GpuTimesDropped()) {
+      ImGui::Text("GPU times not used (none arrived, or lowering on them gained nothing): %s", reason);
+    } else if (sDynGpuMs > 0.0) {
+      ImGui::Text("GPU %.1f of %.1f ms a frame: %s", sDynGpuMs, 1000.0 / DynamicResTargetFps(), reason);
+    } else if (sDynGpuMs < 0.0) {
+      ImGui::Text("No GPU times (unsupported, or MP_DYNRES_GPU_TIMES=0); following the frame rate: %s", reason);
+    } else {
+      ImGui::Text("%s", reason);
+    }
+    ImGui::PopStyleColor();
+  }
+  if (dynMode != 0 || sRenderScale > 0.f) {
     int sharpen = sSharpenMode;
     if (ImGui::Combo("Sharpen when upscaled", &sharpen, "Off\0" "With dynamic resolution\0" "Always\0")) {
       sSharpenMode = sharpen;
       ApplyPresentSharpness();
       MarkDirty();
     }
-    ImGui::SetItemTooltip("Contrast-adaptive sharpening for a frame drawn smaller than the window and\n"
-                          "stretched to it, so a lowered scale looks less soft. With dynamic\n"
-                          "resolution: only while it has lowered the scale. Always: also a fixed low\n"
-                          "scale on a large window. A frame at or above the window's size is not touched.");
+    ImGui::SetItemTooltip(
+        "Sharpens a frame drawn smaller than the window, so a lowered scale looks less\n"
+        "soft. With dynamic resolution: only while it has lowered the scale. Always:\n"
+        "also a fixed low scale on a large window.");
     if (sSharpenMode != 0) {
       if (ImGui::SliderInt("Sharpening", &sSharpenAmount, 0, 100, "%d%%", ImGuiSliderFlags_AlwaysClamp)) {
         ApplyPresentSharpness();
@@ -511,8 +620,8 @@ void DrawVideoQuality() {
 void DrawVideoCompatibility() {
   ImGui::SeparatorText("Compatibility");
   ImGui::PushTextWrapPos(0.f);
-  ImGui::TextDisabled("For GPU driver problems, such as a black world or a crash at start. Most of these "
-                      "take effect after a restart.");
+  ImGui::TextDisabled("For GPU driver problems, such as a black world or a crash at start. Most of "
+                      "these take effect after a restart.");
   ImGui::PopTextWrapPos();
 #if defined(_WIN32)
   // Which API to ask Aurora for (issue #135). Read at window creation, so it takes a
@@ -525,10 +634,10 @@ void DrawVideoCompatibility() {
     if (ImGui::Combo("Renderer", &choice, kBackendNames, PortDebug::kGraphicsBackendCount)) {
       SetGraphicsBackend(static_cast< PortDebug::EGraphicsBackend >(choice));
     }
-    ImGui::SetItemTooltip("Which graphics API to start on. Auto tries Direct3D 12, then Vulkan, then\n"
-                          "Direct3D 11. Takes effect after a restart. If the driver can't start the chosen\n"
-                          "API, this run falls back to Auto and the setting is kept, so it can be changed\n"
-                          "here. MP_GRAPHICS_BACKEND=auto|d3d12|vulkan|d3d11 overrides it for one run.");
+    ImGui::SetItemTooltip(
+        "Which graphics API to start on. Auto tries Direct3D 12, then Vulkan, then\n"
+        "Direct3D 11. Restart to apply. If the chosen API can't start, this run falls\n"
+        "back to Auto and the setting is kept.");
     // What this run asked for is the resolution of the STARTUP selection, not the
     // setting: MP_GRAPHICS_BACKEND outranks the file, and changing the combo must not
     // pretend the API this run started on was the one asked for.
@@ -592,9 +701,10 @@ void DrawVideoCompatibility() {
       sStorageClamp = clamp - 1;
       MarkDirty();
     }
-    ImGui::SetItemTooltip("Reads GPU buffers without the bounds-check branch some Adreno Vulkan drivers\n"
-                          "miscompile (the world draws black, issue #7). Auto turns it on for Adreno 7xx GPUs;\n"
-                          "try On if the world is black on another Adreno. Takes effect after a restart.");
+    ImGui::SetItemTooltip(
+        "Reads GPU buffers without the bounds check some Adreno Vulkan drivers\n"
+        "miscompile (black world, issue #7). Auto turns it on for Adreno 7xx; try On\n"
+        "on another Adreno with a black world. Restart to apply.");
     if (sStorageClamp != sStorageClampAtStart) {
       ImGui::SameLine();
       ImGui::TextColored(ThemeWarnColor(), "Restart to apply");
@@ -613,9 +723,9 @@ void DrawVideoCompatibility() {
     }
     if (open) {
       ImGui::PushTextWrapPos(0.f);
-      ImGui::TextDisabled("For a GPU that draws wrong, such as flickering or missing geometry. Tick one, "
-                          "restart, then run the GPU self-test below; leave them off otherwise. If a start "
-                          "with them fails, the next start turns them off.");
+      ImGui::TextDisabled("For a GPU that draws wrong (flickering or missing geometry). Tick one, "
+                          "restart, then run the GPU self-test below; leave them off otherwise. If "
+                          "a start with them fails, the next start turns them off.");
       if (sDriverWorkaroundsCleared) {
         ImGui::TextColored(ThemeWarnColor(), "Turned off: the last start with them did not reach the game.");
       }
@@ -645,10 +755,10 @@ void DrawVideoCompatibility() {
       RequestGpuSelfTest();
     }
     ImGui::EndDisabled();
-    ImGui::SetItemTooltip("Renders known patterns offscreen through the game's own GX path, reads them back\n"
-                          "and logs one PASS or FAIL line per feature (indexed vertices, TEV, textures, blend,\n"
-                          "depth, EFB copy), plus checks of the readback and EFB copy alone that say which\n"
-                          "stage fails. For GPU driver bugs such as a black world; attach the log to a report.");
+    ImGui::SetItemTooltip(
+        "Renders test patterns offscreen and logs one PASS or FAIL line per feature\n"
+        "(vertices, TEV, textures, blend, depth, EFB copy), with checks that say which\n"
+        "stage fails. For GPU driver bugs such as a black world; attach the log to a report.");
     char summary[160];
     if (pending) {
       ImGui::SameLine();

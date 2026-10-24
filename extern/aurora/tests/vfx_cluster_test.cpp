@@ -163,6 +163,20 @@ TEST(VfxCluster, LitTailIsTheReportedEquation) {
   EXPECT_NE(source.find("(shaded * 0.3183098862 + base * (c5.z * ie)) * M"), std::string::npos);
 }
 
+TEST(VfxCluster, ParticleLitScalesTheRecipeColourByTheLight) {
+  // 20e149b2's lit perms (080_0..091_0): the unlit colour x (AMBS + probe + lights) x BLCM / pi, whatever
+  // the recipe; the gather and the probe are the IceChargeCollisionLit ones.
+  PipelineConfig config{};
+  config.features = ColorTex | OpacityTex | DepthSoften | ParticleLit;
+  const std::string source = pipeline_source(config);
+  EXPECT_NE(source.find("if ((FEAT & 67108864u) != 0u) {"), std::string::npos);
+  EXPECT_NE(source.find("rgb = rgb * lighting * u.lit6.rgb * 0.3183098862;"), std::string::npos);
+  EXPECT_NE(source.find("let i = 3u + bit * 5u;"), std::string::npos);
+  EXPECT_NE(source.find("@binding(12) var clusterMask: texture_2d<u32>"), std::string::npos);
+  // Not a shader-side exposure policy: the feature word's AlreadyExposed stays off the pipeline key.
+  EXPECT_EQ(shader_features(ParticleLit | AlreadyExposed), uint32_t(ParticleLit));
+}
+
 TEST(VfxCluster, MaskDimensionsAreValidated) {
   Gather g;
   fill_header(g, 34, 19, 0.f, 0xffffffffu);

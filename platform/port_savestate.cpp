@@ -52,6 +52,7 @@ namespace fs = std::filesystem;
 // area's once Samus is placed.
 void PortKeepMusicForStateLoad(bool sameWorld);
 void PortStartStateLoadMusic(CStateManager& mgr);
+void PortEndStateLoadMusic();
 
 namespace PortSaveState {
 namespace {
@@ -88,7 +89,15 @@ std::vector< uint8_t > sPendingBlob;
 // up. Areas that load later than kRoomApplyFrames ticks after the place keep
 // the memory card load's fresh objects (the player may have left and come back).
 constexpr int kRoomApplyFrames = 600;
+constexpr int kRoomLateFrames = 3600;
 bool sRoomPending = false;
+// The primary restore is over (the log line is out) but neighbour areas that were
+// resident at the save are still streaming in; each takes its state when it finishes.
+// Ends when all have, when Samus leaves the saved room, or after kRoomLateFrames.
+bool sRoomLate = false;
+// The room state names the music that was playing: the room restore plays it, and
+// the area-music guess (PortStartStateLoadMusic) only runs if none of it could be.
+bool sRoomMusic = false;
 int sRoomFrames = 0;
 std::vector< int32_t > sRoomDone;
 RoomApplyStats sRoomStats;
@@ -148,6 +157,22 @@ fs::path SlotPath(int slot) {
   return PortGci::PathFromString(folder) / ("slot" + std::to_string(slot) + ".mpss");
 }
 
+// A state the running game can build: Capture always writes kBlobSize bytes
+// (CGameState reads them without a bound), and its world must be one this disc
+// has, or SetCurrentWorldId sends the main flow to an MLVL that isn't there.
+bool Loadable(const Header& header, const std::vector< uint8_t >& blob) {
+  if (blob.size() != kBlobSize)
+    return false;
+  if (gpMemoryCard == nullptr)
+    return true;
+  const rstl::vector< CMemoryCard::MemoryWorld >& worlds = gpMemoryCard->GetMemoryWorlds();
+  for (int i = 0; i < worlds.size(); ++i) {
+    if (static_cast< uint32_t >(worlds[i].first) == header.worldId)
+      return true;
+  }
+  return false;
+}
+
 bool ReadSlot(int slot, Header& header, std::vector< uint8_t >& blob) {
   const fs::path path = SlotPath(slot);
   if (path.empty())
@@ -156,7 +181,7 @@ bool ReadSlot(int slot, Header& header, std::vector< uint8_t >& blob) {
   if (!file)
     return false;
   const std::string data = port::ReadAllText(file);
-  return Decode(data, header, blob);
+  return Decode(data, header, blob) && Loadable(header, blob);
 }
 
 bool WriteSlot(int slot, const Header& header, const std::vector< uint8_t >& blob) {
@@ -292,6 +317,8 @@ void QuitToPending(CStateManager& mgr) {
   sInstallPending = true;
   sPlacePending = false;
   sRoomPending = false;
+  sRoomLate = false;
+  sRoomMusic = false;
 
   // As the debug world warp: stop the outgoing world's loads, retire its PAKs
   // and quit to CMainFlow, which starts the next game (InstallPending).
@@ -476,6 +503,9 @@ void Place(CStateManager& mgr) {
     look = CVector3f(0.f, 1.f, 0.f);
   player.Teleport(CTransform4f::LookAt(pos, pos + look, CVector3f(0.f, 0.f, 1.f)), mgr, true);
   player.SetVelocityWR(CVector3f(0.f, 0.f, 0.f));
+  // The rebuilt player has no area until its own first Update, which runs after the
+  // enemies' (a Metroid whose target is the player loses interest while it reads -1).
+  mgr.SetActorAreaId(player, mgr.GetWorld()->GetCurrentAreaId());
   const bool morphed = player.GetMorphballTransitionState() == CPlayer::kMS_Morphed;
   if (h.morphed != morphed) {
     player.SetSpawnedMorphBallState(h.morphed ? CPlayer::kMS_Morphed : CPlayer::kMS_Unmorphed,
@@ -486,24 +516,57 @@ void Place(CStateManager& mgr) {
   sRoomPending = PortDebug::SaveStateRoomState() && !h.roomState.empty();
   if (!sRoomPending)
     DisarmSpawnLayers();  // no restore will run to the end that disarms them
+  sRoomLate = false;
   sRoomFrames = 0;
   sRoomDone.clear();
   sRoomStats = {};
 }
 
+void EndRoomState() {
+  sRoomPending = false;
+  sRoomLate = false;
+  DisarmSpawnLayers();
+}
+
 // Puts the saved room objects on the rebuilt areas as each one finishes loading.
 void TickRoomState(CStateManager& mgr) {
-  if (!sRoomPending || mgr.GetWantsToQuit())
+  if (!(sRoomPending || sRoomLate) || mgr.GetWantsToQuit())
     return;
   const int waiting = ApplyRoomState(mgr, sPendingHeader.roomState, sRoomDone, sRoomStats);
+  if (sRoomLate) {
+    ++sRoomFrames;
+    if (sRoomStats.late == 0 || sRoomFrames >= kRoomLateFrames ||
+        mgr.GetWorld()->GetCurrentAreaId().Value() != static_cast< int >(sPendingHeader.areaId)) {
+      PortLog::Write("[savestate] room state, neighbour areas: %d applied in total, %d areas %s\n",
+                     sRoomStats.applied, sRoomStats.late,
+                     sRoomStats.late == 0 ? "all loaded" : "never loaded; left as loaded");
+      EndRoomState();
+    }
+    return;
+  }
   if (waiting > 0 && ++sRoomFrames < kRoomApplyFrames)
     return;
-  sRoomPending = false;
-  DisarmSpawnLayers();
+  const bool late = sRoomStats.late > 0;
   PortLog::Write("[savestate] room state: %d applied, %d generated, %d removed, %d unmatched, "
-                 "%d areas skipped, %d script messages replayed\n",
+                 "%d areas skipped, %d script messages replayed, %d enemy fields set%s\n",
                  sRoomStats.applied, sRoomStats.generated, sRoomStats.removed, sRoomStats.unmatched,
-                 sRoomStats.skipped, sRoomStats.replayed);
+                 sRoomStats.skipped, sRoomStats.replayed, sRoomStats.fields,
+                 late ? ", neighbour areas still streaming" : "");
+  sRoomPending = false;
+  if (sRoomMusic) {
+    sRoomMusic = false;
+    if (sRoomStats.music > 0)
+      PortEndStateLoadMusic();
+    else
+      PortStartStateLoadMusic(mgr);
+  }
+  if (late) {
+    // The armed spawn layers stay: those areas spawn with the bits they had at the save.
+    sRoomLate = true;
+    sRoomFrames = 0;
+  } else {
+    EndRoomState();
+  }
 }
 
 
@@ -574,7 +637,7 @@ bool ReadResume(ResumeMeta& meta, Header& header, std::vector< uint8_t >& blob) 
     return false;
   const std::string data = port::ReadAllText(file);
   std::string state;
-  return DecodeResume(data, meta, state) && Decode(state, header, blob);
+  return DecodeResume(data, meta, state) && Decode(state, header, blob) && Loadable(header, blob);
 }
 
 ResumeContext GatherResumeContext() {
@@ -723,6 +786,14 @@ bool RequestModReload() {
 
 std::string LastMessage() { return sMessage; }
 
+bool RoomRestoreOwnsArea(CStateManager& mgr, int area) {
+  if (!(sPlacePending || sRoomPending || sRoomLate) || !PortDebug::SaveStateRoomState() ||
+      mgr.GetWorld() == nullptr ||
+      static_cast< uint32_t >(mgr.GetWorld()->IGetWorldAssetId()) != sPendingHeader.worldId)
+    return false;
+  return RoomAreaAwaitsRestore(mgr, sPendingHeader.roomState, sRoomDone, area);
+}
+
 bool Tick(CStateManager& mgr) {
   if (sPlacePending && !mgr.GetWantsToQuit() && mgr.GetWorld() != nullptr &&
       mgr.GetGameState() == CStateManager::kGS_Running) {
@@ -740,7 +811,9 @@ bool Tick(CStateManager& mgr) {
       WriteMarker();
       SetMessage("Resumed");
     }
-    PortStartStateLoadMusic(mgr);
+    sRoomMusic = sRoomPending && RoomStateHasMusic(sPendingHeader.roomState);
+    if (!sRoomMusic)
+      PortStartStateLoadMusic(mgr);
   }
   TickRoomState(mgr);
   if (sInstallPending) {
@@ -785,6 +858,13 @@ void SetInFrontEnd(bool inFrontEnd) {
     // Back at the title: the snapshot, a room restore still running and the layers
     // armed for it belong to a game that was left.
     sRoomPending = false;
+    sRoomLate = false;
+    if (sRoomMusic) {
+      // The restore that was to play the music never finished: the next world
+      // destroyed must not keep the track as a state load would.
+      sRoomMusic = false;
+      PortEndStateLoadMusic();
+    }
     DisarmSpawnLayers();
     std::lock_guard< std::mutex > lock(sSnapMutex);
     sSnap.valid = false;

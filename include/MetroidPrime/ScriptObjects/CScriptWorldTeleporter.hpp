@@ -8,6 +8,7 @@
 #include "Kyoto/Math/CVector3f.hpp"
 
 class CScriptWorldTeleporter : public CEntity {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 public:
   CScriptWorldTeleporter(TUniqueId uid, const rstl::string& name, const CEntityInfo& info,
                          bool active, CAssetId worldId, CAssetId areaId);

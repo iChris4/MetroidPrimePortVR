@@ -40,7 +40,7 @@ static float kMaxRayLength = 120.f;
 static int kMaxTilesPerPatch = 7;
 
 const float CScriptWater::kSplashScales[6] = {
-    1.0f, 3.0f, 0.709f, 1.19f, 0.709f, 1.0f,
+    1.0f, 3.0f, 0.71f, 1.19f, 0.71f, 1.0f,
 };
 
 CScriptWater::CScriptWater(

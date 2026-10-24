@@ -4,6 +4,7 @@
 #include "MetroidPrime/CEntity.hpp"
 
 class CScriptTimer : public CEntity {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
   friend struct PortRoomState;
 
 #if VERSION >= VERSION_GM8P_00 && VERSION != VERSION_GM8E_02

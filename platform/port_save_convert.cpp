@@ -1083,17 +1083,27 @@ void Retarget(Save& save, Layout to, Stats& stats) {
           }
         }
       }
+      // The current area by its MREA; the source index would name whatever room
+      // sits at that index in the target. One the target lacks becomes its
+      // first area, counted. An unresolved source index is kept as it was.
+      n.areaKnown = false;
       if (w.areaKnown) {
+        n.areaRaw = 0;
         for (u32 i = 0; i < dst->nAreas; ++i) {
           if (dst->areas[i].mrea == w.areaMrea) {
             n.areaRaw = i;
+            n.areaKnown = true;
             break;
           }
         }
+        if (!n.areaKnown) {
+          ++stats.areas;
+          Note(stats, "area", w.areaMrea);
+          n.areaKnown = dst->nAreas > 0;
+        }
+        if (n.areaKnown)
+          n.areaMrea = dst->areas[n.areaRaw].mrea;
       }
-      n.areaKnown = n.areaRaw < dst->nAreas;
-      if (n.areaKnown)
-        n.areaMrea = dst->areas[n.areaRaw].mrea;
       worlds[mlvl] = std::move(n);
     }
     s.worlds = std::move(worlds);
@@ -1275,8 +1285,15 @@ bool WriteWii(const Save& save, const uint8_t* base, size_t size, std::vector<ui
     const bool used = WiiFileUsed(d, i);
     if (!used) {
       if (model >= 0) {
+        // The summary copy covers the Mii owner id (sum+0x3F): a file another
+        // Mii already owns keeps its own.
+        const bool owned = WiiFileOwned(d, i);
+        uint8_t owner[8];
+        std::memcpy(owner, sum + 0x3F, sizeof(owner));
         std::memcpy(entry, d + kWiiEntry + 7 * size_t(model), 7);
         std::memcpy(sum, d + kWiiSummary[model], kWiiSummaryMp1);
+        if (owned)
+          std::memcpy(sum + 0x3F, owner, sizeof(owner));
         std::memcpy(slot, d + kWiiSlot[model], kWiiSlotSize / 2);
       } else {
         static constexpr uint8_t kEntry[7] = {1, 1, 0, 0, 1, 0, 0}; // a real PAL save's

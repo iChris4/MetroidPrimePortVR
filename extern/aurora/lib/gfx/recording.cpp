@@ -1662,7 +1662,7 @@ PipelineRef clear_multiview_pipeline_ref(const clear::PipelineConfig& config) no
 
 void resolve_pass_into(TextureHandle texture, ClipRect rect, bool clearColor, bool clearAlpha, bool clearDepth,
                        Vec4<float> clearColorValue, float clearDepthValue, GXTexFmt resolveFormat,
-                       int probeFace, bool resolveMips, const ResolveHdr* hdr) {
+                       int probeFace, bool resolveMips, const ResolveHdr* hdr, bool opaqueAlpha) {
   if (scene_hdr_pass_active()) {
     // The scene holds exposed linear light: a display copy post-tones it, a linear copy keeps it,
     // and the clear colour (display-referred) goes in as the light that post-tones back to it.
@@ -1684,22 +1684,31 @@ void resolve_pass_into(TextureHandle texture, ClipRect rect, bool clearColor, bo
   prevPass.resolveFormat = resolveFormat;
   prevPass.resolveMips = resolveMips;
   if (resolveMips) {
-    prevPass.resolveMipsUniformRange = push_uniform(std::array{0.f, 0.f, 1.f, 1.f});
+    prevPass.resolveMipsUniformRange = push_uniform(tex_copy_conv::Uniforms{});
   }
-  // Push UV transform uniform for tex_copy_conv (crop region in UV space)
+  // tex_copy_conv's uniforms: the crop region in UV space, and whether the source has alpha
   const auto srcW = static_cast<float>(prevPass.colorAttachments[SceneColorAttachmentIndex].size.width);
   const auto srcH = static_cast<float>(prevPass.colorAttachments[SceneColorAttachmentIndex].size.height);
-  const std::array uvTransform{
-      static_cast<float>(rect.x) / srcW,
-      static_cast<float>(rect.y) / srcH,
-      static_cast<float>(rect.width) / srcW,
-      static_cast<float>(rect.height) / srcH,
+  const tex_copy_conv::Uniforms uniforms{
+      .offset = {static_cast<float>(rect.x) / srcW, static_cast<float>(rect.y) / srcH},
+      .scale = {static_cast<float>(rect.width) / srcW, static_cast<float>(rect.height) / srcH},
+      .opaqueAlpha = opaqueAlpha,
   };
-  prevPass.resolveUniformRange = push_uniform(uvTransform);
+  prevPass.resolveUniformRange = push_uniform(uniforms);
   if (probeFace >= 0) {
     prevPass.probeFace = probeFace;
-    prevPass.probeUniformRange = push_uniform(std::array{0.f, 0.f, 1.f, 1.f});
+    prevPass.probeUniformRange = push_uniform(tex_copy_conv::Uniforms{});
   }
+  // GXCopyTex clears only the rectangle it copies: the whole target clears through the
+  // continuation's load ops, a part of it with a clear draw scissored to it.
+  const auto targetWidth = static_cast<int32_t>(prevPass.colorAttachments[SceneColorAttachmentIndex].size.width);
+  const auto targetHeight = static_cast<int32_t>(prevPass.colorAttachments[SceneColorAttachmentIndex].size.height);
+  const auto left = std::clamp<int32_t>(rect.x, 0, targetWidth);
+  const auto top = std::clamp<int32_t>(rect.y, 0, targetHeight);
+  const auto right = std::clamp<int32_t>(rect.x + rect.width, left, targetWidth);
+  const auto bottom = std::clamp<int32_t>(rect.y + rect.height, top, targetHeight);
+  const ClipRect clearRect{.x = left, .y = top, .width = right - left, .height = bottom - top};
+  const bool fullTarget = left == 0 && top == 0 && right == targetWidth && bottom == targetHeight;
   // Stereo replay: a copy from an EFB pass that replays per eye is also taken
   // from each eye, into the copy's stand-ins (stereo_shadow.hpp), so effects
   // that sample it (the thermal and X-ray visors) see each eye's own view. Set
@@ -1709,7 +1718,7 @@ void resolve_pass_into(TextureHandle texture, ClipRect rect, bool clearColor, bo
   // When it also clears the whole EFB, the next pass's eye passes clear the
   // eyes too, so nothing could see this pass in them: it is not replayed.
   const bool monoCopy = g_recorder.stereoRoute == AURORA_STEREO_ROUTE_SKIP && probeFace < 0;
-  if (monoCopy && clearColor && clearAlpha && (clearDepth || !prevPass.hasDepth) && !prevPass.hasStencil) {
+  if (monoCopy && fullTarget && clearColor && clearAlpha && (clearDepth || !prevPass.hasDepth) && !prevPass.hasStencil) {
     prevPass.stereo.monoOnly = true;
   }
   stereo_seal_pass(current_frame_packet(), g_recorder.currentRenderPass);
@@ -1740,7 +1749,7 @@ void resolve_pass_into(TextureHandle texture, ClipRect rect, bool clearColor, bo
           const auto uv = stereo_replay::head_locked_plane_uv_rect(params.projection, params.headLockedViewFromCenter,
                                                                    plane, ndcLeft, ndcTop, ndcRight, ndcBottom);
           if (uv.valid()) {
-            prevPass.stereo.copyUniformRanges[eye] = push_uniform(std::array{uv.u, uv.v, uv.width, uv.height});
+            prevPass.stereo.copyUniformRanges[eye] = push_uniform(tex_copy_conv::Uniforms{.offset = {uv.u, uv.v}, .scale = {uv.width, uv.height}, .opaqueAlpha = opaqueAlpha});
           }
         }
       }
@@ -1749,7 +1758,7 @@ void resolve_pass_into(TextureHandle texture, ClipRect rect, bool clearColor, bo
     }
   }
   // The continuation's load op clears whatever the copy clears.
-  discard_dead_stores(prevPass, clearColor && clearAlpha, clearDepth);
+  discard_dead_stores(prevPass, clearColor && clearAlpha && fullTarget, clearDepth && fullTarget);
   enqueue_pass(current_frame_packet(), g_recorder.currentRenderPass);
   if (clearDepth && !g_recorder.inOffscreen) {
     g_recorder.efbDepthNear = std::min(g_recorder.efbDepthNear, gx_depth(clearDepthValue));
@@ -1768,13 +1777,13 @@ void resolve_pass_into(TextureHandle texture, ClipRect rect, bool clearColor, bo
       .copySourceDepthView = prevPass.copySourceDepthView,
       .msaaSamples = msaaSamples,
       .clearDepthValue = clearDepthValue,
-      .clearDepth = clearDepth,
+      .clearDepth = clearDepth && fullTarget,
       .hasDepth = prevPass.hasDepth,
       .hasStencil = prevPass.hasStencil,
       // Still the EFB after a copy: the stereo replay carries on into the eyes.
       .efb = prevPass.efb,
   };
-  const bool fullColorClear = clearColor && clearAlpha;
+  const bool fullColorClear = clearColor && clearAlpha && fullTarget;
   for (uint32_t i = 0; i < newPass.colorAttachmentCount; ++i) {
     auto& color = newPass.colorAttachments[i];
     color.loadOp = wgpu::LoadOp::Undefined;
@@ -1791,10 +1800,13 @@ void resolve_pass_into(TextureHandle texture, ClipRect rect, bool clearColor, bo
   current_render_passes().emplace_back(std::move(newPass));
   ++g_recorder.currentRenderPass;
 
-  if (!fullColorClear && (clearColor || clearAlpha)) {
-    // If we're only clearing color _or_ alpha, perform a clear draw
+  const bool drawClearColor = clearColor && !fullColorClear;
+  const bool drawClearAlpha = clearAlpha && !fullColorClear;
+  const bool drawClearDepth = clearDepth && !fullTarget;
+  if (clearRect.width > 0 && clearRect.height > 0 && (drawClearColor || drawClearAlpha || drawClearDepth)) {
+    // Part of the target, or only its colour or alpha: a clear draw
     const auto targetLayout = current_render_passes()[g_recorder.currentRenderPass].target_layout();
-    const auto clearConfig = clear::make_pipeline_config(targetLayout, clearColor, clearAlpha, false);
+    const auto clearConfig = clear::make_pipeline_config(targetLayout, drawClearColor, drawClearAlpha, drawClearDepth);
     push_draw_command(clear::DrawData{
         .pipeline = pipeline_ref(clearConfig),
         .color =
@@ -1805,6 +1817,10 @@ void resolve_pass_into(TextureHandle texture, ClipRect rect, bool clearColor, bo
                 .a = clearColorValue.w(),
             },
         .multiviewPipeline = clear_multiview_pipeline_ref(clearConfig),
+        .depth = clearDepthValue,
+        .rect = clearRect,
+        .rectReferenceWidth = static_cast<uint32_t>(targetWidth),
+        .rectReferenceHeight = static_cast<uint32_t>(targetHeight),
     });
   }
   push_command(CommandType::SetViewport, Command::Data{.setViewport = g_recorder.cachedViewport});
@@ -1867,11 +1883,17 @@ bool set_scene_hdr(bool on) {
     return false;
   }
   // An HDR scene must be convertible before its first draw. Check the same FIFO-owned post budget
-  // used by bloom::record so an unsupported third segment falls back to the display EFB here.
+  // used by bloom::record so an unsupported third segment is refused here, and draws without the post.
   if (on && !bloom::scene_post_available()) {
     return false;
   }
   if (on && !webgpu::ensure_scene_hdr_target()) {
+    // No retail fallback: the frame draws without the Remastered post, each PBR draw toned on its own.
+    static bool warned = false;
+    if (!warned) {
+      warned = true;
+      Log.warn("HDR scene unavailable: the frame draws without the Remastered post (warned once)");
+    }
     return false;
   }
 
@@ -1994,7 +2016,7 @@ bool resolve_scene_copy(TextureHandle color, const ResolveHdr* hdr, wgpu::Textur
   const auto& attachment = pass.colorAttachments[SceneColorAttachmentIndex];
   const uint32_t width = attachment.size.width;
   const uint32_t height = attachment.size.height;
-  if (pass.hasDepth && tex_copy_conv::snapshot_depth_supported()) {
+  if (pass.hasDepth && tex_copy_conv::snapshot_depth_supported(pass.msaaSamples)) {
     auto& entry = acquire_pass_snapshot(width, height, attachment.format, pass.msaaSamples, false, true);
     pass.snapshotDepthDst = entry.depth.view;
     depth = entry.depth.view;
@@ -2016,13 +2038,13 @@ bool resolve_pass(const ResolveDesc& desc, ResolvedTargets& out) {
     return false;
   }
 
+  auto& prevPass = current_render_passes()[g_recorder.currentRenderPass];
   bool wantDepth = desc.depth;
-  if (wantDepth && !tex_copy_conv::snapshot_depth_supported()) {
+  if (wantDepth && !tex_copy_conv::snapshot_depth_supported(prevPass.msaaSamples)) {
     Log.warn("resolve_pass: depth snapshots are unsupported on this device");
     wantDepth = false;
   }
 
-  auto& prevPass = current_render_passes()[g_recorder.currentRenderPass];
   const uint32_t width = prevPass.colorAttachments[SceneColorAttachmentIndex].size.width;
   const uint32_t height = prevPass.colorAttachments[SceneColorAttachmentIndex].size.height;
   // Requesting no snapshots is a plain pass break (or offscreen close, discarding its output).

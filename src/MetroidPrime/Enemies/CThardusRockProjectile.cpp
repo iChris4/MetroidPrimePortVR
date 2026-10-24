@@ -49,7 +49,8 @@ CThardusRockProjectile::CThardusRockProjectile(const TUniqueId uid, const rstl::
 , x5d4_(0)
 , x5d8_(0)
 , x5dc_(false)
-, x5dd_(false) {
+, x5dd_(false)
+, x5de_(false) {
   CMaterialList exclude = GetMaterialFilter().GetExcludeList();
   exclude.Add(CMaterialList(kMT_Player, kMT_Character, kMT_NoPlatformCollision));
   SetMaterialFilter(

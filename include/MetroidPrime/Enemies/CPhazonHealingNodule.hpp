@@ -15,6 +15,7 @@ class CParticleElectric;
 class CElectricDescription;
 
 class CPhazonHealingNodule : public CPatterned {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 public:
   CPhazonHealingNodule(TUniqueId uid, const rstl::string& name, const CEntityInfo& info,
                        const CTransform4f& xf, const CModelData& mData,

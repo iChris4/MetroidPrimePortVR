@@ -2074,4 +2074,12 @@ EWeaponCollisionResponseTypes CRidley::GetCollisionResponseType(const CVector3f&
 
 float CRidley::GetGravityConstant() const { return 50.f; }
 
+#ifdef TARGET_PC
+void CRidley::PortStage3WingEffects(CStateManager& mgr) {
+  for (uint i = 0; i < 24; ++i) {
+    ModelData()->AnimationData()->SetParticleEffectState(skWingEffects[i], true, mgr);
+  }
+}
+#endif
+
 CRidley::~CRidley() {}

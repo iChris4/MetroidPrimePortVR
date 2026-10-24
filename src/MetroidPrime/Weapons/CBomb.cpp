@@ -56,9 +56,9 @@ void CBomb::Explode(const CVector3f& pos, CStateManager& mgr) {
   mgr.RemoveWeaponId(GetOwnerId(), GetType());
   mIsNotDetonated = false;
   if (mParticle3.get()) {
-    // Remastered calls CParticleGen::ShutdownEffect (vtable +0x98). BombAttract has SHTM 0 and no
-    // SHTT, so that is DoShutdownBehavior(0): stop emitting, children shut down the same way.
-    mParticle3->SetParticleEmission(false);
+    // Remastered calls CParticleGen::ShutdownEffect (vtable +0x98): stop emitting, and with
+    // SHTM/SHTT (PSHM/PSHT) destroy the particles or wait first.
+    mParticle3->ShutdownEffect();
   }
 }
 

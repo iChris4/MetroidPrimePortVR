@@ -64,9 +64,9 @@ struct PipelineConfig {
   uint32_t compare = 0;
 };
 static_assert(std::has_unique_object_representations_v<PipelineConfig>);
-// Set in PipelineConfig::flags for a surface drawn into the HDR scene (exposed linear, RGBA16F): its
-// snapshot is read raw and the blend's result written as light. Flags are 1 and 2, so no LDR config,
-// cached record or in-memory key can carry it.
+// Set in PipelineConfig::flags of every surface: water is drawn only into the HDR scene (exposed
+// linear, RGBA16F), its snapshot read raw and the blend's result written as light. Flags are 1 and 2,
+// so no config recorded before the LDR blend was removed can carry it.
 constexpr uint32_t WaterSceneHdr = 1u << 31;
 
 wgpu::RenderPipeline create_pipeline(const PipelineConfig& config);

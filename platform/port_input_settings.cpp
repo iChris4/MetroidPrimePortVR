@@ -118,8 +118,6 @@ bool ApplySetting(std::string_view keyView, std::string_view valueView) {
     s.gyroCursorCamera = ParseBool(value);
   } else if (key == "reset_aim_both") {
     s.resetAimBoth = ParseBool(value);
-  } else if (key == "lock_keeps_pitch") {
-    s.lockKeepsPitch = ParseBool(value);
   } else if (key == "gyro_sensitivity") {
     const float f = ParseFloat(value);
     if (std::isfinite(f) && f >= kGyroSensitivityMin && f <= kGyroSensitivityMax) {
@@ -205,6 +203,8 @@ bool ApplySetting(std::string_view keyView, std::string_view valueView) {
     if (v >= kPointerAimTurnMin && v <= kPointerAimTurnMax) {
       s.pointerAimTurn = v;
     }
+  } else if (key == "lock_on_free_aim") {
+    s.lockOnFreeAim = ParseBool(value);
   } else if (key == "crosshair_size") {
     const int v = std::atoi(value.c_str());
     if (v >= kCrosshairSizeMin && v <= kCrosshairSizeMax) {
@@ -352,7 +352,6 @@ void WriteAimSettings(std::ostream& out) {
   out << "gyro_cursor_angle=" << s.gyroCursorAngle << '\n';
   out << "gyro_cursor_camera=" << (s.gyroCursorCamera ? 1 : 0) << '\n';
   out << "reset_aim_both=" << (s.resetAimBoth ? 1 : 0) << '\n';
-  out << "lock_keeps_pitch=" << (s.lockKeepsPitch ? 1 : 0) << '\n';
   out << "touch_aim=" << (s.touchAim ? 1 : 0) << '\n';
   out << "touch_aim_speed=" << s.touchAimSpeed << '\n';
   out << "touch_aim_split=" << (s.touchAimSplit ? 1 : 0) << '\n';
@@ -384,6 +383,7 @@ void WriteAimSettings(std::ostream& out) {
   out << "pointer_aim=" << (s.pointerAim ? 1 : 0) << '\n';
   out << "pointer_aim_box=" << s.pointerAimBox << '\n';
   out << "pointer_aim_turn=" << s.pointerAimTurn << '\n';
+  out << "lock_on_free_aim=" << (s.lockOnFreeAim ? 1 : 0) << '\n';
 }
 
 void WriteSettings(std::ostream& out) {

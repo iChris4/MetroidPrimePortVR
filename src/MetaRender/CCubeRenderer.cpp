@@ -2187,7 +2187,9 @@ void CCubeRenderer::ReallyRenderFogVolume(const CColor& color, const CAABox& aab
         uv0MaxX = static_cast< float >(chunkW - 1) / static_cast< float >(chunkW);
         uv0MaxY = static_cast< float >(chunkH - 1) / static_cast< float >(chunkH);
 
-        GXSetTexCopyDst(static_cast< u16 >(chunkW), static_cast< u16 >(chunkH), GX_CTF_A8,
+        // A depth copy (li r5, 0x13 in the DOL): the ramp is indexed by the copy's upper
+        // 16 bits of Z, read back as IA8.
+        GXSetTexCopyDst(static_cast< u16 >(chunkW), static_cast< u16 >(chunkH), GX_TF_Z16,
                         GX_FALSE);
 
         uv0MinX = 0.5f / static_cast< float >(chunkW);

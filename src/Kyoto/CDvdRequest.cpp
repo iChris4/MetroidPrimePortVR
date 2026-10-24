@@ -39,6 +39,16 @@ int CRealDvdRequest::GetMediaType() const {
   return 1;
 }
 
+#ifdef TARGET_PC
+int CRealDvdRequest::PortTransferred() {
+  return PortCancelled() ? 0 : static_cast< int >(mFileInfo.cb.transferredSize);
+}
+
+bool CRealDvdRequest::PortCancelled() {
+  return DVDGetCommandBlockStatus(&mFileInfo.cb) == DVD_STATE_CANCELED;
+}
+#endif
+
 void CARAMDvdRequest::WaitUntilComplete() {
   if (CARAMManager::GetInvalidDMAHandle() == x4_dmaReq) {
     return;

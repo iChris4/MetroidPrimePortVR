@@ -2271,6 +2271,159 @@ void TestUnfogged() {
   }
 }
 
+// ZTES 0 becomes the port-only PZTS 0 (depth compare ALWAYS instead of LEQUAL, ctor 0x28c2fc/0x28c384),
+// in a generator and a swoosh; IVSE 0 the port-only PIVS 0 (retail always turns the emitter's velocity);
+// ISVF the port-only PISV (EMRV's mode word, then the factor) and an authored ITPE 1 the port-only PITP
+// (the mode word). The defaults, an authored ITPE 0 and XFMD 3 (EMRV is zero there) write nothing;
+// an XFMD that EMRV is not decoded for drops ISVF, naming it.
+void TestInheritedMotion() {
+  const auto one = [](uint8_t ztes, uint8_t ivse, bool isvf, int itpe, uint32_t xfmd) {
+    return ConvertOne(OneGenerator([=](auto& o) {
+                        PutProperty(o, "XFMD", 0);
+                        PutConstant(o, xfmd);
+                        PutProperty(o, "ZTES", 0);
+                        PutFourCC(o, "CNST");
+                        o.push_back(ztes);
+                        PutProperty(o, "IVSE", 0);
+                        PutFourCC(o, "CNST");
+                        o.push_back(ivse);
+                        if (isvf) {
+                          PutProperty(o, "ISVF", 1);
+                          PutConstant(o, Bits(0.5f));
+                        }
+                        if (itpe >= 0) {
+                          PutProperty(o, "ITPE", 0);
+                          PutFourCC(o, "CNST");
+                          o.push_back(uint8_t(itpe));
+                        }
+                        PutTexr(o, 0x1234ABCD);
+                      }),
+                      {});
+  };
+  // XFMD 2 (the default) writes PZTS, PIVS and PITP at the end, PISV where ISVF stood
+  auto parts = one(0, 0, true, 1, 2);
+  Retail want;
+  want.f("GPSM").f("PISV").f("CNST").w(0).f("CNST").w(Bits(0.5f)).f("TEXR").f("CNST").f("CNST").w(0x1234ABCD);
+  want.f("PZTS").f("CNST").w(0).f("PIVS").f("CNST").w(0).f("PITP").f("CNST").w(0);
+  want.end();
+  CHECK_MSG(parts.size() == 1 && parts[0].part == want.bytes, "ZTES 0, IVSE 0, ISVF and ITPE 1 become PZTS, PIVS, PISV, PITP");
+  CHECK_MSG(!parts.empty() && parts[0].dropped.empty() && parts[0].approximated.empty(), "they are exact");
+  parts = one(1, 1, false, 0, 2);
+  Retail plain;
+  plain.f("GPSM").f("TEXR").f("CNST").f("CNST").w(0x1234ABCD).end();
+  CHECK_MSG(parts.size() == 1 && parts[0].part == plain.bytes && parts[0].dropped.empty(),
+            "ZTES 1, IVSE 1 and ITPE 0 write nothing");
+  const auto has = [](const ConvertedPart& part, const char* fourcc) {
+    return std::search(part.part.begin(), part.part.end(), fourcc, fourcc + 4) != part.part.end();
+  };
+  // With the import's spreadDefault, an absent ITPE is Remastered's default 1, flagged 0x100, and noted.
+  {
+    EffectConvertIO io;
+    io.spreadDefault = true;
+    const auto spread = [&](uint32_t xfmd) {
+      return ConvertOne(OneGenerator([=](auto& o) {
+                          PutProperty(o, "XFMD", 0);
+                          PutConstant(o, xfmd);
+                          PutTexr(o, 0x1234ABCD);
+                        }),
+                        io);
+    };
+    parts = spread(2);
+    Retail flagged;
+    flagged.f("GPSM").f("TEXR").f("CNST").f("CNST").w(0x1234ABCD).f("PITP").f("CNST").w(0x100).end();
+    CHECK_MSG(parts.size() == 1 && parts[0].part == flagged.bytes, "no ITPE under XFMD 2 is PITP 0x100");
+    CHECK_MSG(parts.size() == 1 &&
+                  std::count(parts[0].approximated.begin(), parts[0].approximated.end(),
+                             std::string("ITPE: absent, Remastered's default 1")) == 1,
+              "the default is noted");
+    parts = spread(3);
+    CHECK_MSG(parts.size() == 1 && !has(parts[0], "PITP"), "no ITPE under XFMD 3 writes nothing");
+  }
+  parts = one(1, 1, true, 1, 3);
+  CHECK_MSG(parts.size() == 1 && !has(parts[0], "PISV") && !has(parts[0], "PITP") && parts[0].dropped.empty(),
+            "ISVF and ITPE under XFMD 3 write nothing (EMRV is zero there)");
+  parts = one(1, 1, true, 1, 4);
+  CHECK_MSG(parts.size() == 1 && !has(parts[0], "PISV") && !has(parts[0], "PITP") && parts[0].dropped.size() == 2 &&
+                parts[0].dropped[0].find("ISVF under XFMD 4") != std::string::npos &&
+                parts[0].dropped[1].find("ITPE under XFMD 4") != std::string::npos,
+            "ISVF and ITPE under XFMD 4 are dropped, naming it");
+  const auto swoosh = [](uint8_t ztes) {
+    return ConvertSwoosh([=](auto& o) {
+      PutProperty(o, "ZTES", 0);
+      PutFourCC(o, "CNST");
+      o.push_back(ztes);
+    });
+  };
+  ConvertedPart part = swoosh(0);
+  CHECK_MSG(has(part, "PZTS") && part.dropped.empty(), "a swoosh's ZTES 0 becomes PZTS");
+  part = swoosh(1);
+  CHECK_MSG(!has(part, "PZTS") && part.dropped.empty(), "a swoosh's ZTES 1 writes nothing");
+}
+
+// DBIS (Remastered's particle depth bias, desc+0xd4) becomes the port-only PDBS on a generator and
+// a swoosh; 0 is the default and writes nothing.
+// A drawing sprite with DVVN 1..4 and no SIZE gets Remastered's default SIZE 1.0 (retail's is 0.1);
+// DVVN 0 or an authored SIZE writes none.
+void TestDvvnDefaultSize() {
+  const auto one = [](uint8_t dvvn, bool size) {
+    return ConvertOne(OneGenerator([=](auto& o) {
+                        PutProperty(o, "DVVN", 0);
+                        PutFourCC(o, "CNST");
+                        o.push_back(dvvn);
+                        if (size) {
+                          PutProperty(o, "SIZE", 1);
+                          PutConstant(o, Bits(0.5f));
+                        }
+                        PutTexr(o, 0x1234ABCD);
+                      }),
+                      {});
+  };
+  const auto sizes = [](const ConvertedPart& part) {
+    const char tag[4] = {'S', 'I', 'Z', 'E'};
+    int n = 0;
+    for (auto it = part.part.begin(); (it = std::search(it, part.part.end(), tag, tag + 4)) != part.part.end(); ++it) {
+      ++n;
+    }
+    return n;
+  };
+  auto parts = one(4, false);
+  Retail want;
+  want.f("GPSM").f("TEXR").f("CNST").f("CNST").w(0x1234ABCD).f("SIZE").f("CNST").w(Bits(1.0f)).end();
+  CHECK_MSG(parts.size() == 1 && parts[0].part == want.bytes, "DVVN 4 without SIZE writes SIZE 1.0");
+  parts = one(0, false);
+  CHECK_MSG(parts.size() == 1 && sizes(parts[0]) == 0, "DVVN 0 writes no SIZE");
+  parts = one(1, true);
+  CHECK_MSG(parts.size() == 1 && sizes(parts[0]) == 1, "an authored SIZE is kept alone");
+}
+
+void TestDepthBias() {
+  for (float bias : {-0.5f, 0.0f}) {
+    const auto parts = ConvertOne(OneGenerator([bias](auto& o) {
+                                    PutProperty(o, "DBIS", 3);
+                                    PutConstant(o, Bits(bias));
+                                    PutTexr(o, 0x1234ABCD);
+                                  }),
+                                  {});
+    Retail want;
+    want.f("GPSM").f("TEXR").f("CNST").f("CNST").w(0x1234ABCD);
+    if (bias != 0.0f) {
+      want.f("PDBS").f("CNST").w(Bits(bias));
+    }
+    want.end();
+    CHECK_MSG(parts.size() == 1 && parts[0].part == want.bytes, "DBIS becomes PDBS, 0 nothing");
+    CHECK_MSG(!parts.empty() && parts[0].dropped.empty() && parts[0].approximated.empty(), "DBIS is exact");
+  }
+  const ConvertedPart swoosh = ConvertSwoosh([](auto& o) {
+    PutProperty(o, "DBIS", 3);
+    PutConstant(o, Bits(-2.0f));
+  });
+  Retail pdbs;
+  pdbs.f("PDBS").f("CNST").w(Bits(-2.0f));
+  CHECK_MSG(std::search(swoosh.part.begin(), swoosh.part.end(), pdbs.bytes.begin(), pdbs.bytes.end()) != swoosh.part.end() &&
+                swoosh.dropped.empty(),
+            "a swoosh's DBIS becomes PDBS");
+}
+
 // GPUA (how much GPU time is free) is 1.0 exactly at a GPU frame time of 14 ms or less.
 void TestGpuAvailability() {
   auto parts = ConvertOne(OneGenerator([](auto& o) {
@@ -2657,6 +2810,130 @@ void TestComposedModelRotation() {
             "ordered PMRQ refuses a non-REUL operand rather than adding Euler components");
 }
 
+// SHTM 1 (shutdown kills the live particles) is the port-only PSHM, 0 the default; SHTT is the
+// shutdown countdown, PSHT; PMOV and PMPV are the model direction and pivot, vectors in the port's
+// space (BSIS, folded for a constant). PMOV is deleted by Remastered under a PMRQ base rotation
+// (PMRB/PMCF) and is not converted with EMTU.
+void TestShutdownAndPivot() {
+  const auto convert = [](auto&& body) {
+    return ConvertOne(OneGenerator([&](auto& o) {
+                        body(o);
+                        PutTexr(o, 0x1234ABCD);
+                      }),
+                      {});
+  };
+  const auto shtm = [&](uint8_t mode) {
+    return convert([&](auto& o) {
+      PutProperty(o, "SHTM", 0);
+      o.push_back(mode);
+    });
+  };
+  auto parts = shtm(1);
+  Retail want;
+  want.f("GPSM").f("PSHM").f("CNST").w(1).f("TEXR").f("CNST").f("CNST").w(0x1234ABCD).end();
+  CHECK_MSG(parts.size() == 1 && parts[0].part == want.bytes && parts[0].dropped.empty(), "SHTM 1 is PSHM 1");
+  parts = shtm(0);
+  Retail none;
+  none.f("GPSM").f("TEXR").f("CNST").f("CNST").w(0x1234ABCD).end();
+  CHECK_MSG(parts.size() == 1 && parts[0].part == none.bytes && parts[0].dropped.empty(), "SHTM 0 writes nothing");
+  parts = shtm(2);
+  CHECK_MSG(parts.size() == 1 && parts[0].part == none.bytes && parts[0].dropped.size() == 1 &&
+                parts[0].dropped[0] == "SHTM: mode 2",
+            "SHTM 2 is dropped with its reason");
+
+  const auto isdt = [&](uint8_t value) {
+    return convert([&](auto& o) {
+      PutProperty(o, "ISDT", 0);
+      o.push_back(value);
+    });
+  };
+  parts = isdt(0);
+  Retail pisd;
+  pisd.f("GPSM").f("PISD").f("CNST").w(0).f("TEXR").f("CNST").f("CNST").w(0x1234ABCD).end();
+  CHECK_MSG(parts.size() == 1 && parts[0].part == pisd.bytes && parts[0].dropped.empty(), "ISDT 0 is PISD 0");
+  if (!parts.empty()) {
+    std::vector<RetailPartProperty> properties;
+    std::string error;
+    CHECK_MSG(SplitRetailPart(parts[0].part.data(), parts[0].part.size(), properties, error),
+              "a PART with PISD passes the retail element reader");
+  }
+  parts = isdt(1);
+  CHECK_MSG(parts.size() == 1 && parts[0].part == none.bytes && parts[0].dropped.empty(),
+            "ISDT 1, the default, writes nothing");
+
+  const auto blit = [&](uint8_t value) {
+    return convert([&](auto& o) {
+      PutProperty(o, "BLIT", 0);
+      o.push_back(value);
+    });
+  };
+  parts = blit(1);
+  Retail pblt;
+  pblt.f("GPSM").f("PBLT").f("CNST").w(1).f("TEXR").f("CNST").f("CNST").w(0x1234ABCD).end();
+  CHECK_MSG(parts.size() == 1 && parts[0].part == pblt.bytes && parts[0].dropped.empty(), "BLIT 1 is PBLT 1");
+  if (!parts.empty()) {
+    std::vector<RetailPartProperty> properties;
+    std::string error;
+    CHECK_MSG(SplitRetailPart(parts[0].part.data(), parts[0].part.size(), properties, error),
+              "a PART with PBLT passes the retail element reader");
+  }
+  parts = blit(0);
+  CHECK_MSG(parts.size() == 1 && parts[0].part == none.bytes && parts[0].dropped.empty(),
+            "BLIT 0, the default, writes nothing");
+
+  parts = convert([](auto& o) {
+    PutProperty(o, "SHTT", 1);
+    PutConstant(o, 30);
+  });
+  Retail shtt;
+  shtt.f("GPSM").f("PSHT").f("CNST").w(30).f("TEXR").f("CNST").f("CNST").w(0x1234ABCD).end();
+  CHECK_MSG(parts.size() == 1 && parts[0].part == shtt.bytes && parts[0].dropped.empty(), "SHTT CNST(30) is PSHT");
+  if (!parts.empty()) {
+    std::vector<RetailPartProperty> properties;
+    std::string error;
+    CHECK_MSG(SplitRetailPart(parts[0].part.data(), parts[0].part.size(), properties, error),
+              "a PART with PSHT passes the retail element reader");
+  }
+
+  parts = convert([](auto& o) {
+    PutProperty(o, "PMOV", 3);
+    PutFourCC(o, "PVEL");
+    PutProperty(o, "PMPV", 3);
+    PutFourCC(o, "CNST");
+    PutConstant(o, Bits(0.f));
+    PutConstant(o, Bits(0.4f));
+    PutConstant(o, Bits(0.f));
+  });
+  Retail pivot;
+  pivot.f("GPSM").f("PMOV").f("PVEL");
+  pivot.f("PMPV").f("CNST").f("CNST").w(Bits(-0.f)).f("CNST").w(Bits(0.f)).f("CNST").w(Bits(0.4f));
+  pivot.f("TEXR").f("CNST").f("CNST").w(0x1234ABCD).end();
+  CHECK_MSG(parts.size() == 1 && parts[0].part == pivot.bytes && parts[0].dropped.empty(),
+            "PMOV PVEL and PMPV CNST(0, 0.4, 0) are written in the port's space");
+  if (!parts.empty()) {
+    std::vector<RetailPartProperty> properties;
+    std::string error;
+    CHECK_MSG(SplitRetailPart(parts[0].part.data(), parts[0].part.size(), properties, error),
+              "a PART with PMOV and PMPV passes the retail element reader");
+  }
+
+  const auto pmov = [&](const char* flag, uint8_t value) {
+    return convert([&](auto& o) {
+      PutProperty(o, flag, 0);
+      PutFourCC(o, "CNST");
+      o.push_back(value);
+      PutProperty(o, "PMOV", 3);
+      PutFourCC(o, "PVEL");
+    });
+  };
+  parts = pmov("PMRB", 1);
+  CHECK_MSG(parts.size() == 1 && parts[0].dropped.empty(), "PMOV under PMRB drops nothing");
+  parts = pmov("EMTU", 1);
+  CHECK_MSG(parts.size() == 1 &&
+                std::count(parts[0].dropped.begin(), parts[0].dropped.end(), "PMOV: EMTU makes its up the system's") == 1,
+            "PMOV with EMTU is dropped with its reason");
+}
+
 // INTS is the system scale in place of the external one (Compile 0x289af0): the port-only PINS,
 // turned into the port's numbers by BSSC; EXTS inside it stays the external scale. XFMD 5 frees it.
 void TestIntScale() {
@@ -3025,6 +3302,7 @@ std::vector<uint8_t> Mati(uint32_t shader, const std::vector<std::pair<const cha
   std::vector<uint8_t> out(0x6d, 0);
   for (int i = 0; i < 4; ++i) {
     out[0x48 + size_t(i)] = uint8_t(shader >> (24 - 8 * i));
+    out[0x61 + size_t(i)] = 0xff;  // EBlendMode -1: the generator's own blend row
   }
   const uint32_t count = uint32_t(textures.size());
   for (int i = 0; i < 4; ++i) {
@@ -3044,7 +3322,8 @@ std::vector<uint8_t> Mati(uint32_t shader, const std::vector<std::pair<const cha
 }
 
 // A root generator whose material is `Fresh(7)`, with a blend mode and sprite centre.
-std::vector<uint8_t> VmatEffect(bool model = false, const EffectGuid& material = Fresh(7), uint32_t pbdm = 2) {
+std::vector<uint8_t> VmatEffect(bool model = false, const EffectGuid& material = Fresh(7), uint32_t pbdm = 2,
+                                float sftd = 0) {
   std::vector<uint8_t> out(0x3c, 0);
   std::memcpy(out.data(), "RFRM", 4);
   std::memcpy(out.data() + 0x14, "GENP", 4);
@@ -3060,10 +3339,42 @@ std::vector<uint8_t> VmatEffect(bool model = false, const EffectGuid& material =
     PutProperty(out, "PMDL", 0);
     PutGuid(out, Legacy(0x1234ABCD));
   }
+  if (sftd > 0) {
+    PutProperty(out, "SFTD", 3);
+    PutConstant(out, Bits(sftd));
+  }
   PutProperty(out, "_END", 4);
   Put32(out, 0);
   out.insert(out.end(), {'F', 'O', 'O', 'T'});
   return out;
+}
+
+// SFTD goes into the VMAT (its depthSoften), so it is reported only when no VMAT comes out.
+void TestSftdReport() {
+  const std::vector<uint8_t> data = VmatEffect(false, Fresh(7), 2, 3.0f);
+  EffectNode effect;
+  std::string error;
+  CHECK_MSG(ParseEffect(data.data(), data.size(), effect, error), "sftd effect parses");
+  EffectConvertIO io;
+  io.materialTexture = [](const EffectGuid& material) { return material == Fresh(7) ? 0x5EED0007u : 0u; };
+  io.materialData = [](const EffectGuid&) { return Mati(0x461071b8, {{"TCH0", Fresh(8)}}); };
+  io.vfxTexture = [](const EffectGuid&) {
+    FlipbookAtlas atlas;
+    atlas.id = 0x5EED0008;
+    return atlas;
+  };
+  auto dropped = [](const ConvertedPart& part, const std::string& line) {
+    return std::find(part.dropped.begin(), part.dropped.end(), line) != part.dropped.end();
+  };
+  std::vector<ConvertedPart> parts = ConvertEffect(effect, data.data(), io);
+  CHECK_MSG(parts.size() == 1, "one sftd part");
+  if (parts.size() == 1) {
+    CHECK_MSG(!dropped(parts[0], "SFTD: Remastered only") && !dropped(parts[0], "SFTD: no VMAT"),
+              "an SFTD the VMAT takes is not reported dropped");
+  }
+  io.materialData = [](const EffectGuid&) { return Mati(0x12345678, {}); };
+  parts = ConvertEffect(effect, data.data(), io);
+  CHECK_MSG(parts.size() == 1 && dropped(parts[0], "SFTD: no VMAT"), "without a VMAT, SFTD is dropped as no VMAT");
 }
 
 // A model particle with a VMAT carries its converted model as VMSH, when the import has the mesh.
@@ -3513,7 +3824,10 @@ void TestWaveOrbSwoosh(const std::vector<uint8_t>& mati) {
       }
     }
   }
-  CHECK_MSG(blend == 0, "a swoosh on the orb's MATI keeps SBDM (alpha), not AdditiveOne");
+  // A swoosh is not a model: BindGraphicsState takes the MATI's EBlendMode 1 (One/One) over SBDM, and the
+  // fog stays SBDM's (alpha, fogged).
+  CHECK_MSG(blend == 5, "a swoosh on the orb's MATI takes its EBlendMode 1 (AdditiveOne) over SBDM");
+  CHECK_MSG(features != ~0u && (features & (1u << 27)) != 0, "the swoosh keeps SBDM's fog under the MATI's factors");
   CHECK_MSG(features != ~0u && (features & kAlreadyExposedBit) == 0, "a swoosh on the orb's MATI keeps the room's exposure");
 }
 
@@ -3522,7 +3836,9 @@ void TestWaveOrbSwoosh(const std::vector<uint8_t>& mati) {
 void TestWaveOrbExposurePolicy() {
   auto orb = [](uint32_t shader, uint32_t headerBlend) {
     std::vector<uint8_t> mati = Mati(shader, {{shader == 0x642dd72b ? "BCLR" : "TCH0", Fresh(8)}});
-    mati[0x61] = uint8_t(headerBlend);
+    for (int i = 0; i < 4; ++i) {
+      mati[0x61 + size_t(i)] = uint8_t(headerBlend >> (8 * i));
+    }
     return mati;
   };
   const uint32_t flagged = ConvertBlend(orb(0x642dd72b, 1), kWaveMati, true, 0, 12);
@@ -3936,7 +4252,9 @@ void TestPowerChargeExposurePolicy() {
 void TestWaveOrbHeaderBlend() {
   auto orb = [](uint32_t shader, uint32_t headerBlend) {
     std::vector<uint8_t> mati = Mati(shader, {{shader == 0x642dd72b ? "BCLR" : "TCH0", Fresh(8)}});
-    mati[0x61] = uint8_t(headerBlend);
+    for (int i = 0; i < 4; ++i) {
+      mati[0x61 + size_t(i)] = uint8_t(headerBlend >> (8 * i));
+    }
     return mati;
   };
   CHECK_MSG(ConvertBlend(orb(0x642dd72b, 1), kWaveMati, true) == 5, "wave orb MATI + PMDL + header blend 1: AdditiveOne (5)");
@@ -3945,13 +4263,32 @@ void TestWaveOrbHeaderBlend() {
   CHECK_MSG(ConvertBlend(orb(0x461071b8, 1), kWaveMati, true) == 0, "another shader keeps PBDM 0");
   CHECK_MSG(ConvertBlend(orb(0x642dd72b, 2), kWaveMati, true) == 0, "header blend 2 keeps PBDM 0");
   CHECK_MSG(ConvertBlend(std::vector<uint8_t>(0x50, 0), kWaveMati, true) == ~0u, "a short MATI writes no VMAT, no crash");
-  CHECK_MSG(ConvertBlend(orb(0x642dd72b, 1), kWaveMati, false) == 0, "no PMDL keeps PBDM 0");
+  CHECK_MSG(ConvertBlend(orb(0x642dd72b, 1), kWaveMati, false) == 5, "no PMDL: the sprite takes EBlendMode 1 over PBDM");
   // The older modes are untouched: PBDM 0..3 convert as themselves, on the orb's MATI too without PMDL
   // and on its PMDL with another guid.
   for (uint32_t pbdm = 0; pbdm <= 3; ++pbdm) {
     CHECK_MSG(ConvertBlend(orb(0x642dd72b, 1), Fresh(7), true, pbdm) == pbdm, "PBDM 0..3 convert unchanged");
-    CHECK_MSG(ConvertBlend(orb(0x642dd72b, 1), kWaveMati, false, pbdm) == pbdm, "PBDM 0..3 without PMDL unchanged");
+    CHECK_MSG(ConvertBlend(orb(0x642dd72b, 1), kWaveMati, false, pbdm) == 5, "EBlendMode 1 without PMDL, whatever the PBDM");
   }
+  // A sprite's MATI EBlendMode (SBlendModeState 0xf0164) wins over PBDM; -1 and the modes the port has no
+  // exact state for keep the row.
+  const struct {
+    uint32_t header, pbdm, blend;
+  } sprite[] = {{~0u, 2, 2}, {0, 2, 3}, {1, 2, 5}, {2, 1, 0}, {5, 2, 6}, {6, 0, 7}, {3, 2, 2}, {4, 1, 1},
+                {7, 0, 0}, {10, 2, 2}, {14, 3, 3}};
+  for (const auto& c : sprite) {
+    CHECK_MSG(ConvertBlend(orb(0x461071b8, c.header), Fresh(7), false, c.pbdm) == c.blend,
+              "a sprite takes its MATI's EBlendMode where the port has it, else the PBDM row");
+  }
+  // The fog is the row's (SetupFogFromBlendMode on PBDM), whatever the MATI's factors.
+  const auto fogBits = [&orb](uint32_t header, uint32_t pbdm) {
+    return ConvertBlend(orb(0x461071b8, header), Fresh(7), false, pbdm, 12) & (1u << 27 | 1u << 22);
+  };
+  CHECK_MSG(fogBits(6, 0) == 1u << 27, "PBDM alpha under EBlendMode 6: fogged");
+  CHECK_MSG(fogBits(1, 3) == 1u << 27, "PBDM opaque under EBlendMode 1: fogged");
+  CHECK_MSG(fogBits(2, 1) == 1u << 22, "PBDM additive under EBlendMode 2: unfogged");
+  CHECK_MSG(fogBits(0, 2) == 1u << 22, "PBDM 2 under EBlendMode 0: unfogged");
+  CHECK_MSG(fogBits(2, 0) == 0 && fogBits(5, 1) == 0 && fogBits(~0u, 1) == 0, "matching fog pins nothing");
   CHECK_MSG(ConvertBlend(orb(0x642dd72b, 1), kWaveMati, true, 2) == 5, "the override is the orb's, whatever its PBDM");
   TestWaveOrbSwoosh(orb(0x642dd72b, 1));
 }
@@ -4266,6 +4603,65 @@ void TestVmatIceChargeCollisionLitRecipe() {
             "390fc33b under DFOG 1 is Unfogged");
 }
 
+// VFX_Color_Opacity_Lit (20e149b2, the Landing Site mist): LIT_ 1 selects the lit perm, the ParticleLit bit,
+// and its inverse exposure (IEXP, or DVVN 3/4's default) makes the draw AlreadyExposed. LIT_ 0 is the unlit
+// recipe alone, and so is a shader without a lit tail.
+void TestVmatParticleLit() {
+  constexpr uint32_t kColorTex = 1, kOpacityTex = 2, kDepthSoften = 32, kParticleLit = 1u << 26;
+  const auto features = [](uint32_t shader, int lit, int iexp, int dvvn) {
+    std::vector<uint8_t> data = VmatEffect(false, Fresh(7), 0);
+    std::vector<uint8_t> extra;
+    if (lit >= 0) {
+      PutProperty(extra, "LIT_", 0);
+      extra.push_back(uint8_t(lit));
+    }
+    if (iexp >= 0) {
+      PutProperty(extra, "IEXP", 1);
+      extra.push_back(uint8_t(iexp));
+    }
+    if (dvvn >= 0) {
+      PutProperty(extra, "DVVN", 1);
+      extra.push_back(uint8_t(dvvn));
+    }
+    data.insert(data.end() - 13, extra.begin(), extra.end());
+    EffectNode node;
+    std::string error;
+    CHECK_MSG(ParseEffect(data.data(), data.size(), node, error), "the lit sprite effect parses");
+    EffectConvertIO io;
+    io.materialTexture = [](const EffectGuid&) { return 0x5EED0007u; };
+    io.materialData = [shader](const EffectGuid& material) {
+      return material == Fresh(7) ? Mati(shader, {{"BCLR", Fresh(8)}, {"TCH0", Fresh(9)}}) : std::vector<uint8_t>();
+    };
+    io.vfxTexture = [](const EffectGuid& texture) {
+      FlipbookAtlas atlas;
+      atlas.id = texture == Fresh(8) ? 0x5EED0008 : texture == Fresh(9) ? 0x5EED0009 : 0;
+      return atlas;
+    };
+    std::vector<ConvertedPart> parts = ConvertEffect(node, data.data(), io);
+    std::vector<RetailPartProperty> properties;
+    if (parts.size() != 1 || !SplitRetailPart(parts[0].part.data(), parts[0].part.size(), properties, error)) {
+      return ~0u;
+    }
+    for (const RetailPartProperty& property : properties) {
+      if (property.fourcc == EffectFourCC("VMAT")) {
+        return VmatWord(property.value, 12);
+      }
+    }
+    return ~0u;
+  };
+  const uint32_t unlit = kColorTex | kOpacityTex | kDepthSoften;
+  CHECK_MSG(features(0x20e149b2, -1, -1, -1) == unlit, "20e149b2 without LIT_ is the unlit recipe");
+  CHECK_MSG(features(0x20e149b2, 0, 1, 4) == unlit, "LIT_ 0 is the unlit recipe, IEXP or not");
+  CHECK_MSG(features(0x20e149b2, 1, 0, 1) == (unlit | kParticleLit), "LIT_ 1: ParticleLit, at the room's exposure");
+  // The lit vertex perm reads no inverse exposure (080_1: o6 = v3, v2.z unread), so IEXP never makes a lit
+  // draw AlreadyExposed.
+  CHECK_MSG(features(0x20e149b2, 1, 1, 1) == (unlit | kParticleLit), "LIT_ 1 + IEXP 1 is lit at the room exposure");
+  CHECK_MSG(features(0x20e149b2, 1, -1, 4) == (unlit | kParticleLit), "LIT_ 1 under DVVN 4 is lit at the room exposure");
+  CHECK_MSG(features(0x20e149b2, 1, 0, 4) == (unlit | kParticleLit), "LIT_ 1 + IEXP 0 is lit at the room exposure");
+  const uint32_t other = features(0x461071b8, 1, 1, 4);
+  CHECK_MSG(other != ~0u && (other & (kParticleLit | kAlreadyExposedBit)) == 0, "a shader off the lit-tail list stays unlit");
+}
+
 // VFX_VisorRunOff (b5e12668 / d85d4169): one TCH0 flow map as the colour slot, CCH0..4 whole in VPRM
 // v1 and SMTR overrides of any of them to their VPRM targets, Unfogged without a DFOG 1 (the visor
 // composite pass has no fog), and the second shader on its own feature bit.
@@ -4359,6 +4755,60 @@ void TestVmatVisorRunOffRecipes() {
             "d85d4169 without DFOG writes an exact VMAT");
   CHECK_MSG(VmatWord(value(properties, EffectFourCC("VMAT")), 12) == (kVisorRunOffLit | kUnfogged),
             "d85d4169 is VisorRunOffLit, Unfogged");
+}
+
+// VFX_VisorRain (0ec41df0, the visor rain splash GENP 45ba782d; vfx/0ec41df0.md): TCH0, a 2-channel
+// noise map, as the colour slot, CCH0 whole in VPRM v1 (the drop mask's scale and gain, which the
+// effect's SMTR animates), Unfogged without a DFOG 1 (the visor composite pass has no fog), and no
+// other slot: the fragment maths needs one noise map and the PMTR rows 0..2.
+void TestVmatVisorRainRecipe() {
+  constexpr uint32_t kVisorRain = 1u << 28, kUnfogged = 1u << 22;
+  // The effect's effective CCH0: the MATI's own (1, .01, .1, .1) with the GENP's SMTR over it.
+  const std::vector<std::array<float, 4>> cch = {{1.f, 0.12f, 0.2f, 4.f}};
+  const std::vector<uint8_t> data = VmatEffect();
+  const std::vector<uint8_t> mati = MatiCchN(0x0ec41df0, {{"TCH0", Fresh(8)}}, cch);
+  EffectNode node;
+  std::string error;
+  CHECK_MSG(ParseEffect(data.data(), data.size(), node, error), "the visor rain effect parses");
+  EffectConvertIO io;
+  io.materialTexture = [](const EffectGuid&) { return 0x5EED0007u; };
+  io.materialData = [&mati](const EffectGuid&) { return mati; };
+  io.vfxTexture = [](const EffectGuid& texture) {
+    FlipbookAtlas atlas;
+    if (texture == Fresh(8)) {
+      atlas.id = 0x5EED0008;
+    }
+    return atlas;
+  };
+  std::vector<ConvertedPart> parts = ConvertEffect(node, data.data(), io);
+  std::vector<RetailPartProperty> properties;
+  if (parts.size() == 1) {
+    SplitRetailPart(parts[0].part.data(), parts[0].part.size(), properties, error);
+  }
+  const auto value = [](const std::vector<RetailPartProperty>& properties, uint32_t fourcc) {
+    for (const RetailPartProperty& property : properties) {
+      if (property.fourcc == fourcc) {
+        return property.value;
+      }
+    }
+    return std::vector<uint8_t>();
+  };
+  const std::vector<uint8_t> vmat = value(properties, EffectFourCC("VMAT"));
+  CHECK_MSG(parts.size() == 1 && !vmat.empty() && parts[0].approximated.empty(),
+            "0ec41df0 writes an exact VMAT");
+  CHECK_MSG(VmatWord(vmat, 12) == (kVisorRain | kUnfogged),
+            "0ec41df0 is VisorRain, Unfogged (the visor composite pass has no fog)");
+  CHECK_MSG(VmatWord(vmat, 20) == 1, "0ec41df0's TCH0 is its only texture");
+  // The role words follow the one texture entry (11 words at 24): colour first, then the absent slots.
+  CHECK_MSG(VmatWord(vmat, 24 + 44) == 0 && VmatWord(vmat, 24 + 44 + 4) == ~0u,
+            "0ec41df0's TCH0 is the colour slot, with no opacity map");
+  // VPRM v1: version, the NMAP slot (-1), one row, then CCH0 whole.
+  const std::vector<uint8_t> vprm = value(properties, EffectFourCC("VPRM"));
+  CHECK_MSG(vprm.size() == 8 + 12 + 16 && VmatWord(vprm, 8) == 1 && VmatWord(vprm, 16) == 1,
+            "VPRM v1: no NMAP slot and one CCH row");
+  CHECK_MSG(VmatWord(vprm, 20) == Bits(1.f) && VmatWord(vprm, 24) == Bits(0.12f) &&
+                VmatWord(vprm, 28) == Bits(0.2f) && VmatWord(vprm, 32) == Bits(4.f),
+            "VPRM carries the effect's CCH0 (1, .12, .2, 4)");
 }
 
 bool Contains(const std::vector<uint8_t>& bytes, const std::vector<uint8_t>& what) {
@@ -4586,6 +5036,50 @@ void TestElc2BlendAndLifetime() {
   }
 }
 
+// An ELC2's NCLR GRAD over ILPT reads slot 2 = nodes - 1, which CParticleElectric2Port sets as the
+// lifetime around the evaluation: PLPT offset 0. Its XFMD 3 is the port-only follow flag; 2 is not written.
+void TestElc2NclrAndXfmd() {
+  auto parts = ConvertElc2([](auto& o) {
+    PutProperty(o, "NCLR", 5);
+    PutFourCC(o, "GRAD");
+    o.push_back(2);
+    for (uint16_t half : {0x3c00, 0x0000, 0x0000, 0x3c00}) {
+      o.push_back(uint8_t(half));
+      o.push_back(uint8_t(half >> 8));
+    }
+    Put32(o, Bits(0.0f));
+    for (uint16_t half : {0x0000, 0x0000, 0x3c00, 0x0000}) {
+      o.push_back(uint8_t(half));
+      o.push_back(uint8_t(half >> 8));
+    }
+    Put32(o, Bits(1.0f));
+    PutFourCC(o, "ILPT");
+    PutConstant(o, 100);
+    o.push_back(1);
+    PutProperty(o, "XFMD", 1);
+    PutConstant(o, 3);
+  });
+  CHECK_MSG(parts.size() == 1, "ELC2 with an NCLR GRAD and XFMD 3 converts");
+  if (parts.size() == 1) {
+    Retail plpt;
+    plpt.f("PLPT").w(0).f("CNST").w(100).b(1);
+    CHECK_MSG(Contains(parts[0].part, plpt.bytes), "ELC2 NCLR GRAD over ILPT is PLPT offset 0");
+    Retail follow;
+    follow.f("XFMD").f("CNST").w(3);
+    CHECK_MSG(Contains(parts[0].part, follow.bytes), "ELC2 XFMD 3 is written as the follow flag");
+    CHECK_MSG(parts[0].approximated.empty(), "the ELC2 NCLR GRAD is exact");
+  }
+  parts = ConvertElc2([](auto& o) {
+    PutProperty(o, "XFMD", 1);
+    PutConstant(o, 2);
+  });
+  if (parts.size() == 1) {
+    Retail follow;
+    follow.f("XFMD");
+    CHECK_MSG(!Contains(parts[0].part, follow.bytes), "ELC2 XFMD 2 is not written");
+  }
+}
+
 // A generator with a PMDL but no TEXR or MTIN draws only models: its SIZE is
 // left out and a SIZE of 0 written instead, as with one that draws nothing.
 void TestModelsOnly() {
@@ -4703,6 +5197,7 @@ void TestFacingRotation() {
 int main() {
   TestVmat();
   TestVmsh();
+  TestSftdReport();
   TestAtlasTexture();
   TestModelChoice();
   TestColourChoice();
@@ -4733,6 +5228,10 @@ int main() {
   TestDrawsNothing();
   TestBlendMode();
   TestUnfogged();
+  TestInheritedMotion();
+  TestDepthBias();
+  TestDvvnDefaultSize();
+  TestShutdownAndPivot();
   TestGpuAvailability();
   TestCurlNoise();
   TestParentRead();
@@ -4746,12 +5245,15 @@ int main() {
   TestVmatPyroRecipes();
   TestVmatDisintegrationRecipe();
   TestVmatVisorRunOffRecipes();
+  TestVmatVisorRainRecipe();
   TestVmatVisorSplatRecipe();
   TestVmatSceneWarpRecipes();
   TestVmatIceChargeBeamRecipe();
   TestVmatIceChargeCollisionRecipe();
   TestVmatIceChargeCollisionLitRecipe();
+  TestVmatParticleLit();
   TestElc2BlendAndLifetime();
+  TestElc2NclrAndXfmd();
   TestWaveOrbHeaderBlend();
   TestWaveOrbExposurePolicy();
   TestPowerBallExposurePolicy();

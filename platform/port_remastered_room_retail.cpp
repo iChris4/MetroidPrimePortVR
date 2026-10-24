@@ -149,6 +149,13 @@ bool ReadScly(const std::vector<uint8_t>& m, std::vector<ScriptObject>& objects)
       if (objectEnd - rest >= 12) {
         object.hasPos = true;
         object.pos = {port::ReadBEFloat(&m[rest]), port::ReadBEFloat(&m[rest + 4]), port::ReadBEFloat(&m[rest + 8])};
+        if (objectEnd - rest >= 36) {
+          object.hasXf = true;
+          for (size_t i = 0; i < 3; ++i) {
+            object.rot[i] = port::ReadBEFloat(&m[rest + 12 + 4 * i]);
+            object.scale[i] = port::ReadBEFloat(&m[rest + 24 + 4 * i]);
+          }
+        }
       } else if (type == 3) {
         return false;
       }

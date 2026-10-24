@@ -66,6 +66,10 @@ public:
   static void PortDropScanZoom();
   // What DrawScanEffect draws before its copy (scan shield, icons, target reticle).
   void PortDrawScanOverlay(const CStateManager& mgr, const CTargetingManager* tgtMgr) const;
+  // The scan window's width and height factors: narrower and taller under pointer aim, where
+  // the window is the cursor (Trilogy's is near square); the scan zone takes the same shape.
+  static float PortWindowShapeX();
+  static float PortWindowShapeY();
 #endif
 
 private:

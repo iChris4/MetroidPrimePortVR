@@ -57,6 +57,29 @@ void aurora_set_pipeline_eviction(uint32_t idleFrames);
 void aurora_trim_pipelines(uint32_t idleFrames);
 // Built pipelines held now.
 uint32_t aurora_get_pipeline_count(void);
+// Pipeline use contexts. Draws record the pipelines they use under the current context, so a later
+// session can build them before they are needed. GLOBAL pipelines (player, gun, HUD) are built at
+// startup and never evicted; FRONTEND is the default; an area is (uint64_t(mlvl) << 32) | areaIdx.
+#define AURORA_PIPELINE_CONTEXT_GLOBAL 0ull
+#define AURORA_PIPELINE_CONTEXT_FRONTEND 1ull
+#define AURORA_PIPELINE_CONTEXT_AREA(mlvl, area) ((((uint64_t)(uint32_t)(mlvl)) << 32) | (uint32_t)(area))
+// Draw thread: the context the draws that follow record under; returns the previous one. Every frame
+// starts in FRONTEND.
+uint64_t aurora_pipeline_set_context(uint64_t context);
+// Any thread: queue background builds of the pipelines `context` used before, plus those shared by
+// several areas. Lazy pipeline cache only; a context prefetched in the last 600 frames is skipped.
+void aurora_pipeline_prefetch(uint64_t context);
+typedef struct {
+  uint64_t skippedDraws; // draws dropped because their pipeline was not built yet
+  uint64_t newMisses;    // draw lookups of a pipeline the cache had never recorded
+  uint64_t knownMisses;  // draw lookups of a recorded pipeline that was not built or queued
+  uint64_t lateMisses;   // draw lookups of a pipeline still waiting in the background queue
+  uint64_t prefetches;   // prefetch requests run
+  uint64_t prefetchQueued; // rows those requests queued for a build
+  uint32_t pinned;       // GLOBAL pipelines kept from eviction
+  uint32_t known;        // pipelines the cache has rows for (lazy only)
+} AuroraPipelineStats;
+void aurora_get_pipeline_stats(AuroraPipelineStats* out);
 // Live sampled/target TextureRefs grouped by creation label, size and format, most numerous first. Fills up to
 // `cap` groups and returns how many exist; `totals` (optional) gets the count and bytes over all of them.
 typedef struct {

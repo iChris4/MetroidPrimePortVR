@@ -146,7 +146,7 @@ wgpu::CompareFunction to_compare_function(GXCompare func) {
 }
 
 wgpu::BlendState to_blend_state(GXBlendMode mode, GXBlendFactor srcFac, GXBlendFactor dstFac, GXLogicOp op,
-                                u32 dstAlpha) {
+                                u32 dstAlpha, bool dualSource) {
   wgpu::BlendComponent colorBlendComponent;
   switch (mode) {
     DEFAULT_FATAL("unsupported blend mode {}", underlying(mode));
@@ -197,6 +197,20 @@ wgpu::BlendState to_blend_state(GXBlendMode mode, GXBlendFactor srcFac, GXBlendF
       break;
     }
     break;
+  }
+  if (dualSource) {
+    // The TEV alpha is the second source; the first's alpha is 1 (DstAlphaMode::DualSource).
+    const auto remap = [](wgpu::BlendFactor factor) {
+      if (factor == wgpu::BlendFactor::SrcAlpha) {
+        return wgpu::BlendFactor::Src1Alpha;
+      }
+      if (factor == wgpu::BlendFactor::OneMinusSrcAlpha) {
+        return wgpu::BlendFactor::OneMinusSrc1Alpha;
+      }
+      return factor;
+    };
+    colorBlendComponent.srcFactor = remap(colorBlendComponent.srcFactor);
+    colorBlendComponent.dstFactor = remap(colorBlendComponent.dstFactor);
   }
   wgpu::BlendComponent alphaBlendComponent;
   if (dstAlpha != UINT32_MAX) {
@@ -377,8 +391,29 @@ static const wgpu::PipelineLayout& pipeline_layout(TextureLayout textures, bool 
   }
 }
 
+DstAlphaMode dst_alpha_mode(const PipelineConfig& config) noexcept {
+  // A zero constant times any source alpha is still zero.
+  if (config.shadowPass != 0 || !config.alphaUpdate || config.dstAlpha == UINT32_MAX || config.dstAlpha == 0) {
+    return DstAlphaMode::None;
+  }
+  // The draw-id and actor-decal shaders end in their own return (alpha 1).
+  const auto& sc = config.shaderConfig;
+  if (sc.drawId || (sc.actorDecal != 0 && sc.lineMode == 0)) {
+    return DstAlphaMode::None;
+  }
+  const auto usesSourceAlpha = [](GXBlendFactor factor) {
+    return factor == GX_BL_SRCALPHA || factor == GX_BL_INVSRCALPHA;
+  };
+  const bool needsSourceAlpha = config.colorUpdate && config.blendMode == GX_BM_BLEND &&
+                                (usesSourceAlpha(config.blendFacSrc) || usesSourceAlpha(config.blendFacDst));
+  if (!needsSourceAlpha) {
+    return DstAlphaMode::Replace;
+  }
+  return webgpu::g_dualSourceBlendingSupported ? DstAlphaMode::DualSource : DstAlphaMode::None;
+}
+
 wgpu::RenderPipeline build_pipeline(const PipelineConfig& config, ArrayRef<wgpu::VertexBufferLayout> vtxBuffers,
-                                    wgpu::ShaderModule shader, const char* label) noexcept {
+                                    wgpu::ShaderModule shader, const char* label, DstAlphaMode dstAlphaMode) noexcept {
   ZoneScoped;
   if (config.shadowPass != 0) {
     // The sun's shadow map: depth only, culled as the draw is, with Remastered's shadow pass bias
@@ -426,7 +461,8 @@ wgpu::RenderPipeline build_pipeline(const PipelineConfig& config, ArrayRef<wgpu:
       .depthBiasClamp = depthBiasClamp,
   };
   const auto blendState =
-      to_blend_state(config.blendMode, config.blendFacSrc, config.blendFacDst, config.blendOp, config.dstAlpha);
+      to_blend_state(config.blendMode, config.blendFacSrc, config.blendFacDst, config.blendOp, config.dstAlpha,
+                     dstAlphaMode == DstAlphaMode::DualSource);
   const std::array colorTargets{wgpu::ColorTargetState{
       // The HDR scene's RGBA16F target is a different format from every other pass's.
       .format = config.shaderConfig.sceneHdr ? webgpu::SceneHdrFormat : g_graphicsConfig.surfaceConfiguration.format,
@@ -694,10 +730,21 @@ void populate_pipeline_config(PipelineConfig& config, GXPrimitive primitive, GXV
   config.depthFunc = depthEqual ? GX_EQUAL : g_gxState.depthFunc;
   config.cullMode = cullMode;
   config.blendMode = drawId ? GX_BM_NONE : g_gxState.blendMode;
-  config.blendFacSrc = g_gxState.blendFacSrc;
-  config.blendFacDst = g_gxState.blendFacDst;
+  // An EFB without alpha: its alpha reads as 1 and is never written (nor is GXSetDstAlpha's).
+  const bool hasAlpha = efb_has_alpha(g_gxState.pixelFmt);
+  const auto blendFactor = [hasAlpha](GXBlendFactor factor) {
+    if (!hasAlpha && factor == GX_BL_DSTALPHA) {
+      return GX_BL_ONE;
+    }
+    if (!hasAlpha && factor == GX_BL_INVDSTALPHA) {
+      return GX_BL_ZERO;
+    }
+    return factor;
+  };
+  config.blendFacSrc = blendFactor(g_gxState.blendFacSrc);
+  config.blendFacDst = blendFactor(g_gxState.blendFacDst);
   config.blendOp = g_gxState.blendOp;
-  config.dstAlpha = g_gxState.dstAlpha;
+  config.dstAlpha = hasAlpha && g_gxState.alphaUpdate ? g_gxState.dstAlpha : UINT32_MAX;
   config.polygonOffsetBits = std::bit_cast<uint32_t>(polygonOffset);
   config.polygonOffsetScaleBits = std::bit_cast<uint32_t>(polygonOffsetScale);
   config.polygonOffsetClampBits = std::bit_cast<uint32_t>(g_gxState.clamp);
@@ -716,7 +763,7 @@ void populate_pipeline_config(PipelineConfig& config, GXPrimitive primitive, GXV
     // The receiver keeps its own cull (back faces for the world's geometry), as Remastered's
     // decal draw does.
   }
-  config.alphaUpdate = g_gxState.alphaUpdate && !depthOnly;
+  config.alphaUpdate = hasAlpha && g_gxState.alphaUpdate && !depthOnly;
   config.colorUpdate = g_gxState.colorUpdate && !depthOnly;
   static_assert(sizeof(PipelineConfig) == sizeof(ShaderConfig) + 13 * sizeof(uint32_t) + 4 * sizeof(bool),
                 "a new PipelineConfig field must be written above");

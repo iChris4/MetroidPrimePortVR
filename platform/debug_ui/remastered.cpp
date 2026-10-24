@@ -1,5 +1,5 @@
-// F1 overlay: The Remastered tab, PAL languages and Remastered debugging. State and helpers shared
-// with the other parts are in debug_ui_internal.h.
+// F1 overlay: The Mods page's built-in sections, PAL languages and Remastered debugging. State and
+// helpers shared with the other parts are in debug_ui_internal.h.
 
 #include "debug_ui_internal.h"
 
@@ -11,6 +11,7 @@
 #include "port_room_geo.h"
 #include "port_paths.h"
 #include "port_mods.h"
+#include "port_dread_samus_mod.h"
 #include "port_remastered_import.h"
 #include "port_remastered_text.h"
 #include "port_savestate.h"
@@ -46,9 +47,8 @@ void DrawRemasteredWarning() {
     ImGui::SetWindowFontScale(1.6f);
     ImGui::TextColored(bad, "EXPERIMENTAL - EXPECT BREAKAGE");
     ImGui::SetWindowFontScale(1.f);
-    ImGui::TextWrapped("Remastered support is unfinished and broken in places. Expect wrong materials, missing or "
-                       "misplaced models and effects, visual glitches, slowdowns and crashes. Re-imports are often "
-                       "needed after updates.");
+    ImGui::TextWrapped("Remastered support is unfinished: expect wrong materials, missing models, "
+                       "glitches and crashes. Re-import after updates.");
     ImGui::EndChild();
     ImGui::PopStyleVar();
     ImGui::PopStyleColor(2);
@@ -60,8 +60,8 @@ void DrawRemasteredWarning() {
 void DrawPalLanguages() {
   if (PortDisc::Current() == PortDisc::Version::Pal) {
     ImGui::TextDisabled("PAL disc: support is experimental.");
-    ItemHelp("The port runs the USA 1.00 code on the PAL disc's data. It has been checked on every "
-             "room, but less played than a USA disc: please report anything that differs.");
+    ItemHelp("The port runs the USA 1.00 code on the PAL disc's data. Checked on every room, but "
+             "less played than USA: please report differences.");
     return;
   }
   std::string picked;
@@ -95,10 +95,9 @@ void DrawPalLanguages() {
     OpenRemasteredDialog(kPalLanguagesPick);
   }
   ImGui::EndDisabled();
-  ItemHelp("For a USA disc: pick your own PAL Metroid Prime image (GM8P01) to add its French, German, "
-           "Spanish and Italian text and its fonts. Only the text is taken; the game stays the USA "
-           "one. The disc's full Flaahgra boss theme is added too (F1 > Settings > Audio). Restart "
-           "afterwards so every menu and the font take it.");
+  ItemHelp("For a USA disc: pick your PAL Metroid Prime image (GM8P01) to add its French, German, "
+           "Spanish and Italian text and fonts. The full Flaahgra boss theme is added too. Restart "
+           "afterwards.");
   if (installed > 0 && !state.running) {
     ImGui::SameLine();
     if (ImGui::Button("Remove")) {
@@ -138,10 +137,9 @@ void DrawLanguageSection() {
                      static_cast< int >(PortRemastered::kTextLanguageCount) + 1)) {
       SetTextLanguage(language == 0 ? "" : PortRemastered::kTextLanguages[language - 1].code);
     }
-    ItemHelp("The language of the game's text. A USA disc has only English; a PAL disc also has French, "
-             "German, Spanish and Italian (or add them below), and the Remastered import adds its "
-             "languages (its text wins). Text missing in a language stays English. Text already on screen "
-             "changes the next time its menu or screen opens; the font changes after a restart.");
+    ItemHelp("The language of the game's text. A USA disc has English only; a PAL disc, the "
+             "options below and the Remastered import add more. Missing text stays English. Open "
+             "menus change the next time they open; the font changes after a restart.");
   }
   DrawPalLanguages();
 
@@ -155,9 +153,9 @@ void DrawRemasteredRoomModels(bool geoReady) {
   if (ImGui::Combo("Room geometry", &mode, kModes, 3)) {
     PortRoomGeo::SetMode(PortRoomGeo::Mode(mode));
   }
-  ImGui::SetItemTooltip("Recommended: in place of the room.\n"
-                        "Draws a mod's Remastered room models instead of the original rooms, or on\n"
-                        "top of them to compare the two. Does nothing without a room geometry mod.");
+  ImGui::SetItemTooltip("Recommended: in place of the room.\nDraws a mod's Remastered room models "
+                        "instead of the original rooms,\n"
+                        "or over them to compare. Needs a room geometry mod.");
 #ifdef __ANDROID__
   // The defaults (MSAA off, 1x) are fine; this catches a phone set up for the original rooms.
   if (PortRoomGeo::GetMode() != PortRoomGeo::Mode::Off && (EffectiveMsaa() > 1 || EffectiveRenderScale() <= 0.f || EffectiveRenderScale() > 2.f)) {
@@ -168,62 +166,80 @@ void DrawRemasteredRoomModels(bool geoReady) {
       SetRenderScale(2.f);
       MarkDirty();
     }
-    ImGui::SetItemTooltip("Turns anti-aliasing off and sets the EFB scale to 2x (the Quality settings).\n"
-                          "The Remastered rooms draw many more models, and a phone's GPU pays for\n"
-                          "each one at every pixel it renders.");
+    ImGui::SetItemTooltip(
+        "Turns anti-aliasing off and sets the resolution scale to 2x (Quality settings).\nRemastered "
+        "rooms draw many more models, which is heavy for a phone's GPU.");
   }
 #endif
   bool areaLights = PortRoomGeo::AreaLights();
   if (ImGui::Checkbox("Take the area's lights", &areaLights)) {
     PortRoomGeo::SetAreaLights(areaLights);
   }
-  ImGui::SetItemTooltip("Recommended: off.\n"
-                        "Also lights the Remastered rooms with the game's own lights where the room\n"
-                        "has baked light. Off matches Remastered.");
+  ImGui::SetItemTooltip("Recommended: off.\nAlso lights Remastered rooms with the game's lights "
+                        "where the room has baked\n"
+                        "light. Off matches Remastered.");
   float minPixels = PortRoomGeo::MinPixels();
   if (ImGui::SliderFloat("Skip small models", &minPixels, 0.f, 8.f, minPixels > 0.f ? "under %.1f px" : "off")) {
     PortRoomGeo::SetMinPixels(minPixels);
     MarkDirty();
   }
-  ImGui::SetItemTooltip("Leaves out room models that look smaller than this on screen (in the game's\n"
-                        "own 480-line pixels, whatever the render scale). Raise it if frames are\n"
-                        "slow; 0 draws everything.");
+  ImGui::SetItemTooltip("Skips room models that look smaller than this on screen.\nRaise it if "
+                        "frames are slow; 0 draws everything.");
   float lodDistance = PortRoomGeo::LodDistance();
   if (ImGui::SliderFloat("Detail distance", &lodDistance, 0.f, 4.f, lodDistance > 0.f ? "x%.2f" : "full detail")) {
     PortRoomGeo::SetLodDistance(lodDistance);
     MarkDirty();
   }
-  ImGui::SetItemTooltip("Where room models switch to Remastered's simpler versions of themselves\n"
-                        "farther away: 1 is Remastered's own distances, higher keeps the full models\n"
-                        "farther out, 0 never switches. Lower it if frames are slow. Needs an import\n"
-                        "made by this version.");
+  ImGui::SetItemTooltip(
+      "Distance where room models switch to simpler versions: 1 is Remastered's own,\n"
+      "higher keeps full models farther out, 0 never switches. Lower it if frames are\n"
+      "slow. Needs an import made by this version.");
   ImGui::EndDisabled();
   bool resident = sRoomGeoResident;
   if (ImGui::Checkbox("Keep on the GPU (next start)", &resident)) {
     PortDebug::SetRoomGeoResident(resident);
   }
-  ImGui::SetItemTooltip(
-      "Recommended: on.\n"
-      "Uploads a room geometry mod's models once when they load instead of\n"
-      "every frame, so a frame's buffers can be smaller. Takes effect from the\n"
-      "next start.");
+  ImGui::SetItemTooltip("Recommended: on.\nUploads a room geometry mod's models once on load "
+                        "instead of every frame.\n"
+                        "Takes effect at the next start.");
   ImGui::Separator();
 }
 
-// Switches the imported mod on and off, as the Mods page does for the others.
-void DrawRemasteredModToggle() {
+namespace {
+// Whether a built-in mod's import is older than this build. port_mods marks an import made by the
+// Remastered importer on its ModInfo; the Dread import keeps its own stamp instead (port_dread_samus_mod.h),
+// which the loader reports among the status messages.
+bool DreadImportStale(const PortMods::Status& status) {
+  return std::any_of(status.messages.begin(), status.messages.end(), [](const std::string& message) {
+    return message.find(PortDreadSamus::kModName) != std::string::npos &&
+           message.find("imported by an older version") != std::string::npos;
+  });
+}
+
+// A built-in mod's switch, shared by the Remastered and Dread sections: the mods_disabled entry the
+// Mods page writes for every mod. Nothing to switch while the mod is not installed. Below it: the
+// switch's value (what the next reload loads) and, apart from it, whether this launch loaded it.
+void DrawBuiltinModToggle(const char* modName, const char* label, bool stale) {
   const PortMods::Status& status = PortMods::CurrentStatus();
-  const auto mod = std::find_if(status.mods.begin(), status.mods.end(), [](const PortMods::ModInfo& m) {
-    return m.name == PortRemastered::kImportModName;
+  const auto mod = std::find_if(status.mods.begin(), status.mods.end(), [modName](const PortMods::ModInfo& m) {
+    return m.name == modName;
   });
   if (mod == status.mods.end()) {
     ImGui::TextDisabled("Not imported yet.");
     return;
   }
+  if (stale) {
+    ImGui::TextColored(ThemeWarnColor(), "Imported by an older version: re-import.");
+  } else {
+    ImGui::TextDisabled("Imported.");
+  }
   std::vector<std::string> disabled = PortMods::SplitDisabled(sModsDisabled);
   bool on = std::find(disabled.begin(), disabled.end(), mod->name) == disabled.end();
-  ImGui::BeginDisabled(!sModsEnabled);
-  if (ImGui::Checkbox("Use the Remastered models", &on)) {
+  // ModsEnabled, not the Load mods setting: Original experience turns every mod off whatever
+  // mods_disabled says, and the switch would be a lie. The setting itself is kept as it is.
+  const bool modsOn = ModsEnabled();
+  ImGui::BeginDisabled(!modsOn);
+  if (ImGui::Checkbox(label, &on)) {
     if (on) {
       disabled.erase(std::remove(disabled.begin(), disabled.end(), mod->name), disabled.end());
     } else {
@@ -232,32 +248,45 @@ void DrawRemasteredModToggle() {
     SetModsDisabled(PortMods::JoinDisabled(disabled));
   }
   ImGui::EndDisabled();
-  ItemHelp("Off plays the retail game. Takes effect when the mods are reloaded.");
-  if (!sModsEnabled) {
+  ItemHelp("Off unloads this mod alone; the other mods still load. Takes effect when the mods are reloaded.");
+  if (!modsOn) {
     SameLineAfterHelp();
-    ImGui::TextDisabled("(mods are off: Mods page)");
+    ImGui::TextDisabled(sModsEnabled ? "(Original experience is on: no mods load)" : "(mods are off)");
   }
-  if (PortMods::Suspended()) {
-    return;
-  }
-  if ((ModsEnabled() && on) != mod->enabled) {
-    ImGui::TextColored(ThemeWarnColor(), "Reload the mods to apply.");
-    ImGui::SameLine();
-    if (ImGui::Button("Reload mods##remastered")) {
-      PortSaveState::RequestModReload();
-    }
+  // What this launch loaded, which the switch above only changes at the next reload.
+  if (mod->enabled) {
+    ImGui::TextDisabled(on ? "Loaded." : "Loaded until the mods are reloaded.");
+  } else if (!on) {
+    ImGui::TextDisabled("Off, not loaded.");
+  } else if (PortMods::Suspended()) {
+    ImGui::TextDisabled("Not loaded while an import runs.");
+  } else if (modsOn) {
+    ImGui::TextColored(ThemeWarnColor(), "Not loaded: reload the mods to apply.");
   }
 }
+} // namespace
 
-void DrawRemasteredTab() {
-  DrawRemasteredWarning();
-  ImGui::SeparatorText("Remastered models");
-  DrawRemasteredModToggle();
-  ImGui::SeparatorText("Import");
-  DrawRemasteredImport();
-
-  ImGui::SeparatorText("Gallery");
-  {
+// The port's own mods, each with its import: Prime Remastered's models and Dread's Samus.
+void DrawBuiltinMods() {
+  ImGui::SeparatorText("Built-in mods");
+  const PortMods::Status& status = PortMods::CurrentStatus();
+  // One prod.keys serves both imports, so the page has one row for it, above both sections and
+  // inside neither: it stays visible whichever of them is open, and neither section owns it.
+  DrawImportKeys();
+  // MP_DEBUG_TAB=Mods/<section>, and the old Remastered and Dread page names, open one of these.
+  if (StartSection("Mods", "Prime Remastered")) {
+    ImGui::SetNextItemOpen(true);
+  }
+  // Its header is the only wrapper Prime's content has: the import and the gallery are drawn
+  // straight into this indented body, which ends before the next header.
+  if (ImGui::CollapsingHeader("Prime Remastered")) {
+    ImGui::Indent();
+    DrawBuiltinModToggle(PortRemastered::kImportModName, "Use the Remastered models",
+                         PortMods::StaleRemasteredImport() != nullptr);
+    DrawRemasteredWarning();
+    ImGui::SeparatorText("Import");
+    DrawRemasteredImport();
+    ImGui::SeparatorText("Gallery");
     const std::vector<std::string> pictures = PortMods::GalleryPaths();
     if (pictures.empty()) {
       ImGui::TextDisabled("Remastered's concept art. It comes with the Remastered import.");
@@ -267,6 +296,18 @@ void DrawRemasteredTab() {
       ReleaseGalleryTexture();
       sGalleryOpen = true;
     }
+    ImGui::Unindent();
+  }
+  if (StartSection("Mods", "Metroid Dread")) {
+    ImGui::SetNextItemOpen(true);
+  }
+  // A sibling of the Prime section, at the same level: neither import sits under the other.
+  if (ImGui::CollapsingHeader("Metroid Dread")) {
+    ImGui::Indent();
+    DrawBuiltinModToggle(PortDreadSamus::kModName, "Use the Dread Suit models", DreadImportStale(status));
+    ImGui::SeparatorText("Import");
+    DrawDreadSamusImport();
+    ImGui::Unindent();
   }
 }
 
@@ -283,8 +324,8 @@ void DrawRemasteredDebug() {
     const bool geoReady = PortRoomGeo::BuffersReady();
     if (!geoReady && PortMods::RoomGeometryLoaded()) {
       ImGui::TextColored(ThemeWarnColor(), "Restart the game to see the Remastered rooms.");
-      ImGui::SetItemTooltip("The game started without room geometry installed, so it set no room aside\n"
-                            "for it. Once it starts with some, mods can be changed without a restart.");
+      ImGui::SetItemTooltip("No room geometry was installed at start, so no room was set aside for "
+                            "it.\nStart with some to change mods without a restart.");
     }
     DrawRemasteredRoomModels(geoReady);
     ImGui::BeginDisabled(!geoReady);
@@ -292,24 +333,23 @@ void DrawRemasteredDebug() {
     if (ImGui::Checkbox("Draw merged copies", &merged)) {
       PortRoomGeo::SetMergedDraws(merged);
     }
-    ImGui::SetItemTooltip("Recommended: on. Not saved.\n"
-                          "Draws repeated props (rocks, grass) near each other as one model, lit as\n"
-                          "a group. Off draws each copy on its own, with its own lights: slower, but a\n"
-                          "way to check whether the merge changes how something looks.");
+    ImGui::SetItemTooltip("Recommended: on. Not saved.\nDraws repeated props (rocks, grass) near "
+                          "each other as one model. Off draws\n"
+                          "each on its own: slower, for comparing.");
     bool frontToBack = PortRoomGeo::FrontToBack();
     if (ImGui::Checkbox("Draw nearest first", &frontToBack)) {
       PortRoomGeo::SetFrontToBack(frontToBack);
     }
-    ImGui::SetItemTooltip("Recommended: on. Not saved.\n"
-                          "Draws the room's solid models nearest first, so the GPU skips shading what\n"
-                          "they hide. Looks the same either way; off is for comparing frame rates.");
+    ImGui::SetItemTooltip("Recommended: on. Not saved.\nDraws solid room models nearest first so "
+                          "the GPU skips shading hidden ones.\n"
+                          "Looks the same; off is for comparing frame rates.");
     bool prepass = PortRoomGeo::DepthPrepass();
     if (ImGui::Checkbox("Depth pre-pass for cut-outs", &prepass)) {
       PortRoomGeo::SetDepthPrepass(prepass);
     }
-    ImGui::SetItemTooltip("Recommended: off. Not saved. Needs \"Draw nearest first\".\n"
-                          "Draws grass and leaves once for depth only, then shades just the parts that\n"
-                          "stay in front. Looks the same either way; slower on the phones tried so far.");
+    ImGui::SetItemTooltip("Recommended: off. Not saved. Needs \"Draw nearest first\".\nDraws grass "
+                          "and leaves for depth first, then shades only what stays visible.\n"
+                          "Looks the same; slower on the phones tried so far.");
     static constexpr const char* kCostTests[] = {"Off", "Flat", "No lights", "No ambient volume",
                                                  "No reflections", "No normal maps", "No ORM/emissive maps",
                                                  "Maps only", "Maps without anisotropy",
@@ -322,8 +362,9 @@ void DrawRemasteredDebug() {
     if (ImGui::Checkbox("GPU pass times", &gpuTimes)) {
       WantGpuTimes(kGpuTimesPanel, gpuTimes);
     }
-    ImGui::SetItemTooltip("Not saved. Times each render pass on the GPU (timestamp queries), averaged\n"
-                          "over 60 frames. Total is the sum of the passes; span is first start to last end.");
+    ImGui::SetItemTooltip(
+        "Not saved. Times each render pass on the GPU, averaged over 60 frames.\nTotal is the sum "
+        "of the passes; span is first start to last end.");
     if (gpuTimes) {
       if (!GXPortGpuTimesSupported()) {
         ImGui::TextUnformatted("timestamps unsupported");
@@ -357,16 +398,13 @@ void DrawRemasteredDebug() {
     if (ImGui::Combo("Shading cost test", &costTest, kCostTests, IM_ARRAYSIZE(kCostTests))) {
       GXSetPBRCostTest(u32(costTest));
     }
-    ImGui::SetItemTooltip("Not saved. A speed test: leaves out one part of the Remastered surfaces'\n"
-                          "shading (Flat leaves out all of it but the colour map), so the frame rate\n"
-                          "shows what that part costs. Maps only is Flat with every map still read, to\n"
-                          "tell reading the maps from the maths. Looks wrong on purpose. The two\n"
-                          "without anisotropy shade in full but filter the maps more cheaply, and look a\n"
-                          "little softer. The rest time the frame around the shading: no bloom and\n"
-                          "colour grade, no copies of the screen for effects such as heat haze, and\n"
-                          "then one part of the post-processing at a time: the bloom (the grade stays),\n"
-                          "its copy of the frame, and reloading depth for the HUD after it. The last\n"
-                          "looks right: it reloads the depth even when the HUD doesn't need it.");
+    ImGui::SetItemTooltip(
+        "Not saved. A speed test: leaves out one part of the Remastered shading so the\n"
+        "frame rate shows what it costs. Flat leaves out all but the colour map. Maps\n"
+        "only reads every map but skips the maths. The anisotropy options shade in\n"
+        "full but filter maps more cheaply, looking a little softer. The rest time the\n"
+        "frame around the shading (bloom, colour grade, screen copies, depth reload for\n"
+        "the HUD). Most look wrong on purpose.");
     ImGui::EndDisabled();
 
     static std::string picked;
@@ -413,45 +451,38 @@ void DrawRemasteredDebug() {
       }
       ImGui::EndCombo();
     }
-    ImGui::SetItemTooltip("Recommended: the shaded result.\n"
-                          "The other choices show one input of a mod's PBR materials alone: base colour\n"
-                          "(albedo), normals, roughness, metalness, ambient occlusion, ambient light,\n"
-                          "reflection, glow, exposure, or the material kind.");
+    ImGui::SetItemTooltip(
+        "Recommended: the shaded result.\nThe others show one input of a mod's PBR materials "
+        "alone: base colour,\n"
+        "normals, roughness, metalness, occlusion, ambient light, reflection, glow,\n"
+        "exposure or material kind.");
     static const char* const kProbes[] = {"off", "on", "mirror", "window"};
     int probe = std::clamp(CCubeMaterial::sPortPBRProbeMode, 0, 3);
     if (ImGui::Combo("Reflection probe", &probe, kProbes, 4)) {
       CCubeMaterial::sPortPBRProbeMode = probe;
     }
-    ImGui::SetItemTooltip("Recommended: on.\n"
-                          "Where shiny PBR surfaces get their reflections: the room's own cube when\n"
-                          "the mod has one, otherwise a live capture of the world around the camera.\n"
-                          "Mirror and window draw surfaces as perfect mirrors of it, or windows onto it,\n"
-                          "to check what it holds.");
+    ImGui::SetItemTooltip(
+        "Recommended: on.\nWhere shiny surfaces get reflections: the room's own cube if the mod "
+        "has one,\n"
+        "else a live capture around the camera. Mirror and window show it as a perfect\n"
+        "mirror or as windows onto it, to check what it holds.");
 
     bool env = PortRoomEnv::Enabled();
     if (ImGui::Checkbox("Room environments", &env)) {
       PortRoomEnv::SetEnabled(env);
     }
-    ImGui::SetItemTooltip("Recommended: on.\n"
-                          "Uses the lighting a mod brings for each room: its reflection cubes, baked\n"
-                          "ambient light, exposure and bloom.");
+    ImGui::SetItemTooltip("Recommended: on.\nUses a mod's own lighting for each room: reflection "
+                          "cubes, baked ambient light,\n"
+                          "exposure and bloom.");
     ImGui::BeginDisabled(!env);
-    ImGui::SameLine();
-    bool exposed = PortRoomEnv::RoomExposed();
-    if (ImGui::Checkbox("Exposure by room", &exposed)) {
-      PortRoomEnv::SetRoomExposed(exposed);
-    }
-    ImGui::SetItemTooltip("Recommended: on.\n"
-                          "Sets the brightness as Remastered does, from the room the camera is in and\n"
-                          "its tone curve. Off exposes every reflection cube to a neutral middle grey.");
     ImGui::SameLine();
     bool volumes = PortRoomEnv::VolumesEnabled();
     if (ImGui::Checkbox("Baked light per pixel", &volumes)) {
       PortRoomEnv::SetVolumesEnabled(volumes);
     }
-    ImGui::SetItemTooltip("Recommended: on.\n"
-                          "Lights the Remastered rooms from the room's grid of baked light, so the light\n"
-                          "changes across a surface. Off gives each model one ambient colour.");
+    ImGui::SetItemTooltip("Recommended: on.\nLights Remastered rooms from the room's baked light "
+                          "grid, so light changes\n"
+                          "across a surface. Off gives each model one ambient colour.");
     float ambient = PortRoomEnv::AmbientScale();
     if (ImGui::SliderFloat("Baked ambient scale", &ambient, 0.f, 4.f, "%.2f")) {
       PortRoomEnv::SetAmbientScale(ambient);

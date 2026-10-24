@@ -15,6 +15,10 @@
 
 #include "string.h"
 
+#ifdef TARGET_PC
+#include "port_log.h"
+#endif
+
 #include <mutex>
 #include <stdexcept>
 #include <string>
@@ -71,7 +75,33 @@ const char* DecodeARAMFile(const char* filename) {
 
 void CDvdFile::DVDARAMXferCallback(s32 result, DVDFileInfo* info) {
   CDvdFileARAM::SDvdInfo* ptr = reinterpret_cast< CDvdFileARAM::SDvdInfo* >(info);
+#ifdef TARGET_PC
+  // Port: a read can end short (even at 0 bytes) without an error. That chunk of
+  // the ARAM copy would stay unfilled, and every resource in it would read as
+  // zeros (issue #176), so read the chunk again; fail the file after a few tries.
+  static int sRetries = 0; // one ARAM file loads at a time
+  const s32 wanted = static_cast< s32 >(info->cb.length);
   DVDClose(&ptr->mDvdFileInfo);
+  if (result >= 0 && result < wanted) {
+    std::lock_guard< std::recursive_mutex > guard(AramFileStateMutex());
+    CDvdFile* file = ptr->mDvdFile;
+    CDvdFileARAM* arFile = file->mARAMFile.get();
+    const uint offset = arFile->mFileSize2 - wanted;
+    PortLog::Write("resource: ARAM copy of %s: read ended short, %d of %d bytes at %u; reading it again\n",
+                   file->mFilename.data(), result, wanted, offset);
+    if (++sRetries <= 3 && DVDFastOpen(file->mFileEntry, &ptr->mDvdFileInfo) &&
+        DVDReadAsync(&ptr->mDvdFileInfo, arFile->mBuffers[arFile->mBufferIndex].get(), wanted, offset,
+                     DVDARAMXferCallback)) {
+      return;
+    }
+    sRetries = 0;
+    ptr->mDvdFile->HandleDVDInterrupt(false);
+    return;
+  }
+  sRetries = 0;
+#else
+  DVDClose(&ptr->mDvdFileInfo);
+#endif
   ptr->mDvdFile->HandleDVDInterrupt(result >= 0);
 }
 

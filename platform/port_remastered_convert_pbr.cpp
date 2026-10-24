@@ -48,10 +48,10 @@ int PbrMode(const RemMaterial& m);
 
 // Whether the glow is Remastered's bare ICAN x ICNC in scene radiance, which the frame's
 // exposure multiplies: the port's runtime scales it (bit 32). Not the inverse-exposed
-// glows (glowLinear: they are drawn as the screen shows them), a ramp's mean, nor a
-// liquid or glass, whose first three floats are a tint.
+// glows (glowLinear: they are drawn as the screen shows them), nor a liquid
+// or glass, whose first three floats are a tint.
 bool ExposedGlow(const RemMaterial& m) {
-  return !m.glowLinear && m.maps[kEmissive].has && !m.maps[kEmissive].mean && m.kind != 7 && m.kind != 20 &&
+  return !m.glowLinear && m.maps[kEmissive].has && m.kind != 7 && m.kind != 20 &&
          m.kind != 8 && m.kind != 11 && m.kind != 14 && m.kind != 21 && m.kind != 24;
 }
 
@@ -76,8 +76,9 @@ bool FlatAmbient(const RemMaterial& m) { return m.family == kShaderLambertFx && 
 bool NoEnvSpec(const RemMaterial& m) { return (m.noRefl || PureLambert(m)) && !m.unlit && !ColorUnlitDraw(m) && m.kind == 0; }
 
 bool SurfaceUnlit(const RemMaterial& m) {
-  return m.unlit && m.kind == 0 && !ColorUnlitDraw(m) &&
-         std::find(std::begin(kShaderSurfaceUnlit), std::end(kShaderSurfaceUnlit), m.shader) != std::end(kShaderSurfaceUnlit);
+  return (m.unlit && m.kind == 0 && !ColorUnlitDraw(m) &&
+          std::find(std::begin(kShaderSurfaceUnlit), std::end(kShaderSurfaceUnlit), m.shader) != std::end(kShaderSurfaceUnlit)) ||
+         BareUnlitKind(m.kind);
 }
 
 int PbrMode(const RemMaterial& m) {
@@ -157,7 +158,7 @@ void PbrRecord(Blob& b, const RemMaterial& m, uint32_t wrap, uint32_t cube) {
     P32(b, cube);
   }
   b.insert(b.end(), tag, tag + 4);
-  if ((m.kind >= 14 && m.kind <= 19) || m.kind == 21 || m.kind == 22 || m.kind == 32 || m.kind == 35 || m.kind == 25 || m.kind == 28 || m.kind == 29 || m.kind == 31 || m.kind == 33 || m.wind) {
+  if ((m.kind >= 14 && m.kind <= 19) || m.kind == 21 || m.kind == 22 || m.kind == 32 || m.kind == 35 || m.kind == 25 || m.kind == 28 || m.kind == 29 || m.kind == 11 || m.kind == 31 || m.kind == 33 || (m.kind >= 38 && m.kind <= 43) || m.wind) {
     // The boundary shield's (or pickup's) constants follow the record, as a trailer the reader strips first.
     // A swaying leaf's is the model's SWindSet (v1, v2, rate, b, c) in the first nine.
     for (double v : m.shieldRows) {
@@ -166,6 +167,26 @@ void PbrRecord(Blob& b, const RemMaterial& m, uint32_t wrap, uint32_t cube) {
     static constexpr char kPbr8[] = "PBR8";
     b.insert(b.end(), kPbr8, kPbr8 + 4);
   }
+}
+
+// The matcap shell (kind 13) is drawn premultiplied, GX_BL_ONE and GX_BL_INVSRCALPHA: its
+// shader scales the diffuse by the opacity, and the rim and reflection are added unscaled.
+// The boundary shield (kind 14) and cracked glass (kind 8, class 1 with the scene in rgb) are plainly alpha blended, GX_BL_SRCALPHA and GX_BL_INVSRCALPHA.
+// The pickup (kind 15) is SrcAlpha with the mesh class's destination: One where it is additive.
+// 4BC890C1 (a lit Lambert) is opaque, as Remastered's mesh class 0 draws it.
+// The pause visor's glass (kind 36) is SrcAlpha / InvSrcAlpha (mesh class 1), its lit layer (kind 37)
+// SrcAlpha / One (mesh class 3).
+void PbrBlend(const RemMaterial& rem, const RetailMaterial& pm, uint32_t& src, uint32_t& dst) {
+  const bool lambertFx = rem.family == kShaderLambertFx;
+  // Otherwise as its mesh class: a retail model's material from the class table, a standalone
+  // one from the synthetic retail material its class picked (premultiplied glass among them).
+  uint32_t classSrc = pm.blendSrc;
+  uint32_t classDst = pm.blendDst;
+  if (rem.classBlend) {
+    ClassBlend(rem.blendClass, classSrc, classDst);
+  }
+  dst = rem.kind == 8 || rem.kind == 13 || rem.kind == 14 || rem.kind == 29 || rem.kind == 34 || rem.kind == 36 || rem.kind == 43 ? 5 : rem.kind == 37 ? 1 : (rem.kind >= 15 && rem.kind <= 18) || rem.kind == 31 || rem.kind == 33 ? (rem.additive ? 1 : 5) : rem.kind == 19 ? (GunFxParticle(pm) ? 5 : 0) : lambertFx ? 0 : classDst;
+  src = rem.kind == 8 || rem.kind == 14 || rem.kind == 29 || rem.kind == 34 || rem.kind == 36 || rem.kind == 37 || rem.kind == 43 || (rem.kind >= 15 && rem.kind <= 18) || rem.kind == 31 || rem.kind == 33 ? 4 : rem.kind == 19 ? (GunFxParticle(pm) ? 4 : 1) : rem.kind == 13 || lambertFx ? 1 : classSrc;
 }
 
 // A retail material rebuilt for the port's PBR path: maps 0-3 are base, MR,
@@ -186,18 +207,26 @@ Blob PbrMaterial(const RetailMaterial& pm, uint32_t vtx, const uint32_t* texIdx,
   // The emissive map is stored as authored (the PBR path scales it at run time), but the
   // fallback adds it as it is: it took the 0.10 the converter used to bake in, as a konst
   // (in the gamma domain TEV works in, that is 0.10^(1/2.2) of the byte).
-  const bool emissiveKonst = rem.maps[kEmissive].has && !rem.maps[kEmissive].mean && !rem.maps[kEmissive].raw &&
+  const bool emissiveKonst = rem.maps[kEmissive].has && !rem.maps[kEmissive].raw &&
                              !rem.maps[kEmissive].detail;
   const uint32_t emissiveSel = colorUnlit ? 0x0Du : 0x0Cu;  // GX_TEV_KCSEL_K1 / K0
-  const uint32_t flags = (pm.flags & 0xFFFF & ~uint32_t(0x8 | 0x40 | 0x100 | 0x400 | 0x800 | 0x2000)) |
-                         0xF0000 | kPbrFlag | (colorUnlit || emissiveKonst ? 0x8u : 0u);
+  // A retail model's material sorts and writes depth as its mesh class does: classes 1 and 3
+  // are Remastered's sorted pass, depth test only; 0 and 2 the unsorted one, depth written
+  // (kb topic/mesh-blend-class.md).
+  uint32_t passFlags = pm.flags & (0x10 | 0x80);
+  if (rem.classBlend && rem.blendClass >= 0) {
+    passFlags = rem.blendClass == 1 || rem.blendClass == 3 ? 0x10u : 0x80u;
+  }
+  const uint32_t flags = (pm.flags & 0xFFFF & ~uint32_t(0x8 | 0x10 | 0x40 | 0x80 | 0x100 | 0x400 | 0x800 | 0x2000)) |
+                         passFlags | 0xF0000 | kPbrFlag | (colorUnlit || emissiveKonst ? 0x8u : 0u);
   P32(b, flags);
   P32(b, uint32_t(nmaps));
   for (int i = 0; i < nmaps; ++i) {
     P32(b, texIdx[i]);
   }
-  // The vertex descriptor is retail's: it fixes how many texcoord attributes,
-  // and so how many indices per vertex, the display list carries.
+  // The vertex descriptor is retail's with a texcoord slot for every Remastered set: it
+  // fixes how many texcoord attributes, and so how many indices per vertex, the display
+  // list carries.
   P32(b, vtx);
   // The material's cache id: CCubeMaterial::SetCurrent skips the vertex layout
   // and TEV when it matches the previous draw's, so it must differ from retail's.
@@ -214,16 +243,11 @@ Blob PbrMaterial(const RetailMaterial& pm, uint32_t vtx, const uint32_t* texIdx,
       P32(b, k << 24 | k << 16 | k << 8 | 0xFF);
     }
   }
-  // The matcap shell (kind 13) is drawn premultiplied, GX_BL_ONE and GX_BL_INVSRCALPHA: its
-  // shader scales the diffuse by the opacity, and the rim and reflection are added unscaled.
-  // The boundary shield (kind 14) and cracked glass (kind 8, class 1 with the scene in rgb) are plainly alpha blended, GX_BL_SRCALPHA and GX_BL_INVSRCALPHA.
-  // The pickup (kind 15) is SrcAlpha with the mesh class's destination: One where it is additive.
-  // 4BC890C1 (a lit Lambert over a retail effect) is opaque, as Remastered's mesh class 0 draws it.
-  // The pause visor's glass (kind 36) is SrcAlpha / InvSrcAlpha (mesh class 1), its lit layer (kind 37)
-  // SrcAlpha / One (mesh class 3).
-  const bool lambertFx = rem.family == kShaderLambertFx || rem.opaqueFx;
-  P16(b, rem.kind == 8 || rem.kind == 13 || rem.kind == 14 || rem.kind == 29 || rem.kind == 34 || rem.kind == 36 ? 5 : rem.kind == 37 ? 1 : (rem.kind >= 15 && rem.kind <= 18) || rem.kind == 31 || rem.kind == 33 ? (rem.additive ? 1 : 5) : rem.kind == 19 ? (GunFxParticle(pm) ? 5 : 0) : lambertFx ? 0 : pm.blendDst);
-  P16(b, rem.kind == 8 || rem.kind == 14 || rem.kind == 29 || rem.kind == 34 || rem.kind == 36 || rem.kind == 37 || (rem.kind >= 15 && rem.kind <= 18) || rem.kind == 31 || rem.kind == 33 ? 4 : rem.kind == 19 ? (GunFxParticle(pm) ? 4 : 1) : rem.kind == 13 || lambertFx ? 1 : pm.blendSrc);
+  uint32_t blendSrc = 0;
+  uint32_t blendDst = 0;
+  PbrBlend(rem, pm, blendSrc, blendDst);
+  P16(b, blendDst);
+  P16(b, blendSrc);
   // An unlit surface coloured by its vertices (a door shield) keeps that in the
   // fallback too, which is what draws it whenever the model is not opaque: channel
   // 0 unlit with the vertex colour as its material colour (bit 2), and the alpha
@@ -248,7 +272,7 @@ Blob PbrMaterial(const RetailMaterial& pm, uint32_t vtx, const uint32_t* texIdx,
   };
   // Glass samples the frame behind it, which the game copies into map 7 (the
   // spare buffer's) before it draws one: a stage of its own binds it.
-  const int nstages = rem.kind == 8 || rem.kind == 11 || rem.kind == 14 || rem.kind == 23 || rem.kind == 29 || rem.kind == 30 || rem.kind == 34 || rem.kind == 36 ? nmaps + 1 : nmaps;
+  const int nstages = rem.kind == 8 || rem.kind == 11 || rem.kind == 14 || rem.kind == 23 || rem.kind == 29 || rem.kind == 30 || rem.kind == 34 || rem.kind == 36 || rem.kind == 43 ? nmaps + 1 : nmaps;
   P32(b, uint32_t(nstages));
   for (int i = 0; i < nstages; ++i) {
     // Kind 20's map 3 is a detail map, sampled only (the table's stage adds it as glow).

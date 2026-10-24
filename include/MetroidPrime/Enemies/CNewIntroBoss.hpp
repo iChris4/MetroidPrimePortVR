@@ -11,6 +11,7 @@ class CCollisionActorManager;
 class CPatternedInfo;
 
 class CNewIntroBoss : public CPatterned {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 public:
   CNewIntroBoss(TUniqueId, const rstl::string&, const CEntityInfo& info, const CTransform4f& xf,
                 const CModelData& mData, const CPatternedInfo& pInfo,

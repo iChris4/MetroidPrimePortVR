@@ -6,6 +6,7 @@
 #include "MetroidPrime/CGrappleParameters.hpp"
 
 class CScriptGrapplePoint : public CActor {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
   CAABox xe8_touchBounds;
   CGrappleParameters x100_parameters;
 

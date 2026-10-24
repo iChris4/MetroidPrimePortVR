@@ -4,6 +4,7 @@
 #include "MetroidPrime/ScriptObjects/CScriptTrigger.hpp"
 
 class CScriptBallTrigger : public CScriptTrigger {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 public:
   CScriptBallTrigger(TUniqueId, const rstl::string&, const CEntityInfo&, const CVector3f&,
                      const CVector3f&, bool, float, float, float, CVector3f, bool);

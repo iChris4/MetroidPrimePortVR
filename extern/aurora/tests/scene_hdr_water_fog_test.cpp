@@ -11,7 +11,7 @@
 #include <string_view>
 
 // The HDR scene's water, full-screen fog and per-draw fog readers without a GPU (stage 3B): the
-// sources each domain generates, and the config bits that keep LDR keys and sources as they were.
+// sources they generate, and the config bits that key them.
 namespace aurora::gfx {
 namespace {
 
@@ -20,14 +20,6 @@ size_t count(std::string_view s, std::string_view what) {
   for (size_t at = s.find(what); at != std::string_view::npos; at = s.find(what, at + what.size()))
     ++n;
   return n;
-}
-
-std::string replaced(std::string s, std::string_view from, std::string_view to) {
-  const size_t at = s.find(from);
-  EXPECT_NE(at, std::string::npos) << from;
-  if (at != std::string::npos)
-    s.replace(at, from.size(), to);
-  return s;
 }
 
 // The text after a function's opening line up to its closing brace at column 0.
@@ -41,13 +33,7 @@ std::string_view body(std::string_view s, std::string_view signature) {
 
 // --- Water ------------------------------------------------------------------------------------------------------
 
-// water.cpp's LDR blend tail and its HDR replacement, as the HDR source must differ by them alone.
-constexpr std::string_view WaterLdrBlend = R"(  let y = srgb_dec(snap.rgb);
-  let dst = min(vec3f(untone(y.r), untone(y.g), untone(y.b)), vec3f(4.0));
-  let x = max(o0 + dst * (1.0 - o1), vec3f(0.0));
-  let drawn = vec3f(tone(x.r), tone(x.g), tone(x.b));
-  return vec4f(srgb_enc(drawn), snap.a);
-)";
+// water.cpp's blend tail: the snapshot read raw, the result left as light.
 constexpr std::string_view WaterHdrBlend = R"(  let x = max(o0 + snap.rgb * (1.0 - o1), vec3f(0.0));
   return vec4f(x, snap.a);
 )";
@@ -62,33 +48,20 @@ water::PipelineConfig waterConfig(uint32_t flags) {
   return config;
 }
 
-TEST(SceneHdrWater, LdrSourcesKeepTheOldBlend) {
+TEST(SceneHdrWater, SourcesBlendRawLight) {
   for (uint32_t flags = 0; flags < 4; ++flags) {
     SCOPED_TRACE(flags);
-    const std::string ldr = water::pipeline_source(waterConfig(flags));
+    const std::string hdr = water::pipeline_source(waterConfig(flags | water::WaterSceneHdr));
     const std::string prefix = std::string("const BOTTOM: bool = ") + ((flags & 1) ? "true" : "false") +
                                ";\nconst RAIN: bool = " + ((flags & 2) ? "true" : "false") + ";\n";
-    EXPECT_TRUE(ldr.starts_with(prefix));
-    EXPECT_EQ(count(ldr, WaterLdrBlend), 1u);
-    EXPECT_EQ(count(ldr, WaterHdrBlend), 0u);
-  }
-}
-
-TEST(SceneHdrWater, HdrSourcesBlendRawLight) {
-  for (uint32_t flags = 0; flags < 4; ++flags) {
-    SCOPED_TRACE(flags);
-    const std::string ldr = water::pipeline_source(waterConfig(flags));
-    const std::string hdr = water::pipeline_source(waterConfig(flags | water::WaterSceneHdr));
-    // The same lighting, fresnel, refraction and constants; only the blend's tail is new.
-    EXPECT_EQ(hdr, replaced(ldr, WaterLdrBlend, WaterHdrBlend));
-    // The snapshot is read raw and the result left as light: no decode, inverse curve, clip, curve or encode.
-    const std::string_view tail = std::string_view(hdr).substr(hdr.find("let snap = textureLoad(sceneColor"));
-    EXPECT_EQ(count(tail, "srgb_dec("), 0u);
-    EXPECT_EQ(count(tail, "srgb_enc("), 0u);
-    EXPECT_EQ(count(tail, "untone("), 0u);
-    EXPECT_EQ(count(tail, "tone("), 0u);
-    EXPECT_EQ(count(tail, "vec3f(4.0)"), 0u);
-    EXPECT_NE(tail.find("return vec4f(x, snap.a);"), std::string_view::npos) << "alpha is the snapshot's";
+    EXPECT_TRUE(hdr.starts_with(prefix));
+    EXPECT_EQ(count(hdr, WaterHdrBlend), 1u);
+    // No decode, inverse curve, clip, curve or encode anywhere.
+    EXPECT_EQ(count(hdr, "srgb_dec("), 0u);
+    EXPECT_EQ(count(hdr, "srgb_enc("), 0u);
+    EXPECT_EQ(count(hdr, "untone("), 0u);
+    EXPECT_EQ(count(hdr, "tone("), 0u);
+    EXPECT_EQ(count(hdr, "vec3f(4.0)"), 0u);
   }
 }
 
@@ -121,31 +94,17 @@ TEST(SceneHdrWater, AFormatMismatchIsCaught) {
 
 // --- Full-screen volumetric fog -------------------------------------------------------------------------------
 
-constexpr std::string_view FogLdrTail = R"(  let x = exposed(f.rgb) * fog.a + light;
-  let drawn = vec3f(tone(x.r), tone(x.g), tone(x.b));
-  return vec4f(srgb_enc(drawn), f.a);
-)";
 constexpr std::string_view FogHdrTail = R"(  let x = f.rgb * fog.a + light;
   return vec4f(x, f.a);
 )";
 
-TEST(SceneHdrVolFog, LdrApplyIsTheOldOne) {
+TEST(SceneHdrVolFog, ApplyFogsRawLight) {
   for (const uint32_t samples : {1u, 4u}) {
     SCOPED_TRACE(samples);
-    const std::string ldr = volfog::apply_source(volfog::Domain::Ldr, samples);
-    EXPECT_EQ(count(ldr, FogLdrTail), 1u);
-    EXPECT_EQ(count(ldr, FogHdrTail), 0u);
-    EXPECT_EQ(count(ldr, "DEPTH_TYPE"), 0u);
-    EXPECT_EQ(count(ldr, "texture_depth_multisampled_2d") > 0, samples > 1);
-  }
-}
-
-TEST(SceneHdrVolFog, HdrApplyFogsRawLight) {
-  for (const uint32_t samples : {1u, 4u}) {
-    SCOPED_TRACE(samples);
-    const std::string ldr = volfog::apply_source(volfog::Domain::Ldr, samples);
-    const std::string hdr = volfog::apply_source(volfog::Domain::Hdr, samples);
-    EXPECT_EQ(hdr, replaced(ldr, FogLdrTail, FogHdrTail));
+    const std::string hdr = volfog::apply_source(samples);
+    EXPECT_EQ(count(hdr, FogHdrTail), 1u);
+    EXPECT_EQ(count(hdr, "DEPTH_TYPE"), 0u);
+    EXPECT_EQ(count(hdr, "texture_depth_multisampled_2d") > 0, samples > 1);
     const std::string_view apply = body(hdr, "fn fs_apply(");
     ASSERT_FALSE(apply.empty());
     EXPECT_EQ(count(apply, "exposed("), 0u);
@@ -153,9 +112,8 @@ TEST(SceneHdrVolFog, HdrApplyFogsRawLight) {
     EXPECT_EQ(count(apply, "srgb_enc("), 0u);
     EXPECT_EQ(count(apply, "srgb_dec("), 0u);
     EXPECT_EQ(count(apply, "vec3f(4.0)"), 0u);
-    // The in-scatter's exposure once, as in LDR.
+    // The in-scatter's exposure once.
     EXPECT_EQ(count(apply, "p.colorA.w"), 1u);
-    EXPECT_EQ(count(body(ldr, "fn fs_apply("), "p.colorA.w"), 1u);
   }
 }
 
@@ -197,12 +155,11 @@ ShaderConfig fogConfig(int pbr, u8 volFog, bool hdr) {
 constexpr u8 FogModes[] = {VolFogBlended, VolFogAdditive, VolFogOpaque, VolFogPremultiplied};
 constexpr std::string_view Convert = "prev = vec4f(hdr_exposed(prev.rgb,";
 
-TEST(SceneHdrGxFog, LdrDrawsKeepTheOldFog) {
+TEST(SceneHdrGxFog, LdrDrawsHaveNoFog) {
   for (const u8 mode : FogModes) {
     SCOPED_TRACE(static_cast<int>(mode));
     const std::string ldr = build_shader_source(fogConfig(0, mode, false));
-    EXPECT_EQ(count(ldr, "prev = vf_apply(prev,"), 1u);
-    EXPECT_EQ(count(ldr, "vf_apply_hdr"), 0u);
+    EXPECT_EQ(count(ldr, "vf_apply"), 0u);
     EXPECT_EQ(count(ldr, "hdr_exposed("), 0u);
   }
 }
@@ -210,21 +167,13 @@ TEST(SceneHdrGxFog, LdrDrawsKeepTheOldFog) {
 TEST(SceneHdrGxFog, TevDrawsFogTheirLightAfterOneConversion) {
   for (const u8 mode : FogModes) {
     SCOPED_TRACE(static_cast<int>(mode));
-    const std::string ldr = build_shader_source(fogConfig(0, mode, false));
     const std::string hdr = build_shader_source(fogConfig(0, mode, true));
-    EXPECT_EQ(count(hdr, "prev = vf_apply(prev,"), 0u);
     EXPECT_EQ(count(hdr, "prev = vf_apply_hdr(prev,"), 1u);
     EXPECT_EQ(count(hdr, Convert), 1u) << "converted once";
     EXPECT_EQ(count(hdr, "if (ubuf.hdr_tev_blend.x > 0.5)"), 1u);
     EXPECT_EQ(count(hdr, "prev = vec4f(hdr_tev_srcalpha_add(prev.rgb, prev.a,"), 1u);
     EXPECT_LT(hdr.find("prev = vec4f(hdr_tev_srcalpha_add(prev.rgb, prev.a,"), hdr.find("prev = vf_apply_hdr(prev,"));
     EXPECT_LT(hdr.find(Convert), hdr.find("prev = vf_apply_hdr(prev,")) << "the fog applies in the light";
-    // The same sample and the same blend-mode weight as LDR's call.
-    const auto args = [](const std::string& s, std::string_view call) {
-      const size_t at = s.find(call) + call.size();
-      return s.substr(at, s.find('\n', at) - at);
-    };
-    EXPECT_EQ(args(hdr, "prev = vf_apply_hdr(prev,"), args(ldr, "prev = vf_apply(prev,"));
     // The HDR fog itself: transmittance plus the in-scatter, no curve, decode, clip or encode.
     const std::string_view fn = gfx::body(hdr, "fn vf_apply_hdr(");
     ASSERT_FALSE(fn.empty());
@@ -232,7 +181,9 @@ TEST(SceneHdrGxFog, TevDrawsFogTheirLightAfterOneConversion) {
     for (const std::string_view banned : {"vf_exposed(", "vf_tone(", "vf_srgb_enc(", "vf_srgb_dec(", "untone(", "4.0"}) {
       EXPECT_EQ(count(fn, banned), 0u) << banned;
     }
-    EXPECT_EQ(gfx::body(hdr, "fn vf_apply(c"), gfx::body(ldr, "fn vf_apply(c")) << "LDR's fog unchanged";
+    for (const std::string_view banned : {"fn vf_exposed(", "fn vf_tone(", "fn vf_untone(", "fn vf_apply(c"}) {
+      EXPECT_EQ(count(hdr, banned), 0u) << banned;
+    }
   }
 }
 

@@ -11,6 +11,11 @@ static void VideoDecode(THPReadBuffer*);
 extern "C" {
 #endif // ifdef __cplusplus
 s32 THPVideoDecode(void* file, void* tileY, void* tileU, void* tileV, void* work);
+#ifdef TARGET_PC
+// aurora's THPDec.cpp (dolphin/thp.h): decodes within `size` bytes into planes for a width x height picture.
+s32 THPVideoDecodeBounded(const void* file, size_t size, void* tileY, void* tileU, void* tileV, u32 width,
+                          u32 height);
+#endif
 BOOL CreateVideoDecodeThread(OSPriority priority, void* task);
 void VideoDecodeThreadStart();
 void VideoDecodeThreadCancel();

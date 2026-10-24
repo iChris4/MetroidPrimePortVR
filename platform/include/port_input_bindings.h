@@ -152,4 +152,57 @@ void Revert(UserProfile& user, Action action, Family family);
 // Every override and unbind in one family (a reset to the built-in controls).
 void ClearFamily(UserProfile& user, Family family);
 
+// The same physical input: mouse buttons match across their code runs (aim, key
+// slot, menu, held), and the press threshold is ignored.
+bool SamePhysicalInput(const Input& a, const Input& b);
+// Makes the inputs of the `isRow` bindings do only those in `ctx`: every other
+// binding on the same physical inputs (the same chord, for a chord) gets `ctx`
+// blocked, which keeps its rank and what it does elsewhere. everywhereOnly: only
+// bindings for every context are blocked, so ones scoped under Advanced still apply.
+void BlockRowInputs(Profile& profile, bool (*isRow)(const Binding&), uint16_t ctx, bool everywhereOnly);
+
+// The Morph Ball rows (issue #167): each presses a GameCube button, only in Morph
+// Ball. Touch can't take them (the touch overlay keeps its own morph ball buttons).
+struct BallRow {
+  Action row;
+  Action game;
+  const char* hint; // the Remap page's note beside the row
+};
+inline constexpr BallRow kBallRows[] = {
+    {Action::BallBomb, Action::PadA, "A when unset"},
+    {Action::BallPowerBomb, Action::PadY, "Y when unset"},
+    {Action::BallBoost, Action::PadB, "B when unset"},
+    {Action::BallSpider, Action::PadR, "R when unset"},
+    {Action::BallUnmorph, Action::PadX, "X when unset"},
+};
+// The row of `a`, or nullptr; the row that presses `game`, or nullptr.
+const BallRow* FindBallRow(Action a);
+const BallRow* BallRowForGame(Action game);
+// Before a poll: scopes the Morph Ball rows to Morph Ball (a row with layers to
+// Morph Ball while one is held) and blocks Morph Ball for the other bindings on
+// their keyboard, mouse and controller inputs. A row that isn't bound changes nothing.
+void ApplyBallButtons(Profile& profile);
+
+// The touch overlay's own buttons (issue #92): the layout editor adds up to
+// kTouchButtonSlots, each with one action, on touch codes kTouchButtonBase + slot. They live in the touch layout string
+// (TouchControlsView owns it), not in controls.toml, as entries
+//   k<slot>:dx,dy,scale,opacity,hidden,<action key>
+// among the stock controls' `id:dx,dy,scale[,opacity[,hidden]]` ones, ';'
+// separated. Entries with a bad slot, a field count other than 6 or an action
+// a button can't take are skipped; a repeated slot keeps its last valid entry.
+constexpr int kTouchButtonSlots = 64;
+constexpr int kTouchButtonBase = 64;
+struct TouchButton {
+  int slot = 0;
+  Action action = Action::None;
+  bool operator==(const TouchButton&) const = default;
+};
+// Digital actions that do something from a touch button: not None, the analog
+// and look ones, the layer holds (only controls.toml's layered bindings use
+// them), the Menu rows (inert while touch is active) or the Morph Ball rows.
+bool TouchButtonAction(Action a);
+std::vector<TouchButton> ParseTouchButtons(std::string_view layout); // by slot
+// Appends a Press binding of each button's action on its touch code.
+void BindTouchButtons(Profile& profile, std::string_view layout);
+
 } // namespace PortInput

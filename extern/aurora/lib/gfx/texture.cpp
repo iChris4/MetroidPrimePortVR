@@ -185,6 +185,9 @@ TextureHandle new_static_texture_2d(uint32_t width, uint32_t height, uint32_t mi
     }
     offset += dataSize;
   }
+  if (!webgpu::g_hasCoreFeatures && format_info(ref.format).compressed) {
+    ref.cpuBytes = std::make_shared<const std::vector<uint8_t>>(data.data(), data.data() + offset);
+  }
   if (data.size() != UINT32_MAX && offset < data.size()) {
     Log.warn("new_static_texture_2d[{}]: texture used {} bytes, but given {} bytes", label, offset, data.size());
   }
@@ -381,6 +384,9 @@ void write_texture(TextureRef& ref, ArrayRef<uint8_t> data) noexcept {
       g_queue.WriteTexture(&dstView, data.data() + offset, dataSize, &dataLayout, &physicalSize);
     }
     offset += dataSize;
+  }
+  if (!webgpu::g_hasCoreFeatures && format_info(ref.format).compressed) {
+    ref.cpuBytes = std::make_shared<const std::vector<uint8_t>>(data.data(), data.data() + offset);
   }
   if (data.size() != UINT32_MAX && offset < data.size()) {
     Log.warn("write_texture: texture used {} bytes, but given {} bytes", offset, data.size());

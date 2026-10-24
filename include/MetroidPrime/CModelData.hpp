@@ -151,6 +151,21 @@ private:
   rstl::optional_object< TLockedToken< CModel > > x1c_normalModel;
   rstl::optional_object< TLockedToken< CModel > > x2c_xrayModel;
   rstl::optional_object< TLockedToken< CModel > > x3c_infraModel;
+#ifdef TARGET_PC
+public:
+  // PORT: the transform a Remastered retail model draws through for this object, between its
+  // scaled transform and the model (port_retail_placement.h). Looked up per model by the
+  // object's area and editor id; a model without one draws as retail places it.
+  void PortPlace(uint mrea, uint editorId);
+  // xf * scale, then the static model `which` picks' correction when it has one.
+  CTransform4f PortScaledXf(EWhichModel which, const CTransform4f& xf) const;
+
+private:
+  int PortSlot(EWhichModel which) const;
+  CAABox PortLocalBounds() const;
+  float xPortCorrection[3][12];
+  uchar xPortCorrected = 0;  // bit n: slot n (normal, xray, infra) has a correction
+#endif
 };
 CHECK_SIZEOF(CModelData, 0x4c)
 

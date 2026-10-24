@@ -431,6 +431,7 @@ void Nsp::Close() {
   m_file.Close();
   m_files.clear();
   m_open = false;
+  m_programId = 0;
 }
 
 bool Nsp::Open(const std::string& nspPath, const std::string& keysPath, std::string& error) {
@@ -510,6 +511,8 @@ bool Nsp::Open(const std::string& nspPath, const std::string& keysPath, std::str
     error = firstError.empty() ? "no program NCA in the image" : firstError;
     return false;
   }
+
+  m_programId = ReadLE64(hdr.data() + 0x210);
 
   uint8_t cryptoType = std::max(hdr[0x206], hdr[0x220]);
   if (cryptoType) {
@@ -909,6 +912,7 @@ Nsp::~Nsp() = default;
 void Nsp::Close() {
   m_files.clear();
   m_open = false;
+  m_programId = 0;
 }
 
 bool Nsp::Open(const std::string&, const std::string&, std::string& error) {

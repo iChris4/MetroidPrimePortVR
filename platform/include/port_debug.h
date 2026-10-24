@@ -162,12 +162,16 @@ void SetFullscreen(bool enabled);
 // 0 = auto (native, driven by the display scale), otherwise a fixed multiplier.
 float RenderScale();
 void SetRenderScale(float scale);
-// Photo mode captures: the configured scale (1 when auto), and a temporary override
+// Photo mode captures: the configured scale (auto: the scale the window's own size
+// is, as a multiple of what 1x draws), and a temporary override
 // (0 = none) that also holds dynamic resolution still.
 float BaseRenderScale();
 void SetCaptureRenderScale(float scale);
+// The lowest scale dynamic resolution may be set to drop to.
+constexpr float kDynamicResMinLowest = 0.25f;
 // Dynamic resolution: draws the EFB between DynamicResMin and RenderScale to
-// hold DynamicResTarget fps (0 = the frame cap). False when off.
+// hold DynamicResTarget fps (0 = the frame cap). False when off. With auto render
+// scale the top is the window's own scale.
 bool DynamicRes();
 int DynamicResTarget();
 float DynamicResMin();
@@ -254,6 +258,15 @@ bool AutoAim();
 const int kScanSpeedMin = 100;
 const int kScanSpeedMax = 500;
 float ScanSpeed();
+// Hint delay in minutes (hint_delay=, MP_HINT_DELAY); 0 = the game's own timing. HintDelaySeconds()
+// caps the wait before a hint first shows (CHintOptions::Update); 0 when off or under Original
+// experience. RequestShowHint() (F1 button, `hint show`) asks the next CHintOptions::Update to show
+// the hint the game would show next; ConsumeShowHintRequest() takes the request.
+const int kHintDelayMin = 0;
+const int kHintDelayMax = 30;
+float HintDelaySeconds();
+void RequestShowHint();
+bool ConsumeShowHintRequest();
 // The next-target reticles (combat seeker, X-ray ring, thermal crosshair). Off hides them;
 // lock-on and scan reticles stay. On under Original experience.
 bool SecondaryCrosshairs();
@@ -351,6 +364,16 @@ void SetBeamDoorsStayUnlocked(bool enabled);
 // and the Phazon Beam are unchanged. Off by default, and off in the Original experience.
 bool StackBeams();
 void SetStackBeams(bool enabled);
+// walk_speed (CPlayerDynamics WalkScale), in percent: Samus's on-foot top speed,
+// acceleration and friction (and the orbit strafe speeds) are scaled by it, so she
+// moves that much faster or slower and gets there in the same time. Jumps, dashes,
+// turning, grapple and the morph ball are unchanged. 100 (retail) by default, and
+// 100 in the Original experience.
+const int kWalkSpeedMin = 50;
+const int kWalkSpeedMax = 200;
+const int kWalkSpeedDefault = 100;
+int WalkSpeed();
+void SetWalkSpeed(int percent);
 // The stored 1.00 sequence-break compatibility choice (raw, not the effective
 // policy). Randomizer and Archipelago games force it on at use.
 bool Revision100Compatibility();
@@ -478,6 +501,9 @@ bool UnlockHardMode();
 void SetUnlockHardMode(bool enabled);
 bool UnlockFusionSuit();
 void SetUnlockFusionSuit(bool enabled);
+// Puts the Fusion Suit on or off in game, as the Fusion Bonus menu's choice
+// would: the suit, arm and ball load again as after a suit pickup.
+void WearFusionSuit(CStateManager& mgr, bool wearing);
 bool UnlockGalleries();
 void SetUnlockGalleries(bool enabled);
 
@@ -571,6 +597,9 @@ void SetModsDisabled(const std::string& list);
 // while it runs; they load again, the new import included, when it ends.
 // False when one is already running or there is no mods folder.
 bool StartRemasteredImport(const std::string& image, const std::string& keys);
+// The Dread Samus import (PortRemastered::StartDreadSamusImport), with the same mods unload/reload
+// around it.
+bool StartDreadSamusImport(const std::string& image, const std::string& keys);
 // Memory card transfer to and from Dolphin (port_gci.h), for the overlay and
 // the console. Each returns a message for the user. Imports are refused in
 // game; `path` may be a .gci, a raw card image, a folder of .gci files or an
@@ -592,6 +621,9 @@ void SetInvulnerable(bool enabled);
 // running. Main thread.
 bool CheatFullHealth();
 bool CheatGrantEverything();
+// Cheat: the Phazon Beam takes the Power Beam's place, anywhere (F1 > Debug > Cheats).
+bool PhazonBeamCheat();
+void SetPhazonBeamCheat(bool enabled);
 // Write the log to <user folder>/metroid_prime_port.log (port_log_file.h). MP_LOG_FILE=1
 // turns it on for one run without changing the setting.
 bool LogFile();
@@ -679,8 +711,6 @@ bool MouseInvertX();
 bool MouseInvertY();
 bool MouseButtons();
 bool MouseCrosshair();
-// Direct aim: an empty lock-on keeps the camera pitch instead of levelling it.
-bool LockKeepsPitch();
 // The free-aim crosshair under direct aim: the setting, or always with pointer aim.
 bool AimCrosshair();
 // Pointer aim (Trilogy style, any direct aim): the mouse, right stick, gyro or a
@@ -691,6 +721,10 @@ bool PointerAim();
 void SetPointerAim(bool on);
 int PointerAimBox();
 int PointerAimTurn();
+// Lock-on free aim: under a combat lock any direct aim moves a pointer, with or
+// without pointer aim (no edge turn: the lock owns the view). CPlayer::PortLockFreeAim
+// reads it.
+bool LockOnFreeAim();
 // The pointer (-1..1 of the half view, right/down positive) as of the last tick;
 // false (and centre) unless it steered that tick's free look.
 bool PointerAimPosition(float& x, float& y);
@@ -727,7 +761,7 @@ bool TapUpdateToast(float x, float y);
 // it opened and the total. The headset draws its own (vr_menu.cpp). Game thread.
 bool ShaderCompilationProgress(uint32_t& done, uint32_t& total);
 // Called during simulation, using the effective unbobbed camera direction.
-bool UpdateMouseAim(bool active, bool locked, float x, float y, float z);
+bool UpdateMouseAim(bool active, bool locked, float x, float y, float z, bool pointerLock = false);
 void SynchronizeMouseAim(float x, float y, float z);
 // Turns the mouse-look yaw by dyaw radians (the game turned the player: a rotating
 // platform's rider carry). No effect until the aim is initialized.

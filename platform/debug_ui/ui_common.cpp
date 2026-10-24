@@ -534,7 +534,8 @@ void UpdateControllerNav() {
   // own pad polling off): a second one that disagrees about a key, as the
   // backend did with a stick held as a d-pad or with another pad than the
   // player's, queues two changes a frame where ImGui applies one.
-  SDL_Gamepad* pad = PADGetSDLGamepadForIndex(0);
+  const s32 padIndex = PADGetIndexForPort(PAD_CHAN0);
+  SDL_Gamepad* pad = PADGetSDLGamepadForIndex(padIndex >= 0 ? static_cast< u32 >(padIndex) : 0);
   // While the Controls tab captures a pad input, the pad binds instead of
   // navigating (releasing everything here also ends any nav press in progress).
   // A pad that went away releases everything the same way.

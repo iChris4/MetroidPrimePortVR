@@ -26,6 +26,7 @@ class CStateManager;
 class CVector3f;
 
 class CScriptWater : public CScriptTrigger {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 public:
   CScriptWater(CStateManager&, TUniqueId, const rstl::string&, const CEntityInfo&, const CVector3f&,
                const CAABox&, const CDamageInfo&, const CVector3f&, uint, bool, bool, uint, uint,

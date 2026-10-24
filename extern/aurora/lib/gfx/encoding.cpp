@@ -847,6 +847,7 @@ bool bind_pipeline(PipelineRef ref, const wgpu::RenderPassEncoder& pass) {
   }
   wgpu::RenderPipeline pipeline;
   if (!get_pipeline(ref, pipeline) || !pipeline) {
+    note_skipped_draw();
     return false;
   }
   pass.SetPipeline(pipeline);

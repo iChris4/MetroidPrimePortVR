@@ -8,6 +8,7 @@ class CElectricDescription;
 class CParticleGen;
 
 class CHUDBillboardEffect : public CEffect {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 public:
   CHUDBillboardEffect(const rstl::optional_object< TToken< CGenDescription > >& particle,
                       const rstl::optional_object< TToken< CElectricDescription > >& electric,
@@ -34,6 +35,8 @@ public:
   static bool PortHasVisorGoo(CStateManager& mgr);
   static void PortSetVisorGoo(CStateManager& mgr, TUniqueId uid, float dt);
   static void PortAddVisorGooSplat(CStateManager& mgr);
+  // CVisorEffectManagerMP1::Update over the billboards whose PART has visor effect data.
+  static void PortUpdateVisorOverrides(CStateManager& mgr, float dt);
 #endif
 
 private:
@@ -48,6 +51,12 @@ private:
 #ifdef TARGET_PC
   // Remastered's managed effect type: 4 = the visor goo manager's billboard, -1 none.
   int xPortManagedType = -1;
+  // Added to the visor effect override list (AddBillboardEffect).
+  bool xPortVisorOverride = false;
+  // The spread last given to the generator, which passes it down to its children.
+  CVector3f xPortSpawnSpread{1.f, 1.f, 1.f};
+  void PortUpdateSpawnSpread(const CStateManager& mgr);
+  void PortApplySpawnSpread(const CVector3f& spread);
 #endif
 
   static int g_IndirectTexturedBillboardCount;

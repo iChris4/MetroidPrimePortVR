@@ -9,7 +9,8 @@
 
 // aurora's THP decoder (extern/aurora/lib/dolphin/thp/THPDec.cpp). Declared here with a const input; the game's
 // own header takes a plain pointer and drags the whole THP player along.
-extern "C" int THPVideoDecode(const void* file, void* tileY, void* tileU, void* tileV, void* work);
+extern "C" int THPVideoDecodeBounded(const void* file, size_t size, void* tileY, void* tileU, void* tileV, uint32_t width,
+                                     uint32_t height);
 
 namespace PortGallery {
 namespace {
@@ -155,7 +156,8 @@ bool DecodeGalleryJpeg(const uint8_t* data, size_t size, int& width, int& height
   planes[0].Allocate(width, height);
   planes[1].Allocate((width + 1) / 2, (height + 1) / 2);
   planes[2].Allocate((width + 1) / 2, (height + 1) / 2);
-  if (THPVideoDecode(padded.data(), planes[0].data.data(), planes[1].data.data(), planes[2].data.data(), nullptr) != 0) {
+  if (THPVideoDecodeBounded(padded.data(), padded.size(), planes[0].data.data(), planes[1].data.data(),
+                            planes[2].data.data(), uint32_t(width), uint32_t(height)) != 0) {
     return false;
   }
 

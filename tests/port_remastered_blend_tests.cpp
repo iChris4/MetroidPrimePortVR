@@ -1,13 +1,15 @@
 // How a Remastered mesh is blended: its class (ModelMesh::bits2), not a material flag.
 // A synthetic model with three single-mesh materials is run through PortRemastered::Converter
 // and the GX blend factors of the CMDL's materials are read back: an opaque one writes
-// (One, Zero), a transparent one of class 1 (SrcAlpha, InvSrcAlpha) and one of class 3 (SrcAlpha, One).
+// (One, Zero), a transparent one of class 1 (SrcAlpha, InvSrcAlpha) and one of class 3 (SrcAlpha, One),
+// standalone and over a disc model's material whatever that one blends.
 
 #include "port_remastered_convert.h"
 #include "port_test.h"
 
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <set>
 #include <string>
 #include <utility>
@@ -68,7 +70,83 @@ Model BuildModel(const std::vector<Surface>& surfaces) {
   return model;
 }
 
-bool Convert(const Model& model, std::vector<uint8_t>& cmdl) {
+void Put32(std::vector<uint8_t>& out, uint32_t v) {
+  for (int shift = 24; shift >= 0; shift -= 8) {
+    out.push_back(uint8_t(v >> shift));
+  }
+}
+
+void Pad32(std::vector<uint8_t>& out) { out.resize((out.size() + 31) & ~size_t(31), 0); }
+
+uint32_t FloatBits(float f) {
+  uint32_t bits;
+  std::memcpy(&bits, &f, sizeof(bits));
+  return bits;
+}
+
+// A disc model (as port_inventory_visor_tests' visor): one set of one untextured material blending
+// (src, dst), and one surface drawing BuildModel's three vertices in the GameCube's frame.
+std::vector<uint8_t> RetailModel(uint32_t src, uint32_t dst) {
+  std::vector<uint8_t> mat;
+  Put32(mat, 0);    // flags
+  Put32(mat, 0);    // textures
+  Put32(mat, 0x3);  // vertex attributes: a u16 position index
+  Put32(mat, 0);    // group
+  Put32(mat, (dst << 16) | src);
+  Put32(mat, 1);    // colour channels
+  Put32(mat, 0);
+  Put32(mat, 1);    // one TEV stage, no texture
+  for (uint32_t v : {0x7A14Fu, 0x21CE7u, 0x100u, 0x100u, 0u}) {
+    Put32(mat, v);
+  }
+  Put32(mat, 0x0000FFFF);
+  Put32(mat, 0);  // texgens
+  Put32(mat, 4);  // UV animations: none
+  Put32(mat, 0);
+  std::vector<std::vector<uint8_t>> secs(8);
+  Put32(secs[0], 0);  // the set's textures
+  Put32(secs[0], 1);
+  Put32(secs[0], uint32_t(mat.size()));
+  secs[0].insert(secs[0].end(), mat.begin(), mat.end());
+  for (int v = 0; v < 3; ++v) {
+    for (float c : {-float(v), 0.f, float(v * v)}) {
+      Put32(secs[1], FloatBits(c));
+    }
+  }
+  std::vector<uint8_t>& surface = secs[7];
+  surface.resize(12, 0);  // centre
+  Put32(surface, 0);      // material
+  Put32(surface, 32);     // display list size
+  surface.resize(28, 0);
+  Put32(surface, 0);  // extra
+  surface.resize(64, 0);
+  for (uint8_t b : {0x90, 0x00, 0x03, 0x00, 0x00, 0x00, 0x01, 0x00, 0x02}) {  // GX_TRIANGLES 0, 1, 2
+    surface.push_back(b);
+  }
+  Put32(secs[6], 1);  // surfaces, and where each ends
+  Put32(secs[6], 96);
+  for (std::vector<uint8_t>& sec : secs) {
+    Pad32(sec);
+  }
+  std::vector<uint8_t> out;
+  Put32(out, 0xDEADBABE);
+  Put32(out, 2);
+  Put32(out, 0);  // flags
+  out.resize(0x24, 0);
+  Put32(out, uint32_t(secs.size()));
+  Put32(out, 1);  // material sets
+  for (const std::vector<uint8_t>& sec : secs) {
+    Put32(out, uint32_t(sec.size()));
+  }
+  Pad32(out);
+  for (const std::vector<uint8_t>& sec : secs) {
+    out.insert(out.end(), sec.begin(), sec.end());
+  }
+  return out;
+}
+
+// Standalone with an empty retail; otherwise against that disc model, as the game imports one.
+bool Convert(const Model& model, std::vector<uint8_t>& cmdl, const std::vector<uint8_t>& retail = {}) {
   ConvertIO io;
   io.texture = [](const ModelUuid&, Image& out, std::string&) {
     out.width = out.height = 4;
@@ -82,9 +160,19 @@ bool Convert(const Model& model, std::vector<uint8_t>& cmdl) {
     return true;
   };
   ConvertOptions opt;
-  opt.standalone = true;
+  opt.standalone = retail.empty();
   opt.retail = 0xABCD1234;
   opt.skip.clear();
+  if (!opt.standalone) {
+    io.retail = [&retail, &opt](uint32_t type, uint32_t id, std::vector<uint8_t>& out) {
+      if (type != FourCC('C', 'M', 'D', 'L') || id != opt.retail) {
+        return false;
+      }
+      out = retail;
+      return true;
+    };
+    io.retailId = [](uint32_t) { return false; };
+  }
   Converter converter(io);
   std::string error;
   if (!converter.Convert(model, opt, error)) {
@@ -157,6 +245,32 @@ void TestClasses() {
   CHECK_MSG(got.size() == 3, "each class has factors of its own");
 }
 
+// Over a disc model's material the class decides too, not what that material blends: an opaque
+// disc material under class 1 and 3 meshes, and an effect's (One, One) under a class 0 mesh not
+// flagged blended (600D500E's case, drawn opaque).
+void TestClassesOverRetail() {
+  std::vector<uint8_t> cmdl;
+  if (!Convert(BuildModel({{0x1, 0}, {0x1, 1}, {0x1, 3}, {0x20, 2}}), cmdl, RetailModel(1, 0))) {
+    return;
+  }
+  std::vector<std::pair<uint32_t, uint32_t>> f;
+  if (!Factors(cmdl, f) || f.size() != 4) {
+    CHECK_MSG(false, "the four materials over a disc model are readable");
+    return;
+  }
+  CHECK_MSG((f[0] == std::pair<uint32_t, uint32_t>(1, 0)), "over (One, Zero), class 0 blends (One, Zero)");
+  CHECK_MSG((f[1] == std::pair<uint32_t, uint32_t>(4, 5)), "over (One, Zero), class 1 blends (SrcAlpha, InvSrcAlpha)");
+  CHECK_MSG((f[2] == std::pair<uint32_t, uint32_t>(4, 1)), "over (One, Zero), class 3 blends (SrcAlpha, One)");
+  CHECK_MSG((f[3] == std::pair<uint32_t, uint32_t>(1, 0)), "over (One, Zero), class 2 blends (One, Zero)");
+  cmdl.clear();
+  f.clear();
+  if (!Convert(BuildModel({{0x100010, 0}}), cmdl, RetailModel(1, 1))) {
+    return;
+  }
+  CHECK_MSG(Factors(cmdl, f) && f.size() == 1, "the material over an effect is readable");
+  CHECK_MSG((f.size() == 1 && f[0] == std::pair<uint32_t, uint32_t>(1, 0)), "over (One, One), class 0 blends (One, Zero)");
+}
+
 // Lit glass of Remastered's premultiplied families (here 11B30369) adds its own colour:
 // (One, InvSrcAlpha), however its mesh class says to blend.
 void TestPremultipliedGlass() {
@@ -207,6 +321,7 @@ void TestHoloGlass() {
 
 int main() {
   TestClasses();
+  TestClassesOverRetail();
   TestPremultipliedGlass();
   TestHoloGlass();
   if (port_test::Failures() == 0) {

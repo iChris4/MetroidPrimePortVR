@@ -8,6 +8,7 @@
 class CProjectedShadow;
 
 class CScriptShadowProjector : public CActor {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 public:
   CScriptShadowProjector(TUniqueId, const rstl::string&, const CEntityInfo&, const CTransform4f&,
                          bool, const CVector3f&, bool, float, float, float, float, int);

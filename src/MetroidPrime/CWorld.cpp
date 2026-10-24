@@ -797,6 +797,21 @@ void CWorld::DrawSky(const CTransform4f& xf) const {
       }
     }
   }
+  // Where retail draws the world's sky (and no script has swapped it), Remastered's world
+  // sky stands in for it: the master room's Skybox, which rooms with none of their own carry.
+  if (count == 0 && x70_27_skyboxVisible && !xb4_skyboxOverride) {
+    if (x68_curAreaId != kInvalidAreaId) {
+      const CGameArea* current = GetArea(x68_curAreaId);
+      if (current->IsPostConstructed() && (count = PortRoomGeo::Skies(*current, layers, true)) != 0) {
+        skyArea = current;
+      }
+    }
+    for (CGameArea::CConstChainIterator it = GetChainHead(kC_Alive); count == 0 && it != skGlobalEnd; ++it) {
+      if (it->DoesAreaNeedSkyNow() && (count = PortRoomGeo::Skies(*it, layers, true)) != 0) {
+        skyArea = &*it;
+      }
+    }
+  }
   if (count != 0) {
     PortRoomGeo::sSkyDrawnFor = skyArea->GetAreaAssetId();
     // Remastered draws a sky unlit, its base map times the Skybox's colour and intensity in

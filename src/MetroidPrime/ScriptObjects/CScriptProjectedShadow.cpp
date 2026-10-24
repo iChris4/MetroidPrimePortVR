@@ -82,29 +82,21 @@ void CScriptShadowProjector::PreRender(CStateManager& mgr, const CFrustumPlanes&
   SetPreRenderClipped(true);
   if (!x108_projectedShadow.null()) {
     CActor* act = TCastToPtr< CActor >(mgr.ObjectById(x104_target));
-    bool hasModelData;
-    if (act != nullptr) {
-      hasModelData = false;
-      if (act->HasModelData()) {
-        hasModelData = true;
-      }
-    } else {
+    if (act == nullptr || !act->HasModelData()) {
       x104_target = kInvalidUniqueId;
       return;
     }
 
-    if (hasModelData) {
-      if (!act->GetActive()) {
-        return;
-      }
-
-      if (act->HasAnimation()) {
-        act->AnimationData()->PreRender();
-      }
-      x108_projectedShadow->SetOpacity(xfc_opacity);
-      x108_projectedShadow->RenderShadowBuffer(mgr, *act->GetModelData(), act->GetTransform(), 0,
-                                               xec_offset, xe8_scale, xf8_zOffsetAdjust);
+    if (!act->GetActive()) {
+      return;
     }
+
+    if (act->HasAnimation()) {
+      act->AnimationData()->PreRender();
+    }
+    x108_projectedShadow->SetOpacity(xfc_opacity);
+    x108_projectedShadow->RenderShadowBuffer(mgr, *act->GetModelData(), act->GetTransform(), 0,
+                                             xec_offset, xe8_scale, xf8_zOffsetAdjust);
   }
 }
 

@@ -42,6 +42,7 @@
 #include "port_debug.h"
 #include "port_model_variant.h"
 #include "port_ball_looks.h"
+#include "port_dread_samus_mod.h"
 #include "port_remastered_ball_light.h"
 #include "port_synthetic_effect.h"
 #include "Kyoto/Math/CPlane.hpp"
@@ -2888,7 +2889,11 @@ void CMorphBall::LoadMorphBallModel(CStateManager& mgr) {
 #endif
           );
       x6c_lowPolyBallModelShader = skSpiderBallLowPoly[modelIdx].x4_shader;
-      if (skSpiderBallGlass[modelIdx].x0_name != nullptr) {
+      if (skSpiderBallGlass[modelIdx].x0_name != nullptr
+#ifdef TARGET_PC
+          && !PortDreadSamus::ReplacesBall(modelIdx, true)
+#endif
+      ) {
         x60_spiderBallGlassModel =
             GetMorphBallModel(rstl::string_l(skSpiderBallGlass[modelIdx].x0_name), xc_radius
 #ifdef TARGET_PC
@@ -2931,6 +2936,14 @@ void CMorphBall::LoadMorphBallModel(CStateManager& mgr) {
     }
 
     const float scale = 2.f * gpTweakPlayer->GetPlayerBallHalfExtent();
+#ifdef TARGET_PC
+    if (PortDreadSamus::ReplacesBall(modelIdx, spiderBall)) {
+      x5c_ballModelShader = 0;
+    }
+    if (PortDreadSamus::ReplacesLowBall(modelIdx, spiderBall)) {
+      x6c_lowPolyBallModelShader = 0;
+    }
+#endif
     x58_ballModel->SetScale(CVector3f(scale, scale, scale));
   }
 }

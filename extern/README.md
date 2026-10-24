@@ -6,7 +6,7 @@ be fetched. Keep their license files and source notices when updating them.
 
 | Directory | Upstream | Snapshot imported into this repository |
 | --- | --- | --- |
-| `aurora` | <https://github.com/encounter/aurora> | Local port fork `d39404c803d28657c94159a8f44addffdd85a781`, based on port snapshot `32c926ca0f59994249ba4dae5d606a66f8bbd87f` |
+| `aurora` | <https://github.com/encounter/aurora> | Local port fork `d39404c803d28657c94159a8f44addffdd85a781`, based on port snapshot `32c926ca0f59994249ba4dae5d606a66f8bbd87f` (upstream `011e33109`, 2026-09-17), plus upstream fixes ported by hand up to `8e356df6e` (2026-10-20): `26371ce`, `2bf0825`, `e938637`, `0857ad8`, `3094e04`, `afa388d`, `8e0ff96`, `f394fc4`, `323e66f`, `cb0e279`, `3840bf9`, `9c0bf66`. Not taken: readback API, `LruCache`, `aurora::input`/`binding`, RmlUi |
 | `astcenc` | <https://github.com/ARM-software/astc-encoder> | Release `5.7.0` (`baff485b0ff36d2f95d28961605106502c653966`), Apache-2.0 |
 | `adrenotools` | <https://github.com/bylaws/libadrenotools> | `8fae8ce254dfc1344527e05301e43f37dea2df80`, with `lib/linkernsbypass` at `aa3975893d83ef1bc84c321ec60c65fbf1287887`, BSD-2-Clause |
 | `sdk` | PrimeDecomp (decompiled) | Dolphin SDK, Metrowerks libc headers and CodeWarrior runtime, decompiled from the retail executable; **not** open source and not covered by `LICENSE` (see `NOTICE`) |

@@ -37,6 +37,9 @@ public:
     int x2c_size;
     CResLoader::ECompressionType x30_compression;
     CVParamTransfer x34_params;
+#ifdef TARGET_PC
+    int xPortReadRetries;
+#endif
 
     SLoadingData(const SObjectTag& tag, CDvdRequest* request, IObj** target, void* buffer, int size,
                  CResLoader::ECompressionType compression, const CVParamTransfer& params);
@@ -69,6 +72,8 @@ public:
   void PortLoadListCounts(int& total, int& pending);
   // Finishes the loads in flight, then CResLoader::PortReopenPaks.
   void PortReopenPaks(void (*between)());
+  // Reads a load again when its read ended without filling the buffer.
+  bool PortRetryFailedRead(SLoadingData& data);
 #endif
   CFactoryMgr& GetFactoryMgr() { return x5c_factoryMgr; }
 

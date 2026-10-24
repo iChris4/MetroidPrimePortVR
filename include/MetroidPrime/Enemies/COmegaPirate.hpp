@@ -19,6 +19,7 @@ class CCollisionActorManager;
 class CTexture;
 
 class COmegaPirate : public CElitePirate {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 public:
   COmegaPirate(TUniqueId uid, const rstl::string& name, const CEntityInfo& info,
                const CTransform4f& xf, const CModelData& mData, const CPatternedInfo& pInfo,
@@ -71,6 +72,7 @@ public:
 
 private:
   class CFlash : public CActor {
+    friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
   public:
     DECLARE_TYPES_MATCH_OR_ACCEPT;
     void Think(float dt, CStateManager& mgr) override;

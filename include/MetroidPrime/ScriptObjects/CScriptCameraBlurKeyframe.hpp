@@ -6,6 +6,7 @@
 #include "MetroidPrime/Cameras/CCameraBlurPass.hpp"
 
 class CScriptCameraBlurKeyframe : public CEntity {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
   CCameraBlurPass::EBlurType x34_type;
   float x38_amount;
   u32 x3c_;

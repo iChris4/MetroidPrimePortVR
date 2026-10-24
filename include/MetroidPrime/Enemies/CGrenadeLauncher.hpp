@@ -58,6 +58,7 @@ public:
 CHECK_SIZEOF(CEPGrenadeLauncherData, 0x58)
 
 class CGrenadeLauncher : public CPhysicsActor {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 public:
   ~CGrenadeLauncher() override;
   void Think(float dt, CStateManager& mgr) override;

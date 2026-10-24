@@ -198,6 +198,24 @@ void CCinematicCamera::AcceptScriptMsg(EScriptObjectMessage msg, TUniqueId uid,
   }
 }
 
+#ifdef TARGET_PC
+void CCinematicCamera::PortResumeCinematic(float t, int passedViewPoint, int passedTarget,
+                                           CStateManager& mgr) {
+  CalculateWaypoints(mgr);
+  if ((x21c_flags & 1) == 0 && x220_24_ && x1b8_targets.size() == 0) {
+    return;
+  }
+  x1ec_t = t;
+  x1f4_passedViewPoint = passedViewPoint;
+  x1f8_passedTarget = passedTarget;
+  Think(0.f, mgr);
+  mgr.CameraManager()->AddCinemaCamera(GetUniqueId(), mgr);
+  if ((x21c_flags & 0x100) != 0) {
+    mgr.SetCinematicPause(true);
+  }
+}
+#endif
+
 void CCinematicCamera::SendArrivedMsg(TUniqueId reciever, CStateManager& mgr) const {
   mgr.SendScriptMsgAlways(reciever, GetUniqueId(), kSM_Arrived);
 }

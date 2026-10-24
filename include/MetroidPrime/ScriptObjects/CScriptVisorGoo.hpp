@@ -7,6 +7,7 @@ class CGenDescription;
 class CElectricDescription;
 
 class CScriptVisorGoo : public CActor {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 public:
   CScriptVisorGoo(TUniqueId uid, const rstl::string& name, const CEntityInfo& info,
                   const CTransform4f& xf, CAssetId particle, CAssetId electric, float minRange,

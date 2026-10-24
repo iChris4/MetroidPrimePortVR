@@ -11,6 +11,7 @@
 #include "rstl/single_ptr.hpp"
 
 class CPuddleToadGamma : public CPatterned {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 public:
   CPuddleToadGamma(const TUniqueId uid, const rstl::string& name, const EFlavorType flavor,
                    const CEntityInfo& info, const CTransform4f& xf, const CModelData& mData,

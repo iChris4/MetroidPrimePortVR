@@ -11,6 +11,7 @@
 #include "Kyoto/TToken.hpp"
 
 class CFire : public CActor {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 public:
   CFire(const TToken< CGenDescription >& effect, TUniqueId uid, TAreaId area, bool active,
         TUniqueId owner, const CTransform4f& xf, const CDamageInfo& dInfo, const CAABox& aabox,

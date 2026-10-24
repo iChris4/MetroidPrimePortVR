@@ -34,8 +34,8 @@ void DrawPerformanceTab() {
       MarkDirty();
     }
     ImGui::EndDisabled();
-    ItemHelp("With the 60 FPS cap off, the most frames drawn a second. Vsync still holds it to "
-             "the display's refresh rate.");
+    ItemHelp("The most frames drawn a second with the 60 FPS cap off. Vsync still limits it to the "
+             "display's refresh rate.");
   }
   // Both, because they answer different questions. Throughput is what the
   // machine produces once the pacing wait is excluded; presented is what
@@ -57,10 +57,8 @@ void DrawPerformanceTab() {
   if (ImGui::Checkbox("Smooth uncapped frames", &smooth)) {
     PortDebug::SetSmoothFrames(smooth);
   }
-  ItemHelp("With the FPS cap off, frames between the game's 60 Hz ticks turn the view with "
-           "mouse, gyro and twin-stick look, and draw moving objects, animation and particles "
-           "between their last two ticks. The game itself still runs at 60 Hz, so aim and "
-           "shots are unchanged.");
+  ItemHelp("With the FPS cap off, smooths mouse, gyro and twin-stick look and moving objects "
+           "between the game's 60 Hz ticks. Aim and shots are unchanged.");
 
   ImGui::SeparatorText("Simulation rate (very experimental)");
   ImGui::TextColored(ThemeWarnColor(), "For testing only. The game was written for 60 Hz: other rates can\n"
@@ -69,18 +67,16 @@ void DrawPerformanceTab() {
   if (ImGui::Checkbox("Adaptive (follow frame rate)", &adaptive)) {
     PortDebug::SetSimAdaptive(adaptive);
   }
-  ItemHelp("One step per frame with dt = the measured frame time (clamped 30-480 Hz), so a "
-           "variable frame rate is matched exactly. Leave the FPS cap off.");
+  ItemHelp("Steps the game once per frame at the measured frame time, so a variable frame rate is "
+           "matched. Leave the FPS cap off.");
   ImGui::BeginDisabled(adaptive);
   int simRate = static_cast< int >(sSimRate);
   if (ImGui::SliderInt("Sim Hz", &simRate, 30, 480)) {
     PortDebug::SetSimRate(static_cast< unsigned >(simRate));
   }
   ImGui::EndDisabled();
-  ItemHelp("60 Hz is console-accurate and the only rate that's supported. Other values step the "
-           "game logic at that rate instead of smoothing frames between 60 Hz ticks; leave the "
-           "FPS cap off for it to matter. For smooth high frame rates, use Smooth uncapped "
-           "frames instead.");
+  ItemHelp("60 Hz is console-accurate and the only supported rate. Other rates change the game's "
+           "logic speed; for smooth high frame rates use Smooth uncapped frames.");
   EndOriginalLocked(locked);
 }
 

@@ -393,8 +393,13 @@ float CPlayerVisor::ScanWindowCopySize(const CStateManager& mgr, int vpWidth, in
                                        t * gpTweakGui->GetScanWindowScanningAspect()) +
                         (1.f - transFactor);
   const float fit = ScanWindowFit(vpWidth, vpHeight);
+#ifdef TARGET_PC
+  const float vpW = 169.218f * fit * x48_interpWindowDims.GetX() * PortWindowShapeX();
+  const float vpH = 152.218f * fit * x48_interpWindowDims.GetY() * PortWindowShapeY();
+#else
   const float vpW = 169.218f * fit * x48_interpWindowDims.GetX();
   const float vpH = 152.218f * fit * x48_interpWindowDims.GetY();
+#endif
 #ifdef TARGET_PC
   // PortVr: the copy is vpW by vpH (the pane's own size) over the divisor, and
   // the pane stretches it back: the divisor is the zoom. With the headset's
@@ -415,6 +420,25 @@ float CPlayerVisor::ScanWindowCopySize(const CStateManager& mgr, int vpWidth, in
 }
 
 #ifdef TARGET_PC
+// Port: with pointer aim, the scan window is the pointer's cursor. It follows the presented
+// pointer (half-view units, +y down) and magnifies the screen around it; the scan zone moves
+// with it (CPlayerOrbit.cpp). Locked, the pointer is held at the centre and so is the window.
+static bool PortScanWindowPointer(float& x, float& y) {
+  return PortDebug::PresentedPointerAimPosition(CCameraManager::GetPresentationInterpolation(), x,
+                                                y);
+}
+
+// Same area as retail's window, held while the pointer is locked so the window keeps its shape.
+// Only the idle (search) window takes it: as the window grows to its scan size it returns to
+// retail's, which sits above the scan text box. 0 = idle size, 1 = scan size (UpdateScanWindow).
+static float sPortScanSizeBlend = 0.f;
+float CPlayerVisor::PortWindowShapeX() {
+  return PortDebug::PointerAim() ? 0.7f + 0.3f * sPortScanSizeBlend : 1.f;
+}
+float CPlayerVisor::PortWindowShapeY() {
+  return PortDebug::PointerAim() ? 1.4f - 0.4f * sPortScanSizeBlend : 1.f;
+}
+
 // The zoomed copy (sharp scan window), keyed apart from the spare buffer; valid for the frame
 // that made it, until DrawScanEffect takes it.
 static u8 sPortScanZoomCopy[32];
@@ -425,6 +449,7 @@ static int sPortScanZoomHeight = 0;
 bool CPlayerVisor::PortScanZoom(const CStateManager& mgr, float& zoom, int& width,
                                 int& height) const {
   sPortScanZoomCopied = false;
+  float pointerX, pointerY;
   // PortVr: not while immersive. The zoomed pass is one mono view through the game camera,
   // copied from the screen's centre; the headset's window is copied from each eye through the
   // head-locked plane (DrawScanEffect), where the eyes' own projections replace the zoomed one
@@ -432,7 +457,7 @@ bool CPlayerVisor::PortScanZoom(const CStateManager& mgr, float& zoom, int& widt
   // per eye. The headset's window keeps the retail copy (unmagnified with vr_scan_zoom off).
   // PortDebug::SharpScanWindow() is already off while the headset runs (debug_ui.cpp);
   // this keeps the immersive case safe on its own.
-  if (!PortDebug::SharpScanWindow() || PortVr::VrImmersive() ||
+  if (!PortDebug::SharpScanWindow() || PortVr::VrImmersive() || PortScanWindowPointer(pointerX, pointerY) ||
       mgr.GetPlayerState()->GetActiveVisor(mgr) != CPlayerState::kPV_Scan ||
       mgr.GetPlayerState()->GetVisorTransitionFactor() <= 0.f ||
       x108_newScanPane.GetObject() == nullptr) {
@@ -520,11 +545,29 @@ void CPlayerVisor::DrawScanEffect(const CStateManager& mgr,
   const float fit = ScanWindowFit(vpWidth, vpHeight);
   void* buffer = CGraphics::GetDolphinSpareBuffer();
 #ifdef TARGET_PC
+  float pointerX = 0.f;
+  float pointerY = 0.f;
+  const bool portPointer = PortScanWindowPointer(pointerX, pointerY);
+  // The window's centre in pixels from the view's centre (+y down).
+  const float portShiftX = pointerX * 0.5f * static_cast< float >(vpWidth);
+  const float portShiftY = pointerY * 0.5f * static_cast< float >(vpHeight);
   if (sPortScanZoomCopied) {
     sPortScanZoomCopied = false;
     buffer = sPortScanZoomCopy;
     width = sPortScanZoomWidth;
     height = sPortScanZoomHeight;
+  } else if (portPointer) {
+    // The copy is centred on the window, kept inside the view.
+    const int srcLeft = CMath::Clamp(
+        vpLeft, (vpLeft + (vpWidth - width) / 2 + static_cast< int >(portShiftX)) & ~1,
+        vpLeft + vpWidth - width);
+    const int srcTop = CMath::Clamp(
+        vpTop, (vpTop + (vpHeight - height) / 2 + static_cast< int >(portShiftY)) & ~1,
+        vpTop + vpHeight - height);
+    GXSetTexCopySrc(srcLeft, srcTop, width, height);
+    GXSetTexCopyDst(width, height, GX_TF_RGB565, GX_FALSE);
+    GXCopyTex(buffer, GX_FALSE);
+    GXPixModeSync();
   } else
 #endif
   {
@@ -543,8 +586,19 @@ void CPlayerVisor::DrawScanEffect(const CStateManager& mgr,
   AuroraSetStereoDrawRoute(AURORA_STEREO_ROUTE_HEAD_LOCKED_2D);
 #endif
   gpRender->SetViewportOrtho(true, -1.f, 1.f);
+#ifdef TARGET_PC
+  // Moving the view the other way draws the window and its frame around the pointer.
+  if (portPointer)
+    CGraphics::SetViewPointMatrix(CTransform4f::Translate(-portShiftX, 0.f, portShiftY));
+#endif
+#ifdef TARGET_PC
+  const CTransform4f windowScale =
+      CTransform4f::Scale(x48_interpWindowDims.GetX() * PortWindowShapeX(), 1.f,
+                          x48_interpWindowDims.GetY() * PortWindowShapeY());
+#else
   const CTransform4f windowScale =
       CTransform4f::Scale(x48_interpWindowDims.GetX(), 1.f, x48_interpWindowDims.GetY());
+#endif
   const CTransform4f seventeenScale = CTransform4f::Scale(17.f * fit, 1.f, 17.f * fit);
   const CTransform4f mm = seventeenScale * windowScale;
   const CTransform4f verticalFlip = CTransform4f::Scale(1.f, 1.f, -1.f);
@@ -628,6 +682,10 @@ void CPlayerVisor::DrawScanEffect(const CStateManager& mgr,
     gpRender->SetModelMatrix(verticalFlip * horizontalFlip * modelXf);
     model->Draw(flags);
   }
+#ifdef TARGET_PC
+  if (portPointer)
+    CGraphics::SetViewPointMatrix(CTransform4f::Identity());
+#endif
   CGraphics::SetCullMode(kCM_Front);
 #ifdef TARGET_PC
   // PortVr: back to the route CInGameGuiManager::Draw set for the visor.
@@ -765,6 +823,18 @@ void CPlayerVisor::UpdateScanWindow(float dt, const CStateManager& mgr) {
     }
     x48_interpWindowDims = CVector2f::Lerp(x50_nextWindowDims, x40_prevWindowDims, t);
   }
+#ifdef TARGET_PC
+  const CVector2f toScan = x0_scanWindowSizes[kSWS_Scan] - x0_scanWindowSizes[kSWS_Idle];
+  const float scanDist = CVector2f::Dot(toScan, toScan);
+  sPortScanSizeBlend =
+      scanDist > 0.f
+          ? CMath::Clamp(0.f,
+                         CVector2f::Dot(x48_interpWindowDims - x0_scanWindowSizes[kSWS_Idle],
+                                        toScan) /
+                             scanDist,
+                         1.f)
+          : 0.f;
+#endif
 }
 
 void CPlayerVisor::UpdateScanObjectIndicators(const CStateManager& mgr, float dt) {
@@ -920,8 +990,21 @@ bool CPlayerVisor::DrawScanObjectIndicators(const CStateManager& mgr) const {
   CGraphics::SetDepthRange(0.125f, 1.f);
   gpRender->SetViewportOrtho(true, 0.f, 4096.f);
   const float fit = ScanWindowFit(CGraphics::GetViewportWidth(), CGraphics::GetViewportHeight());
+#ifdef TARGET_PC
+  // The shield masks the reticle lines outside the window by depth: it moves with the window.
+  float pointerX = 0.f;
+  float pointerY = 0.f;
+  if (PortScanWindowPointer(pointerX, pointerY))
+    CGraphics::SetViewPointMatrix(CTransform4f::Translate(
+        -pointerX * 0.5f * static_cast< float >(CGraphics::GetViewportWidth()), 0.f,
+        pointerY * 0.5f * static_cast< float >(CGraphics::GetViewportHeight())));
+  gpRender->SetModelMatrix(
+      CTransform4f::Scale(17.f * fit * x48_interpWindowDims.GetX() * PortWindowShapeX(), 1.f,
+                          17.f * fit * x48_interpWindowDims.GetY() * PortWindowShapeY()));
+#else
   gpRender->SetModelMatrix(CTransform4f::Scale(17.f * fit * x48_interpWindowDims.GetX(), 1.f,
                                                17.f * fit * x48_interpWindowDims.GetY()));
+#endif
   shield->Draw(CModelFlags::AlphaBlended(CColor(0)));
 #ifdef TARGET_PC
   // PortVr: the shield is a frame around the window's hole whose border lies

@@ -39,6 +39,7 @@ extern const int gkPVSEnabled;
 #ifdef TARGET_PC
 #include "Kyoto/Particles/CPortParticleVars.hpp"
 #include "MetroidPrime/PortVisorGoo.hpp"
+#include "MetroidPrime/PortVisorOverrides.hpp"
 #endif
 
 class CAABox;
@@ -318,13 +319,19 @@ public:
   // CMFGame snapshots this per-world-pass policy; DrawWorld consumes and clears it before
   // recording the LDR probe capture or beginning the real scene.
   static bool sPortSceneHdrRequest;
+  // Remastered draws every visor inside the HDR scene pipeline (kb topic/visor-hdr-pipeline.md):
+  // thermal and X-ray push their own reduced-size target over the scene and blend it back into it,
+  // then take the same UberPost as combat.
   static constexpr bool PortIsSceneHdrVisorSupported(bool combat, bool scan, bool thermal,
                                                      bool xray) noexcept {
-    return (combat || scan) && !thermal && !xray;
+    return combat || scan || thermal || xray;
   }
-  static constexpr bool PortShouldUseSceneHdr(bool enabled, bool roomEnvEnabled, bool hasRoomTone,
-                                             bool supportedVisor, bool visorTransitioning) noexcept {
-    return enabled && roomEnvEnabled && hasRoomTone && supportedVisor && !visorTransitioning;
+  // No transition-specific path: each frame renders exactly one visor's pipeline, which switches
+  // when the transition timer crosses zero, so a visor transition keeps the HDR scene.
+  // The HDR scene is the only Remastered path: a room without tone data still draws in it, through
+  // the identity tone (STonemapParams::BuildLinear(3.0)). Retail (no room environment) never does.
+  static constexpr bool PortShouldUseSceneHdr(bool roomEnvActive, bool supportedVisor) noexcept {
+    return roomEnvActive && supportedVisor;
   }
   // Port (sharp scan window): above 1, DrawWorld draws a magnified view through a camera
   // zoomed by this much, without the gun and the frame's one-off captures.
@@ -541,10 +548,14 @@ public:
     u16 sizeHandle = kPortNoVar;
   };
   PortVisorGooState& PortVisorGooManager() { return xPortVisorGoo; }
+  // Port: the same manager's visor effect overrides (the radial damage tint's colours).
+  PortVisorOverrides::State& PortVisorOverrideManager() { return xPortVisorOverrides; }
+  const PortVisorOverrides::State& PortVisorOverrideManager() const { return xPortVisorOverrides; }
 
 private:
   uint xPortSimTick = 0;
   PortVisorGooState xPortVisorGoo;
+  PortVisorOverrides::State xPortVisorOverrides;
 #endif
 };
 CHECK_SIZEOF(CStateManager, 0xf98)

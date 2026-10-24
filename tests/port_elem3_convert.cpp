@@ -316,7 +316,7 @@ void TestSwooshSust() {
   CHECK_MSG(Dropped(parts, "retail has no element SUST there"), "SUST in a generator stays dropped");
 }
 
-// SDTR is read as a leaf, then dropped with its reason.
+// SDTR is read as a leaf, then written as the port-only PSDT.
 void TestShutdownTime() {
   EffectNode effect;
   std::vector<uint8_t> out;
@@ -328,7 +328,11 @@ void TestShutdownTime() {
         PutConstant(o, Bits(1.0f));
       },
       effect, out);
-  CHECK_MSG(Dropped(parts, "SDTR needs Remastered's shutdown countdown (SHTT)"), "SDTR is dropped with its reason");
+  CHECK_MSG(!parts.empty() && parts[0].dropped.empty(), "SDTR drops nothing");
+  const char psdt[] = {'P', 'S', 'D', 'T'};
+  CHECK_MSG(!parts.empty() &&
+                std::search(parts[0].part.begin(), parts[0].part.end(), psdt, psdt + 4) != parts[0].part.end(),
+            "SDTR is written as PSDT");
 }
 
 }  // namespace

@@ -17,6 +17,7 @@ class CSkinnedModel;
 class CSkinRules;
 
 class CScriptPlayerActor : public CScriptActor {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 public:
   CScriptPlayerActor(TUniqueId uid, const rstl::string& name, const CEntityInfo& info,
                      const CTransform4f& xf, const CAnimRes& animRes, const CModelData& mData,

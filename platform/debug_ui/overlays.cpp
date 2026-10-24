@@ -67,7 +67,8 @@ void DrawStaleImportToast() {
   if (ImGui::Begin("##stale-import-toast", nullptr,
                    ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav |
                        ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoSavedSettings)) {
-    ImGui::TextWrapped("%s was imported by an older version. Re-import Remastered (F1 > Remastered) to get the latest fixes.",
+    ImGui::TextWrapped("%s was imported by an older version. Re-import Remastered (F1 > Mods > "
+                       "Built-in mods) to get the latest fixes.",
                        name);
   }
   ImGui::End();

@@ -11,6 +11,12 @@ public:
   virtual bool IsComplete() = 0;        // 10
   virtual void PostCancelRequest() = 0; // 14
   virtual int GetMediaType() const = 0; // 18
+#ifdef TARGET_PC
+  // Port: bytes the read delivered, or -1 for a request that cannot come up short.
+  virtual int PortTransferred() { return -1; }
+  // Port: the read ended cancelled, so its buffer holds nothing.
+  virtual bool PortCancelled() { return false; }
+#endif
 };
 
 inline CDvdRequest::~CDvdRequest() {}
@@ -23,6 +29,10 @@ public:
   bool IsComplete();
   void PostCancelRequest();
   int GetMediaType() const;
+#ifdef TARGET_PC
+  int PortTransferred();
+  bool PortCancelled();
+#endif
 
   DVDFileInfo* FileInfo() { return &mFileInfo; }
 

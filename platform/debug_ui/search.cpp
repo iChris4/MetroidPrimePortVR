@@ -35,7 +35,6 @@ const DebugPage kDebugPages[] = {
     {"Game", DrawGameTab},
     {"Controls", DrawControlsTab},
     {"Video", DrawVideoTab},
-    {"Remastered", DrawRemasteredTab},
     {"Mods", DrawModsTab},
     {"Randomizer", DrawRandomizerTab},
     {"Archipelago", DrawArchipelagoTab},
@@ -48,7 +47,8 @@ const DebugPage kDebugPages[] = {
 const int kDebugPageCount = static_cast< int >(std::size(kDebugPages));
 
 // MP_DEBUG_TAB=<page>[/<sub-tab>], case-insensitive. The old page names are
-// kept: Input, Render, Performance, Extras, States, Session and Chat.
+// kept: Input, Render, Performance, Extras, States, Session and Chat, and
+// Remastered and Dread, which now open their section of the Mods page.
 const StartTarget& GetStartTarget() {
   static const StartTarget target = [] {
     StartTarget t;
@@ -70,7 +70,8 @@ const StartTarget& GetStartTarget() {
         {"Input", "Controls", ""},         {"Render", "Video", ""},
         {"Performance", "Video", "Frame rate"}, {"Extras", "Game", ""},
         {"States", "Save states", ""},     {"Session", "Archipelago", "Connection"},
-        {"Chat", "Archipelago", "Chat"},
+        {"Chat", "Archipelago", "Chat"},   {"Remastered", "Mods", "Prime Remastered"},
+        {"Dread", "Mods", "Metroid Dread"},
     };
     t.page = raw;
     for (const Alias& alias : kAliases) {
@@ -137,6 +138,20 @@ bool SubTab(const char* page, const char* name) {
   return shown;
 }
 
+// A page's section (a collapsing header), opened first when MP_DEBUG_TAB names it: the Mods page's
+// built-in sections, so the old Remastered and Dread page names still land on theirs. The header
+// stays as the user leaves it afterwards.
+bool StartSection(const char* page, const char* name) {
+  static bool pending = !GetStartTarget().sub.empty();
+  const StartTarget& target = GetStartTarget();
+  const bool start = pending && SDL_strcasecmp(target.page.c_str(), page) == 0 &&
+                     SDL_strcasecmp(target.sub.c_str(), name) == 0;
+  if (start) {
+    pending = false;
+  }
+  return start;
+}
+
 // The settings search: a query lists the matching rows of the settings index,
 // and picking one opens its page, sub-tab and collapsing header, scrolls to the
 // widget and flashes it. The widget is found by its label through ImGui's item
@@ -153,6 +168,11 @@ char sSearch[128] = "";
 // The label without its "##id" part is the text, which may go on with a key
 // hint ("Screenshot (F12)").
 bool LabelIs(const char* label, const char* text) {
+  // A row that names a widget's hidden id ("Import##dread") matches that widget alone: both
+  // built-in sections show an "Import" button, so the text on its own cannot say which one.
+  if (std::strstr(text, "##") != nullptr) {
+    return std::strcmp(label, text) == 0;
+  }
   const char* end = ImGui::FindRenderedTextEnd(label);
   const size_t length = std::strlen(text);
   const size_t shown = static_cast< size_t >(end - label);
@@ -408,7 +428,8 @@ void DrawSearchResults() {
     const ImVec2 min = ImGui::GetItemRectMin();
     ImDrawList* draw = ImGui::GetWindowDrawList();
     draw->PushClipRect(min, ImGui::GetItemRectMax(), true); // long labels stop at the row
-    draw->AddText(min, ImGui::GetColorU32(ImGuiCol_Text), row.label);
+    // A row's hidden id stays hidden, as it is on its widget.
+    draw->AddText(min, ImGui::GetColorU32(ImGuiCol_Text), row.label, ImGui::FindRenderedTextEnd(row.label));
     draw->AddText(ImVec2(min.x, min.y + ImGui::GetTextLineHeight()),
                   ImGui::GetColorU32(ImGuiCol_TextDisabled), place.c_str());
     draw->PopClipRect();

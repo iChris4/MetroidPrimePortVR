@@ -522,10 +522,21 @@ void end_frame(uint64_t contentTag) noexcept {
     wgpu::TextureView currentView;
     auto surfaceStatus = wgpu::SurfaceGetCurrentTextureStatus::Error;
     bool acquireAttempted = false;
+    // Port: AURORA_PRESENT_EVERY=<n> presents one frame in n (test runs on Xvfb, where each present
+    // is a CPU copy under MESA_VK_WSI_DEBUG=sw). The frame is still rendered; screenshots read the EFB.
+    static const uint32_t presentEvery = [] {
+      const char* env = std::getenv("AURORA_PRESENT_EVERY");
+      const long n = env != nullptr ? std::strtol(env, nullptr, 10) : 1;
+      return n > 1 ? static_cast<uint32_t>(n) : 1u;
+    }();
+    static uint32_t presentCounter = 0;
+    const bool skipPresent = presentEvery > 1 && (presentCounter++ % presentEvery) != 0;
+    if (skipPresent) {
+      gfx::after_present();
+    }
     {
       window::SurfaceLock surfaceLock;
-      // The headset is the only display: nobody sees the window (stereo_host.hpp).
-      if (!headsetOwnsDisplay && window::is_presentable() && g_surface) {
+      if (!skipPresent && !headsetOwnsDisplay && window::is_presentable() && g_surface) {
         ZoneScopedN("Acquire texture");
         phase::set(phase::Render, "surface GetCurrentTexture");
         wgpu::SurfaceTexture surfaceTexture;
@@ -633,7 +644,7 @@ void end_frame(uint64_t contentTag) noexcept {
         imgui::render(pass, imguiDrawData);
         pass.End();
       }
-    } else if (!headsetOwnsDisplay) {
+    } else if (!skipPresent && !headsetOwnsDisplay) {
       Log.info("Skipping present; window not presentable");
     }
     // The headset's eyes, whether or not the window could be presented.

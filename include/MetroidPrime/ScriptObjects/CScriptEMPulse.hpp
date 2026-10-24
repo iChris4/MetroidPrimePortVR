@@ -7,6 +7,7 @@ class CGenDescription;
 class CElementGen;
 
 class CScriptEMPulse : public CActor {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 public:
   CScriptEMPulse(TUniqueId, const rstl::string&, const CEntityInfo&, const CTransform4f&, bool,
                  float, float, float, float, float, float, float, CAssetId);

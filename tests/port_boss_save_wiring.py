@@ -61,22 +61,41 @@ class Wiring(WiringCase):
         room = ROOM.read_text()
         body = braced(room, "void ApplyObject(CStateManager& mgr, CEntity& ent, const RoomObject& obj,", str(ROOM))
         active = body.index("RestoreActive(mgr, ent, obj.active);")
-        replay = body.index("stats.replayed += ReplayScriptMsgs(mgr, ent, obj);")
+        replay = body.index("stats.replayed += ReplayScriptMsgs(mgr, ent, obj, !generic);")
         health = body.index("FindBlock(obj, kTagHealth)")
         self.assertLess(active, replay)
         self.assertLess(replay, health)
+        # An enemy its fields block covers skips the replay and the per-boss restore.
+        self.assertLess(body.index("EntityFieldsCover(ent, fields->data)"), replay)
+        self.assertIn("if (!generic) {", body)
         # The replayed journal is kept for the next save.
         replayer = braced(room, "int ReplayScriptMsgs(", str(ROOM))
         self.assertIn("NoteFor(mgr, uid).msgs = journal;", replayer)
         self.assertIn("DeliverUnlinked(mgr, ent, sender,", replayer)
+
+    def test_boss_fight_state(self):
+        room = ROOM.read_text()
+        save = braced(room, "void CaptureObject(CStateManager& mgr, CEntity& ent, RoomObject& obj) {", str(ROOM))
+        self.assertIn("if (CaptureBossState(mgr, ent, boss))", save)
+        self.assertIn("obj.blocks.push_back({kTagBoss, boss});", save)
+        body = braced(room, "void ApplyObject(CStateManager& mgr, CEntity& ent, const RoomObject& obj,", str(ROOM))
+        # After the saved health and pose, which a hook reads when the save has no block.
+        restore = body.index("RestoreBossState(mgr, ent, boss != nullptr ? &boss->data : nullptr);")
+        self.assertLess(body.index("FindBlock(obj, kTagHealth)"), restore)
+        self.assertLess(body.index("FindBlock(obj, kTagTransform)"), restore)
 
     def test_generated_copies(self):
         room = ROOM.read_text()
         capture = between(room, "void CaptureRoomState(", "\nint ApplyRoomState(", str(ROOM))
         # A copy never decides whether its template's editor id is present.
         self.assertIn("if (!generated)\n      out.present.push_back(id);", capture)
-        self.assertIn("if (generated && TCastToPtr< CPatterned >(&ent) == nullptr)", capture)
+        # Enemy, pickup and debris copies are saved; other copies (maze walls, sounds) are not.
+        self.assertIn("if (generated && !SavesGeneratedCopy(ent))", capture)
+        keeps = braced(room, "bool SavesGeneratedCopy(CEntity& ent) {", str(ROOM))
+        self.assertIn("CPatterned", keeps)
+        self.assertNotIn("CScriptSound", keeps)
         apply = braced(room, "int ApplyRoomState(", str(ROOM))
+        self.assertIn("pickup->SetWasGenerated();", apply)
         self.assertIn("if (FindBlock(obj, kTagGenerated) != nullptr) {", apply)
         self.assertIn("mgr.SetIsGeneratingObject(true);", apply)
         self.assertIn("mgr.GenerateObject(TEditorId(obj->editorId)).second;", apply)

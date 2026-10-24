@@ -20,7 +20,7 @@ class CVector3f;
 // them in place of the area's own world geometry.
 //
 // The file is little endian:
-//   'MPRG', u32 version (1 to 11), u32 instances
+//   'MPRG', u32 version (1 to 13), u32 instances
 //   instance: u32 CMDL id, f32 transform[12] (rows of model -> area)
 //     version 2 adds: u8 layer, u8 active, u16 links,
 //     version 3 (and 4) then: u32 platform, f32 platformStart[3],
@@ -66,12 +66,16 @@ class CVector3f;
 // looping clip that starts at the area's load.
 //
 // Version 6 may then end with the room's skies:
-//   'SKY ', u32 count, per sky: u32 index, and from version 7 f32 radiance r, g, b
+//   'SKY ', u32 count, per sky: u32 index, and from version 7 f32 radiance r, g, b, and from
+//   version 13 u32 flags (bit 0: the world's sky, below)
 // The radiance is Remastered's Skybox colour times its intensity, which takes the place of
 // the sky materials' diffuse colour (DIFC): the base map times it is the light the sky
 // gives, in Remastered's HDR units; 0 (version 6) for not known. A sky instance is not
 // drawn with the room: the world's sky is drawn as it, centred on the camera, turned and scaled by its transform (whose translation is left out). Its layer,
 // `active`, links and group show and hide it as they do any instance's.
+// A world's sky (version 13) is the world master room's Skybox, which Remastered draws in the
+// rooms that have none of their own (Phendrana's): it stands in for retail's world sky only
+// where retail draws that, and never makes the area count as having a sky of its own (HasSky).
 //
 // Version 9 may then end with the retail objects the instances stand in for:
 //   'HIDE', u32 count (1 or more), per object: u32 editor id (its low 26 bits, as
@@ -146,6 +150,7 @@ struct Instance {
   std::vector<AnimClip> anim;
   bool animOnShow = false;
   bool sky = false; // the room's sky (version 6), drawn in place of the world's
+  bool worldSky = false; // version 13, with sky: the world's sky, drawn only where retail draws its own
   float skyRadiance[3] = {}; // version 7; 0: not known
   float lightmap[3] = {};    // version 10: offU, offV, scale into the room's lightmap; all 0: none
   // Version 11: a float driver of one kind parameter of its materials (WDRV).
@@ -225,7 +230,7 @@ struct Script {
 bool ParseFileName(const std::string& fileName, uint32_t& id);
 bool Parse(const std::vector<uint8_t>& data, std::vector<Instance>& out, std::string& error,
            Script* script = nullptr);
-// The file for these instances (version 11), with the script section when there is a script
+// The file for these instances (version 13), with the script section when there is a script
 // or a group, the glow section when an instance glows, the animation section when one is
 // animated, the sky section when one is a sky and the hidden objects when there are any.
 std::vector<uint8_t> Write(const std::vector<Instance>& instances, const Script* script = nullptr);

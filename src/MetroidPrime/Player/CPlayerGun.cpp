@@ -8,6 +8,8 @@
 #include "vr/vr_view.h"
 #include "vr/vr_model_mirror.h"
 #endif
+#include "port_third_person.h"
+#include "port_third_person_body.h"
 #ifdef MP_ENABLE_SMOKE_DRIVER
 #include "port_smoke.h"
 #endif
@@ -33,6 +35,7 @@
 #include "MetroidPrime/Enemies/CPatterned.hpp"
 #include "MetroidPrime/HUD/CSamusHud.hpp"
 #include "MetroidPrime/Player/CGrappleArm.hpp"
+#include "MetroidPrime/Cameras/CFirstPersonCamera.hpp"
 #include "MetroidPrime/Player/CPlayer.hpp"
 #include "MetroidPrime/SFX/PhazonGun.h"
 #include "MetroidPrime/SFX/Weapons.h"
@@ -611,6 +614,10 @@ void CPlayerGun::PortShotFromDrawnMuzzle(const CStateManager& mgr, CTransform4f&
   // so on screen the muzzle sits where a world point at the same depth, scaled out from the
   // view axis by the ratio of the two projections, would. Shots start there, so they leave
   // the cannon as drawn; with pointer aim they still head for the pointed point.
+  if (PortThirdPerson::Active()) {
+    PortShotFromThirdPersonCannon(mgr, xf, aim);
+    return;
+  }
   const CCameraManager* camMgr = mgr.GetCameraManager();
   if (!camMgr->IsInFPCamera()) {
     return;
@@ -650,6 +657,38 @@ void CPlayerGun::PortShotFromDrawnMuzzle(const CStateManager& mgr, CTransform4f&
     xf = CTransform4f::LookAt(CVector3f::Zero(), toAim);
   }
   xf.SetTranslation(pos);
+}
+
+void CPlayerGun::PortShotFromThirdPersonCannon(const CStateManager& mgr, CTransform4f& xf,
+                                               bool aim) const {
+  // Third person: the shot leaves the body's cannon (the first-person muzzle if the body is not
+  // there) and heads for the point under the camera's centre ray, or the assisted aim point of
+  // the locked target, as retail's does under a lock.
+  const CPlayer& player = *mgr.GetPlayer();
+  CVector3f origin = xf.GetTranslation();
+  PortThirdPersonBody::CannonPosition(player, origin);
+  if (!aim) {
+    xf.SetTranslation(origin);
+    return;
+  }
+  CVector3f aimPoint;
+  const CVector3f camFwd = mgr.GetCameraManager()->GetFirstPersonCamera()->GetTransform().GetForward();
+  bool have = false;
+  if (player.GetOrbitTargetId() != kInvalidUniqueId &&
+      TCastToConstPtr< CActor >(mgr.GetObjectById(player.GetOrbitTargetId())) != nullptr) {
+    aimPoint = player.GetAssistedTargetAim();
+    have = true;
+  } else {
+    have = PortThirdPerson::AimPoint(aimPoint);
+  }
+  if (have && camFwd.CanBeNormalized()) {
+    const PortThirdPerson::Vec3 d = PortThirdPerson::AimDirection(
+        {origin.GetX(), origin.GetY(), origin.GetZ()},
+        {aimPoint.GetX(), aimPoint.GetY(), aimPoint.GetZ()},
+        {camFwd.AsNormalized().GetX(), camFwd.AsNormalized().GetY(), camFwd.AsNormalized().GetZ()});
+    xf = CTransform4f::LookAt(CVector3f::Zero(), CVector3f(d.x, d.y, d.z));
+  }
+  xf.SetTranslation(origin);
 }
 
 CVector3f CPlayerGun::PortShotAimPoint(const CStateManager& mgr, const CVector3f& from,
@@ -1481,25 +1520,9 @@ void CPlayerGun::PortFireStackedBeams(float dt, CStateManager& mgr, const CTrans
     beam->PortLockStackTokens();
     beam->PortFireStackedProjectile(
         x834_27_underwater, dt, CPlayerState::EChargeStage(x330_chargeState), xf, mgr,
-        static_cast< const TUniqueId& >(targetHoming ? GetTargetId(mgr) : kInvalidUniqueId),
+        static_cast< const TUniqueId& >(targetHoming ? PortHomingTargetId(mgr) : kInvalidUniqueId),
         x340_chargeBeamFactor, x340_chargeBeamFactor);
   }
-}
-
-// The selected beam's shot cool down, or with stack_beams the slowest owned beam's.
-float CPlayerGun::PortShotCoolDown(const CStateManager& mgr) const {
-  float coolDown = x72c_currentBeam->GetWeaponInfo().x0_coolDown;
-  if (!PortDebug::StackBeams() || x833_28_phazonBeamActive) {
-    return coolDown;
-  }
-  const CPlayerState& playerState = *mgr.GetPlayerState();
-  for (int i = 0; i < 4; ++i) {
-    const CGunWeapon* beam = x760_selectableBeams[i];
-    if (beam != nullptr && playerState.HasPowerUp(mBeamArr[i])) {
-      coolDown = rstl::max_val(coolDown, beam->GetWeaponInfo().x0_coolDown);
-    }
-  }
-  return coolDown;
 }
 
 // Releases the stacked beams' projectile tokens once the setting is off.
@@ -1535,7 +1558,7 @@ void CPlayerGun::UpdateNormalShotCycle(float dt, CStateManager& mgr) {
     xf.SetTranslation(pos);
   }
 #ifdef TARGET_PC
-  if (!x833_29_pointBlankWorldSurface) {
+  if (!x833_29_pointBlankWorldSurface || PortThirdPerson::Active()) {
     PortShotFromDrawnMuzzle(mgr, xf);
   }
 #endif
@@ -1553,7 +1576,11 @@ void CPlayerGun::UpdateNormalShotCycle(float dt, CStateManager& mgr) {
 #endif
   x72c_currentBeam->Fire(
       x834_27_underwater, dt, CPlayerState::EChargeStage(x330_chargeState), xf, mgr,
+#ifdef TARGET_PC
+      static_cast< const TUniqueId& >(targetHoming ? PortHomingTargetId(mgr) : kInvalidUniqueId),
+#else
       static_cast< const TUniqueId& >(targetHoming ? GetTargetId(mgr) : kInvalidUniqueId),
+#endif
       x340_chargeBeamFactor, x340_chargeBeamFactor);
 #ifdef TARGET_PC
   PortFireStackedBeams(dt, mgr, xf, targetHoming);
@@ -1568,7 +1595,14 @@ void CPlayerGun::FireSecondary(float dt, CStateManager& mgr) {
   }
 
   CPlayerState* playerState = mgr.PlayerState();
-  if (x835_25_inPhazonBeam || int(x318_comboAmmoIdx) == 0 ||
+#ifdef TARGET_PC
+  // Port: the Phazon Beam cheat fires missiles (not combos) from the Phazon Beam.
+  const bool phazonBlocks = x835_25_inPhazonBeam && !(mPortPhazonCheat && int(x318_comboAmmoIdx) == 1 &&
+                                                      !x832_26_comboFiring);
+#else
+  const bool phazonBlocks = x835_25_inPhazonBeam;
+#endif
+  if (phazonBlocks || int(x318_comboAmmoIdx) == 0 ||
       playerState->HasPowerUp(skItemArr[x318_comboAmmoIdx]) != true || !IsWeaponStateSet(0x4)) {
     NWeaponTypes::play_sfx(SFXsam_b_malfxn_00, x834_27_underwater, false, 0x4a);
     return;
@@ -1596,8 +1630,16 @@ void CPlayerGun::FireSecondary(float dt, CStateManager& mgr) {
   }
 
   if (fired) {
+#ifdef TARGET_PC
+    TUniqueId targetId = PortHomingTargetId(mgr);
+#else
     TUniqueId targetId = GetTargetId(mgr);
+#endif
+    // Under a lock the aim target is the locked one, so a Wavebuster sent off it takes none.
     if (x832_26_comboFiring && targetId == kInvalidUniqueId &&
+#ifdef TARGET_PC
+        !PortShotOffLock(mgr) &&
+#endif
         x310_currentBeam == CPlayerState::kBI_Wave) {
       targetId = mgr.GetPlayer()->GetAimTargetId();
     }
@@ -1610,7 +1652,7 @@ void CPlayerGun::FireSecondary(float dt, CStateManager& mgr) {
       xf.SetTranslation(pos);
     }
 #ifdef TARGET_PC
-    if (!x833_29_pointBlankWorldSurface) {
+    if (!x833_29_pointBlankWorldSurface || PortThirdPerson::Active()) {
       PortShotFromDrawnMuzzle(mgr, xf);
     }
 #endif
@@ -1989,6 +2031,52 @@ void CPlayerGun::PortForcePhazonBeam(const bool on) {
   }
 }
 
+#ifdef TARGET_PC
+// Port: the Phazon Beam cheat. While on, the Phazon Beam takes the Power Beam's place: it is the
+// selected Power Beam, in any room. The flags are the ones standing in phazon with the suit sets
+// (the retail code drops canFirePhazon on leaving a pool, so they are set again every frame).
+// Another beam is reached by leaving the Phazon Beam first (the game's own exit morph), then
+// changing to the beam picked; picking Power again enters Phazon again. In a real phazon pool the
+// retail code runs untouched.
+void CPlayerGun::PortApplyPhazonCheat(const CFinalInput& input, CStateManager& mgr) {
+  if (!PortDebug::PhazonBeamCheat()) {
+    if (mPortPhazonCheat) {
+      // Turned off: let go of the beam through the exit morph (a pool sets it again).
+      mPortPhazonCheat = false;
+      mPortPhazonPendingBeam = -1;
+      if (!x835_30_inPhazonPool) {
+        x835_24_canFirePhazon = false;
+      }
+    }
+    return;
+  }
+  mPortPhazonCheat = true;
+  if (IsWeaponStateSet(0x8) || x835_30_inPhazonPool) {
+    return;
+  }
+
+  if (x835_25_inPhazonBeam && x33c_phazonBeamState == kPBS_Active && mPortPhazonPendingBeam < 0) {
+    const CPlayerState& playerState = *mgr.GetPlayerState();
+    float maxInput = 0.f;
+    for (int i = 1; i < 4; ++i) {
+      if (playerState.HasPowerUp(mBeamArr[i])) {
+        const float inputVal = ControlMapper::GetAnalogInput(mBeamCtrlCmd[i], input);
+        if (inputVal > 0.65f && inputVal > maxInput) {
+          maxInput = inputVal;
+          mPortPhazonPendingBeam = i;
+        }
+      }
+    }
+  }
+
+  const bool phazon = mPortPhazonPendingBeam < 0 && x310_currentBeam == CPlayerState::kBI_Power;
+  x835_24_canFirePhazon = phazon;
+  if (phazon) {
+    x835_25_inPhazonBeam = true;
+  }
+}
+#endif
+
 void CPlayerGun::StartPhazonBeamTransition(bool active, CStateManager& mgr,
                                            CPlayerState& playerState) {
   if (x833_28_phazonBeamActive == active) {
@@ -2018,6 +2106,9 @@ void CPlayerGun::HandleWeaponChange(const CFinalInput& input, CStateManager& mgr
   if (ControlMapper::GetPressInput(ControlMapper::kC_Morph, input)) {
     StopContinuousBeam(mgr, true);
   }
+#ifdef TARGET_PC
+  PortApplyPhazonCheat(input, mgr);
+#endif
   if (!IsWeaponStateSet(0x8)) {
     if (!x835_25_inPhazonBeam) {
       HandleBeamChange(input, mgr);
@@ -2042,6 +2133,13 @@ void CPlayerGun::HandleBeamChange(const CFinalInput& input, CStateManager& mgr) 
     }
   }
 
+#ifdef TARGET_PC
+  // Port: the Phazon Beam cheat's pending pick, once the Phazon Beam has been left.
+  if (mPortPhazonPendingBeam >= 0) {
+    beam = mPortPhazonPendingBeam;
+    mPortPhazonPendingBeam = -1;
+  }
+#endif
   if (beam > -1) {
     x833_25_ = true;
     if (x310_currentBeam != beam && playerState.HasPowerUp(mBeamArr[beam])) {
@@ -2250,6 +2348,15 @@ TUniqueId CPlayerGun::GetTargetId(CStateManager& mgr) {
   return ret;
 }
 
+bool CPlayerGun::PortShotOffLock(CStateManager& mgr) const {
+  // A centred pointer reports no aim point, and plain pointer aim has no orbit target.
+  return mPortPointerAimValid && mgr.GetPlayer()->GetOrbitTargetId() != kInvalidUniqueId;
+}
+
+TUniqueId CPlayerGun::PortHomingTargetId(CStateManager& mgr) {
+  return PortShotOffLock(mgr) ? kInvalidUniqueId : GetTargetId(mgr);
+}
+
 CPlayerGun::CGunMorph::CGunMorph(float gunTransformTime, float holoHoldTime)
 : x0_yLerp(0.f)
 , x4_gunTransformTime(CMath::FastFSel(-gunTransformTime, 1.f, gunTransformTime))
@@ -2344,11 +2451,7 @@ void CPlayerGun::UpdateWeaponFire(float dt, CPlayerState& playerState, CStateMan
   CPlayer& player = *mgr.Player();
 
   if (!x832_24_coolingCharge && !x834_30_inBigStrike) {
-#ifdef TARGET_PC
-    float coolDown = PortShotCoolDown(mgr);
-#else
     float coolDown = x72c_currentBeam->GetWeaponInfo().x0_coolDown;
-#endif
     if ((pressedStates & 0x1) == 0) {
       if (x390_cooldown >= coolDown) {
         x390_cooldown = coolDown;
@@ -2413,7 +2516,11 @@ void CPlayerGun::UpdateWeaponFire(float dt, CPlayerState& playerState, CStateMan
           x300_remainingMissiles = missileCount;
           if (static_cast< int >(x300_remainingMissiles) > 5)
             x300_remainingMissiles = 5;
-          if (!x835_25_inPhazonBeam) {
+          if (!x835_25_inPhazonBeam
+#ifdef TARGET_PC
+              || mPortPhazonCheat // Port: Phazon Beam cheat, missiles work in it
+#endif
+          ) {
             ResetToMissile();
           }
           FireSecondary(dt, mgr);
@@ -3088,8 +3195,15 @@ void CPlayerGun::UpdateAuxWeapons(float dt, const CTransform4f& targetXf, CState
   if (IsWeaponStateSet(0x10)) {
     if (x310_currentBeam == CPlayerState::kBI_Wave &&
         x744_auxWeapon->HasTarget(mgr) == kInvalidUniqueId) {
+#ifdef TARGET_PC
+      // The Wavebuster re-picks its target while it fires: not the locked one while the
+      // pointer is off it.
+      TUniqueId targetId = PortHomingTargetId(mgr);
+      if (targetId == kInvalidUniqueId && !PortShotOffLock(mgr)) {
+#else
       TUniqueId targetId = GetTargetId(mgr);
       if (targetId == kInvalidUniqueId) {
+#endif
         targetId = mgr.GetPlayer()->GetAimTargetId();
       }
       x744_auxWeapon->SetNewTarget(targetId, mgr);

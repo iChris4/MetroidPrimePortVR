@@ -4,6 +4,7 @@
 #include "MetroidPrime/Cameras/CGameCamera.hpp"
 
 class CInterpolationCamera : public CGameCamera {
+  friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
 public:
   ~CInterpolationCamera() override;
   DECLARE_TYPES_MATCH_OR_ACCEPT;

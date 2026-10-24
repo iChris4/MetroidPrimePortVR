@@ -1065,7 +1065,7 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u32 vtxCount, gfx::Rang
     cache.lineMode = lineMode;
     cache.hasPipeline = true;
     // BP cmode0 (blend state) is DirtyPipeline. Always refresh uniforms even when only that
-    // register changed: non-PBR HDR's hdr_tev_blend follows the actual SRCALPHA/ONE blend.
+    // register changed: non-PBR HDR's hdr_tev_blend follows the actual SRCALPHA/ONE or SRCALPHA/INVSRCALPHA blend.
     state.dirty = (state.dirty & ~DirtyPipeline) | DirtyUniform;
     gfx::perf::count(gfx::perf::g_fifoPipelineBuilds, perfOn);
     if (!hadPipeline || prevSampledTextures != cache.shaderInfo.sampledTextures ||
@@ -2516,7 +2516,7 @@ void handle_aurora(ByteReader& reader) noexcept {
       g_gxState.dirty |= DirtyUniform;
     }
   } else if (subCmd == GX_AURORA_PORT_POST_PROCESS) {
-    u32 words[32];
+    u32 words[49];
     for (u32& word : words) {
       word = reader.read<u32>();
     }

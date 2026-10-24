@@ -32,6 +32,8 @@
 #include "MetroidPrime/CActor.hpp"
 #include "MetroidPrime/Cameras/CCameraManager.hpp"
 #include "port_debug.h"
+#include "port_dread_samus_mod.h"
+#include "port_log.h"
 
 #include "Kyoto/Basics/CBasics.hpp"
 
@@ -76,6 +78,87 @@ rstl::reserved_vector< CInt32POINode, 16 > sInt32TransientCache;
 static int skPOICacheReferenceCount;
 static CInt32POINode* sInt32TransientCacheData;
 
+#ifdef TARGET_PC
+// The skeleton a character is posed on. A Dread Samus body (port_dread_samus_mod.h) is skinned on its
+// own Dread-proportioned CINF, so it is posed on that one; its animations still sample against the
+// retail CINF (layoutData) and RecalcPoseBuilder carries their translations across.
+static const TLockedToken< CCharLayoutInfo >& PortPoseLayout(const CCharacterInfo& charInfo,
+                                                             const TLockedToken< CCharLayoutInfo >& layoutData,
+                                                             const TLockedToken< CSkinnedModel >& modelData) {
+  const uint32_t cinf = PortDreadSamus::Skeleton(charInfo.GetModelId());
+  if (cinf == 0) {
+    return layoutData;
+  }
+  // The import patches each Dread skeleton from the retail one, so they hold the same segments. A
+  // body paired with another CINF (another mod, another ANCS reusing it) would index segments the
+  // posed skeleton lacks: keep the retail pose then.
+  const CCharLayoutInfo& anim = **layoutData;
+  const CCharLayoutInfo& pose = **modelData->GetLayoutInfo();
+  const CSegIdList& segs = anim.GetBodyPartSegIds();
+  bool matches = segs.size() == pose.GetBodyPartSegIds().size();
+  for (int i = 0; matches && i < segs.size(); ++i) {
+    matches = pose.ContainsSegment(segs[i]);
+  }
+  if (!matches) {
+    static bool sMismatchLogged = false;
+    if (!sMismatchLogged) {
+      sMismatchLogged = true;
+      PortLog::Write("dread-samus: skeleton %08X does not match body %08X's animations; posing it on the retail one\n",
+                     cinf, charInfo.GetModelId());
+    }
+    return layoutData;
+  }
+  static bool sLogged = false;
+  if (!sLogged) {
+    sLogged = true;
+    PortLog::Write("dread-samus: posing body %08X on skeleton %08X\n", charInfo.GetModelId(), cinf);
+  }
+  return modelData->GetLayoutInfo();
+}
+
+// Rest-pose correction for a retargeted pose, per segment (indexed by CSegId value): the rotation
+// that turns the posed skeleton's rest bone onto the animations' (toward the child with the longest
+// retail offset). The animations were authored on the retail rest pose, so without it a limb that
+// rests 10 degrees apart (Dread's thighs) stays 10 degrees apart in every pose: splayed legs.
+// Bones turned further than 35 degrees are not aimed limbs but joints placed elsewhere
+// (Dread's hips and shoulder pads sit at other angles from the pelvis and collar); they keep the
+// posed skeleton's placement. Leaves, locators and degenerate bones get no correction.
+static void PortRestCorrections(const CCharLayoutInfo& anim, const CCharLayoutInfo& pose,
+                                CQuaternion (&out)[256]) {
+  static const float minCos = 0.81915f; // cos(35 degrees)
+  const CSegIdList& segs = pose.GetBodyPartSegIds();
+  const int count = segs.size();
+  for (int i = 0; i < 256; ++i) {
+    out[i] = CQuaternion::NoRotation();
+  }
+  for (int i = 0; i < count; ++i) {
+    const CSegId& seg = segs[i];
+    float best = 0.f;
+    int bestChild = -1;
+    for (int c = 0; c < count; ++c) {
+      if (pose.GetOriginalParent(segs[c]) != seg) {
+        continue;
+      }
+      const float len = anim.GetFromParentUnrotated(segs[c]).Magnitude();
+      if (len > best) {
+        best = len;
+        bestChild = c;
+      }
+    }
+    if (bestChild < 0) {
+      continue;
+    }
+    const CVector3f from = pose.GetFromParentUnrotated(segs[bestChild]);
+    const CVector3f to = anim.GetFromParentUnrotated(segs[bestChild]);
+    if (from.Magnitude() < 0.01f || to.Magnitude() < 0.01f ||
+        CVector3f::Dot(from.AsNormalized(), to.AsNormalized()) < minCos) {
+      continue;
+    }
+    out[seg.val()] = CQuaternion::ShortestRotationArc(from, to);
+  }
+}
+#endif
+
 CAnimData::CAnimData(
     uint selfId, const CCharacterInfo& charInfo, int defaultAnim, int charIdx, const bool loop,
     const TLockedToken< CCharLayoutInfo >& layoutData, const TToken< CSkinnedModel >& modelData,
@@ -118,7 +201,11 @@ CAnimData::CAnimData(
 , x220_30_poseBuilt(false)
 , x220_31_poseCached(false)
 , x224_pose(static_cast< uchar >(layoutData->GetBodyPartSegIds().size()))
+#ifdef TARGET_PC
+, x2fc_poseBuilder(CLayoutDescription(PortPoseLayout(charInfo, layoutData, xd8_modelData)))
+#else
 , x2fc_poseBuilder(CLayoutDescription(layoutData))
+#endif
 , x40c_playbackParms(-1, -1, 1.f, true)
 , x434_additiveAnims()
 #ifdef TARGET_PC
@@ -147,7 +234,11 @@ CAnimData::CAnimData(
 
   x120_particleDB.CacheParticleDesc(charInfo.GetParticleResData());
 
+#ifdef TARGET_PC
+  CLayoutDescription layoutDesc(PortPoseLayout(charInfo, xcc_layoutData, xd8_modelData));
+#else
   CLayoutDescription layoutDesc(xcc_layoutData);
+#endif
   CHierarchyPoseBuilder pb(layoutDesc);
   pb.BuildNoScale(x224_pose);
   x220_30_poseBuilt = true;
@@ -642,11 +733,41 @@ void CAnimData::RecalcPoseBuilder(const CCharAnimTime* time) const {
 
   AddAdditiveSegData(*segIdList, statementSet);
 
+#ifdef TARGET_PC
+  // Posed on another skeleton than the animations' (PortPoseLayout; both CINFs have identity bind
+  // rotations). Each rotation q becomes C(parent)^-1 * q * C(seg) (PortRestCorrections), so a
+  // posed bone's world orientation is the animation's times its rest correction. A translation
+  // keeps its move away from the retail bind offset, carried into the corrected parent frame and
+  // applied to the posed skeleton's own offset, so its bone lengths stay. Segment 3 is never
+  // inserted, so it gets no correction.
+  const CCharLayoutInfo& animLayout = **xcc_layoutData;
+  const CCharLayoutInfo& poseLayout = **poseBuilder.CharLayoutInfo();
+  const bool retarget = &poseLayout != &animLayout;
+  CQuaternion corr[256];
+  if (retarget) {
+    PortRestCorrections(animLayout, poseLayout, corr);
+    corr[3] = CQuaternion::NoRotation();
+  }
+#endif
+
   int i = 0;
   const int segCount = segIdList->size();
   while (i < segCount) {
     const CSegId& seg = (*segIdList)[i];
     if (seg.val() != 3) {
+#ifdef TARGET_PC
+      if (retarget) {
+        const CQuaternion parentInv = corr[poseLayout.GetOriginalParent(seg).val()].BuildInverted();
+        poseBuilder.Insert(seg, parentInv * statementSet.GetData(seg).Orientation() * corr[seg.val()]);
+        if (statementSet.GetData(seg).OffsetValid()) {
+          poseBuilder.Insert(seg, poseLayout.GetFromParentUnrotated(seg) +
+                                      parentInv.Transform(statementSet.GetData(seg).Offset() -
+                                                          animLayout.GetFromParentUnrotated(seg)));
+        }
+        ++i;
+        continue;
+      }
+#endif
       poseBuilder.Insert(seg, statementSet.GetData(seg).Orientation());
       if (statementSet.GetData(seg).OffsetValid()) {
         poseBuilder.Insert(seg, statementSet.GetData(seg).Offset());

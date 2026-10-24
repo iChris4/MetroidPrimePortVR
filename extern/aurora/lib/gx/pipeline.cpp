@@ -32,7 +32,8 @@ wgpu::RenderPipeline create_pipeline(const PipelineConfig& config) {
     // (gfx/stereo_multiview.hpp): its shader would not compile. Never bound.
     return {};
   }
-  const auto shader = build_shader(config.shaderConfig);
+  auto dstAlphaMode = dst_alpha_mode(config);
+  const auto shader = build_shader(config.shaderConfig, dstAlphaMode);
   const auto label =
       fmt::format("GX Pipeline {:x} shader {:x}", xxh3_hash(config, static_cast<HashType>(gfx::ShaderType::GX)),
                   xxh3_hash(config.shaderConfig));
@@ -46,9 +47,9 @@ wgpu::RenderPipeline create_pipeline(const PipelineConfig& config) {
     buffer.attributeCount = native.count;
     buffer.attributes = native.attributes.data();
     const std::array buffers{buffer};
-    return build_pipeline(config, buffers, shader, label.c_str());
+    return build_pipeline(config, buffers, shader, label.c_str(), dstAlphaMode);
   }
-  return build_pipeline(config, {}, shader, label.c_str());
+  return build_pipeline(config, {}, shader, label.c_str(), dstAlphaMode);
 }
 
 void render(const DrawData& data, const wgpu::RenderPassEncoder& pass) {

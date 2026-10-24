@@ -294,6 +294,18 @@ inline bool GunFxParticle(const RetailMaterial& m) { return m.blendSrc == 4 && m
 
 inline bool IsFx(const RetailMaterial& m) { return !(m.blendSrc == 1 && m.blendDst == 0); }
 
+// The (source, destination) factors Remastered draws a mesh class with: opaque and cutout
+// GX_BL_ONE / GX_BL_ZERO, blended GX_BL_SRCALPHA / GX_BL_INVSRCALPHA, additive GX_BL_SRCALPHA
+// / GX_BL_ONE. False for a material no mesh uses.
+inline bool ClassBlend(int cls, uint32_t& src, uint32_t& dst) {
+  if (cls < 0 || cls > 3) {
+    return false;
+  }
+  src = cls == 1 || cls == 3 ? 4 : 1;
+  dst = cls == 1 ? 5 : cls == 3 ? 1 : 0;
+  return true;
+}
+
 enum class Role { EnvMap, Lightmap, Reflect, Emissive, Diffuse, Keep };
 
 const char* RoleName(Role r);
@@ -332,14 +344,13 @@ const int kPbrStub[kMaps] = {128, 32, 32, 32};
 // The PBR emissive map is stored as authored. Remastered's glow is the bare ICAN x ICNC
 // in scene radiance, which the post tonemap then multiplies by 2^(3 - EV) (0.03-0.09 in
 // the rooms seen); the port does the same at run time (record mode bit 32, see
-// PortSetPBRMaterial). kPbrEmissive, 0.10, is what stood in for that exposure before, and
-// is the factor the runtime falls back on outside a Remastered room. Here it only sizes a
-// ramp's mean, which is not an authored map.
-const double kPbrEmissive = 0.10;
+// PortSetPBRMaterial). Without tone data Remastered's exposure is 1 (STonemapParams::
+// BuildLinear(3.0), kb topic/post-output.md), so the glow is left as authored: 1, which is
+// also what the TEV fallback adds and what sizes a ramp's mean (not an authored map).
+const double kPbrEmissive = 1.0;
 // Ceiling on the metalness channel. Remastered applies none (the MR map is read as is);
 // it was 0.6 before the BRDF LUT and the room probe cubes, when full metals went near-black.
 const double kPbrMetalMax = 1.0;
-const double kFlatStd = 3.0;
 const double kJointSplit = 0.05;
 // The PC skin reader (CVirtualBone, SKIN_MAX_WEIGHTS) keeps four weights a vertex
 // and drops the rest without renormalising, so more would leave the vertex pulled
@@ -365,11 +376,12 @@ struct MapRef {
   int32_t wrap[2] = {1, 1};  // the sampler's U and V modes (0 clamp, 1 repeat, 2 mirror)
   std::string src;  // how the texture is named in a tag
   bool raw = false;  // a shader's own data (a ramp, noise): every texel and channel kept as it is
-  bool mean = false;  // drawn as its colour times alpha, averaged: one colour
-  bool solid = false;  // a flat map that is the surface's colour all the same (the Eyon gloss's black BCLR)
   bool detail = false;  // kind 20's detail map, which rides in the emissive slot (that shader has no glow)
   bool volume = false;  // a 3D texture, kept whole as an 8 x 8 atlas of its 64 slices (ConvertIO::volume), RGBA8, level 0 only
   double metalMax = kPbrMetalMax;  // an MR map's metalness ceiling
+  // A base map's: at most one map on its texcoord whose red becomes its alpha (the gun
+  // body's IncanMask, TCH0), which the "mask" alpha then lays over the glow.
+  std::vector<MapRef> mask;
 };
 
 struct RemMaterial {
@@ -387,7 +399,8 @@ struct RemMaterial {
   bool cutout = false;     // the base map's alpha cuts holes: leaves, grates
   bool blended = false;    // drawn over what is behind it: glass, decals, ice
   bool additive = false;   // its meshes are of class 3: added to what is behind it (SrcA, One)
-  bool opaqueFx = false;   // a retail fx material Remastered draws opaque (mesh class 0)
+  int blendClass = -1;     // its meshes' class (ModelMesh::bits2): 0 opaque, 1 blended, 2 cutout, 3 additive; -1 none
+  bool classBlend = false; // a retail model's: it blends as its class does, not as the retail material it took
   bool tinted = false;     // its vertices carry a colour
   bool tintF0 = false;     // which tints the albedo before F0 too (kShaderTints), not just the diffuse
   bool wind = false;       // procedural wind sway (mode bit 32768): the model's SWindSet rides in shieldRows[0..8]
@@ -533,7 +546,11 @@ constexpr uint32_t kShaderVertexAlpha = 0x495899E7;
 constexpr uint32_t kShaderDecalAlphaMap = 0x42FE2ED0;
 // The unlit "Surface" shaders (byte-identical code): BCLR x AO x (1 - metal), no exposure factor
 // (mode bit 131072: the runtime exposes them with the frame's, as the tonemap does).
-constexpr uint32_t kShaderSurfaceUnlit[] = {0x67135A0B, 0x6FC4D540};
+// 7159ecc8, 6f1f0438 (CAdd), 2d32d109 (sky) and 1350d65d are the same formula (kb material/7159ecc8.md etc.).
+constexpr uint32_t kShaderSurfaceUnlit[] = {0x67135A0B, 0x6FC4D540, 0x7159ECC8, 0x6F1F0438, 0x2D32D109, 0x1350D65D};
+// The port kinds of unlit shaders with no exposure factor of their own, exposed by the frame as kShaderSurfaceUnlit
+// (mode bit 131072): 38 (5854e91b, bda080c0).
+constexpr bool BareUnlitKind(int kind) { return kind == 38; }
 
 size_t LightmapSourceCoordinate(uint32_t family);
 const char* KindName(int kind);
@@ -541,6 +558,8 @@ RemMaterial ReadMaterial(const ModelMaterial& mat, const ConvertOptions& opt);
 
 bool BackLightScale(const RemMaterial& m);
 int PbrMode(const RemMaterial& m);
+// The blend factors PbrMaterial writes for rem over pm.
+void PbrBlend(const RemMaterial& rem, const RetailMaterial& pm, uint32_t& src, uint32_t& dst);
 Blob PbrMaterial(const RetailMaterial& pm, uint32_t vtx, const uint32_t* texIdx, uint32_t group,
                  const uint32_t* coords, const RemMaterial& rem, uint32_t wrap, uint32_t cube,
                  const uint32_t* authored, const AnuvEntry* anim, AnuvCounts& counts);
@@ -548,6 +567,8 @@ Blob PbrMaterial(const RetailMaterial& pm, uint32_t vtx, const uint32_t* texIdx,
 std::vector<WeightKey> SkinWeights(const std::vector<double>& P, size_t n, const std::vector<uint16_t>* J,
                                    const std::vector<float>* W, const Retail& retail, Span cskr,
                                    const std::function<void(const std::string&)>& log);
+// Each vertex's weights cut to kMaxSkinWeights, quantised to 1/64 and renormalised (the votes' last step).
+std::vector<WeightKey> QuantiseWeights(std::vector<std::vector<std::pair<uint32_t, double>>>& weights);
 Blob CskrBytes(const std::vector<std::pair<const WeightKey*, uint32_t>>& runs, size_t total);
 void SurfaceHeader(Blob& s, const double* centre, uint32_t mat, size_t dlSize, uint32_t extra);
 

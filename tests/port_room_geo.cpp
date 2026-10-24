@@ -187,7 +187,7 @@ void TestClips() {
   std::vector<PortRoomGeo::Instance> out;
   std::string error;
   const std::vector<uint8_t> file = PortRoomGeo::Write(in);
-  CHECK_MSG(file.size() > 8 && file[4] == 12, "version 12 written");
+  CHECK_MSG(file.size() > 8 && file[4] == 13, "version 13 written");
   CHECK_MSG(PortRoomGeo::Parse(file, out, error), "clips file parses");
   CHECK_MSG(out.size() == 2 && out[0].anim.empty() && !out[0].animOnShow && out[1].animOnShow &&
                 out[1].anim.size() == 2 && out[1].anim[0].fps == 24.f && !out[1].anim[0].loop &&
@@ -337,14 +337,29 @@ void TestSky() {
   CHECK_MSG(out.size() == 2 && out[1].skyRadiance[0] == 0.5f && out[1].skyRadiance[1] == 2.f &&
                 out[1].skyRadiance[2] == 0.f,
             "sky radiance");
+  CHECK_MSG(out.size() == 2 && !out[1].worldSky, "not a world sky");
+  // Version 13's flags: bit 0, the world's sky.
+  std::vector<uint8_t> world = file;
+  world[file.size() - 4] = 1;
+  CHECK_MSG(PortRoomGeo::Parse(world, out, error, &back) && out.size() == 2 && out[1].sky && out[1].worldSky,
+            "world sky flag");
+  in[1].worldSky = true;
+  CHECK_MSG(PortRoomGeo::Write(in) == world, "world sky written");
+  in[1].worldSky = false;
+  // Version 12: radiance and no flags.
+  std::vector<uint8_t> v12(file.begin(), file.end() - 4);
+  v12[4] = 12;
+  CHECK_MSG(PortRoomGeo::Parse(v12, out, error, &back) && out.size() == 2 && out[1].sky && !out[1].worldSky &&
+                out[1].skyRadiance[1] == 2.f,
+            "version 12 sky parses");
   // Version 6: the index alone, and no radiance.
   // Its animation entry is the version 5 one: no flags or loop, a single clip.
-  const size_t animAt = file.size() - 24 - 84; // the sky section is 8 + 16 bytes, the animation's 8 + 76
+  const size_t animAt = file.size() - 28 - 84; // the sky section is 8 + 20 bytes, the animation's 8 + 76
   std::vector<uint8_t> old(file.begin(), file.begin() + animAt + 8);
   old.insert(old.end(), file.begin() + animAt + 8, file.begin() + animAt + 12);
   old.insert(old.end(), file.begin() + animAt + 16, file.begin() + animAt + 24);
   old.insert(old.end(), file.begin() + animAt + 28, file.begin() + animAt + 84);
-  old.insert(old.end(), file.end() - 24, file.end() - 12);
+  old.insert(old.end(), file.end() - 28, file.end() - 16);
   old[4] = 6;
   CHECK_MSG(PortRoomGeo::Parse(old, out, error, &back) && out.size() == 2 && out[1].sky &&
                 out[1].skyRadiance[0] == 0.f && out[1].skyRadiance[1] == 0.f,
@@ -353,12 +368,12 @@ void TestSky() {
   std::vector<uint8_t> odd = file;
   const float nan = std::nanf("");
   const float negative = -1.f;
-  std::memcpy(odd.data() + file.size() - 12, &negative, 4);
-  std::memcpy(odd.data() + file.size() - 8, &nan, 4);
+  std::memcpy(odd.data() + file.size() - 16, &negative, 4);
+  std::memcpy(odd.data() + file.size() - 12, &nan, 4);
   CHECK_MSG(PortRoomGeo::Parse(odd, out, error, &back) && out.size() == 2 && out[1].skyRadiance[0] == 0.f &&
                 out[1].skyRadiance[1] == 0.f,
             "odd sky radiance reads as 0");
-  for (size_t cut = file.size() - 23; cut < file.size(); ++cut) {
+  for (size_t cut = file.size() - 27; cut < file.size(); ++cut) {
     const std::vector<uint8_t> part(file.begin(), file.begin() + cut);
     if (PortRoomGeo::Parse(part, out, error, &back)) {
       std::fprintf(stderr, "FAIL: sky truncated at %zu parses\n", cut);
@@ -366,15 +381,15 @@ void TestSky() {
     }
   }
   std::vector<uint8_t> bad = file;
-  bad[file.size() - 16] = 2; // no such instance
+  bad[file.size() - 20] = 2; // no such instance
   CHECK_MSG(!PortRoomGeo::Parse(bad, out, error, &back), "sky of a missing instance rejected");
   bad = file;
   bad[4] = 5;
   CHECK_MSG(!PortRoomGeo::Parse(bad, out, error, &back), "sky in a version 5 file rejected");
   bad = file;
-  bad[file.size() - 20] = 2; // count 2
+  bad[file.size() - 24] = 2; // count 2
   Put32(bad, 1);
-  for (int i = 0; i < 3; ++i) {
+  for (int i = 0; i < 4; ++i) {
     Put32(bad, 0);
   }
   CHECK_MSG(!PortRoomGeo::Parse(bad, out, error, &back), "duplicate sky instance rejected");

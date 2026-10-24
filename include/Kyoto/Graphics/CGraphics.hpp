@@ -313,6 +313,11 @@ public:
   static void SetClearColor(const CColor& color);
   static void SetDepthRange(float near, float far);
   static void FlushProjection();
+#ifdef TARGET_PC
+  // Port: reload the projection with Remastered's particle depth bias (PortParticleMath::DepthBiasedProjM22);
+  // bias 0 reloads it unbiased.
+  static void PortSetProjectionDepthBias(float bias, float depth);
+#endif
   static void SetDefaultVtxAttrFmt();
   static CMatrix4f GetPerspectiveProjectionMatrix();
   static CMatrix4f CalculatePerspectiveMatrix(float fovy, float aspect, float znear, float zfar);
