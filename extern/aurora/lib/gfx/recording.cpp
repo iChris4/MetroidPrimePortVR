@@ -1723,7 +1723,11 @@ void resolve_pass_into(TextureHandle texture, ClipRect rect, bool clearColor, bo
   }
   stereo_seal_pass(current_frame_packet(), g_recorder.currentRenderPass);
   if (probeFace < 0) {
-    if (prevPass.stereo.enabled && !monoCopy && !gx::is_depth_format(resolveFormat)) {
+    // VR MERGE NOTE: keep depth copies eligible alongside colour copies.
+    // Upstream can change an effect's GXCopyTex format without touching this
+    // code: retail lava/fog changed A8 -> Z16 in 0.32 and silently became mono
+    // when depth was excluded here. See RetailFogDepthCopiesHaveSeparateEyeTargets.
+    if (prevPass.stereo.enabled && !monoCopy) {
       // Each eye's copy at that eye's resolution (stereo_shadow.hpp).
       const auto& efbSize = prevPass.colorAttachments[SceneColorAttachmentIndex].size;
       std::array<stereo_shadow::EyeSize, AURORA_STEREO_EYE_COUNT> eyeTargets{};

@@ -930,6 +930,12 @@ void CEnvFxManager::Render(const CStateManager& mgr) {
 bool CEnvFxManager::PortRenderEnvFx(const CStateManager& mgr, EEnvFxType type, const CTransform4f& xf,
                                     const CTransform4f& invXf, const CTransform4f& camXf) {
   namespace envfx = aurora::gfx::envfx;
+  // VR MERGE NOTE: EnvFX is a native custom draw, which the stereo eye replay
+  // does not execute. Keep the existing tracked GX rain/snow/underwater path
+  // until EnvFX has per-eye uniforms and replay (including Quest multiview).
+  if (PortVr::VrImmersive()) {
+    return false;
+  }
   if (!PortRoomEnv::Enabled() || !PortMods::RoomEnvLoaded()) {
     return false;
   }

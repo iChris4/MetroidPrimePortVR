@@ -1,3 +1,26 @@
+## VR: upstream rendering merge checks (2026-10-25)
+
+Upstream targets a desktop camera. A clean merge and passing desktop tests do
+not establish correct stereo rendering. Audit changes to EFB copy formats,
+depth attachments, copy uniforms, screen projection/crop rectangles, custom
+draws and post-process encoder tasks against both per-eye replay and Quest
+multiview. Preserve the HMD-aware camera, billboard and reticle paths.
+
+The 0.32 merge changed retail fog copies from A8 to Z16. The stereo path
+excluded depth formats, so both eyes sampled the mono depth copy. Depth
+copies now get separate eye targets and use each eye's depth attachment;
+VR fog also avoids crop bounds computed from the desktop camera. The user
+confirmed the lava and normal fog correction in-headset. Regression tests:
+`SceneHdrTest.RetailFogDepthCopiesHaveSeparateEyeTargets` and
+`StereoFogCopy.DepthReadsEachEyesDepthAttachment`.
+
+Do not restore colour-only copy gates or assume a new native custom draw
+replays into the eyes. The new Remastered EnvFX weather draw is mono-only,
+so immersive VR retains the tracked retail GX weather renderer until EnvFX
+has a stereo implementation. The merge also preserves partial-clear scaling
+for eye resolution and keeps mono HDR compositing/desktop third-person out
+of the immersive view. Those protections need review on future merges too.
+
 ## VR: pipelined rendering on the Quest (2026-10-22)
 
 `vr_pipelined_rendering` has been on by default on Android since 5e3ebaa87,

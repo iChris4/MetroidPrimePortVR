@@ -110,6 +110,14 @@ struct StereoEyePass {
   // from this eye read (a foveated view is a render attachment only).
   wgpu::TextureView copySourceView;
   wgpu::Extent3D size{};
+
+  const wgpu::TextureView& copy_view(bool depth) const noexcept {
+    // Retail fog copies Z16, then samples its converted IA8 texture. It must
+    // read this eye's depth attachment, never the mono EFB or colour view.
+    if (depth) return depthView;
+    if (resolveView) return resolveView;
+    return copySourceView ? copySourceView : colorView;
+  }
 };
 
 struct StereoPassReplay {

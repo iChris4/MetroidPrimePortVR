@@ -1,6 +1,7 @@
 #include "MetaRender/CCubeRenderer.hpp"
 #ifdef TARGET_PC
 #include "port_surface_culling.h"
+#include "vr/vr_view.h"
 #endif
 #include "Kyoto/Basics/CBasics.hpp"
 
@@ -2114,7 +2115,14 @@ void CCubeRenderer::ReallyRenderFogVolume(const CColor& color, const CAABox& aab
 
   int drawRight = vpWidth;
   int drawBottom = vpHeight;
-  if (!allOutside) {
+  // A rectangle projected with the body camera can clip fog that an eye sees,
+  // especially while looking away from that camera. Each eye copies its own
+  // full depth buffer in VR; keep the composite over that same full view.
+  if (!allOutside
+#ifdef TARGET_PC
+      && !PortVr::VrImmersive()
+#endif
+      ) {
     maxChunkW = rstl::min_val(maxBounds.GetX() - minBounds.GetX(), maxChunkW);
     maxChunkH = rstl::min_val(maxBounds.GetY() - minBounds.GetY(), maxChunkH);
 

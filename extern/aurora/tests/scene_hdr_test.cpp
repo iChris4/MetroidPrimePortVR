@@ -12,6 +12,8 @@
 #include "gfx/resources.hpp"
 #include "gfx/tex_copy_conv.hpp"
 #include "gfx/texture.hpp"
+#include "gfx/stereo_eyes.hpp"
+#include "gfx/stereo_shadow.hpp"
 #include "gfx/thermal.hpp"
 #include "gfx/volfog.hpp"
 #include "gfx/xray.hpp"
@@ -199,6 +201,39 @@ protected:
   bool recording = true;
   uint32_t savedUniformAlignment = 0;
 };
+
+TEST_F(SceneHdrTest, RetailFogDepthCopiesHaveSeparateEyeTargets) {
+  struct Cleanup {
+    ~Cleanup() {
+      set_frame_stereo({});
+      release_stereo_eye_targets();
+      stereo_shadow::shutdown();
+    }
+  } cleanup;
+  StereoFrameState stereo{};
+  stereo.immersive = true;
+  stereo.eyes[0].width = 800;
+  stereo.eyes[0].height = 600;
+  stereo.eyes[1].width = 900;
+  stereo.eyes[1].height = 700;
+  ASSERT_TRUE(ensure_stereo_eye_targets(stereo.eyes));
+  set_frame_stereo(stereo);
+  auto copy = new_conv_texture(640, 480, GX_TF_Z16, "Retail fog depth copy test");
+  ASSERT_TRUE(copy);
+  const size_t copiedPass = frame.renderPasses.size() - 1;
+  resolve_pass_into(copy, {0, 0, 640, 480}, false, false, false, {}, 1.f, GX_TF_Z16);
+  const auto& pass = frame.renderPasses[copiedPass];
+  ASSERT_TRUE(pass.stereo.enabled);
+  ASSERT_TRUE(pass.stereo.copyTargets[0]);
+  ASSERT_TRUE(pass.stereo.copyTargets[1]);
+  EXPECT_NE(pass.stereo.copyTargets[0].get(), pass.stereo.copyTargets[1].get());
+  EXPECT_EQ(pass.stereo.copyTargets[0]->size.width, 800u);
+  EXPECT_EQ(pass.stereo.copyTargets[1]->size.width, 900u);
+  EXPECT_EQ(pass.stereo.eyes[0].copy_view(true).Get(), stereo_eye_target(0).depth.view.Get());
+  EXPECT_EQ(pass.stereo.eyes[1].copy_view(true).Get(), stereo_eye_target(1).depth.view.Get());
+  EXPECT_EQ(stereo_shadow::eye_texture(copy.get(), 0), pass.stereo.copyTargets[0].get());
+  EXPECT_EQ(stereo_shadow::eye_texture(copy.get(), 1), pass.stereo.copyTargets[1].get());
+}
 
 TEST_F(SceneHdrTest, OffKeepsTheLdrLayoutAndKey) {
   for (const uint32_t samples : {1u, 4u}) {

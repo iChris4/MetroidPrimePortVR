@@ -357,3 +357,14 @@ TEST(StereoClearRect, EmptyRectClearsTheWholeEye) {
   EXPECT_EQ(rect.width, 2000);
   EXPECT_EQ(rect.height, 2100);
 }
+
+TEST(StereoFogCopy, DepthReadsEachEyesDepthAttachment) {
+  std::array<aurora::gfx::detail::StereoEyePass, 2> eyes{};
+  for (const auto& eye : eyes) {
+    EXPECT_EQ(&eye.copy_view(true), &eye.depthView);
+    EXPECT_NE(&eye.copy_view(true), &eye.colorView);
+    EXPECT_NE(&eye.copy_view(true), &eye.copySourceView);
+    EXPECT_EQ(&eye.copy_view(false), &eye.colorView);
+  }
+  EXPECT_NE(&eyes[0].copy_view(true), &eyes[1].copy_view(true));
+}

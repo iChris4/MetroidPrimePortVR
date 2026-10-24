@@ -655,15 +655,17 @@ void render(wgpu::CommandEncoder& cmd, FramePacket& frame, RenderPass& passInfo,
   // per eye instead: the part of the eye's view behind the copied rectangle of
   // the head-locked plane (stereo_replay.hpp HeadLockedPlane).
   if (passInfo.stereo.enabled && passInfo.resolveTarget && passInfo.probeFace < 0 &&
-      passInfo.stereo.copyTargets[0] && !gx::is_depth_format(passInfo.resolveFormat)) {
+      passInfo.stereo.copyTargets[0]) {
     const webgpu::gpu_prof::Zone zone{cmd, "Stereo eye copies"};
     for (uint32_t eye = 0; eye < AURORA_STEREO_EYE_COUNT; ++eye) {
       const auto& eyePass = passInfo.stereo.eyes[eye];
       // The eye's sampleable view: the pass may have rendered through a
       // foveated, attachment-only view of the same image (stereo_foveation.hpp).
-      const auto& source = eyePass.resolveView      ? eyePass.resolveView
-                           : eyePass.copySourceView ? eyePass.copySourceView
-                                                    : eyePass.colorView;
+      // VR MERGE NOTE: a depth-format change must still select this eye's
+      // depth attachment, not the desktop EFB. Copy formats and uniform layouts
+      // must stay in sync with recording.cpp and tex_copy_conv::Uniforms.
+      const bool depthCopy = gx::is_depth_format(passInfo.resolveFormat);
+      const auto& source = eyePass.copy_view(depthCopy);
       if (!source || !passInfo.stereo.copyTargets[eye]) {
         continue;
       }
@@ -673,7 +675,7 @@ void render(wgpu::CommandEncoder& cmd, FramePacket& frame, RenderPass& passInfo,
           .srcView = source,
           .uniformRange = eyeUniform.size != 0 ? eyeUniform : passInfo.resolveUniformRange,
           .dst = passInfo.stereo.copyTargets[eye],
-          .sampleFilter = tex_copy_conv::SampleFilter::Linear,
+          .sampleFilter = depthCopy ? tex_copy_conv::SampleFilter::Nearest : tex_copy_conv::SampleFilter::Linear,
       };
       if (tex_copy_conv::needs_conversion(passInfo.resolveFormat)) {
         tex_copy_conv::run(cmd, eyeReq);
