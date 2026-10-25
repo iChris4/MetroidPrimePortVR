@@ -289,6 +289,7 @@ struct View {
     bool streamed_audio = true;
     bool musyx_audio = true;
     bool log_file = false;
+    bool quick_resume = false;
     bool draw_tags = true; // PortDebug::DrawTags
     uint32_t eye_width = 0; // per eye at the chosen render scale; 0 without a session
     uint32_t eye_height = 0;
@@ -325,6 +326,7 @@ public:
     virtual void SetMusyxAudio(bool on) = 0;
     virtual void SetLogFile(bool on) = 0;
     virtual void SetDrawTags(bool on) = 0;
+    virtual void SetQuickResume(bool on) = 0;
 };
 
 // --- The port's tabs ---
@@ -432,8 +434,9 @@ enum class DebugItem : uint8_t {
     HeadsetFrames, // readout
     GameFrames,    // readout
     Draws,         // readout
+    QuickResume,
 };
-inline constexpr uint32_t kDebugItems = 12;
+inline constexpr uint32_t kDebugItems = 13;
 
 inline constexpr std::array<float, 5> kRefreshRates = {0.0f, 72.0f, 80.0f, 90.0f, 120.0f};
 inline constexpr std::array<const char*, 5> kPerformanceLevels = {"boost", "sustained_high", "sustained_low",
@@ -754,6 +757,8 @@ inline Row DebugRow(const State& s, const PortVrSettings& v, const View& view, D
         return {"GAME FRAMES PER SECOND", rate(view.game_fps, "%.1f")};
     case DebugItem::Draws:
         return {"DRAWS PER FRAME", std::to_string(view.draws)};
+    case DebugItem::QuickResume:
+        return {"QUICK RESUME", OnOff(view.quick_resume)};
     }
     return {};
 }
@@ -1733,6 +1738,9 @@ inline void Activate(State& s, PortVrSettings& v, const View& view, double now, 
             break;
         case DebugItem::DrawTags:
             actions.SetDrawTags(!view.draw_tags);
+            break;
+        case DebugItem::QuickResume:
+            actions.SetQuickResume(!view.quick_resume);
             break;
         default:
             break; // readouts

@@ -5,6 +5,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import dev.encounter.aurora.AuroraSurface
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -37,7 +38,10 @@ import org.libsdl.app.SDLSurface
  * launcher (launcher.LauncherActivity) starts it with Play, and its Stop sends
  * [ACTION_STOP_GAME], which finishes it as the headset's Quit does.
  */
-class PrimedGunVrActivity : SDLActivity() {
+open class PrimedGunVrActivity : SDLActivity() {
+    protected open val optionsOnly = false
+
+    override fun getArguments(): Array<String> = if (optionsOnly) arrayOf("--options") else emptyArray()
 
     private val stopReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -51,38 +55,48 @@ class PrimedGunVrActivity : SDLActivity() {
 
     override fun getLibraries(): Array<String> = arrayOf("metroid_prime_port")
 
-    override fun createSDLSurface(context: Context): SDLSurface = QuestSurface(context)
+    override fun createSDLSurface(context: Context): SDLSurface =
+        if (optionsOnly) AuroraSurface(context) else QuestSurface(context)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         val user = QuestStorage.userFolder(this)
-        QuestStorage.clearLastError(this)
+        if (!optionsOnly) QuestStorage.clearLastError(this)
         Os.setenv("MP_USER_PATH", user.absolutePath, true)
         Os.setenv("MP_NO_DISC_DIALOG", "1", true)
-        Os.setenv("MP_VR", "1", true)
-        Os.setenv("MP_LOG_FILE", "1", true)
+        Os.setenv("MP_VR", if (optionsOnly) "0" else "1", true)
+        Os.setenv("MP_LOG_FILE", if (optionsOnly) "0" else "1", true)
+        if (optionsOnly) {
+            // Share settings, not live GPU cache files, with the game process.
+            val optionsCache = File(cacheDir, "port_options").apply { mkdirs() }
+            Os.setenv("MP_CACHE_PATH", optionsCache.absolutePath, true)
+        }
         // Test runs over adb, e.g. straight into the Landing Site:
         //   am start -n org.primedgun.v2/.PrimedGunVrActivity --es MP_BOOT_WORLD 39F2DE28:B2701146
         for (name in TEST_ENVIRONMENT) {
             intent?.getStringExtra(name)?.let { Os.setenv(name, it, true) }
         }
-        val disc = QuestStorage.discImage(this)
-        val discProblem = QuestStorage.checkDisc(disc)
-        if (discProblem == null) {
-            Os.setenv("MP_DISC", disc.absolutePath, true)
-        } else {
-            // The game then finds no disc, does not ask (MP_NO_DISC_DIALOG) and ends,
-            // which finishes this activity.
-            Log.w(TAG, discProblem)
-            QuestStorage.writeLastError(this, discProblem)
-            Os.unsetenv("MP_DISC")
+        if (!optionsOnly) {
+            val disc = QuestStorage.discImage(this)
+            val discProblem = QuestStorage.checkDisc(disc)
+            if (discProblem == null) {
+                Os.setenv("MP_DISC", disc.absolutePath, true)
+            } else {
+                // The game then finds no disc, does not ask (MP_NO_DISC_DIALOG) and ends,
+                // which finishes this activity.
+                Log.w(TAG, discProblem)
+                QuestStorage.writeLastError(this, discProblem)
+                Os.unsetenv("MP_DISC")
+            }
         }
         unpackPortResources()
 
         super.onCreate(savedInstanceState)
 
         // Only this app's launcher can send it (an explicit, package-scoped broadcast).
-        ContextCompat.registerReceiver(this, stopReceiver, IntentFilter(ACTION_STOP_GAME), ContextCompat.RECEIVER_NOT_EXPORTED)
-        stopReceiverRegistered = true
+        if (!optionsOnly) {
+            ContextCompat.registerReceiver(this, stopReceiver, IntentFilter(ACTION_STOP_GAME), ContextCompat.RECEIVER_NOT_EXPORTED)
+            stopReceiverRegistered = true
+        }
 
         if (mBrokenLibraries) {
             // SDLActivity reports this in a dialog, which the headset never shows.

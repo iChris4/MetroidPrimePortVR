@@ -33,6 +33,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <filesystem>
 #include <string>
 
 namespace PortDebug {
@@ -400,6 +401,24 @@ void PollSettingsFile(bool now) {
 void DrawUI() {
   EnsureInitialized();
   PollSettingsFile(false);
+#if !defined(__ANDROID__)
+  // A launcher request opens (never toggles shut) the existing F1 panel.
+  static Uint64 nextOptionsRequestPoll = 0;
+  if (SDL_GetTicks() >= nextOptionsRequestPoll) {
+    nextOptionsRequestPoll = SDL_GetTicks() + 250;
+    if (!PortPaths::UserFolder().empty()) {
+      std::error_code ec;
+      const auto request = PortPaths::detail::FromUtf8(PortPaths::UserFolder()) / "open_options.request";
+      if (std::filesystem::remove(request, ec)) {
+        sVisible = true;
+        if (SDL_Window* window = MainWindow()) {
+          SDL_RestoreWindow(window);
+          SDL_RaiseWindow(window);
+        }
+      }
+    }
+  }
+#endif
   if (!sAudioSettingsApplied) {
     // Apply the startup audio switches (MP_DISABLE_AI_AUDIO) once the backends are alive.
     sAudioSettingsApplied = true;

@@ -30,6 +30,7 @@
 #include <QPixmap>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QSaveFile>
 #include <QStyle>
 #include <QTabWidget>
 #include <QTimer>
@@ -100,6 +101,7 @@ LauncherWindow::LauncherWindow()
   layout->setSpacing(8);
 
   m_ctx.onEdited = [this] { OnEdited(); };
+  m_ctx.openPortOptions = [this] { OpenPortOptions(); };
   m_ctx.saveKeyNow = [this](std::string_view key) { SaveKeyNow(key); };
 
   m_tabs = new QTabWidget(page);
@@ -633,9 +635,23 @@ void LauncherWindow::TransferOldSave() {
 
 // --- the game --------------------------------------------------------------
 
-void LauncherWindow::Play() {
+void LauncherWindow::OpenPortOptions() {
+  if (m_game == nullptr) {
+    Play(true);
+    return;
+  }
+  if (!SaveSettings()) {
+    return;
+  }
+  QSaveFile request(QDir(m_paths.userFolder).filePath(QStringLiteral("open_options.request")));
+  if (!request.open(QIODevice::WriteOnly) || request.write("open\n") != 5 || !request.commit()) {
+    QMessageBox::warning(this, tr("Port Options"), tr("Could not ask the running game to open its options."));
+  }
+}
+
+void LauncherWindow::Play(bool optionsOnly) {
   const QString disc = SelectedDisc();
-  if (m_game != nullptr || disc.isEmpty()) {
+  if (m_game != nullptr || (!optionsOnly && disc.isEmpty())) {
     return;
   }
   if (!QFileInfo::exists(m_paths.gameExe)) {
@@ -652,7 +668,8 @@ void LauncherWindow::Play() {
   m_game->setProgram(m_paths.gameExe);
   // The first argument that is not an option is the disc (platform/main.cpp
   // ResolveDiscPath); Qt quotes it, and SDL reads the wide command line.
-  m_game->setArguments({QDir::toNativeSeparators(disc)});
+  m_game->setArguments(optionsOnly ? QStringList{QStringLiteral("--options")}
+                                   : QStringList{QDir::toNativeSeparators(disc)});
   m_game->setWorkingDirectory(m_paths.exeFolder);
   // The game logs to stderr all along; a file needs no reader.
   m_game->setProcessChannelMode(QProcess::MergedChannels);
@@ -681,6 +698,9 @@ void LauncherWindow::Play() {
   m_forceStopOffered = false;
   m_game->start();
   SetRunning(true);
+  if (optionsOnly) {
+    m_runStatus->setText(tr("Port options open. Close the options window before pressing Play."));
+  }
 }
 
 void LauncherWindow::Stop() {

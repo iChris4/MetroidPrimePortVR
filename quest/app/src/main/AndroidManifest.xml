@@ -77,6 +77,19 @@
             </intent-filter>
         </activity>
 
+        <!-- Full F1 options in a 2D panel, independently of the immersive game. -->
+        <activity
+            android:name=".PortOptionsActivity"
+            android:configChanges="density|fontScale|keyboard|keyboardHidden|layoutDirection|locale|navigation|orientation|screenLayout|screenSize|smallestScreenSize|touchscreen|uiMode"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:process=":options"
+            android:resizeableActivity="true"
+            android:theme="@style/Theme.PrimedGun.Vr">
+            <layout android:defaultWidth="1024dp" android:defaultHeight="720dp"
+                android:minWidth="760dp" android:minHeight="520dp" />
+        </activity>
+
         <!-- Copies the picked disc image into the user folder (launcher process). -->
         <service
             android:name=".launcher.DiscCopyService"

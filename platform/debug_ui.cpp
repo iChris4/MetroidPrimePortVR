@@ -142,7 +142,7 @@ std::string sTextLanguage;
 int sElevatorRide = PortDebug::kElevatorRide_Original;
 int sBootLogos = PortDebug::kBootLogos_Skippable;
 bool sSaveStateHotkeys = true;
-bool sQuickResume = true;
+bool sQuickResume = false;
 bool sSaveStateRoomState = true;
 std::atomic<bool> sTouchBeamShift{false}; // the touch twin layout's held Beam button
 std::atomic<bool> sTouchTurboFire{false}; // the touch Turbo button, held

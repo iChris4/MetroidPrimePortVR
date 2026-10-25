@@ -106,3 +106,12 @@ Where the Quest panel differs:
   - refresh rate, performance level, passthrough and foveation;
   - the renderer switches the PC reaches through F1.
 - Settings the game does not read yet carry the same "not active yet" tag.
+
+The Port Config tab has **Open Full Port Options (F1)...**. With a game running,
+it opens its existing F1 panel. Otherwise it opens a desktop options window
+without loading a disc or starting OpenXR. Close that window before pressing Play.
+
+On Quest, **Port Config > Open Full Port Options (F1)** opens the same settings
+in a normal 2D system panel, without requiring a disc. It has its own SDL process
+and GPU cache, so it can open while the immersive game process exists. Close the
+options panel to return to the launcher; settings are saved to the shared user folder.

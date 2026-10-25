@@ -257,6 +257,12 @@ void SetStateManager(CStateManager* mgr) {
   sStateManager = mgr;
 }
 bool QuickResume() { return sQuickResume; }
+void SetQuickResume(bool on) {
+  if (sQuickResume != on) {
+    sQuickResume = on;
+    MarkDirty();
+  }
+}
 bool SaveStateRoomState() { return sSaveStateRoomState; }
 CStateManager* StateManager() { return sStateManager; }
 bool ViewRay(float origin[3], float forward[3]) {

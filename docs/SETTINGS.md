@@ -965,7 +965,9 @@ other `X:\Users\<name>`: `X:\Users\<user>`); the
   Saving is refused while Samus is dead. A state saved on an elevator pad
   rides the elevator after loading, like stepping onto it. Console:
   `state list | last | save [n] | load [n] | undo | slot <n>`.
-- Quick resume (F1 > Save states, `quick_resume`, on by default): when the app
+- Quick resume (launcher > Port Config, VR > Debug, or F1 > Save states;
+  `quick_resume_enabled`, off by default for new and existing users): the legacy
+  `quick_resume` preference is ignored; enable this option again to opt in. When the app
   goes to the background (Android) or you quit (desktop, window close, the
   overlay's Exit game or the console `quit`) during play, one more state is
   written to `savestates/resume.mpss`, outside the eight slots (slot 0's undo is

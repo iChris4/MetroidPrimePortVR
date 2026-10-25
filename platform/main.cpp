@@ -706,6 +706,7 @@ AuroraBackend DesiredGraphicsBackend() {
 } // namespace
 
 int main(int argc, char** argv) {
+    const bool optionsOnly = argc == 2 && std::strcmp(argv[1], "--options") == 0;
 #if defined(_WIN32)
     if ((argc == 4 || argc == 5) && std::strcmp(argv[1], "--log-copy") == 0) {
         return PortLogFile::RunCopy(argv[2], argv[3], argc == 5 ? argv[4] : nullptr);
@@ -1032,7 +1033,7 @@ int main(int argc, char** argv) {
         .msaa = static_cast<uint32_t>(PortDebug::Msaa()),
         .maxTextureAnisotropy = static_cast<uint16_t>(PortDebug::Anisotropy()),
         .vsync = false,
-        .startFullscreen = PortDebug::Fullscreen(),
+        .startFullscreen = !optionsOnly && PortDebug::Fullscreen(),
         .allowJoystickBackgroundEvents = false,
         .pauseOnFocusLost = false,
         .allowTextureDumps = dumpTextures,
@@ -1151,7 +1152,8 @@ int main(int argc, char** argv) {
     // picks a device, so the eyes are copied on the compositor's own GPU.
     PortVr::ApplyVrEnvironmentOverrides();
     PortVr::PushVrSettingsToAurora();
-    const PortVr::OpenXRStartupResult vrStartup = PortVr::OpenXRPrepareAurora(config);
+    const PortVr::OpenXRStartupResult vrStartup = optionsOnly
+        ? PortVr::OpenXRStartupResult::Disabled : PortVr::OpenXRPrepareAurora(config);
     // A flat start compiles no eye pipelines from PrimedGun's seed. MP_PIPELINE_SEED_EYES=1 takes
     // them anyway, to check on a desktop that every row of a new seed compiles.
     config.pipelineCacheExtraSeedStereo =
@@ -1305,6 +1307,34 @@ int main(int argc, char** argv) {
     PortTextures::Initialize(textures, userTextures.c_str());
     // Binding-aware prompt icons, served from <textures>/bindings.
     PortPrompts::Initialize(textures);
+
+    // Standalone desktop F1 settings: no disc, game state, or headset session.
+    if (optionsOnly) {
+        SDL_SetWindowTitle(auroraInfo.window, "PrimedGun Port Options");
+        SDL_ShowWindow(auroraInfo.window);
+        if (!PortDebug::Visible()) PortDebug::Toggle();
+        bool quit = false;
+        while (!quit) {
+            for (const AuroraEvent* event = aurora_update();
+                 event != nullptr && event->type != AURORA_NONE; ++event) {
+                if (event->type == AURORA_EXIT ||
+                    (event->type == AURORA_SDL_EVENT && event->sdl.type == SDL_EVENT_KEY_DOWN &&
+                     (event->sdl.key.scancode == SDL_SCANCODE_AC_BACK ||
+                      event->sdl.key.scancode == SDL_SCANCODE_ESCAPE))) quit = true;
+            }
+            if (quit) break;
+            if (aurora_begin_frame()) {
+                PortDebug::DrawUI();
+                aurora_end_frame();
+                if (!PortDebug::Visible()) break;
+            }
+            SDL_Delay(16);
+        }
+        PortDebug::SaveSettingsNow();
+        PortVr::OpenXRShutdownBeforeAurora();
+        aurora_shutdown();
+        return 0;
+    }
 
     // Disc image: an explicit argument or MP_DISC, else the path saved on a
     // previous launch, else a copy beside the executable, else ask for one.

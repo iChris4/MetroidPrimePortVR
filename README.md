@@ -52,6 +52,42 @@ Roomscale is optional. With it disabled, use stick movement and keep near your
 calibrated position. Physical walking with roomscale enabled applies during
 first-person gameplay.
 
+## Installing HD texture packs
+
+Use a Metroid Prime replacement texture pack containing `.png` or `.dds` files
+with their original texture filenames (usually `tex1_...`). Extract the ZIP/7z
+first; copying the archive itself does not install it. No ISO patch is needed.
+
+### Windows
+
+1. Open **Port Config > Open Texture Pack Folder** in the PrimedGun launcher.
+   Normally this is `user/user_textures/` beside `PrimedGun.exe`; the button
+   opens the folder your installation actually uses.
+2. Copy the extracted textures into that folder. A named pack subfolder is fine;
+   subfolders are scanned automatically. Keep the original filenames.
+3. Restart the game to load the pack. While playing on PC, you can also use
+   **F1 > Mods > Texture pack > Reload texture pack** after copying files.
+
+Example: `user/user_textures/My HD Pack/tex1_...png`.
+
+### Meta Quest
+
+1. Launch PrimedGun once, then open **Port Config > Show Texture Pack Folder**.
+   This creates the `user_textures` folder if it is missing and shows its path.
+2. Connect the headset to your computer and allow file access, then copy the
+   extracted textures into:
+   `/sdcard/Android/data/org.primedgun.v2/files/user_textures/`.
+   In a USB file browser this is usually **Internal shared storage > Android >
+   data > org.primedgun.v2 > files > user_textures**. If copying manually and the
+   folder is missing, create a folder named exactly `user_textures` inside `files`.
+3. Keep the pack in a named subfolder if desired, for example
+   `files/user_textures/My HD Pack/tex1_...png`. Restart the game after copying.
+
+Use one pack/version at a time to avoid conflicting replacements. Larger packs
+use more memory, especially on Quest; choose a lower-resolution version if needed.
+**Texture Pack Help** in Port Config repeats these steps and shows the local path.
+See [the texture-pack reference](docs/MODS.md) for advanced setup.
+
 ## Controller Settings
 
 The **Layout** tab shows the recommended controls. Use **Controller** to adjust

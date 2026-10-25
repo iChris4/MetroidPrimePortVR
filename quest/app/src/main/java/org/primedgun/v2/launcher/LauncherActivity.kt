@@ -28,6 +28,7 @@ import java.io.IOException
 import java.io.RandomAccessFile
 import org.primedgun.v2.BuildConfig
 import org.primedgun.v2.PrimedGunVrActivity
+import org.primedgun.v2.PortOptionsActivity
 import org.primedgun.v2.QuestStorage
 import org.primedgun.v2.R
 import org.primedgun.v2.databinding.ActivityLauncherBinding
@@ -194,6 +195,11 @@ class LauncherActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         panelResumed = true
+        // The full-options panel shares this settings file, even while :game lives.
+        if (!LauncherSettings.dirty && LauncherNative.changedOnDisk()) {
+            LauncherNative.reload()
+            refreshVisibleTab()
+        }
         // Back in front, so the game's activity is not: a launch either ended or never
         // began, and only the process (still exiting, perhaps) says whether it runs.
         launching = false
@@ -283,6 +289,17 @@ class LauncherActivity : AppCompatActivity() {
         }
         if (messages.isNotEmpty()) {
             showMessage(R.string.primedgun_title, messages.joinToString("\n\n"))
+        }
+    }
+
+    fun openPortOptions() {
+        if (PrimedGunTransfer.isStaging || DiscCopy.isRunning) return
+        if (!gameRunning && !saveSettings(showResult = false)) return
+        try {
+            startActivity(Intent(this, PortOptionsActivity::class.java))
+        } catch (e: ActivityNotFoundException) {
+            Log.e(TAG, "Cannot open port options", e)
+            Toast.makeText(this, R.string.primedgun_launch_failed, Toast.LENGTH_LONG).show()
         }
     }
 
@@ -394,6 +411,34 @@ class LauncherActivity : AppCompatActivity() {
             R.string.primedgun_show_user_folder,
             getString(R.string.primedgun_user_folder_message, QuestStorage.userFolder(this).path)
         )
+    }
+
+    fun showTexturePackFolder() {
+        val folder = File(QuestStorage.userFolder(this), "user_textures")
+        if (!folder.isDirectory && !folder.mkdirs()) {
+            showMessage(R.string.primedgun_error, "Could not create the texture pack folder:\n${folder.path}")
+            return
+        }
+        showMessage(R.string.primedgun_texture_pack_folder,
+            "Texture folder ready:\n${folder.path}\n\n" +
+            "Connect your Quest to a computer and allow file access, then copy extracted PNG/DDS textures here. " +
+            "A named pack subfolder is fine. Restart the game after copying. " +
+            "See Texture Pack Help for the full steps.")
+    }
+
+    fun showTexturePackHelp() {
+        val folder = File(QuestStorage.userFolder(this), "user_textures")
+        showMessage(R.string.primedgun_texture_pack_help,
+            "1. Extract your Metroid Prime texture pack ZIP/7z on your computer. Keep the PNG/DDS files' " +
+            "original texture filenames (usually tex1_...). No ISO patch is needed.\n\n" +
+            "2. Launch PrimedGun once. Use Show Texture Pack Folder to create user_textures if it is missing, " +
+            "or create a folder named exactly user_textures inside Android/data/org.primedgun.v2/files.\n\n" +
+            "Your texture folder:\n${folder.path}\n\n" +
+            "3. Connect the Quest to your computer and allow file access. Copy the extracted textures into " +
+            "that folder. A subfolder such as My HD Pack is fine; subfolders are scanned automatically. " +
+            "Copy the extracted files, not the ZIP/7z archive.\n\n" +
+            "4. Restart the game after copying. Use one pack/version at a time to avoid conflicting " +
+            "replacements. Larger packs use more memory, especially on Quest; choose a lower-resolution version if needed.")
     }
 
     /** The end of the last run's log (MP_LOG_FILE), for a headset with no file viewer. */

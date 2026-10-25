@@ -9,6 +9,8 @@
 #include <QFileSystemWatcher>
 #include <QTemporaryDir>
 #include <QTimer>
+#include <QPushButton>
+#include <QDir>
 
 #include <cstdio>
 #include <cstdlib>
@@ -51,9 +53,21 @@ struct LauncherSettingsSyncTest {
     window.m_ctx.RefreshAll();
     Check(!roomScale->isChecked(), "initial desktop toggle matches saved value");
 
+    QPushButton* portOptions = nullptr;
+    for (auto* button : window.findChildren<QPushButton*>()) {
+      if (button->text() == QStringLiteral("Open Full Port Options (F1)...")) portOptions = button;
+    }
+    Check(portOptions && portOptions->isEnabled(), "full options available without a selected disc");
+
     // Route file notifications through the same live-refresh path as a running game.
     QProcess game;
     window.m_game = &game;
+    portOptions->click();
+    QFile optionsRequest(QDir(window.m_paths.userFolder).filePath(QStringLiteral("open_options.request")));
+    Check(optionsRequest.open(QIODevice::ReadOnly) && optionsRequest.readAll() == "open\n",
+          "options button requests the existing game panel rather than starting another game");
+    optionsRequest.close();
+    Check(optionsRequest.remove(), "consume test options request");
     const auto saveFromGame = [&](bool enabled) {
       PortSettingsFile file;
       Check(file.Load(ToPath(window.m_paths.settingsFile)), "load game settings");

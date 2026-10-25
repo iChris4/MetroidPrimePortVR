@@ -303,7 +303,8 @@ const SettingKey kSettingKeys[] = {
      },
      [](std::ostream& out) { out << sBootLogos; }, false, "0", "2"},
     BoolKey< &sSaveStateHotkeys >("savestate_hotkeys"),
-    BoolKey< &sQuickResume >("quick_resume"),
+    // Fresh opt-in: ignore legacy quick_resume=1, which previously defaulted on.
+    BoolKey< &sQuickResume >("quick_resume_enabled"),
     BoolKey< &sSaveStateRoomState >("savestate_room_state"),
     {"fov",
      [](const std::string& value) {

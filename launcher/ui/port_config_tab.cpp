@@ -10,8 +10,11 @@
 #include "widgets.h"
 
 #include <QCheckBox>
+#include <QDir>
 #include <QComboBox>
 #include <QLabel>
+#include <QHBoxLayout>
+#include <QMessageBox>
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QTabWidget>
@@ -30,6 +33,15 @@ void BuildPortConfigTab(TabContext& ctx, QTabWidget* tabs) {
   note->setWordWrap(true);
   layout->addWidget(note);
   layout->addSpacing(8);
+  auto* portOptions = new QPushButton(QObject::tr("Open Full Port Options (F1)..."));
+  portOptions->setToolTip(QObject::tr("Open the full F1 settings panel, with or without a running game."));
+  layout->addWidget(portOptions);
+  QObject::connect(portOptions, &QPushButton::clicked, portOptions, [&ctx] {
+    if (ctx.openPortOptions) ctx.openPortOptions();
+  });
+
+  ctx.Check(layout, QObject::tr("Quick resume"), "quick_resume_enabled",
+            QObject::tr("Save your place when quitting and offer to resume it at the next launch. Off by default."));
 
   layout->addWidget(ctx.Section(QObject::tr("VR Headset")));
   ctx.Check(layout, QObject::tr("Enable VR"), "vr_enabled",
@@ -116,11 +128,17 @@ void BuildPortConfigTab(TabContext& ctx, QTabWidget* tabs) {
   auto* openSettings = new QPushButton(QObject::tr("Open Settings File"));
   auto* openLog = new QPushButton(QObject::tr("Open Last Run Log"));
   auto* openTextures = new QPushButton(QObject::tr("Open Texture Pack Folder"));
+  auto* textureHelp = new QPushButton(QObject::tr("Texture Pack Help"));
   auto* openDumps = new QPushButton(QObject::tr("Open Crash Dumps"));
   openDumps->setToolTip(QObject::tr("The game writes crash_*.dmp next to itself when it crashes."));
-  for (QPushButton* button : {openUser, openSettings, openLog, openTextures, openDumps}) {
+  for (QPushButton* button : {openUser, openSettings, openLog}) {
     layout->addWidget(button);
   }
+  auto* textureRow = new QHBoxLayout;
+  textureRow->addWidget(openTextures, 1);
+  textureRow->addWidget(textureHelp);
+  layout->addLayout(textureRow);
+  layout->addWidget(openDumps);
   layout->addStretch();
 
   QObject::connect(openUser, &QPushButton::clicked, openUser,
@@ -131,6 +149,18 @@ void BuildPortConfigTab(TabContext& ctx, QTabWidget* tabs) {
                    [&ctx] { OpenFile(NewestLog(ctx.paths)); });
   QObject::connect(openTextures, &QPushButton::clicked, openTextures,
                    [&ctx] { OpenFolder(ctx.paths.userTextures); });
+  QObject::connect(textureHelp, &QPushButton::clicked, textureHelp, [&ctx] {
+    QMessageBox::information(ctx.window, QObject::tr("Installing HD Texture Packs"),
+        QObject::tr("1. Extract your Metroid Prime texture pack ZIP/7z first. Use its PNG/DDS files, "
+                    "keeping their original texture filenames (usually tex1_...). No ISO patch is needed.\n\n"
+                    "2. Click Open Texture Pack Folder and copy the extracted textures there. "
+                    "A subfolder such as My HD Pack is fine; subfolders are scanned automatically.\n\n"
+                    "Your texture folder:\n%1\n\n"
+                    "3. Restart the game, or use F1 > Mods > Texture pack > Reload texture pack while playing.\n\n"
+                    "Use one pack/version at a time to avoid conflicting replacements. "
+                    "Larger packs use more memory; choose a lower-resolution version if needed.")
+            .arg(QDir::toNativeSeparators(ctx.paths.userTextures)));
+  });
   QObject::connect(openDumps, &QPushButton::clicked, openDumps,
                    [&ctx] { OpenFolder(ctx.paths.exeFolder); });
 }

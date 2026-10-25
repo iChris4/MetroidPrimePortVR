@@ -145,6 +145,10 @@ public:
             PortLogFile::Start();
         }
     }
+    void SetQuickResume(bool on) override {
+        PortDebug::SetQuickResume(on);
+        m_save = true;
+    }
     void SetDrawTags(bool on) override { PortDebug::SetDrawTags(on); }
 
     // After the click's settings are stored: the requested save, then the exit
@@ -265,6 +269,7 @@ VrMenu::View BuildView(Menu& menu, const PortVrSettings& settings, double now) {
     // The setting: a log started for this run by MP_LOG_FILE goes on until it ends.
     view.log_file = PortDebug::LogFile();
     view.draw_tags = PortDebug::DrawTags();
+    view.quick_resume = PortDebug::QuickResume();
     // The eye size the chosen render scale gives, at once when it changes.
     const OpenXREyeResolution eye = OpenXRGetEyeResolution(settings.render_scale);
     view.eye_width = eye.scaled_width;

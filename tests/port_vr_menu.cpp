@@ -59,6 +59,7 @@ public:
   void SetStreamedAudio(bool on) override { streamed = on ? 1 : 0; }
   void SetMusyxAudio(bool on) override { musyx = on ? 1 : 0; }
   void SetLogFile(bool on) override { log = on ? 1 : 0; }
+  void SetQuickResume(bool on) override { quickResume = on ? 1 : 0; }
   void SetDrawTags(bool on) override { tags = on ? 1 : 0; }
 
   int saves = 0;
@@ -76,6 +77,7 @@ public:
   int musyx = -1;
   int log = -1;
   int tags = -1;
+  int quickResume = -1;
 };
 
 // The middle of row `index`'s hit band, and of its value box's halves.
@@ -491,6 +493,13 @@ void TestDebug() {
   Check(rows[8].value == "90 HZ" && rows[9].value == "89.9" && rows[10].value == "UNKNOWN" && rows[11].value == "1234",
         "readouts");
   Check(PageCount(kDebugTab, view) == 1, "one page");
+  Check(BuildRows(s, v, view)[12].value == "OFF", "quick resume defaults off");
+  Click(s, v, view, kLabelX, RowY(kDebugTab, 12), now, actions);
+  Check(actions.quickResume == 1, "quick resume enables");
+  view.quick_resume = true;
+  Check(BuildRows(s, v, view)[12].value == "ON", "quick resume reflects live state");
+  Click(s, v, view, kLabelX, RowY(kDebugTab, 12), now, actions);
+  Check(actions.quickResume == 0, "quick resume disables");
 
   // The frame rate beside the title, on every tab; nothing while it is unknown.
   State layout{};

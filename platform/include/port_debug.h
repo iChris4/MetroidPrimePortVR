@@ -27,6 +27,7 @@ void SetStateManager(CStateManager* mgr);
 CStateManager* StateManager();
 // The "quick_resume" setting: write a resume state on quit or background.
 bool QuickResume();
+void SetQuickResume(bool on);
 // The "savestate_room_state" setting: save states keep enemies and room objects.
 bool SaveStateRoomState();
 // Where the world is drawn from and which way it looks (the free camera's while it is

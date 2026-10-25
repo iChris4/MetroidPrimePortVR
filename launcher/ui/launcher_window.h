@@ -57,7 +57,8 @@ private:
   void ShowSetupNotes();
   void TransferOldSave();
 
-  void Play();
+  void Play(bool optionsOnly = false);
+  void OpenPortOptions();
   void Stop();
   void OnGameFinished(int exitCode, QProcess::ExitStatus status);
   void SetRunning(bool running);

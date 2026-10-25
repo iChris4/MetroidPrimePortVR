@@ -234,6 +234,11 @@ object PrimedGunTabs {
     private fun portConfigItems(context: Context): List<PrimedGunItem> = buildList {
         add(header(context, R.string.primedgun_section_port_config))
         add(PrimedGunItem.Note(context.getString(R.string.primedgun_port_config_note)))
+        add(PrimedGunItem.Action("Open Full Port Options (F1)...", edits = false) {
+            (context as? LauncherActivity)?.openPortOptions()
+        })
+        add(PrimedGunItem.Note("Opens the full options in a 2D panel, with or without a running game."))
+        add(switch(context, R.string.primedgun_quick_resume, "quick_resume_enabled", R.string.primedgun_quick_resume_note))
 
         add(header(context, R.string.primedgun_section_vr_headset))
         add(
@@ -339,6 +344,14 @@ object PrimedGunTabs {
                 set = { LauncherSettings.setFloat("render_scale", it) }
             )
         )
+
+        add(PrimedGunItem.Header("Texture Packs"))
+        add(PrimedGunItem.Action("Show Texture Pack Folder", edits = false) {
+            (context as? LauncherActivity)?.showTexturePackFolder()
+        })
+        add(PrimedGunItem.Action("Texture Pack Help", edits = false) {
+            (context as? LauncherActivity)?.showTexturePackHelp()
+        })
 
         add(header(context, R.string.primedgun_section_advanced))
         add(PrimedGunItem.Note(context.getString(R.string.primedgun_advanced_note)))

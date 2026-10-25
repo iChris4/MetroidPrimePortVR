@@ -63,6 +63,7 @@ public:
   // Set by the window: after an edit (to show unsaved changes), and to write
   // one key at once (the cannon slot, whose files are already applied).
   std::function<void()> onEdited;
+  std::function<void()> openPortOptions;
   std::function<void(std::string_view)> saveKeyNow;
 
   void AddRefresher(std::function<void()> refresh) { m_refreshers.push_back(std::move(refresh)); }
