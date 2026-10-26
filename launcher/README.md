@@ -115,3 +115,8 @@ On Quest, **Port Config > Open Full Port Options (F1)** opens the same settings
 in a normal 2D system panel, without requiring a disc. It has its own SDL process
 and GPU cache, so it can open while the immersive game process exists. Close the
 options panel to return to the launcher; settings are saved to the shared user folder.
+
+In **Customize controller layout > System**, enable **Long press to open VR menu**
+and set **Hold time (seconds)** from 0.01 to 5.00 in 0.01-second steps. This applies
+to your assigned VR settings button on Windows and Quest. Closing remains a single
+press; with long press disabled, opening is a single press too.

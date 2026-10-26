@@ -938,13 +938,19 @@ void OpenXRInput::Sync(XrTime predicted_display_time, const OpenXRPointerScreen&
             controls[h].connected = connected[h];
             controls[h].primary = hands[h].primary; controls[h].secondary = hands[h].secondary;
             controls[h].menu = hands[h].menu; controls[h].thumbstick_click = hands[h].thumbstick_click;
-            controls[h].trigger_value = hands[h].trigger; controls[h].squeeze_value = hands[h].squeeze;
+            controls[h].trigger_value = hands[h].trigger;
+            // Custom grip bindings keep their own threshold, applied to Index
+            // pressure rather than finger closure.
+            controls[h].squeeze_value = m_profile_names[h].find("valve/index_controller") != std::string::npos
+                ? extra[h].squeeze_force : hands[h].squeeze;
             controls[h].thumbstick_x = hands[h].stick_x; controls[h].thumbstick_y = hands[h].stick_y;
         }
         panel_hands = ControllerLayout::PanelInputs(controls, settings.custom_menu, settings.custom_confirm,
                                                     settings.custom_back, was_open, options.pointing_hand, ControllerLayout::Thresholds(settings));
     }
-    options.long_press = !settings.custom_layout_enabled && settings.vr_menu_hold_left_stick;
+    options.long_press = settings.custom_layout_enabled ? settings.custom_menu_long_press : settings.vr_menu_hold_left_stick;
+    options.long_press_seconds = settings.custom_layout_enabled ? settings.custom_menu_hold_seconds
+        : static_cast<float>(VrMenu::kLongPressSeconds);
     options.needs_head_zone = !settings.custom_layout_enabled && settings.vr_menu_requires_head_zone;
     if (options.needs_head_zone && !was_open) {
         // PrimedGun's LeftControllerNearHead: the physical left hand's aim pose in the

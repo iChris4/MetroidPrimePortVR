@@ -81,6 +81,16 @@ int main() {
     Check(!Pressed(hands, 0) && !Pressed(hands, -1) && !Pressed(hands, 37), "unbound/invalid controls are idle");
     hands = {};
     hands[0].connected = hands[1].connected = true;
+    hands[0].squeeze_value = hands[1].squeeze_value = 1.f;
+    hands[0].squeeze_force = hands[1].squeeze_force = 1.f;
+    auto heldGripPanel = PanelInputs(hands, 5, 1, 34, true, 1);
+    Check(!heldGripPanel[0].secondary && !heldGripPanel[1].secondary,
+          "unmapped held grips do not block custom menu clicks or gameplay return");
+    auto mappedGripPanel = PanelInputs(hands, 5, 20, 34, true, 1);
+    Check(mappedGripPanel[1].trigger == 1.f && mappedGripPanel[1].secondary,
+          "a grip deliberately bound to confirm remains a menu press");
+    hands[0].squeeze_value = hands[1].squeeze_value = 0.f;
+    hands[0].squeeze_force = hands[1].squeeze_force = 0.f;
     hands[1].trigger_value = 1.f;
     auto panel = PanelInputs(hands, 5, 1, 34, true, 1);
     Check(panel[1].trigger == 0.f && panel[1].secondary, "old trigger does not select; it still gates release");

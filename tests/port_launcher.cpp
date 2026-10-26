@@ -281,6 +281,8 @@ void TestDefaultsMatchGame() {
   expected.emplace_back("vr_wrist_roll", FormatFloat(s.wrist_roll));
   expected.emplace_back("vr_wrist_visor_enabled", FormatBool(s.wrist_visor_enabled));
   expected.emplace_back("vr_custom_layout_enabled", FormatBool(s.custom_layout_enabled));
+  expected.emplace_back("vr_custom_menu_long_press", FormatBool(s.custom_menu_long_press));
+  expected.emplace_back("vr_custom_menu_hold_seconds", FormatFloat(s.custom_menu_hold_seconds));
   expected.emplace_back("vr_custom_trigger_threshold", FormatFloat(s.custom_trigger_threshold));
   expected.emplace_back("vr_custom_grip_threshold", FormatFloat(s.custom_grip_threshold));
   expected.emplace_back("vr_custom_touchpad_threshold", FormatFloat(s.custom_touchpad_threshold));
@@ -330,6 +332,7 @@ void TestRangesInsideGameClamps() {
     float low, high;
   };
   const Clamp clamps[] = {
+      {"vr_custom_menu_hold_seconds", 0.01f, 5.0f},
       {"vr_custom_trigger_threshold", 0.05f, 0.95f},
       {"vr_custom_grip_threshold", 0.05f, 0.95f},
       {"vr_custom_touchpad_threshold", 0.05f, 0.95f},

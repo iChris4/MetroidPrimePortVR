@@ -8,8 +8,7 @@ Meta Quest. It builds on the controls and VR experience of
 game engine based on [PrimeDecomp](https://github.com/PrimeDecomp/prime),
 Odran's MetroidPrimePort, and Aurora rendering.
 
-The underlying port also supports desktop play on Linux, Windows, and Android.
-OpenXR VR support is currently wired for Windows and Meta Quest.
+This fork targets Windows PC VR and standalone Meta Quest.
 
 **No game content is included.** You need your own copy of the game: the port
 reads it from a disc image and never ships any of its assets. This repository
@@ -51,6 +50,61 @@ transferred; save normally in the game before moving your progress.
 Roomscale is optional. With it disabled, use stick movement and keep near your
 calibrated position. Physical walking with roomscale enabled applies during
 first-person gameplay.
+
+## Supported discs and saves
+
+### Disc images
+
+The launcher accepts these formats for your own **Metroid Prime GameCube** disc:
+
+| Format | File types |
+|---|---|
+| Standard disc image | `.iso`, `.gcm` |
+| NKit ISO | `.nkit.iso` (or `.nkit`) |
+| Dolphin RVZ | `.rvz` |
+| CISO | `.ciso` |
+| WBFS | `.wbfs` |
+
+Supported game versions are **USA 1.00, 1.01 and 1.02** (`GM8E01`, revisions 0–2).
+**PAL revision 0** (`GM8P01`) is experimental. Extract downloaded archives before
+selecting an image; ZIP/7z files are not disc images.
+
+The native disc reader also supports **GCZ** (`.gcz`) and **WIA** (`.wia`), but
+these extensions are not currently accepted by the PrimedGun launcher. Use a
+supported launcher format such as ISO or RVZ when selecting a game there.
+Wii Trilogy disc images and Metroid Prime Remastered images are not playable
+replacement discs for the GameCube game; optional asset imports are separate.
+
+### Saves and memory cards
+
+| Type | Support |
+|---|---|
+| Individual GameCube save | Dolphin-compatible `.gci` files |
+| GameCube memory-card folder | Dolphin/PrimeHack/older PrimedGun **GCI folders**, containing individual `.gci` files |
+| Complete GameCube memory-card image | `.raw` and `.gcp` images; the importer extracts Metroid Prime saves rather than replacing the card with unrelated games |
+| Wii Metroid Prime Trilogy save | `save.bin` or Wii-exported `data.bin`, through the full F1 memory-card importer; Metroid Prime progress is converted to the selected GameCube release |
+| Native save state / Quick resume | PrimedGun `.mpss` files in the user's `savestates` folder; separate from normal memory-card saves |
+| Dolphin/PrimeHack emulator save state | **Not compatible**; load it in the original emulator and make a normal in-game save first |
+
+Use **Transfer PrimedGun Memory Card / Settings** in the launcher to bring over
+an older installation. On Windows, select its installation or user folder. On
+Quest, choose a `.gci`, `.raw`, `.gcp`, or an exported PrimedGun/Dolphin user-data
+ZIP. Select your game first so the correct **USA** or **EUR** card is used.
+For individual save imports and conversion, the full options panel also has
+**System > Memory card > Import file...**; return to the title screen before
+importing. The launcher's Quest transfer button does not accept Trilogy `.bin`
+files directly.
+
+PrimedGun normally stores its active card as individual `.gci` files in
+`user/USA/Card A/` on Windows, or
+`/sdcard/Android/data/org.primedgun.v2/files/USA/Card A/` on Quest. PAL uses
+`EUR/Card A/` instead. Save import supports conversion between the USA and PAL
+GameCube releases and Trilogy saves; only Metroid Prime saves are imported.
+Existing saves replaced by the native importer are kept in a `_replaced` folder.
+
+When updating on PC, keep the existing **`user` folder**. On Quest, install a
+compatible APK over the existing app to keep its saves and settings; do not
+uninstall it first. Keeping a separate backup is recommended.
 
 ## Installing HD texture packs
 
@@ -139,7 +193,7 @@ See [launcher/README.md](launcher/README.md) for deployment details.
 ### Standalone Meta Quest
 
 On Windows, install JDK 17, the Android SDK with NDK 29.0.14206865, CMake 3.25+,
-Ninja, Git, and Rust with the `aarch64-linux-android` target. Then run:
+Ninja, Git, and Rust configured for Android ARM64. Then run:
 
 ```powershell
 .\quest\Build-Quest.ps1
@@ -151,21 +205,17 @@ signing notes in [quest/Build-Quest.ps1](quest/Build-Quest.ps1).
 
 ### Desktop Native Port
 
-Needs CMake 3.25+, Ninja and a C++20 toolchain. Aurora and MusyX are vendored, so
-a normal clone is enough; Aurora fetches its pinned dependencies on the first
-configure.
+For a desktop build, use an MSVC developer shell with CMake 3.25+, Ninja,
+clang-cl and a C++20 toolchain. Aurora and MusyX are vendored; Aurora fetches
+its pinned dependencies on the first configure.
 
-```sh
-cmake -S . -B build/native -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+```bat
+cmake -S . -B build/native -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo ^
+  -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl ^
   -DAURORA_ENABLE_TESTS=OFF -DMP_BUILD_TESTS=ON
-cmake --build build/native -j 4
+cmake --build build/native --parallel 4
 ctest --test-dir build/native -L port --output-on-failure
 ```
-
-On Windows, run from an MSVC developer shell and add
-`-DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl`. CI builds and tests
-Linux (GCC 14 and Clang 18) and Windows (clang-cl); see
-`.github/workflows/`.
 
 ### Flat Android Build
 
@@ -176,15 +226,9 @@ tools/android_apk.sh :app:assembleRelease
 
 ## Running
 
-```sh
-./build/native/metroid_prime_port "/path/to/Metroid Prime (USA) (v1.00).iso"
+```bat
+build\native\metroid_prime_port.exe "C:\Games\Metroid Prime (USA) (v1.00).iso"
 ```
-
-## Packaging
-
-`tools/make_appimage.sh` builds a self-contained AppImage and
-`tools/make_flatpak.sh` a Flatpak. Neither bundles the disc. See
-`docs/NATIVE_PORT.md` for what each one expects from the host.
 
 ## Credits
 
@@ -235,7 +279,7 @@ prompt icons come from Kenney's Input Prompts pack (CC0), vendored under
 release packages.
 
 `LICENSE` covers this project's own work â€” the platform layer, the build and
-packaging scripts, and the Android and Flatpak integration. It does **not** cover
+packaging scripts, and the Android integration. It does **not** cover
 the game code under `src/` and `include/`, which comes from the decompilation
 and remains Nintendo's. See `NOTICE`.
 

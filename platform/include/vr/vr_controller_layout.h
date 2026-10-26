@@ -53,7 +53,7 @@ inline bool Pressed(const std::array<OpenXRControllerState, 2>& hands, int bindi
     return Value(hands, binding) > threshold;
 }
 // Translate the overlay's toggle/select controls too. All physical buttons are
-// retained as release-gate input, so closing a panel cannot fire a held game action.
+// retained as release-gate input, except grips not explicitly bound to confirm.
 inline std::array<HandInputs, 2> PanelInputs(const std::array<OpenXRControllerState, 2>& hands,
                                           int menu, int confirm, int back, bool open, uint32_t pointer, const Thresholds& thresholds = {}) noexcept {
     std::array<HandInputs, 2> out{};
@@ -61,10 +61,13 @@ inline std::array<HandInputs, 2> PanelInputs(const std::array<OpenXRControllerSt
         const auto& h = hands[i];
         if (!h.connected) continue;
         out[i].stick_x = h.thumbstick_x; out[i].stick_y = h.thumbstick_y;
+        const int grip = static_cast<int>(i) * ControlsPerHand + 4;
+        const bool gripMapped = confirm == grip;
         out[i].secondary = h.primary || h.secondary || h.menu || h.thumbstick_click || h.trackpad_click ||
             h.dpad_up || h.dpad_down || h.dpad_left || h.dpad_right || h.shoulder || h.tertiary || h.quaternary ||
-            h.trigger_click || h.trigger_value > std::min(0.5f, thresholds.trigger) || h.squeeze_click || h.squeeze_value > std::min(0.5f, thresholds.grip) ||
-            h.squeeze_force > std::min(0.5f, thresholds.grip) || h.trackpad_force > std::min(0.5f, thresholds.touchpad);
+            h.trigger_click || h.trigger_value > std::min(0.5f, thresholds.trigger) ||
+            (gripMapped && (h.squeeze_click || std::max(h.squeeze_value, h.squeeze_force) > std::min(0.5f, thresholds.grip))) ||
+            h.trackpad_force > std::min(0.5f, thresholds.touchpad);
     }
     out[0].thumbstick_click = Pressed(hands, menu, thresholds) || (open && Pressed(hands, back, thresholds));
     out[pointer & 1u].trigger = Pressed(hands, confirm, thresholds) ? 1.f : 0.f;

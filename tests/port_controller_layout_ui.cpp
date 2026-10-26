@@ -3,6 +3,7 @@
 #include "style.h"
 #include <QApplication>
 #include <QCheckBox>
+#include <QDoubleSpinBox>
 #include <QSlider>
 #include <QScrollArea>
 #include <QScrollBar>
@@ -33,6 +34,14 @@ int main(int argc, char** argv) {
     auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget()); Check(dialog != nullptr, "editor opens");
     auto* extra = dialog->findChild<QComboBox*>("vr_custom_jump_extra"); Check(extra != nullptr, "additional jump picker exists");
     extra->setCurrentIndex(extra->findData(17));
+    auto* menuLong = dialog->findChild<QCheckBox*>("vr_custom_menu_long_press");
+    auto* menuTime = dialog->findChild<QWidget*>("vr_custom_menu_hold_seconds");
+    Check(menuLong && menuTime && !menuTime->isEnabled(), "menu hold is optional by default");
+    menuLong->setChecked(true);
+    auto* menuSpin = menuTime->findChild<QDoubleSpinBox*>();
+    Check(menuTime->isEnabled() && menuSpin && menuSpin->singleStep() == 0.01,
+          "menu duration enables hundredth-second steps");
+    menuSpin->setValue(0.25);
     dialog->resize(650, 480); QApplication::processEvents();
     QScrollArea* page = nullptr;
     for (auto* parent = extra->parentWidget(); parent; parent = parent->parentWidget()) {
@@ -63,6 +72,7 @@ int main(int argc, char** argv) {
     dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Apply)->click();
   });
   ShowControllerLayout(ctx);
+  Check(model.Bool("vr_custom_menu_long_press") && model.Float("vr_custom_menu_hold_seconds") == 0.25f, "Apply persists menu hold settings");
   Check(model.Float("vr_custom_trigger_threshold") > 0.77f, "Apply persists threshold");
   Check(model.Bool("vr_custom_layout_enabled"), "Apply enables custom layout");
   Check(model.Int("vr_custom_jump") == 24 && model.Int("vr_custom_jump_extra") == 17, "button jump does not replace stick jump");
@@ -71,10 +81,14 @@ int main(int argc, char** argv) {
     auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
     auto* extra = dialog->findChild<QComboBox*>("vr_custom_jump_extra"); extra->setCurrentIndex(extra->findData(0));
     dialog->findChild<QSlider*>("vr_custom_trigger_threshold")->setValue(20);
+    dialog->findChild<QCheckBox*>("vr_custom_menu_long_press")->setChecked(false);
+    dialog->findChild<QWidget*>("vr_custom_menu_hold_seconds")->findChild<QDoubleSpinBox*>()->setValue(0.75);
     dialog->reject();
   });
   ShowControllerLayout(ctx);
   Check(model.Int("vr_custom_jump_extra") == 17, "Cancel discards edits");
+  Check(model.Bool("vr_custom_menu_long_press") && model.Float("vr_custom_menu_hold_seconds") == 0.25f,
+        "Cancel discards menu hold edits");
   Check(model.Float("vr_custom_trigger_threshold") > 0.77f, "Cancel discards threshold edits");
   QTimer::singleShot(50, [&] {
     auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
@@ -103,6 +117,7 @@ int main(int argc, char** argv) {
   });
   ShowControllerLayout(ctx);
   Check(model.Float("vr_custom_trigger_threshold") > 0.54f && model.Float("vr_custom_trigger_threshold") < 0.56f, "Load defaults resets thresholds");
+  Check(!model.Bool("vr_custom_menu_long_press") && model.Float("vr_custom_menu_hold_seconds") == 1.f, "Load defaults resets menu hold");
   Check(model.Int("vr_custom_label_profile") == 4, "controller label choice persists");
   Check(model.Int("vr_custom_visor_mode") == 2 && model.Int("vr_custom_visor_left") == 14, "Frame preset selects real D-pad visors");
   Check(model.Int("vr_custom_morph") == 33 && model.Int("vr_custom_unmorph") == 33, "Frame D-pad is not also used to morph");

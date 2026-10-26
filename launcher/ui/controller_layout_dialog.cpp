@@ -74,6 +74,21 @@ void ShowControllerLayout(TabContext& ctx) {
 #define VR_BIND(name, initial, section, label) inputRows.push_back(row("vr_custom_" #name, label, section));
 #include "vr/vr_controller_bindings.inc"
 #undef VR_BIND
+  auto* menuLongPress = new QCheckBox(QObject::tr("Long press to open VR menu"));
+  menuLongPress->setObjectName("vr_custom_menu_long_press");
+  menuLongPress->setChecked(ctx.model.Bool("vr_custom_menu_long_press"));
+  group("System")->addRow(menuLongPress);
+  float menuHoldSeconds = ctx.model.Float("vr_custom_menu_hold_seconds");
+  auto* menuHold = new FloatRow(QObject::tr("Hold time (seconds)"), 0.01, 5.0, 0.01,
+      [&](float value) { menuHoldSeconds = value; }, nullptr);
+  menuHold->setObjectName("vr_custom_menu_hold_seconds");
+  menuHold->SetValue(menuHoldSeconds);
+  menuHold->setEnabled(menuLongPress->isChecked());
+  QObject::connect(menuLongPress, &QCheckBox::toggled, menuHold, &QWidget::setEnabled);
+  group("System")->addRow(menuHold);
+  auto* menuHoldNote = new QLabel(QObject::tr("Hold your assigned VR settings button to open the menu. "
+      "Adjust in 0.01-second steps (100 centiseconds = 1 second). Closing always takes a single press."));
+  menuHoldNote->setWordWrap(true); group("System")->addRow(menuHoldNote);
   auto* move = row("vr_custom_move_hand", "Movement stick / trackpad", "On foot");
   auto* look = row("vr_custom_look_hand", "Look / turn stick / trackpad", "On foot");
   auto* visor = row("vr_custom_visor_hand", "Visor selector stick / trackpad", "Visors");
@@ -189,6 +204,7 @@ void ShowControllerLayout(TabContext& ctx) {
     for (const auto& [key, value] : defaultBindings(family->currentIndex()))
       rows.at(key)->setCurrentIndex(rows.at(key)->findData(value));
     for (const auto& [key, slider] : thresholds) slider->setValue(55);
+    menuLongPress->setChecked(false); menuHoldSeconds = 1.f; menuHold->SetValue(1.f);
   });
   int previousProfile = family->currentIndex();
   QObject::connect(family, qOverload<int>(&QComboBox::currentIndexChanged), &dialog, [&](int profile) {
@@ -221,6 +237,8 @@ void ShowControllerLayout(TabContext& ctx) {
     }
     for (const auto& [key, combo] : rows) ctx.model.SetInt(key, combo->currentData().toInt());
     for (const auto& [key, slider] : thresholds) ctx.model.SetFloat(key, slider->value() / 100.f);
+    ctx.model.SetBool("vr_custom_menu_long_press", menuLongPress->isChecked());
+    ctx.model.SetFloat("vr_custom_menu_hold_seconds", menuHoldSeconds);
     ctx.model.SetInt("vr_custom_label_profile", family->currentIndex());
     ctx.model.SetBool("vr_custom_layout_enabled", enabled->isChecked());
     ctx.RefreshAll(); ctx.Edited(); dialog.accept();

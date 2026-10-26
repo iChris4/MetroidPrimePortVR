@@ -17,6 +17,8 @@
 namespace PortDebug {
 
 void DrawSaveStatesTab() {
+  ImGui::TextColored(ImVec4(1.f, 0.65f, 0.2f, 1.f), "Experimental save states");
+  ImGui::TextWrapped("Keep using normal in-game memory-card saves as well.");
   ImGui::TextDisabled("Save anywhere and load back to the same spot.");
   ItemHelp("A state holds what a memory card save does, plus where Samus stands and whether she's "
            "in morph ball. Loading rebuilds the room, so enemies and moving parts start over. "

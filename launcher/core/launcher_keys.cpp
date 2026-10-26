@@ -28,6 +28,8 @@ constexpr KeyInfo kKeys[] = {
     {"vr_wrist_roll", K::Float, "50", -180.00f, 180.00f, 1.000f},
 
     {"vr_custom_layout_enabled", K::Bool, "0"},
+    {"vr_custom_menu_long_press", K::Bool, "0"},
+    {"vr_custom_menu_hold_seconds", K::Float, "1", 0.01f, 5.0f, 0.01f},
     {"vr_custom_trigger_threshold", K::Float, "0.55", 0.05f, 0.95f, 0.01f},
     {"vr_custom_grip_threshold", K::Float, "0.55", 0.05f, 0.95f, 0.01f},
     {"vr_custom_touchpad_threshold", K::Float, "0.55", 0.05f, 0.95f, 0.01f},

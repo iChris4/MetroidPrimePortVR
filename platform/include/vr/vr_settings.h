@@ -34,6 +34,8 @@ struct PortVrSettings {
     float wrist_roll = 50.f;
 
     bool custom_layout_enabled = false;
+    bool custom_menu_long_press = false;
+    float custom_menu_hold_seconds = 1.0f;
     float custom_trigger_threshold = 0.55f;
     float custom_grip_threshold = 0.55f;
     float custom_touchpad_threshold = 0.55f;

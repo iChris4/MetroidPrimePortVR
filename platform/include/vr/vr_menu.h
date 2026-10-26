@@ -971,6 +971,10 @@ inline Pixels BuildPixels(const State& s, const PortVrSettings& v, const View& v
     } else {
         draw_button("SAVE SETTINGS", 52, 108, 220);
         draw_button(s.reset_confirm == kResetAll ? "ARE YOU SURE?" : "RESET ALL", 300, 108, 220);
+        if (s.tab == kStatesTab) {
+            DrawString(pixels, width, height, "EXPERIMENTAL SAVE STATES", 548, 116, 2, 0xFFFFB030u);
+            DrawString(pixels, width, height, "KEEP NORMAL MEMORY CARD SAVES TOO", 68, 436, 2, 0xFFFFB030u);
+        }
 
         const auto rows = BuildRows(s, v, view);
         constexpr int row_x = 52;
@@ -1143,6 +1147,8 @@ inline int SnapTurnStep(int current, int direction) {
 inline void ResetCustomControllerLayout(PortVrSettings& v) {
     const PortVrSettings d{};
     v.custom_layout_enabled = false;
+    v.custom_menu_long_press = d.custom_menu_long_press;
+    v.custom_menu_hold_seconds = d.custom_menu_hold_seconds;
     v.custom_trigger_threshold = d.custom_trigger_threshold;
     v.custom_grip_threshold = d.custom_grip_threshold;
     v.custom_touchpad_threshold = d.custom_touchpad_threshold;

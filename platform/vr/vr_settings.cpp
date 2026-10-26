@@ -170,6 +170,8 @@ struct Field {
 
 const Field kFields[] = {
     VR_BOOL(custom_layout_enabled),
+    VR_BOOL(custom_menu_long_press),
+    VR_FLOAT(custom_menu_hold_seconds, 0.01f, 5.0f),
     VR_FLOAT(custom_trigger_threshold, 0.05f, 0.95f),
     VR_FLOAT(custom_grip_threshold, 0.05f, 0.95f),
     VR_FLOAT(custom_touchpad_threshold, 0.05f, 0.95f),

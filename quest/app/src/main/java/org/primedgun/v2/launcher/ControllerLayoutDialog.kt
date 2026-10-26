@@ -47,6 +47,30 @@ object ControllerLayoutDialog {
             pages[name] = page; body.addView(page)
             entries.forEach { row(page, it.key, it.label, names) }
         }
+        val menuLongPress = CheckBox(context).apply {
+            text = "Long press to open VR menu"
+            isChecked = LauncherSettings.bool("vr_custom_menu_long_press")
+        }
+        pages.getValue("System").addView(menuLongPress)
+        val menuHoldLabel = TextView(context)
+        pages.getValue("System").addView(menuHoldLabel)
+        val menuHold = SeekBar(context).apply {
+            max = 499
+            progress = kotlin.math.round(LauncherSettings.float("vr_custom_menu_hold_seconds") * 100f).toInt().coerceIn(1, 500) - 1
+            isEnabled = menuLongPress.isChecked
+        }
+        fun showMenuHold() {
+            menuHoldLabel.text = "Hold time: " + String.format(java.util.Locale.ROOT, "%.2f", (menuHold.progress + 1) / 100f) + " seconds"
+        }
+        menuHold.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(bar: SeekBar?, value: Int, fromUser: Boolean) { showMenuHold() }
+            override fun onStartTrackingTouch(bar: SeekBar?) {}
+            override fun onStopTrackingTouch(bar: SeekBar?) {}
+        })
+        menuLongPress.setOnCheckedChangeListener { _, checked -> menuHold.isEnabled = checked }
+        showMenuHold()
+        pages.getValue("System").addView(menuHold)
+        pages.getValue("System").addView(help("Hold the assigned VR settings button to open. Adjustable in 0.01-second steps (100 centiseconds = 1 second). Closing always takes a single press."))
         val thresholds = mutableMapOf<String, SeekBar>()
         fun threshold(key: String, label: String) {
             val page = pages.getValue("Input sensitivity")
@@ -79,6 +103,7 @@ object ControllerLayoutDialog {
         }
         fun defaults() {
             thresholds.values.forEach { it.progress = 50 }
+            menuLongPress.isChecked = false; menuHold.progress = 99
             bindings.forEach { rows.getValue(it.key).setSelection(it.initial) }
             move.setSelection(0); look.setSelection(1); mode.setSelection(0); rows.getValue("vr_custom_visor_hand").setSelection(0)
             if (!LauncherSettings.bool("vr_use_right_hand")) {
@@ -104,6 +129,8 @@ object ControllerLayoutDialog {
                 } else {
                     thresholds.forEach { (key, slider) -> LauncherSettings.setFloat(key, (slider.progress + 5) / 100f) }
                     rows.forEach { (key, spinner) -> LauncherSettings.setInt(key, spinner.selectedItemPosition) }
+                    LauncherSettings.setBool("vr_custom_menu_long_press", menuLongPress.isChecked)
+                    LauncherSettings.setFloat("vr_custom_menu_hold_seconds", (menuHold.progress + 1) / 100f)
                     LauncherSettings.setBool("vr_custom_layout_enabled", enabled.isChecked)
                     (context as? LauncherActivity)?.let { activity ->
                         activity.onSettingsEdited()

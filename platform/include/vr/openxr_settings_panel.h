@@ -66,6 +66,7 @@ struct ToggleOptions {
     // "LONGER HELD PRESS FOR VR MENU": opening takes kLongPressSeconds of
     // holding; closing is still one press.
     bool long_press = false;
+    float long_press_seconds = static_cast<float>(VrMenu::kLongPressSeconds);
     // "MENU REQUIRES HAND NEAR HEAD": opening also needs the physical left hand in the
     // visor gesture's zone beside the head (VisorDpad::HandNearHead).
     bool needs_head_zone = false;
@@ -105,7 +106,7 @@ inline bool ToggleHeld(const std::array<HandInputs, 2>& hands, OpenXRControllerM
 // - While it is open, the pointing hand's trigger or A / X selects. PrimedGun
 //   points with the cannon hand; the other modes with the hand whose trigger
 //   was pulled last.
-// - The game gets the controllers back only once everything is released, so the
+// - The game gets the controllers back once menu buttons/triggers are released, so the
 //   press that closed the menu never lands in the game as well.
 class Controls {
 public:
@@ -127,7 +128,7 @@ public:
                 m_hold_consumed = false;
             } else if (!m_hold_consumed) {
                 m_hold_seconds += dt_seconds;
-                if (m_hold_seconds >= static_cast<float>(VrMenu::kLongPressSeconds)) {
+                if (m_hold_seconds >= std::clamp(options.long_press_seconds, 0.01f, 5.0f)) {
                     open = true;
                     m_hold_consumed = true;
                 }
@@ -186,10 +187,12 @@ public:
 
     void Reset() noexcept { *this = Controls{}; }
 
+    // Grips may stay held while pointing, selecting, and returning to gameplay.
+    // Custom grips bound to menu actions arrive as logical buttons/triggers.
     static bool AnyHeld(const std::array<HandInputs, 2>& hands) noexcept {
         for (const HandInputs& hand : hands) {
             if (hand.primary || hand.secondary || hand.menu || hand.thumbstick_click ||
-                hand.trigger > kPressThreshold || hand.squeeze > kPressThreshold) {
+                hand.trigger > kPressThreshold) {
                 return true;
             }
         }

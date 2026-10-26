@@ -736,6 +736,30 @@ void TestControls() {
   step();
   options.long_press = false;
 
+  // Custom duration affects opening only; partial holds cannot accumulate.
+  options.long_press = true;
+  options.long_press_seconds = 0.25f;
+  hands[0].thumbstick_click = true;
+  step(0.20f);
+  Check(!open, "custom hold does not open before its duration");
+  hands[0].thumbstick_click = false;
+  step();
+  hands[0].thumbstick_click = true;
+  step(0.20f);
+  Check(!open, "releasing resets a partial custom hold");
+  step(0.06f);
+  Check(open, "custom 0.25-second hold opens the menu");
+  step(1.f);
+  Check(open, "continued hold does not close the menu");
+  hands[0].thumbstick_click = false;
+  step();
+  hands[0].thumbstick_click = true;
+  step(0.01f);
+  Check(!open, "custom long press still closes immediately");
+  hands[0].thumbstick_click = false;
+  step();
+  options.long_press = false;
+
   // Near the head only, when asked.
   options.needs_head_zone = true;
   hands[0].thumbstick_click = true;
@@ -758,6 +782,39 @@ void TestControls() {
   hands[0].thumbstick_click = true;
   step();
   Check(!open, "stays closed when not allowed");
+}
+
+void TestHeldGripsMenuRelease() {
+  settings_panel::Controls controls;
+  settings_panel::ToggleOptions options;
+  std::array<HandInputs, 2> hands{};
+  bool open = false;
+  const auto step = [&] {
+    return controls.Update(hands, open, 1.f / 90.f, OpenXRControllerMode::PrimedGun, options);
+  };
+  // Keep both grips fully pressed throughout opening, selecting and closing.
+  for (auto& hand : hands) {
+    hand.squeeze = 1.f;
+  }
+  hands[0].thumbstick_click = true;
+  step();
+  hands[0].thumbstick_click = false;
+  step();
+  hands[1].trigger = 1.f;
+  Check(step().clicked, "Index finger closure cannot block menu selection");
+  hands[0].thumbstick_click = true;
+  Check(step().withheld && !open, "closing still captures its button press");
+  hands[0].thumbstick_click = false;
+  Check(step().withheld, "a held select trigger still gates gameplay release");
+  hands[1].trigger = 0.f;
+  Check(!step().withheld, "Index controls return without letting go of the handles");
+  // A runtime focus loss resets Controls but preserves the open menu.
+  controls.Reset();
+  open = true;
+  step();
+  hands[1].primary = true;
+  Check(step().clicked, "Index menu accepts input after focus returns");
+
 }
 
 void TestCompileToast() {
@@ -841,6 +898,7 @@ int main() {
   TestScreenAnchor();
   TestCinemaCooldown();
   TestControls();
+  TestHeldGripsMenuRelease();
   TestCompileToast();
   std::puts("vr menu tests passed");
   return 0;
