@@ -65,7 +65,7 @@ The launcher accepts these formats for your own **Metroid Prime GameCube** disc:
 | CISO | `.ciso` |
 | WBFS | `.wbfs` |
 
-Supported game versions are **USA 1.00, 1.01 and 1.02** (`GM8E01`, revisions 0–2).
+Supported game versions are **USA 1.00, 1.01 and 1.02** (`GM8E01`, revisions 0â€“2).
 **PAL revision 0** (`GM8P01`) is experimental. Extract downloaded archives before
 selecting an image; ZIP/7z files are not disc images.
 
