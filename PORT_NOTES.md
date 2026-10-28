@@ -1,3 +1,14 @@
+## VR water/fog visibility merge guards (beta.6 local testing)
+
+Water plane submission must not reject bounds behind the simulation camera:
+the HMD can be facing those bounds. Keep headset PreRender and water-patch
+frustum checks. CPU fog box near caps must use tracked head orientation and
+position, not the simulation view. Retain full-eye fog composites and separate
+per-eye Z16 depth copies. Disabling headset culling or losing tracking must use
+an empty CPU frustum, never fall back to vanilla camera culling. Review these
+paths after upstream renderer merges; stereo replay cannot restore geometry
+removed by CPU visibility or fog clipping.
+
 ## VR: upstream 0.35 local testing merge (2026-10-28)
 
 Merged Odrannnn/MetroidPrimePort `port` at `011c131db` (298 incoming commits)

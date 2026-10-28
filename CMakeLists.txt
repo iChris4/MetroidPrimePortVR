@@ -876,6 +876,14 @@ endif()
 
 if(MP_BUILD_TESTS)
     include(cmake/PortTests.cmake)
+    mp_port_test(port_vr_visibility_tests
+        SOURCES tests/port_vr_visibility.cpp
+            src/Kyoto/Math/CFrustumPlanes.cpp src/Kyoto/Math/CAABox.cpp
+            src/Kyoto/Math/CVector3f.cpp src/Kyoto/Math/CVector2f.cpp
+            src/Kyoto/Math/CTransform4f.cpp src/Kyoto/Math/CUnitVector3f.cpp
+            src/Kyoto/Math/CPlane.cpp src/Kyoto/Math/RMathUtils.cpp
+        INCLUDES platform/include include extern/aurora/include extern/sdk/include
+        DEFINITIONS TARGET_PC VERSION=0 GC_SECTIONS)
     mp_port_test(port_vr_stereo_tests SOURCES tests/port_vr_stereo.cpp
         INCLUDES platform/include extern/aurora/include extern/aurora/lib)
     mp_port_test(port_vr_look_scan_tests SOURCES tests/port_vr_look_scan.cpp

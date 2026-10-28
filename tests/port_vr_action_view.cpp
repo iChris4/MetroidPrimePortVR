@@ -17,6 +17,22 @@ bool Near(float a, float b) { return std::fabs(std::remainder(a - b, 6.283185307
 
 int main() {
     using PortVr::ActionView::State;
+    using PortVr::ActionView::ReleaseLostTarget;
+    Check(ReleaseLostTarget(true, false, true, true), "combat corpse/point transition releases lock");
+    Check(!ReleaseLostTarget(false, false, true, true), "desktop corpse orbit is unchanged");
+    Check(!ReleaseLostTarget(true, true, true, true), "scan orbit is unchanged");
+    Check(!ReleaseLostTarget(true, false, false, true), "intentional empty point lock is unchanged");
+    Check(!ReleaseLostTarget(true, false, true, false), "valid target and grapple transitions stay active");
+    for (float targetYaw : {1.5707963f, -1.5707963f, 3.1415926f}) {
+        State lost;
+        lost.Update(true, true, false, targetYaw, .2f, 42);
+        const bool action = !ReleaseLostTarget(true, false, true, true);
+        const auto released = lost.Update(true, action, false, targetYaw, .2f);
+        Check(released.released && Near(released.yaw, .2f),
+              "target death while held restores view basis for side/rear locks");
+        Check(!lost.Update(true, action, false, .2f, .2f).released,
+              "holding lock after deletion does not repeatedly rebase movement");
+    }
     constexpr float pi = 3.14159265359f;
     State view;
     Check(Near(view.Update(true, false, false, .3f, 0.f).yaw, .3f), "free view is unchanged");

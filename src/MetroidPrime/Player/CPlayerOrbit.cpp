@@ -36,6 +36,7 @@
 #include "port_debug.h"
 #ifdef TARGET_PC
 #include "vr/vr_view.h"
+#include "vr/vr_action_view.h"
 #endif
 #include "port_third_person.h"
 #ifdef TARGET_PC
@@ -1371,6 +1372,17 @@ void CPlayer::SetOrbitTargetId(TUniqueId id, CStateManager& mgr) {
 }
 
 void CPlayer::SetOrbitState(EPlayerOrbitState state, CStateManager& mgr) {
+#ifdef TARGET_PC
+  if (PortVr::ActionView::ReleaseLostTarget(
+          PortVr::VrImmersive(),
+          mgr.GetPlayerState()->GetCurrentVisor() == CPlayerState::kPV_Scan,
+          x304_orbitState == kOS_OrbitObject || x304_orbitState == kOS_ForcedOrbitObject,
+          state == kOS_OrbitCarcass || state == kOS_OrbitPoint)) {
+    // Let the existing action-view release restore the body/view movement basis,
+    // even if the player continues holding lock-on after the target disappears.
+    state = kOS_NoOrbit;
+  }
+#endif
   x304_orbitState = state;
   CFirstPersonCamera* camera = mgr.CameraManager()->FirstPersonCamera();
   switch (x304_orbitState) {

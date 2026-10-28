@@ -5,6 +5,14 @@
 
 namespace PortVr::ActionView {
 
+// A lost combat target must release its simulation orbit too. Keeping the
+// vanilla corpse/point orbit leaves walking in the old target-facing basis
+// until the trigger is released. Intentional point locks and scans stay intact.
+constexpr bool ReleaseLostTarget(bool immersive, bool scanVisor,
+                                 bool wasTargetOrbit, bool becomesTargetless) noexcept {
+    return immersive && !scanVisor && wasTargetOrbit && becomesTargetless;
+}
+
 // Only simulation/view-base yaw enters this state. Tracked head yaw is applied
 // by stereo replay and must never steer an established orbit or swing.
 struct Result {

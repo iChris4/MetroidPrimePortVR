@@ -2,7 +2,7 @@
 # DolphinQt/MainWindow.cpp) beside metroid_prime_port.exe. It edits the game's
 # port_settings.ini and starts the game. Built with -DMP_BUILD_LAUNCHER=ON and
 # Qt 6.5 or later on CMAKE_PREFIX_PATH.
-set(PRIMEDGUN_LAUNCHER_VERSION "2.0.0-beta.5")
+set(PRIMEDGUN_LAUNCHER_VERSION "2.0.0-beta.6")
 
 find_package(Qt6 6.5 REQUIRED COMPONENTS Widgets)
 

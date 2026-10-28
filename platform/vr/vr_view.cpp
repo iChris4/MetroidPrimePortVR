@@ -294,11 +294,23 @@ bool VrCullingFrustum(const CTransform4f& cameraXf, float nearZ, CFrustumPlanes&
         return false;
     }
     const PortVrSettings settings = GetVrSettings();
+    // Disabling headset culling must not restore the vanilla forward-only
+    // frustum: water and its fog also consume this CPU visibility volume.
     if (!settings.frustum_culling_enabled) {
-        return false;
+        frustum = CFrustumPlanes();
+        return true;
     }
     const float degrees = std::clamp(settings.frustum_culling_degrees, 60.0f, 179.0f);
-    frustum = CFrustumPlanes(VrHeadFacingTransform(cameraXf), degrees * kDegreesToRadians, 1.0f, nearZ, false, 100.f);
+    CTransform4f facing = VrHeadFacingTransform(cameraXf);
+    CVector3f headOrigin, headDirection;
+    if (VrHeadGaze(cameraXf, headOrigin, headDirection)) {
+        facing.SetTranslation(headOrigin);
+    } else {
+        // Unknown tracking must retain geometry, not cull against the body.
+        frustum = CFrustumPlanes();
+        return true;
+    }
+    frustum = CFrustumPlanes(facing, degrees * kDegreesToRadians, 1.0f, nearZ, false, 100.f);
     return true;
 }
 

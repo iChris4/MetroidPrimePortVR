@@ -2,6 +2,7 @@
 #ifdef TARGET_PC
 #include "port_surface_culling.h"
 #include "vr/vr_view.h"
+#include "vr/vr_visibility.h"
 #endif
 #include "Kyoto/Basics/CBasics.hpp"
 
@@ -662,7 +663,14 @@ void CCubeRenderer::AddPlaneObject(const void* obj, const CAABox& aabb, const CP
   float closestDist = GetViewPlane().GetHeight(closestPoint);
   CVector3f furthestPoint = aabb.FurthestPointAlongVector(GetViewPlane().GetNormal());
   float furthestDist = GetViewPlane().GetHeight(furthestPoint);
-  if (closestDist < 0.f && furthestDist < 0.f) {
+  // Water may be behind the simulation camera while directly in either eye.
+  // Its PreRender/patch tests already use the headset frustum. Never discard
+  // the whole plane here using the untracked sorting camera (merge guard).
+  if (closestDist < 0.f && furthestDist < 0.f
+#ifdef TARGET_PC
+      && !PortVr::VrImmersive()
+#endif
+      ) {
     return;
   }
 
@@ -1709,7 +1717,22 @@ static void draw_box_or_model(const CAABox& aabb, const CModel* model, const CTr
     };
     CGX::SetVtxDescv(vtxDescrs2);
 
-    const CUnitVector3f viewPlaneFwd(viewXf.GetForward());
+    CTransform4f clipView(viewXf);
+#ifdef TARGET_PC
+    // Stereo merge guard: this CPU-generated cap must follow tracked head yaw,
+    // pitch and roomscale position. Eye replay cannot recover fog geometry
+    // already clipped away behind the simulation camera's near plane.
+    if (PortVr::VrImmersive()) {
+      clipView = PortVr::VrHeadFacingTransform(viewXf);
+      CVector3f headOrigin, headDirection;
+      if (PortVr::VrHeadGaze(viewXf, headOrigin, headDirection)) {
+        clipView.SetTranslation(headOrigin);
+      }
+    }
+#endif
+#ifndef TARGET_PC
+    const CUnitVector3f viewPlaneFwd(clipView.GetForward());
+#endif
 
     CVector3f max = worldAabb.GetMaxPoint();
     max.SetX(-max.GetX());
@@ -1723,7 +1746,11 @@ static void draw_box_or_model(const CAABox& aabb, const CModel* model, const CTr
         CPlane(max.GetY(), CVector3f::Back()),
         CPlane(worldAabb.GetMinPoint().GetZ(), CVector3f::Up()),
         CPlane(max.GetZ(), CVector3f::Down()),
-        CPlane(CVector3f::Dot(viewXf.GetTranslation(), viewPlaneFwd) + 0.2f + 0.1f, viewPlaneFwd),
+#ifdef TARGET_PC
+        PortVr::FogClipNearPlane(clipView),
+#else
+        CPlane(CVector3f::Dot(clipView.GetTranslation(), viewPlaneFwd) + 0.2f + 0.1f, viewPlaneFwd),
+#endif
     };
     CGraphics::SetModelMatrix(CTransform4f::Identity());
 
