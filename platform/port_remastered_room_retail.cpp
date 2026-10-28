@@ -134,7 +134,9 @@ bool ReadScly(const std::vector<uint8_t>& m, std::vector<ScriptObject>& objects)
         return false;
       }
       for (uint64_t k = 0; k < children; ++k) {
-        object.targets.push_back(ReadBE32(&m[q + 8 + 12 * size_t(k) + 8]));
+        const size_t c = q + 8 + 12 * size_t(k);
+        object.links.push_back({ReadBE32(&m[c]), ReadBE32(&m[c + 4]), ReadBE32(&m[c + 8])});
+        object.targets.push_back(object.links.back().target);
       }
       q += 8 + size_t(12 * children) + 4;
       if (q > objectEnd) {

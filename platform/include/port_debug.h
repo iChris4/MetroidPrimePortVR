@@ -246,8 +246,9 @@ const int kCrosshairOpacityMin = 0;
 const int kCrosshairOpacityMax = 100;
 int CrosshairOpacity();
 // The centre crosshair's look: the game's model, or a procedural take on Remastered's design
-// (crosshair_style=, MP_CROSSHAIR_STYLE). Classic under Original experience.
-enum ECrosshairStyle { kCrosshairStyle_Classic, kCrosshairStyle_Remastered };
+// (crosshair_style=, MP_CROSSHAIR_STYLE). Classic under Original experience. GameCube is the
+// GC crosshair in place of Trilogy's aiming cursor on a Trilogy disc, Classic on a GC disc.
+enum ECrosshairStyle { kCrosshairStyle_Classic, kCrosshairStyle_Remastered, kCrosshairStyle_GameCube };
 ECrosshairStyle CrosshairStyle();
 void SetCrosshairStyle(ECrosshairStyle style);
 bool CrosshairColor(float rgb[3]);
@@ -433,21 +434,25 @@ void SetProjectedShadows(bool enabled);
 // creation, so it takes a restart; aurora falls back to Vulkan if it fails.
 bool OpenGles();
 void SetOpenGles(bool enabled);
-// Setting `graphics_backend` (Windows only): the graphics API to ask Aurora for
-// at the next start. Auto asks for nothing in particular, so Aurora takes its own
-// order (Direct3D 12, then Vulkan, then Direct3D 11); an explicit API is tried
-// first (issue #135). Either way a failed start falls back to that order for the
-// run and leaves the setting alone. Read at window creation, so it takes a
-// restart. Other platforms ignore it: Android's OpenGL ES choice is `opengles`.
-// These are the config file's values: don't reorder or renumber.
+// Setting `graphics_backend` (Windows and desktop Linux): the graphics API to ask
+// Aurora for at the next start. Auto asks for nothing in particular, so Aurora
+// takes its own order (Direct3D 12, then Vulkan, then Direct3D 11 on Windows;
+// Vulkan, then OpenGL ES on Linux); an explicit API is tried first (issue #135).
+// Either way a failed start falls back to that order for the run and leaves the
+// setting alone. Read at window creation, so it takes a restart. OpenGL is offered
+// on desktop Linux only for now, through Dawn's desktop GL: Windows has no WGL
+// backend yet. Other platforms ignore the setting: Android's OpenGL ES choice is
+// `opengles`. These are the config file's values: don't reorder or renumber.
 enum EGraphicsBackend {
   kGraphicsBackend_Auto = 0,
   kGraphicsBackend_D3D12,
   kGraphicsBackend_Vulkan,
   kGraphicsBackend_D3D11,
+  kGraphicsBackend_OpenGL,
 };
-// The number of choices, for the combo that lists them in EGraphicsBackend order.
-constexpr int kGraphicsBackendCount = 4;
+// The number of choices. The Video page lists a platform's subset of them
+// (port_graphics_backend.h's Choices()), so this is not a combo's item count.
+constexpr int kGraphicsBackendCount = 5;
 EGraphicsBackend GraphicsBackend();
 void SetGraphicsBackend(EGraphicsBackend backend);
 // The config file's name for a choice; these, and only these, are what
@@ -460,6 +465,8 @@ inline const char* GraphicsBackendConfigName(EGraphicsBackend backend) {
     return "vulkan";
   case kGraphicsBackend_D3D11:
     return "d3d11";
+  case kGraphicsBackend_OpenGL:
+    return "opengl";
   default:
     return "auto";
   }
@@ -475,6 +482,8 @@ inline bool ParseGraphicsBackend(const std::string& value, EGraphicsBackend& out
     out = kGraphicsBackend_Vulkan;
   } else if (value == "d3d11") {
     out = kGraphicsBackend_D3D11;
+  } else if (value == "opengl") {
+    out = kGraphicsBackend_OpenGL;
   } else {
     return false;
   }
@@ -548,6 +557,10 @@ void SetSpringBall(bool enabled);
 // layout), off by default.
 bool SwapScanXray();
 void SetSwapScanXray(bool enabled);
+// Trilogy discs only: holding Beam menu / Visor menu opens the Wii's radial menus
+// (CHudRadialSelect); the aim travel or C-stick picks. Off by default.
+bool RadialMenus();
+void SetRadialMenus(bool enabled);
 // The beam shift's bindings (read by PortInputDevices, which pairs each with the D-pad
 // into the beam chords): slots 0 and 1 are keys
 // or mouse buttons (scancode or PAD_KEY_MOUSE_*), slot 2 a controller button
@@ -594,6 +607,11 @@ bool OriginalExperience();
 void SetOriginalExperience(bool enabled);
 std::string ModsDisabled();
 void SetModsDisabled(const std::string& list);
+// The Remastered import on or off (mods_disabled, saved as on the Mods page), then the mods
+// reload; a note at the top of the screen says which.
+void ToggleRemastered();
+// A note at the top of the screen for a few seconds. Thread-safe.
+void ShowNote(const std::string& text);
 // Starts a Remastered import (port_remastered_import.h) with the mods unloaded
 // while it runs; they load again, the new import included, when it ends.
 // False when one is already running or there is no mods folder.
@@ -762,7 +780,10 @@ bool TapUpdateToast(float x, float y);
 // it opened and the total. The headset draws its own (vr_menu.cpp). Game thread.
 bool ShaderCompilationProgress(uint32_t& done, uint32_t& total);
 // Called during simulation, using the effective unbobbed camera direction.
-bool UpdateMouseAim(bool active, bool locked, float x, float y, float z, bool pointerLock = false);
+// pointerHold: under pointer aim, a lock that keeps the pointer where it is instead of
+// re-centring it (the Scan Visor's point orbit, CPlayer::UpdateMouseAim).
+bool UpdateMouseAim(bool active, bool locked, float x, float y, float z, bool pointerLock = false,
+                    bool pointerHold = false);
 void SynchronizeMouseAim(float x, float y, float z);
 // Turns the mouse-look yaw by dyaw radians (the game turned the player: a rotating
 // platform's rider carry). No effect until the aim is initialized.
@@ -918,6 +939,10 @@ std::string TouchLayout();
 void SetTouchLayout(const std::string& layout);
 // True once after F1's "Edit layout" was pressed.
 bool TakeTouchEditRequested();
+// Asks for the layout editor as "Edit layout" does (the console's `touchedit`).
+void RequestTouchEdit();
+// True while the in-game touch layout editor is open (never without PORT_TOUCH_OVERLAY).
+bool TouchEditing();
 void Toggle();
 // Asks for the overlay to be toggled on the next frame. Safe to call from any
 // thread, unlike Toggle(), which touches ImGui state.

@@ -78,6 +78,7 @@ typedef struct {
   uint64_t prefetchQueued; // rows those requests queued for a build
   uint32_t pinned;       // GLOBAL pipelines kept from eviction
   uint32_t known;        // pipelines the cache has rows for (lazy only)
+  uint32_t pending;      // pipelines queued or building
 } AuroraPipelineStats;
 void aurora_get_pipeline_stats(AuroraPipelineStats* out);
 // Live sampled/target TextureRefs grouped by creation label, size and format, most numerous first. Fills up to
@@ -100,6 +101,9 @@ typedef struct AuroraTextureSite {
 uint32_t aurora_get_texture_sites(AuroraTextureSite* out, uint32_t cap);
 // The AuroraConfig::frameBufferScale in use: the device may allow less than was asked for.
 uint32_t aurora_get_frame_buffer_scale();
+// Takes the frame limits AuroraConfig::frameBuffersDeferred held back, at the start of the next
+// frame (with no frame in flight). Safe from any thread; nothing when none are held.
+void aurora_reserve_frame_buffers();
 // The AuroraConfig::frameStorageScale in use (the array buffer's, in units of its 8 MiB at 1).
 uint32_t aurora_get_frame_storage_scale();
 // The MiB set aside for AuroraConfig::residentGeometryMiB: the device may allow less.

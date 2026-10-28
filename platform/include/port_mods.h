@@ -148,7 +148,8 @@ private:
 
 struct ModInfo {
   std::string name;
-  bool enabled = true;
+  bool enabled = true; // loaded by the last scan, not the saved enabled intent
+  bool pendingRestart = false; // enabled intent retained; geometry buffers were not reserved at startup
   int files = 0;     // disc files replaced
   int resources = 0; // loose resources used
   int textures = 0;  // <id>.dds images
@@ -226,6 +227,8 @@ std::string HudBarsPath(uint32_t frame);
 std::string ThermalLutPath();
 // The envfx.bin a mod supplies (Remastered's EnvironmentFX textures, port_envfx_assets.h); empty when none.
 std::string EnvFxPath();
+// The shell.bin a mod supplies (Remastered's silhouette-shell textures, port_shell_assets.h); empty when none.
+std::string ShellPath();
 // The retailplacements.bin a mod supplies (port_retail_placement.h); empty when none.
 std::string RetailPlacementPath();
 // The id a retail asset (a WPSC) reads for an effect in its field ('APS2'...), when a mod's
@@ -238,12 +241,19 @@ std::string RoomGeoPath(uint32_t mrea);
 std::string RoomLiquidPath(uint32_t mrea);
 // The same for its Remastered effect actors (port_room_effects.h).
 std::string RoomEffectsPath(uint32_t mrea);
+// Winning loose-resource provenance. Empty for disc/whole-PAK resources; main thread only.
+// Native DDS ownership takes precedence for a TXTR. Used for atomic room-effect groups.
+std::string ResourceProvider(uint32_t type, uint32_t id);
+std::string RoomEffectsProvider(uint32_t mrea);
+uint64_t ResourceGeneration();
 // Every roomgeo/lods.bin the mods supply (port_room_geo.h), in mod order: a later one's
 // entry for a model stands in for an earlier one's.
 std::vector<std::string> RoomLodPaths();
 // Whether any mod folder holds room geometry. Reads the disk, and needs no Initialize:
 // the frame buffers are sized from it before there is a renderer.
 bool HasRoomGeometry();
+// The same for the folders that would load (mods on, the folder not disabled).
+bool HasEnabledRoomGeometry();
 // Whether any mod folder would load: the mods setting is on and a folder is not disabled. Like
 // HasRoomGeometry it reads the disk and needs no Initialize. With none, nothing can bring a
 // PBR material (only a mod's converted materials are PBR).

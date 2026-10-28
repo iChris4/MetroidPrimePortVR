@@ -6,6 +6,7 @@
 #include "MetroidPrime/Weapons/CWeaponAssetInfo.hpp"
 
 #ifdef TARGET_PC
+#include "Kyoto/Particles/CParticleElectric.hpp"
 #include "port_tick_pair.h"
 #endif
 
@@ -107,6 +108,19 @@ private:
   };
   mutable PortTickPair< SPortBeam > xPortBeam;
   mutable float xPortDrawLength;
+
+public:
+  // Remastered CPlasmaProjectileMP1's beam electric (this+2000, built in its ctor from the
+  // beam info's ELC2 id at 0x7a4): an ELC2 drawn from the beam's start to its end.
+  void PortSetBeamElectric(CAssetId id);
+  // The frozen VFX of CPlasmaProjectileMP1's SPlayerFrozenStateDataShip1 (+0x764, id +0x10),
+  // built in its ctor from the weapon asset info's +0x64.
+  void PortSetFrozenFx(CAssetId id) { xPortFrozenFxId = id; }
+
+private:
+  CAssetId xPortFrozenFxId = kInvalidAssetId;
+  void PortResetBeamElectric();
+  rstl::single_ptr< CParticleElectric > xPortBeamElectric;
 #endif
 };
 CHECK_SIZEOF(CPlasmaProjectile, (VERSION >= VERSION_GM8P_00 && VERSION != VERSION_GM8E_02 ? 0x578

@@ -15,6 +15,9 @@
 #include "Kyoto/Math/CAABox.hpp"
 #include "Kyoto/Math/CTransform4f.hpp"
 #include "Kyoto/TOneStatic.hpp"
+#ifdef TARGET_PC
+#include "Kyoto/Particles/CPortEffectSet.hpp"
+#endif
 
 #include "rstl/pair.hpp"
 #include "rstl/reserved_vector.hpp"
@@ -115,6 +118,11 @@ public:
   // Port: the view the gun is drawn under (sim camera, blended pose) in first
   // person, else worldView.
   CTransform4f PortGunView(const CStateManager&, const CTransform4f& worldView) const;
+  // Port (performance mode): draws the settled gun's opaque depth, as Render places it, under
+  // the depth prepass; false when its state isn't one this covers (Render draws it as before).
+  bool PortRenderDepth(const CStateManager&, const CVector3f& pos) const;
+  // Port: Trilogy fn_801878D4's gun terms for a radial menu latch.
+  bool PortTriRadialReady() const;
   // Port: the world point pointer aim is on (valid only while pointer aim steers the gun).
   void PortSetPointerAimPoint(bool valid, const CVector3f& point) {
     mPortPointerAimValid = valid;
@@ -511,14 +519,26 @@ private:
   // Port: Remastered's muzzle flashes with no retail counterpart (missile, super missile, ice
   // combo, the per-beam charged-shot flashes), imported as synthetic PARTs. Slot 0 missile,
   // 1 super missile, 2 ice combo, 3..7 charged shot of beam 0..4; absent = not imported.
-  enum { kPortFlashCount = 8 };
+  // Each is a CEffectModule started with limit 2 (CGunWeaponMP1::Fire 0xca2d3c,
+  // CAuxWeaponMP1::LaunchMissile). The aux flashes draw before the gun
+  // (CAuxWeapon::RenderEffectModules), the charged-shot ones after it (PostRenderGunFx).
+  enum { kPortFlashCount = 8, kPortFirstChargeFlash = 3 };
   void PortInitFlashes();
   void PortStartFlash(int slot);
   void PortUpdateFlashes(float dt, const CVector3f& scale);
-  void PortRenderFlashes() const;
+  void PortRenderFlashes(int first, int end) const;
   rstl::reserved_vector< TLockedToken< CGenDescription >, kPortFlashCount > mPortFlashTokens;
   int mPortFlashToken[kPortFlashCount];
-  rstl::auto_ptr< CElementGen > mPortFlashGens[kPortFlashCount];
+  CPortEffectSet mPortFlashGens[kPortFlashCount];
+
+  // Port: Remastered's UnderWaterBubblesWeaponFire module (CPlayerGunMP1 +0x760, timer +0x768),
+  // a synthetic PART; absent = not imported.
+  void PortGenerateUnderWaterBubbles(CStateManager& mgr);
+  void PortUpdateUnderWaterBubbles(float dt, CStateManager& mgr);
+  rstl::optional_object< TLockedToken< CGenDescription > > mPortBubbleToken;
+  CPortEffectSet mPortBubbleGens;
+  CTransform4f mPortBubbleXf;
+  float mPortBubbleTimer;
 #endif
 };
 CHECK_SIZEOF(CPlayerGun, 0x838)

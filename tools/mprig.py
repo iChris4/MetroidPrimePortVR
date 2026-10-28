@@ -664,21 +664,38 @@ def start_run(a):
         mods = Path(a.mods) if a.mods else real / "mods"
     mods = mods.resolve() if mods.exists() else mods
 
-    xlog = open(d / "xvfb.log", "w")
-    xv = subprocess.Popen(["Xvfb", f":{display}", "-screen", "0", f"{a.size}x24", "-ac"],
-                          stdout=xlog, stderr=xlog, start_new_session=True)
-    run["xvfb"] = ident(xv.pid)
-    save_run(run)
-    end = time.monotonic() + 15
-    while not Path(f"/tmp/.X11-unix/X{display}").exists():
-        if xv.poll() is not None or time.monotonic() > end:
-            die(f"Xvfb :{display} failed to start: {(d / 'xvfb.log').read_text()[-200:].strip()}")
-        time.sleep(0.1)
+    host = getattr(a, "host_display", False)
+    if host:
+        # The user's own X display (Xwayland under GNOME): the real GPU driver, DRI3 and all.
+        # Xvfb's llvmpipe can't run Dawn's GL backends, so GL work needs this.
+        if not os.environ.get("DISPLAY"):
+            die("--host-display needs DISPLAY set")
+    else:
+        xlog = open(d / "xvfb.log", "w")
+        xv = subprocess.Popen(["Xvfb", f":{display}", "-screen", "0", f"{a.size}x24", "-ac"],
+                              stdout=xlog, stderr=xlog, start_new_session=True)
+        run["xvfb"] = ident(xv.pid)
+        save_run(run)
+        end = time.monotonic() + 15
+        while not Path(f"/tmp/.X11-unix/X{display}").exists():
+            if xv.poll() is not None or time.monotonic() > end:
+                die(f"Xvfb :{display} failed to start: {(d / 'xvfb.log').read_text()[-200:].strip()}")
+            time.sleep(0.1)
 
     env = {k: v for k, v in os.environ.items() if not k.startswith("MP_") and k not in ("WAYLAND_DISPLAY",)}
     env.update({
-        "DISPLAY": f":{display}", "XDG_RUNTIME_DIR": f"/run/user/{os.getuid()}", "SDL_AUDIO_DRIVER": "dummy",
-        "MESA_VK_WSI_DEBUG": "sw", "SDL_VIDEODRIVER": "x11",  # RADV on Xvfb has no DRI3
+        "DISPLAY": os.environ["DISPLAY"] if host else f":{display}",
+        "XDG_RUNTIME_DIR": f"/run/user/{os.getuid()}", "SDL_AUDIO_DRIVER": "dummy", "SDL_VIDEODRIVER": "x11",
+    })
+    if host:
+        # GNOME rewrites Xwayland's auth file on a shell restart; a long-lived agent shell keeps the old name.
+        if not Path(env.get("XAUTHORITY", "")).is_file():
+            auths = sorted(Path(f"/run/user/{os.getuid()}").glob(".mutter-Xwaylandauth.*"), key=lambda p: p.stat().st_mtime)
+            if auths:
+                env["XAUTHORITY"] = str(auths[-1])
+    else:
+        env["MESA_VK_WSI_DEBUG"] = "sw"  # RADV on Xvfb has no DRI3
+    env.update({
         "MP_USER_PATH": str(user), "MP_CACHE_PATH": str(CACHE), "MP_MODS": str(mods),
         "MP_FAST_BOOT": "0" if getattr(a, "front", False) else "1", "MP_DISABLE_AI_AUDIO": "1", "MP_UPDATE_CHECK": "0", "MP_ASPECT": "16:9", "MP_CONSOLE": str(port),
         "ASAN_OPTIONS": "detect_leaks=0:abort_on_error=1",
@@ -1001,7 +1018,8 @@ def cmd_film(a):
     print(out)
     for f, prev, cur, pf in zip(frames[1:], pngs, pngs[1:], frames):
         print(f"frame {pf} -> {f}: {image_stats(prev, cur)[1]}")
-    run_console(run, ["hold 0"], echo=False)
+    if not a.keep_hold:
+        run_console(run, ["hold 0"], echo=False)
 
 
 def region_mad(pa, pb, region):
@@ -1233,6 +1251,8 @@ def build_parser():
         s.add_argument("--size", default="1280x720", help="Xvfb screen size WxH")
         s.add_argument("--wait", type=float, default=120, help="seconds to wait for the console")
         s.add_argument("--gdb", action="store_true", help="run under gdb so a crash leaves a backtrace in game.log")
+        s.add_argument("--host-display", action="store_true",
+                       help="run on the user's $DISPLAY with the real GPU driver instead of Xvfb (GL backends; opens a window)")
         s.add_argument("--replace", action="store_true", help="stop a running run of this name first")
 
     s = add("start", cmd_start, "start Xvfb + game with a console; prints 'name display port log'")
@@ -1294,6 +1314,8 @@ def build_parser():
     s.add_argument("--pre", help="';'-separated console commands to run first (e.g. 'fx 12345678 5')")
     s.add_argument("--cols", type=int)
     s.add_argument("--width", type=int, default=480)
+    s.add_argument("--keep-hold", action="store_true",
+                   help="leave the game held after the last frame, so a next film carries on from it")
     s = add("fxbisect", cmd_fxbisect, "mute each asset of an effect's tree and rank which one changes a region")
     s.add_argument("name")
     s.add_argument("root", help="root PART asset id (hex) as spawned by --shot-cmds")

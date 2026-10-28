@@ -8,6 +8,9 @@
 #include "Kyoto/Particles/CParticleGlobals.hpp"
 #include "Kyoto/Particles/PortParticleMath.hpp"
 #include "Kyoto/Streams/CInputStream.hpp"
+#ifdef TARGET_PC
+#include "Kyoto/Particles/CPortParticleParseScope.hpp"
+#endif
 
 #include "rstl/math.hpp"
 
@@ -119,7 +122,11 @@ bool CRERandom::GetValue(int frame, float& valOut) const {
 }
 
 CREInitialRandom::CREInitialRandom(CRealElement* min, CRealElement* max)
-: x4_min(min), x8_max(max) {}
+: x4_min(min), x8_max(max)
+#ifdef TARGET_PC
+, xPortLoadConstant(!CPortParticleParseScope::particleInitialRandom)
+#endif
+{}
 
 CREInitialRandom::~CREInitialRandom() {
   delete x4_min;
@@ -385,8 +392,12 @@ bool CREDistanceFromCameraBlend::GetValue(int frame, float& valOut) const {
     }
   }
   // The view matrix is already camera-to-world (CGraphics::SetViewPointMatrix).
+  // Remastered's CalculateBlendValue (0x298f44) dots against column 2 of the
+  // camera transform, which SetCameraTransformById (0x27b2c0) copies raw from
+  // the game camera, so in Retro space that is the camera's up axis, not its
+  // forward one. A streak at eye height therefore blends to B.
   const CTransform4f& camera = CGraphics::GetViewMatrix();
-  const float d = CVector3f::Dot(pos - camera.GetTranslation(), camera.GetForward());
+  const float d = CVector3f::Dot(pos - camera.GetTranslation(), camera.GetUp());
   valOut = DistanceBlend(d, a, b);
   return false;
 }
@@ -446,6 +457,25 @@ bool CREPortSwooshNodeTime::GetValue(int frame, float& valOut) const {
   CParticleGlobals::mParticleLifetimePercentageReal =
       float(swoosh->nodePercentage) + swoosh->nodeRemainder;
   CParticleGlobals::mParticleLifetimePercentageRemainder = swoosh->nodeRemainder;
+  const bool ret = x4_a->GetValue(frame, valOut);
+  CParticleGlobals::mParticleLifetimePercentage = percentage;
+  CParticleGlobals::mParticleLifetimePercentageReal = real;
+  CParticleGlobals::mParticleLifetimePercentageRemainder = remainder;
+  return ret;
+}
+
+CREPortSlot2Time::CREPortSlot2Time(CRealElement* a) : x4_a(a) {}
+
+CREPortSlot2Time::~CREPortSlot2Time() { delete x4_a; }
+
+bool CREPortSlot2Time::GetValue(int frame, float& valOut) const {
+  const int percentage = CParticleGlobals::mParticleLifetimePercentage;
+  const float real = CParticleGlobals::mParticleLifetimePercentageReal;
+  const float remainder = CParticleGlobals::mParticleLifetimePercentageRemainder;
+  CParticleGlobals::mParticleLifetimePercentage = CParticleGlobals::xPortSlot2Percentage;
+  CParticleGlobals::mParticleLifetimePercentageReal =
+      float(CParticleGlobals::xPortSlot2Percentage) + CParticleGlobals::xPortSlot2Remainder;
+  CParticleGlobals::mParticleLifetimePercentageRemainder = CParticleGlobals::xPortSlot2Remainder;
   const bool ret = x4_a->GetValue(frame, valOut);
   CParticleGlobals::mParticleLifetimePercentage = percentage;
   CParticleGlobals::mParticleLifetimePercentageReal = real;

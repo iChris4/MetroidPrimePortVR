@@ -7,6 +7,7 @@
 #include "port_ap_world.h"
 #include "port_apclient.h"
 #include "port_beam_doors.h"
+#include "port_radial.h"
 #include "port_disc_replace.h"
 #include "port_disc_verify.h"
 #include "port_log.h"
@@ -18,6 +19,8 @@
 #include "port_discord.h"
 #include "port_freecam.h"
 #include "port_third_person.h"
+#include "port_third_person_body.h"
+#include "port_dread_samus_mod.h"
 #include "port_gci.h"
 #include "port_photo.h"
 #include "port_pointer.h"
@@ -135,6 +138,11 @@ int sClient = -1;
 unsigned sGeneration = 0;
 bool sStarted = false;
 bool sEnabled = false;
+// PortConsoleRun's lines: no client generation is ever this, so replies go to the log.
+constexpr unsigned kLocalGeneration = ~0u;
+constexpr size_t kMaxLocalQueued = 64;
+// PortConsoleRun has queued something: commands run without MP_CONSOLE from then on.
+bool sLocalUsed = false;
 
 #ifndef _WIN32
 // Replies are sent from the game thread, so a client that stops reading must
@@ -388,7 +396,11 @@ void Finish(const char* error = nullptr) {
     text += error;
     text += '\n';
   }
-  SendRaw(sCmd.generation, text);
+  if (sCmd.generation == kLocalGeneration) {
+    PortLog::Write("[console] %s: %s", sCmd.args.empty() ? "" : sCmd.args[0].c_str(), text.c_str());
+  } else {
+    SendRaw(sCmd.generation, text);
+  }
   sHasCommand = false;
 }
 
@@ -472,6 +484,25 @@ const char* const kItemNames[] = {
 };
 constexpr int kItemCount = sizeof(kItemNames) / sizeof(kItemNames[0]);
 
+// The items a player gives or takes, and their player-facing names; each key is
+// one of kItemNames, which is what the console's LookupName matches.
+constexpr PortConsoleItem kPlayerItems[] = {
+    {"PowerBeam", "Power Beam"},       {"ChargeBeam", "Charge Beam"},
+    {"IceBeam", "Ice Beam"},           {"WaveBeam", "Wave Beam"},
+    {"PlasmaBeam", "Plasma Beam"},     {"Missiles", "Missile Launcher"},
+    {"PowerBombs", "Power Bomb"},      {"EnergyTanks", "Energy Tank"},
+    {"SuperMissile", "Super Missile"}, {"IceSpreader", "Ice Spreader"},
+    {"Wavebuster", "Wavebuster"},      {"Flamethrower", "Flamethrower"},
+    {"CombatVisor", "Combat Visor"},   {"ScanVisor", "Scan Visor"},
+    {"ThermalVisor", "Thermal Visor"}, {"XRayVisor", "X-Ray Visor"},
+    {"MorphBall", "Morph Ball"},       {"MorphBallBombs", "Morph Ball Bombs"},
+    {"BoostBall", "Boost Ball"},       {"SpiderBall", "Spider Ball"},
+    {"SpaceJumpBoots", "Space Jump Boots"},
+    {"GrappleBeam", "Grapple Beam"},   {"PowerSuit", "Power Suit"},
+    {"VariaSuit", "Varia Suit"},       {"GravitySuit", "Gravity Suit"},
+    {"PhazonSuit", "Phazon Suit"},
+};
+
 int LookupName(const std::string& arg, const char* const* names, int count) {
   unsigned number;
   if (ParseUnsigned(arg, number)) {
@@ -491,12 +522,7 @@ const char* NameOr(const char* const* names, int count, int index) {
 }
 
 std::string WorldName(int index) {
-  std::string name;
-  const wchar_t* wide = gpMemoryCard->GetMemoryWorlds()[index].second.GetFrontEndName();
-  for (const wchar_t* p = wide; p != nullptr && *p != 0; ++p) {
-    name.push_back(static_cast< char >(*p));
-  }
-  return name;
+  return PortDiscord::GameTextToUtf8(gpMemoryCard->GetMemoryWorlds()[index].second.GetFrontEndName());
 }
 
 // An object by editor id (hex, as in the level data), by unique id (`u` +
@@ -721,6 +747,11 @@ void CmdStatus(CStateManager& mgr) {
   if (const CEntity* target = mgr.GetObjectById(player.GetOrbitTargetId())) {
     Out("orbit target u%u %08X %s", target->GetUniqueId().Value(), target->GetEditorId().Value(),
         target->GetDebugName().data());
+  }
+  Out("orbit nearby %d", static_cast< int >(player.GetOrbitObjectsOnScreenList().size()));
+  if (const CEntity* next = mgr.GetObjectById(player.GetOrbitNextTargetId())) {
+    Out("orbit next u%u %08X %s", next->GetUniqueId().Value(), next->GetEditorId().Value(),
+        next->GetDebugName().data());
   }
   Out("first person %d, cinematic %d", mgr.GetCameraManager()->IsInFPCamera() ? 1 : 0,
       mgr.GetCameraManager()->IsInCinematicCamera() ? 1 : 0);
@@ -1236,11 +1267,23 @@ void CmdLook(CStateManager& mgr) {
 
 // Deals an actor its remaining health as Power Beam damage, past its
 // vulnerability, so it dies as from a last shot (bosses run their death scripts).
+// `target` is what the player is locked on to.
 void CmdKill(CStateManager& mgr) {
   if (sCmd.args.size() < 2) {
-    return Finish("usage: kill <id> [damage]");
+    return Finish("usage: kill <id>|target [damage]");
   }
-  CActor* actor = TCastToPtr< CActor >(FindObject(mgr, sCmd.args[1]));
+  CEntity* ent = nullptr;
+  if (Lower(sCmd.args[1]) == "target") {
+    const CPlayer* player = mgr.GetPlayer();
+    const TUniqueId target = player != nullptr ? player->GetOrbitTargetId() : kInvalidUniqueId;
+    if (target == kInvalidUniqueId) {
+      return Finish("nothing is locked on");
+    }
+    ent = const_cast< CEntity* >(mgr.GetObjectById(target));
+  } else {
+    ent = FindObject(mgr, sCmd.args[1]);
+  }
+  CActor* actor = TCastToPtr< CActor >(ent);
   if (actor == nullptr) {
     return Finish("no such actor");
   }
@@ -1260,6 +1303,28 @@ void CmdKill(CStateManager& mgr) {
 void CmdHeal(CStateManager& mgr) {
   CPlayerState& ps = *mgr.PlayerState();
   ps.HealthInfo()->SetHP(ps.CalculateHealth());
+  Finish();
+}
+
+// Tops up what the player already has, without giving any capacity: health (the
+// tanks' worth), then the ammo the arm cannon's items hold.
+void CmdRefill(CStateManager& mgr) {
+  const std::string what = sCmd.args.size() > 1 ? Lower(sCmd.args[1]) : "all";
+  if (what != "energy" && what != "ammo" && what != "all") {
+    return Finish("usage: refill [energy|ammo|all]");
+  }
+  CPlayerState& ps = *mgr.PlayerState();
+  if (what != "ammo") {
+    ps.HealthInfo()->SetHP(ps.CalculateHealth());
+  }
+  if (what != "energy") {
+    ps.SetPickup(CPlayerState::kIT_Missiles, ps.GetItemCapacity(CPlayerState::kIT_Missiles));
+    ps.SetPickup(CPlayerState::kIT_PowerBombs, ps.GetItemCapacity(CPlayerState::kIT_PowerBombs));
+  }
+  Out("health %.0f/%.0f, missiles %d/%d, power bombs %d/%d", ps.HealthInfo()->GetHP(),
+      ps.CalculateHealth(), ps.GetItemAmount(CPlayerState::kIT_Missiles),
+      ps.GetItemCapacity(CPlayerState::kIT_Missiles), ps.GetItemAmount(CPlayerState::kIT_PowerBombs),
+      ps.GetItemCapacity(CPlayerState::kIT_PowerBombs));
   Finish();
 }
 
@@ -1964,12 +2029,32 @@ void CmdCollDump() {
 
 // thirdperson [on|off] [distance <m>] [shoulder <m>] [height <m>]
 void CmdThirdPerson() {
-  static const char* const usage = "usage: thirdperson [on|off] [distance <m>] [shoulder <m>] [height <m>]";
+  static const char* const usage =
+      "usage: thirdperson [on|off] [distance <m>] [shoulder <m>] [height <m>] [clips] [feet] "
+      "[clip <name>|off [phase [yaw]]]";
   for (size_t i = 1; i < sCmd.args.size(); ++i) {
     const std::string arg = Lower(sCmd.args[i]);
     float number = 0.f;
     if (arg == "on" || arg == "off") {
       PortThirdPerson::SetEnabled(arg == "on");
+    } else if (arg == "feet") {
+      sCmd.out += PortThirdPersonBody::DescribeFeet();
+      return Finish();
+    } else if (arg == "clips") {
+      sCmd.out += PortThirdPersonBody::DescribeClips();
+      return Finish();
+    } else if (arg == "clip" && i + 1 < sCmd.args.size()) {
+      const std::string name = sCmd.args[++i];
+      float yaw = 0.f;
+      if (i + 1 < sCmd.args.size() && ParseFloat(sCmd.args[i + 1], number)) {
+        ++i;
+        if (i + 1 < sCmd.args.size() && ParseFloat(sCmd.args[i + 1], yaw)) {
+          ++i;
+        }
+      }
+      if (!PortThirdPersonBody::PinClip(Lower(name) == "off" ? nullptr : name.c_str(), number, yaw)) {
+        return Finish("no such clip (or the body is not built)");
+      }
     } else if ((arg == "distance" || arg == "shoulder" || arg == "height") && i + 1 < sCmd.args.size() &&
                ParseFloat(sCmd.args[i + 1], number)) {
       ++i;
@@ -2110,6 +2195,16 @@ bool ParseButtons(const std::string& spec, PADStatus& pad) {
       const s8 axis = static_cast< s8 >(std::clamp(v, -127.f, 127.f));
       (b[0] == 's' ? (b[1] == 'x' ? pad.stickX : pad.stickY)
                    : (b[1] == 'x' ? pad.substickX : pad.substickY)) = axis;
+      start = end + 1;
+      continue;
+    }
+    // lt:<n>, rt:<n> hold an analog trigger's travel (0..255) without its click.
+    if (b.size() > 3 && b[1] == 't' && b[2] == ':' && (b[0] == 'l' || b[0] == 'r')) {
+      float v;
+      if (!ParseFloat(b.substr(3), v)) {
+        return false;
+      }
+      (b[0] == 'l' ? pad.triggerLeft : pad.triggerRight) = static_cast< u8 >(std::clamp(v, 0.f, 255.f));
       start = end + 1;
       continue;
     }
@@ -2296,6 +2391,93 @@ void CmdPointer() {
   Finish();
 }
 
+// Pushes one SDL finger event at window pixel x,y, as a touch screen would: the touch overlay's
+// event filter sees it as it is pushed. Tests the touch overlay on a desktop build.
+bool PushFinger(Uint32 type, SDL_FingerID id, float x, float y) {
+  int count = 0;
+  SDL_Window** windows = SDL_GetWindows(&count);
+  SDL_Window* window = windows != nullptr && count > 0 ? windows[0] : nullptr;
+  SDL_free(windows);
+  int w = 0;
+  int h = 0;
+  if (window == nullptr || !SDL_GetWindowSizeInPixels(window, &w, &h) || w <= 0 || h <= 0) {
+    return false;
+  }
+  // A pushed finger skips SDL_SendTouch, which on a device first sends the touch-mouse the
+  // ImGui windows (the editor's picker, F1) read: send it here the same way.
+  int ww = 0;
+  int wh = 0;
+  SDL_GetWindowSize(window, &ww, &wh);
+  const float mx = x / float(w) * float(ww);
+  const float my = y / float(h) * float(wh);
+  SDL_Event m{};
+  m.motion.type = SDL_EVENT_MOUSE_MOTION;
+  m.motion.timestamp = SDL_GetTicksNS();
+  m.motion.windowID = SDL_GetWindowID(window);
+  m.motion.which = SDL_TOUCH_MOUSEID;
+  m.motion.x = mx;
+  m.motion.y = my;
+  SDL_PushEvent(&m);
+  if (type != SDL_EVENT_FINGER_MOTION) {
+    m = {};
+    m.button.type = type == SDL_EVENT_FINGER_DOWN ? SDL_EVENT_MOUSE_BUTTON_DOWN : SDL_EVENT_MOUSE_BUTTON_UP;
+    m.button.timestamp = SDL_GetTicksNS();
+    m.button.windowID = SDL_GetWindowID(window);
+    m.button.which = SDL_TOUCH_MOUSEID;
+    m.button.button = SDL_BUTTON_LEFT;
+    m.button.down = type == SDL_EVENT_FINGER_DOWN;
+    m.button.clicks = 1;
+    m.button.x = mx;
+    m.button.y = my;
+    SDL_PushEvent(&m);
+  }
+  SDL_Event e{};
+  e.type = type;
+  e.tfinger.timestamp = SDL_GetTicksNS();
+  e.tfinger.touchID = 1;
+  e.tfinger.fingerID = id;
+  e.tfinger.x = x / float(w);
+  e.tfinger.y = y / float(h);
+  e.tfinger.pressure = type == SDL_EVENT_FINGER_UP ? 0.f : 1.f;
+  e.tfinger.windowID = SDL_GetWindowID(window);
+  SDL_PushEvent(&e);
+  return true;
+}
+
+void CmdFinger() {
+  const auto& a = sCmd.args;
+  const auto num = [&](size_t i) { return static_cast< float >(std::atof(a[i].c_str())); };
+  const char* usage =
+      "usage: finger down|move|up <id> <x> <y> | tap <x> <y> | drag <x0> <y0> <x1> <y1> [steps]";
+  if (a.size() == 5 && (a[1] == "down" || a[1] == "move" || a[1] == "up")) {
+    const Uint32 type = a[1] == "down" ? SDL_EVENT_FINGER_DOWN
+                        : a[1] == "move" ? SDL_EVENT_FINGER_MOTION
+                                         : SDL_EVENT_FINGER_UP;
+    if (!PushFinger(type, SDL_FingerID(std::atoll(a[2].c_str())), num(3), num(4))) {
+      return Finish("no window");
+    }
+  } else if (a.size() == 4 && a[1] == "tap") {
+    if (!PushFinger(SDL_EVENT_FINGER_DOWN, 1, num(2), num(3)) ||
+        !PushFinger(SDL_EVENT_FINGER_UP, 1, num(2), num(3))) {
+      return Finish("no window");
+    }
+  } else if ((a.size() == 6 || a.size() == 7) && a[1] == "drag") {
+    const int steps = a.size() == 7 ? std::max(1, std::atoi(a[6].c_str())) : 10;
+    const float x0 = num(2), y0 = num(3), x1 = num(4), y1 = num(5);
+    if (!PushFinger(SDL_EVENT_FINGER_DOWN, 1, x0, y0)) {
+      return Finish("no window");
+    }
+    for (int i = 1; i <= steps; ++i) {
+      const float t = float(i) / float(steps);
+      PushFinger(SDL_EVENT_FINGER_MOTION, 1, x0 + (x1 - x0) * t, y0 + (y1 - y0) * t);
+    }
+    PushFinger(SDL_EVENT_FINGER_UP, 1, x1, y1);
+  } else {
+    return Finish(usage);
+  }
+  Finish();
+}
+
 void CmdWindow() {
   int count = 0;
   SDL_Window** windows = SDL_GetWindows(&count);
@@ -2370,6 +2552,29 @@ void CmdStackBeams() {
     PortDebug::SetStackBeams(v == "1");
   }
   Out(PortDebug::StackBeams() ? "stackbeams 1" : "stackbeams 0");
+  Finish();
+}
+
+void CmdRadial() {
+  const auto& a = sCmd.args;
+  if (a.size() == 2 && a[1] == "release") {
+    PortRadial::Force(-1, 0.f, 0.f);
+  } else if ((a.size() == 2 || a.size() == 4) && (a[1] == "beam" || a[1] == "visor")) {
+    const float x = a.size() == 4 ? float(std::atof(a[2].c_str())) : 0.f;
+    const float y = a.size() == 4 ? float(std::atof(a[3].c_str())) : 0.f;
+    PortRadial::Force(a[1] == "beam" ? PortRadial::kBeam : PortRadial::kVisor, x, y);
+  } else if (a.size() != 1) {
+    return Finish("usage: radial [beam|visor [x y] | release]");
+  }
+  float x = 0.f;
+  float y = 0.f;
+  PortRadial::GetSelection(x, y);
+  Out("radial setting %d held beam %d visor %d capturing %d selection %.2f %.2f eligible beam %d "
+      "visor %d",
+      PortDebug::RadialMenus() ? 1 : 0, PortRadial::Held(PortRadial::kBeam) ? 1 : 0,
+      PortRadial::Held(PortRadial::kVisor) ? 1 : 0, PortRadial::Capturing() ? 1 : 0, x, y,
+      PortRadial::Eligible(PortRadial::kBeam) ? 1 : 0,
+      PortRadial::Eligible(PortRadial::kVisor) ? 1 : 0);
   Finish();
 }
 
@@ -2450,16 +2655,17 @@ void CmdHudOpacity() {
 void CmdCrosshair() {
   if (sCmd.args.size() > 1 && sCmd.args[1] == "style") {
     const std::string style = sCmd.args.size() > 2 ? sCmd.args[2] : "";
-    if (style != "classic" && style != "remastered") {
-      return Finish("usage: crosshair style classic|remastered");
+    if (style != "classic" && style != "remastered" && style != "gamecube") {
+      return Finish("usage: crosshair style classic|remastered|gamecube");
     }
     PortDebug::SetCrosshairStyle(style == "remastered" ? PortDebug::kCrosshairStyle_Remastered
+                                 : style == "gamecube" ? PortDebug::kCrosshairStyle_GameCube
                                                        : PortDebug::kCrosshairStyle_Classic);
     return Finish();
   }
   const int value = sCmd.args.size() > 1 ? std::atoi(sCmd.args[1].c_str()) : 0;
   if (value < PortDebug::kCrosshairSizeMin || value > PortDebug::kCrosshairSizeMax) {
-    return Finish("usage: crosshair <25..100> | crosshair style classic|remastered");
+    return Finish("usage: crosshair <25..100> | crosshair style classic|remastered|gamecube");
   }
   PortDebug::SetCrosshairSize(value);
   Finish();
@@ -2476,6 +2682,17 @@ void CmdHelmetVisorFx() {
   } else {
     PortDebug::SetHideVisorEffects(value == "0");
   }
+  Finish();
+}
+
+void CmdDreadCannon() {
+  const std::string value = sCmd.args.size() > 1 ? sCmd.args[1] : "";
+  if (value == "0" || value == "1") {
+    PortDreadSamus::SetFirstPersonCannonShown(value == "1");
+  } else if (!value.empty()) {
+    return Finish("usage: dreadcannon [0|1]");
+  }
+  Out(PortDreadSamus::FirstPersonCannonShown() ? "dreadcannon 1" : "dreadcannon 0");
   Finish();
 }
 
@@ -2530,6 +2747,27 @@ void CmdPickups() {
     Out("dot %ld collected", index);
     return Finish();
   }
+  if (value == "collected") {
+    // This world's dots whose memory relay is in the mailbox, as the map
+    // shows them collected.
+    if (gpGameState == nullptr) {
+      return Finish("not in a game");
+    }
+    size_t dots = 0;
+    const PortMapPickups::Dot* list = PortMapPickups::Dots(dots);
+    const uint32_t world = gpGameState->CurrentWorldAssetId();
+    const CScriptMailbox& mailbox = *gpGameState->StateForWorld(world).Mailbox().GetPtr();
+    std::string indices;
+    for (size_t i = 0; i < dots; ++i) {
+      if (list[i].world == world && mailbox.HasMsg(TEditorId(list[i].relay))) {
+        char text[32];
+        std::snprintf(text, sizeof(text), "%s%zu(%08X)", indices.empty() ? "" : " ", i, list[i].relay);
+        indices += text;
+      }
+    }
+    Out("collected in this world: %s", indices.empty() ? "none" : indices.c_str());
+    return Finish();
+  }
   if (value == "kinds" || value == "station") {
     const std::string sub = sCmd.args.size() > 2 ? Lower(sCmd.args[2]) : "";
     if (sub == "on" || sub == "off") {
@@ -2572,6 +2810,7 @@ void CmdPickups() {
                   "       pickups seen [clear|all]   the pickups seen so far in this save\n"
                   "       pickups kinds [on|off]     major/minor shapes; no argument lists them\n"
                   "       pickups collect <dot>      mark a dot's pickup collected (test aid)\n"
+                  "       pickups collected          this world's dots whose relay is in the mailbox\n"
                   "       pickups station <on|off>   map stations show pickups in Seen");
   }
   Finish();
@@ -2713,8 +2952,13 @@ void CmdRemastered() {
     }
   } else if (verb == "cancel") {
     PortRemastered::CancelImport();
+  } else if (verb == "toggle") {
+    // As the Remastered graphics binding: the import on or off, then the mods reload.
+    PortDebug::ToggleRemastered();
+    Out("mods_disabled=%s", PortDebug::ModsDisabled().c_str());
+    return Finish();
   } else if (!verb.empty()) {
-    return Finish("usage: remastered [start <image.nsp|xci> [key file] | dread <dread.nsp|xci> [key file] | cancel]");
+    return Finish("usage: remastered [start <image.nsp|xci> [key file] | dread <dread.nsp|xci> [key file] | cancel | toggle]");
   }
   const PortRemastered::ImportState state = PortRemastered::ImportStatus();
   Out("%s %d/%d failed %d: %s",
@@ -2779,6 +3023,12 @@ void CmdMinimap() {
 void CmdMapTap() {
   PortDebug::RequestMapTap();
   Out("maptap queued");
+  Finish();
+}
+
+void CmdTouchEdit() {
+  PortDebug::RequestTouchEdit();
+  Out("touchedit requested");
   Finish();
 }
 
@@ -3022,8 +3272,18 @@ void CmdRoomGeo() {
     } else if (arg == "prepass" && sCmd.args.size() > 2 &&
                (Lower(sCmd.args[2]) == "on" || Lower(sCmd.args[2]) == "off")) {
       PortRoomGeo::SetDepthPrepass(Lower(sCmd.args[2]) == "on");
+    } else if (arg == "opaqueprepass" && sCmd.args.size() > 2 &&
+               (Lower(sCmd.args[2]) == "on" || Lower(sCmd.args[2]) == "off")) {
+      PortRoomGeo::SetOpaquePrepass(Lower(sCmd.args[2]) == "on");
     } else if (arg == "costtest" && sCmd.args.size() > 2) {
       GXSetPBRCostTest(u32(std::atoi(sCmd.args[2].c_str())));
+    } else if (arg == "perf") {
+      if (sCmd.args.size() > 2) {
+        GXPortSetPerformance(u32(std::strtoul(sCmd.args[2].c_str(), nullptr, 0)));
+      }
+      Out("performance shortcuts: 0x%x (glass 0x1, measure 0x2, fog 0x4, gun 0x8; 0 exact)",
+          unsigned(GXPortGetPerformance()));
+      return Finish();
     } else if (arg == "script") {
       const std::string info = PortRoomGeo::ScriptInfo();
       OutLines(info.empty() ? std::string("no area has a script") : info);
@@ -3150,6 +3410,14 @@ void CmdRoomLiquid() {
   // The water the camera is in: retail's underwater fog colour against Remastered's filter.
   const CStateManager* const mgr = PortDebug::StateManager();
   const CCameraManager* const cameras = mgr != nullptr ? mgr->GetCameraManager() : nullptr;
+  if (mgr != nullptr) {
+    Out("camera fluid counter %d", cameras != nullptr ? cameras->GetFluidCounter() : 0);
+    for (int i = 0; i < CStateManager::kCFS_Max; ++i) {
+      char state[256];
+      mgr->GetCameraFilterPass(CStateManager::ECameraFilterStage(i)).PortDescribe(state, sizeof(state));
+      Out("  camera filter %d: %s", i, state);
+    }
+  }
   if (cameras != nullptr && cameras->GetFluidCounter() != 0) {
     if (const CScriptWater* water = TCastToConstPtr< CScriptWater >(mgr->GetObjectById(cameras->GetFluidId()))) {
       const CColor& retail = water->GetUnderwaterFogColor();
@@ -3391,12 +3659,25 @@ void CmdGci() {
       why.clear();
     }
     text = "sharing the emulator card: " + sub + why + "; it takes effect at the title screen";
+  } else if (action == "restore" && sCmd.args.size() <= 3) {
+    // Without an index, list the other releases' saves beside the mounted card.
+    const auto others = PortGci::OtherReleaseSaves();
+    if (sCmd.args.size() == 2) {
+      for (size_t i = 0; i < others.size(); ++i) {
+        text += std::to_string(i) + ": " + others[i].label + " (" + others[i].folder.string() + ")\n";
+      }
+      text += others.empty() ? "no other release's saves found" : "gci restore <n> copies one in";
+    } else {
+      const size_t i = std::strtoul(sub.c_str(), nullptr, 10);
+      text = i < others.size() ? others[i].label + ": " + PortGci::RestoreFrom(others[i]).Summary("Restored")
+                               : "no such entry";
+    }
   } else if (action == "emulator" && !path.empty()) {
     PortGci::SetEmulatorFolder(Lower(path) == "auto" ? "" : path);
     PortDebug::SaveSettingsNow();
     text = "emulator folder: " + (PortGci::EmulatorFolder().empty() ? "auto" : PortGci::EmulatorFolder());
   } else {
-    return Finish("usage: gci list | share on|off | emulator <folder|auto> | import <path> | export [usa|pal] <dir or .raw> | export trilogy "
+    return Finish("usage: gci list | share on|off | emulator <folder|auto> | restore [n] | import <path> | export [usa|pal] <dir or .raw> | export trilogy "
                   "<save.bin> | dolphin import | dolphin export [usa|pal|trilogy]");
   }
   size_t start = 0;
@@ -3777,8 +4058,11 @@ const CommandSpec kCommands[] = {
      "visor <combat|xray|scan|thermal|0-3>, beam <power|ice|wave|plasma|0-3>  switch like the touch wheels"},
     {"beam", nullptr, CmdBeam, ""},
     {"heal", nullptr, CmdHeal, "heal                       refill health"},
+    {"refill", nullptr, CmdRefill,
+     "refill [energy|ammo|all]   top up health, missiles and power bombs to what they hold (default all)"},
     {"kill", nullptr, CmdKill,
-     "kill <id> [damage]         kill an actor as with a last Power Beam shot (bosses too)"},
+     "kill <id>|target [damage]  kill an actor as with a last Power Beam shot (bosses too);\n"
+     "                           target: the enemy the player is locked on to"},
     {"phazongun", CmdPhazonGun, nullptr,
      "phazongun [off]            let the arm cannon fire the Phazon Beam (off: stop)"},
     {"hurt", nullptr, [](CStateManager&) { CmdHurt(sCmd.args.size() > 1 ? sCmd.args[1] : std::string()); },
@@ -3796,7 +4080,8 @@ const CommandSpec kCommands[] = {
      "language [en|EUFR|...]     the text language, changed while the game runs"},
     {"press", CmdPress, nullptr,
      "press <a+b+...> [frames]   hold pad buttons (a b x y z l r start up down left right;\n"
-     "                           sx:<n> sy:<n> cx:<n> cy:<n> also hold a stick axis;\n"
+     "                           sx:<n> sy:<n> cx:<n> cy:<n> also hold a stick axis,\n"
+     "                           lt:<n> rt:<n> a trigger's travel without its click;\n"
      "                           frames 0 = keep holding until the next press/stick)"},
     {"stick", CmdPress, nullptr,
      "stick <x> <y> [frames]     hold the main stick (-127..127); cstick for the C stick"},
@@ -3822,10 +4107,13 @@ const CommandSpec kCommands[] = {
      "roomgeo lod <scale>       scale the distances where models switch to coarser levels; 0 never switches\n"
      "roomgeo sort on|off       draw opaque room models nearest first (default on)\n"
      "roomgeo prepass on|off    depth-only pass first for cut-out room models (default off)\n"
+     "roomgeo opaqueprepass on|off  depth-only pass first for all room models (default on, off on Android)\n"
      "roomgeo casters on|off    out-of-view room models cast the sun's shadow (default on)"},
     {"shadow", CmdShadow, nullptr,
      "shadow [casters on|off]   the sun's shadow map last frame: direction, colour, box, casters, and the room's suns"},
     {"roomgeo", nullptr, nullptr,
+     "roomgeo perf [mask]       performance-mode shortcuts (bits: 1 glass every 2nd frame, 2 quarter-size measure, 4 blended fog;\n"
+     "                          0 exact); no mask prints them\n"
      "roomgeo costtest <n>      PBR shading cost test: 0 off, 1 flat, 2 no lights, 3 no volume, 4 no cube, 5 no normal maps, 6 no ORM/emissive, 7 maps only, 8 no aniso, 9 no aniso or mip blend, 10 no post-processing, 11 no screen copies"},
     {"gpuselftest", CmdGpuSelfTest, nullptr,
      "gpuselftest               render known patterns offscreen, compare the readback, log PASS/FAIL per case"},
@@ -3871,12 +4159,18 @@ const CommandSpec kCommands[] = {
     {"mods", CmdMods, nullptr,
      "mods [reload]              loaded mods, disc files and native textures; reload reads the folder again"},
     {"remastered", CmdRemastered, nullptr,
-     "remastered [start <image.nsp|xci> [key file] | cancel]  the Remastered import and its progress"},
+     "remastered [start <image.nsp|xci> [key file] | cancel | toggle]  the Remastered import and its progress;\n"
+     "                           toggle turns it on or off, as its binding"},
     {"touchpad", CmdTouchPad, nullptr,
      "touchpad [attach|detach|stick <x> <y>]  a virtual gamepad like Android's touch overlay"},
     {"minimap", CmdMinimap, nullptr,
      "minimap  the HUD minimap's screen rect (x0 y0 x1 y1, 0..1), or invalid"},
     {"maptap", CmdMapTap, nullptr, "maptap   a touch-overlay minimap tap: one Z press, opens the map"},
+    {"touchedit", CmdTouchEdit, nullptr,
+     "touchedit  opens the touch layout editor, as F1 > Controls > Edit layout"},
+    {"finger", CmdFinger, nullptr,
+     "finger down|move|up <id> <x> <y> | tap <x> <y> | drag <x0> <y0> <x1> <y1> [steps]  SDL touch "
+     "events at window pixels"},
     {"touchaim", CmdTouchAim, nullptr,
      "touchaim <dx> <dy> [hold s]   touch aim travel in dp (right/down +), the finger counts as down for hold seconds"},
     {"maprotate", CmdMapRotate, nullptr,
@@ -3889,7 +4183,7 @@ const CommandSpec kCommands[] = {
      "freecam [on|off|freeze on|off|player on|off|speed <n>|pos <x> <y> <z>|look <yaw> <pitch>]\n"
      "                           fly the view away from the player (HUD hidden; freeze holds the game still)"},
     {"thirdperson", CmdThirdPerson, nullptr,
-     "thirdperson [on|off] [distance <m>] [shoulder <m>] [height <m>]\n"
+     "thirdperson [on|off] [distance <m>] [shoulder <m>] [height <m>] [clips] [feet] [clip <name>|off [phase [yaw]]]\n"
      "                           third-person gameplay camera (also third_person* settings)"},
     {"photo", nullptr, CmdPhoto,
      "photo [on|off|capture [1|2|4]|fov <n>|roll <n>|samus on|off|panel on|off|super 1|2|4|speed <n>]\n"
@@ -3932,6 +4226,8 @@ const CommandSpec kCommands[] = {
     {"helmet", CmdHelmetVisorFx, nullptr,
      "helmet <0|1>, visorfx <0|1> show (1) or hide (0) the helmet and visor effects"},
     {"visorfx", CmdHelmetVisorFx, nullptr, ""},
+    {"dreadcannon", CmdDreadCannon, nullptr,
+     "dreadcannon [0|1]   the Dread arm cannon in first person (dread_first_person_cannon); prints it"},
     {"interp", CmdInterp, nullptr,
      "interp [actor|pose|particle|all <0|1>]   frame interpolation settings (F1 Video > Frame rate)"},
     {"present", CmdPresent, nullptr,
@@ -3946,6 +4242,8 @@ const CommandSpec kCommands[] = {
      "mapui [0|1]                 the map's extra legend entries and the Mark room prompt"},
     {"stackbeams", CmdStackBeams, nullptr,
      "stackbeams [0|1]           every shot also fires the other owned beams' projectiles (stack_beams)"},
+    {"radial", CmdRadial, nullptr,
+     "radial [beam|visor [x y] | release]  holds a radial menu with its selection (x right, y up); radial_menus"},
     {"walkspeed", CmdWalkSpeed, nullptr,
      "walkspeed [50..200]        on-foot movement speed in percent (walk_speed); no argument prints it"},
     {"beamdoors", nullptr, CmdBeamDoors,
@@ -3973,7 +4271,7 @@ const CommandSpec kCommands[] = {
      "disc verify [status|cancel]   check the whole disc image against Redump, in the background; status prints progress or the result"},
     {"discord", CmdDiscord, nullptr, "discord <0|1> | status   Discord Rich Presence"},
     {"gci", CmdGci, nullptr,
-     "gci list | share on|off | emulator <folder|auto> | import <path> | export <dir or .raw> | dolphin import|export   memory card transfer"},
+     "gci list | share on|off | emulator <folder|auto> | restore [n] | import <path> | export <dir or .raw> | dolphin import|export   memory card transfer"},
     {"ap", CmdAp, nullptr,
      "ap [connect <server> <slot> [password] | disconnect | recent | resume <n> | say <text> | chat]   Archipelago, as the F1 Archipelago page does"},
     {"rando", CmdRando, nullptr,
@@ -4046,6 +4344,8 @@ void Tokenize(const std::string& line, std::vector< std::string >& args) {
 
 } // namespace
 
+std::span<const PortConsoleItem> PortConsoleItems() { return kPlayerItems; }
+
 bool PortConsoleEnabled() {
   if (!sStarted) {
     Start();
@@ -4057,11 +4357,13 @@ bool PortConsoleFrame(unsigned frame) {
   if (!sStarted) {
     Start();
   }
-  if (!sEnabled) {
+  if (!sEnabled && !sLocalUsed) {
     return false;
   }
   sFrame = frame;
-  PortFx::FrameBoundary();
+  if (sEnabled) {
+    PortFx::FrameBoundary();
+  }
   while (!sHasCommand) {
     Incoming next;
     {
@@ -4106,8 +4408,25 @@ void PortConsoleTick(CStateManager& mgr) {
   if (sEnabled && sFxLoop.on) {
     TickFxLoop(mgr);
   }
-  if (!sEnabled || !sHasCommand || !IsTickCommand(sCmd.args[0])) {
+  if (!sHasCommand || !IsTickCommand(sCmd.args[0])) {
     return;
   }
   RunTick(mgr);
+}
+
+bool PortConsoleRun(std::string_view line) {
+  if (!sStarted) {
+    Start();
+  }
+  std::lock_guard< std::mutex > lock(sQueueMutex);
+  size_t local = 0;
+  for (const Incoming& in : sQueue) {
+    local += in.generation == kLocalGeneration;
+  }
+  if (local >= kMaxLocalQueued) {
+    return false;
+  }
+  sQueue.push_back({std::string(line), kLocalGeneration});
+  sLocalUsed = true;
+  return true;
 }

@@ -242,6 +242,9 @@ void CScriptSpecialFunction::AcceptScriptMsg(EScriptObjectMessage msg, TUniqueId
     x1e5_26_displayBillboard = false;
   }
   CActor::AcceptScriptMsg(msg, uid, mgr);
+#ifdef TARGET_PC
+  if (msg == kSM_Deleted) xPortBarrier.Stop(mgr);
+#endif
 
   if (xe8_function == kSF_ChaffTarget && msg == kSM_InitializedInArea) {
     AddMaterial(kMT_Target, mgr);
@@ -696,6 +699,10 @@ void CScriptSpecialFunction::ThinkIntroBossRingController(float dt, CStateManage
   case kRS_Scramble:
     break;
   case kRS_Breakup: {
+#ifdef TARGET_PC
+    PortUpdateBarrier(dt, mgr);
+    if (xPortBarrier.HandlesBreakup()) break;
+#endif
     float minMag = 0.f;
     for (int i = 0; i < x198_ringControllers.size(); ++i) {
       if (CActor* const act = TCastToPtr< CActor >(mgr.ObjectById(x198_ringControllers[i].x0_id))) {
@@ -756,7 +763,25 @@ void CScriptSpecialFunction::ThinkIntroBossRingController(float dt, CStateManage
   default:
     break;
   }
+#ifdef TARGET_PC
+  if (x1a8_ringState != kRS_Breakup) PortUpdateBarrier(dt, mgr);
+#endif
 }
+
+#ifdef TARGET_PC
+void CScriptSpecialFunction::PortUpdateBarrier(float dt, CStateManager& mgr) {
+  if (x198_ringControllers.size() != 5) {
+    xPortBarrier.Stop(mgr);
+    return;
+  }
+  std::array<PortQueenBarrier::RingInput, 5> inputs{};
+  for (int i = 0; i < 5; ++i) {
+    inputs[i].uid = x198_ringControllers[i].x0_id.value;
+    inputs[i].reached = x198_ringControllers[i].x8_reachedTarget;
+  }
+  xPortBarrier.Update(dt, int(x1a8_ringState), inputs, *this, mgr);
+}
+#endif
 
 void CScriptSpecialFunction::ThinkPlayerFollowLocator(float, CStateManager& mgr) {
   for (rstl::vector< SConnection >::const_iterator conn = GetConnectionList().begin();

@@ -83,6 +83,9 @@ struct RetailPlacement {
   double orient[3][3] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
   double offset[3] = {0, 0, 0};
   std::string room;
+  // The object (an Actor or Platform) names an animation set after the model: retail draws the
+  // set's character (ScriptLoader's LoadActor, LoadPlatform), so the model is not what it shows.
+  bool animated = false;
 };
 
 struct RoomIO {
@@ -117,6 +120,16 @@ struct RoomIO {
   // object drawing one of them keeps its own retail id, now the mod's conversion of that GENP,
   // and takes the effect actor's particle variables.
   std::function<std::vector<uint32_t>(const std::array<uint8_t, 16>& genp)> matched;
+  // Optional; used with `effect` for the one room whose barrier Remastered drives from a
+  // controller (the Parasite Queen's rings): each of the ten effects it names is checked
+  // against its conversion. `part` is the PART `effect` gave that effect's GENP, `feature` its
+  // shader feature (1 << 29 the refracting, two-variable family, 1 << 30 the glow one) and
+  // `realVars` the real particle variables the controller animates, as the 16 bytes they are
+  // stored as (Variable::guid's order): breakup then motion for the refraction effect, breakup
+  // for the glow one. False fails the whole group, which is then left out and the retail rings
+  // stay; nothing is added by halves.
+  std::function<bool(uint32_t part, uint32_t feature, const std::vector<std::array<uint8_t, 16>>& realVars)>
+      barrierEffect;
   // Optional: told each retail model placement (RetailPlacement) of every placed room, from
   // the world's worker thread. The entity of an ok one is not written into the room's geometry.
   std::function<void(const RetailPlacement& placement)> retailModel;

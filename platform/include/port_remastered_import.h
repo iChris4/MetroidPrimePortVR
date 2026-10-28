@@ -95,7 +95,16 @@ namespace ImportStage {
 // 72: 084a8db5 draws as kind 43 (HoloGlass less TCH1/TCH2/DIFC).
 // 73: 0c0b6119 draws as kind 31 (fb2bc671's maths, DIFC for ICNC).
 // 74: every retail fx material draws through its Remastered shader (kShaderFxNoKind gone).
-inline constexpr int kConverter = 74;
+// 75: the three shipped null-model ids retain bounds but emit no render surfaces.
+// 76: Ore Processing EnergyField uses its shipped world-space mask formula.
+// 77: E2644678 (the Ore Processing pillar glass) draws as kind 29 with its CCH4 phase scale and depth cap.
+// 78: 5586D988 route hologram retains its vertex data and CCH/DIFC constants as kind 45.
+// 79: the transparent-flagged EnergyField materials keep kind 44 (no not-layered demotion).
+// 80: 81B8E136 (Thardus) draws as a978d507, its verbatim subset; a two-tangent model writes the second
+//     frame when the buffers its two-tangent surfaces draw have it, not only when all of them do.
+// 81: C78982B4 door frames and its twin family 131ED7F0 read their bake from coord 3 (TEXCOORD_1.zw).
+// 82: the surface's visor word keeps mesh bits 19 and 22 (the thermal visor's hot and cold passes).
+inline constexpr int kConverter = 82;
 // What a converted texture holds: port_remastered_image/txtr/dds/astc, and Converter's Get and
 // Cube. Each converted texture is kept across imports under its tag and this number, so a
 // kConverter bump re-imports the models without converting their textures again.
@@ -113,7 +122,14 @@ inline constexpr int kTextures = 5;
 // 11: the Elite Quarters stasis tank 3C26F42B is in the table.
 // 10: a plain cutout over a retail fx material is drawn opaque, cut by the shader.
 // 9: a ColorUnlit mesh (the door shields) gets a back copy.
-inline constexpr int kModels = 18;     // the table's models, their looks and the ANCS copies
+// 19: remove the obsolete model-driven Queen barrier.
+// 20: a skin joint whose pivot sits on one of its retail bones drops that bone's ancestors
+//     (the Parasite Queen's jaw); the 12 artifacts each take their own Remastered model
+//     (CHPR FAA9C708's model node N is name-pool character N), Truth/Lifegiver/Chozo/World added;
+//     the elevator platforms 32103B70/F33A6018 take 6FA561D0's model, not a Frigate rubble sheet.
+// 21: intra-Mines elevator C0A4DF30 uses the shipped E8E0AB8D platform, not a VFX model.
+// 22: a static model on a rigid retail skin keeps each connected piece on one bone (the gunship's hatch).
+inline constexpr int kModels = 22;
 // 63: ELPS reads its CNST surface flag; the system tween is 0 only at a 0x1000000 lifetime.
 // 62: NEGT, CRCV, SPEV, ELPS, ROTV, PNCV, KEYF, SLTW, CRLN octaves, KESP, one-stop GRAD, PAP0/9,
 //     ADV9 and IAV0..3 are converted; PLNV counts come from MAXP.
@@ -157,7 +173,31 @@ inline constexpr int kModels = 18;     // the table's models, their looks and th
 // 102: visor rain splash (VFX_VisorRain 0ec41df0, BC978532 paired).
 // 103: the FlickerBat's 0B9E48EB paired with 3b29b0b3 (#visual-inferred: inferred from the
 // look, not proven by any CHPR or other serialized reference).
-inline constexpr int kEffects = 103;   // port_remastered_effect_import and the particle converters
+// 106: a VMSH whose material's shader reads COLOR (perm 016) is tinted by its vertex colour (VMSH flag 4).
+// 112: a VFX material's sRGB texture over 64 texels is an sRGB .dds, decoded by the GPU.
+// 113: early PIRN (old late-marker PARTs need reimport) and Ice model back culling.
+// 114: WallCrawlerSwarm part1 paired (0A621238, 7DFF579C; #by-hand).
+// 115: MetroidBeta electricParticle 9AEBBD85 paired (#by-hand).
+// 116: Puffer particle C9D453A3 and synthetic puffercloud (#by-hand).
+// 117: enemies' PatternedInfo death particle GENPs (room-only).
+// 118: matched objects' PART property GENPs (room-only).
+// 119: Metroid Prime relay particle property GENPs (room-only).
+// 120: MetroidBeta 3ec1f3bd -> 9AEBBD85, 8e1a4b01 -> SWHC 18E0EADC (#by-hand).
+// 121: Thardus/FlyingPirate/Elite/Omega slot GENPs, four ELC2 slots (#by-hand).
+// 122: room-only ELC2 slots (AtomicBeta) as ELSCs.
+// 124: Ridley's plasma-beam ELC2 (kActorEffectGuids).
+// 125: its GPSM/EPSM GENPs, resolved under their own ids.
+// 127: a standalone GENP another embeds: one id for both (Babygoth's flame collision).
+// 129: Babygoth's frozen VFX (VFX_FrameBuffer_Color_Erosion_Unlit, a HUD billboard).
+// 130: the Ice Sheegoth's breath.
+// 131: the Parasite Queen's beam electric.
+// 132: SteamMP1 GENPs (room-only).
+// 133: visor steam (VFX_VisorSteam 53eceaa4).
+// 134: Metroid Prime's beams' electric (room ELC2s).
+// 135: KESP kept as the ELC2 node tween (AtomicBeta ELC2 radius).
+// 136: GunTurret particle properties (room GENPs).
+// 137: GunTurret visor effects (room ELC2s).
+inline constexpr int kEffects = 138;   // Drone laser and scanner particles (room GENPs)
 // 20: two rooms matching one area write only the closer match's files, not the later room's.
 // 21: roomenv version 22, the world master's hints driven by its camera volumes (the table in every roomenv).
 // 22: a master's InventoryActivator fired by the camera going under water drives its hints (kSenderCameraWaterItem).
@@ -169,11 +209,41 @@ inline constexpr int kEffects = 103;   // port_remastered_effect_import and the 
 // 29: a retail model's objects pair with its entities by order (RetailPlacement orient, entity).
 // 30: roomenv version 26, the EnvironmentFX colour intensity (a RelayAutoFire-fired density controller).
 // 34: a retail Effect object drawing a PART its GENP is shared with takes the actor's variables (the lava spit).
-inline constexpr int kRooms = 34;      // port_remastered_room: roomenv/, .roomgeo, .roomliquid, .roomfx, water maps
+// 36: actors with a model of Remastered's own under a retail-style id no retail object names
+//     are drawn, hiding the retail Actors they stand in for (Central Dynamo's grates).
+// 37: flamejet source placement overrides.
+// 38: Ore Processing's co-rotating PlatformMP1 render models.
+// 39: source placements for all matched converted effects.
+// 40: placement lookup includes every converted-effect pairing method.
+// 42: general PlatformMP1 render models and transform bindings.
+// 43: ColorModulate state bit 0x1000 starts on Registered.
+// 44: exposure hint fluid enum, priority and initial activation.
+// 45: exclude Landing Site's added unposed gunship hulls; keep retail's animated ship.
+// 46: a script node's retail input passes unmatched Relays (the frigate hangar's intro hull counter).
+// 49: an ActorKeyframe's Play to a PlatformMP1 (its own action hash) plays its clip, and script
+// objects in a cycle match by a subset of their retail targets.
+// 50: a retail model on an Actor or Platform that names an animation set stays retail.
+// 51: .roomfx v6, a matched enemy's PatternedInfo death particles and offsets.
+// 52: .roomfx v7, a matched object's PART properties (Water splashes, VisorGoo, Burrower).
+// 53: the Metroid Prime relay's nested CMetroidPrimeData particle properties.
+// 54: the unplaced relay pairs with the area's only type 0x84 object.
+// 55: Thardus, FlyingPirate, ElitePirate and OmegaPirate particle properties.
+// 56: AtomicBeta's electric effect (ELSC) property, per placement.
+// 57: .roomfx v8, a matched Steam's Remastered visor steam (SteamMP1).
+// 58: .roomliquid v5, each surface's matched retail Water editor id.
+// 59: .roomfx v9, the Metroid Prime relay's beams' Remastered electric (actor slots).
+// 60: GunTurret particle properties (idle, deactivate, targetting, charging, panning).
+// 61: a GunTurret's visor effect (actor slot 4: ELC2 or GENP).
+// 62: a Drone's laser particles and its scanner effect (actor slot 5).
+// 63: roomenv version 29, the suns' links and timelines (the intro's fill suns fade out).
+inline constexpr int kRooms = 63;
 inline constexpr int kRoomModels = 1;  // the rooms' own models and their levels of detail
-inline constexpr int kText = 1;        // port_remastered_text, and the font (port_remastered_font)
+// kText: port_remastered_text, and the font (port_remastered_font).
+// 2: text/.disc, the disc the tables were merged from (kTextDiscName).
+inline constexpr int kText = 2;
 // 9: envfx.bin, the EnvironmentFX flake textures (port_envfx_file.h).
-inline constexpr int kHud = 9;         // port_remastered_hud, port_remastered_map, envfx.bin
+// 10: shell.bin, the silhouette-shell textures (port_shell_file.h).
+inline constexpr int kHud = 17;        // port_remastered_hud, port_remastered_map, envfx.bin, shell.bin
 inline constexpr int kMovies = 0;      // port_remastered_movie
 inline constexpr int kGallery = 0;     // the gallery pictures (port_gallery)
 }  // namespace ImportStage
@@ -585,6 +655,11 @@ inline constexpr int kImportVersion = 38 + ImportStage::kConverter + ImportStage
                                       ImportStage::kText + ImportStage::kHud + ImportStage::kMovies +
                                       ImportStage::kGallery;
 inline constexpr const char* kImportStampName = ".import-version";
+// In the import's text folder: the PortDisc::Name of the disc its tables are copies of. They hold
+// that disc's strings and image ids, so the mod scan serves them only on that disc (a GameCube
+// import's STRG_Main on Trilogy names GameCube-only icons, and Trilogy's map reads more strings).
+inline constexpr const char* kTextFolder = "text";
+inline constexpr const char* kTextDiscName = ".disc";
 
 // ~/.switch/prod.keys if it is there, else empty.
 std::string DefaultKeysPath();

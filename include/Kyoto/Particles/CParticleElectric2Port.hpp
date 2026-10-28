@@ -1,6 +1,7 @@
 #ifndef _CPARTICLEELECTRIC2PORT
 #define _CPARTICLEELECTRIC2PORT
 
+#include <array>
 #include <vector>
 
 #include "Kyoto/Graphics/CColor.hpp"
@@ -53,13 +54,30 @@ public:
     int life = 1;
     int startFrame = 0;
     int endFrame = 1;
-    float leftRad = 0.f;
-    float rightRad = 0.f;
-    float color[4] = {1.f, 1.f, 1.f, 1.f};
-    float iten = 1.f;
-    float vpmt[4][4] = {};
+    std::vector< float > leftRad;  // per node (UpdateBolt 0xb77638 node+0x28 x RADS)
+    std::vector< float > rightRad; // per node (node+0x2c x RADS)
+    std::vector< std::array< float, 4 > > color; // per node: NCLR x COLR
+    std::vector< float > iten;                   // per node (the sub-particle AddVar buffer)
+    float vpmt[4][4] = {};                       // per bolt (render indexes PMTR by bolt)
+    // The primary line's end points before the bake (the owner's space, unscaled), where
+    // CreateNewParticles 0xb76508 places the GPSM and EPSM children, and the children taken.
+    PortElectric2::V3 first{};
+    PortElectric2::V3 last{};
+    int gpsm = -1;
+    int epsm = -1;
   };
   const std::vector< Bolt >& Bolts() const { return mBolts; }
+  std::vector< Bolt >& Bolts() { return mBolts; }
+  // The bolts the last Step created (the last Created() of Bolts()), and the children of the ones
+  // it retired (UpdateElectricalEffects 0xb757a4 shuts those down).
+  int Created() const { return mCreated; }
+  struct Retired {
+    int gpsm;
+    int epsm;
+  };
+  const std::vector< Retired >& RetiredChildren() const { return mRetired; }
+  // Beam_Reset 0xb784ec: no bolts, no carried generation.
+  void Reset();
 
 private:
   void CreateBolt(int frame, const Ctx& ctx);
@@ -81,6 +99,8 @@ private:
   CTransform4f mXf = CTransform4f::Identity(); // the owner's latest xf, for XFMD 3 bolts
   CVector3f mScale{1.f, 1.f, 1.f};              // global * local scale of the same
   std::vector< Bolt > mBolts;
+  int mCreated = 0;
+  std::vector< Retired > mRetired;
 };
 
 #endif // _CPARTICLEELECTRIC2PORT

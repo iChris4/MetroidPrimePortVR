@@ -207,15 +207,16 @@ void DrawVideoDisplay() {
   ImGui::SetItemTooltip("The crosshair in the middle of the screen (free aim, mouse aim, twin "
                         "stick). 100%% is full strength; the game's own crosshair is much fainter (19%%).");
   {
-    static const char* const kStyles[] = {"Classic", "Remastered"};
+    static const char* const kStyles[] = {"Classic", "Remastered", "GameCube"};
     int style = static_cast< int >(sCrosshairStyle);
-    if (ImGui::Combo("Crosshair style", &style, kStyles, 2)) {
+    if (ImGui::Combo("Crosshair style", &style, kStyles, 3)) {
       sCrosshairStyle = static_cast< PortDebug::ECrosshairStyle >(style);
       MarkDirty();
     }
     ImGui::SetItemTooltip(
         "Classic: the game's own crosshair model. Remastered: rings and three spikes in\n"
-        "the Remastered design. Original experience uses Classic.");
+        "the Remastered design. GameCube: on a Trilogy disc, the GameCube crosshair in place\n"
+        "of Trilogy's aiming cursor (Classic on a GameCube disc). Original experience uses Classic.");
   }
   if (ImGui::Checkbox("Custom crosshair colour", &sCrosshairCustomColor)) {
     MarkDirty();
@@ -623,21 +624,52 @@ void DrawVideoCompatibility() {
   ImGui::TextDisabled("For GPU driver problems, such as a black world or a crash at start. Most of "
                       "these take effect after a restart.");
   ImGui::PopTextWrapPos();
-#if defined(_WIN32)
+#if defined(_WIN32) || (defined(__linux__) && !defined(__ANDROID__))
   // Which API to ask Aurora for (issue #135). Read at window creation, so it takes a
   // restart: Aurora tries the choice first and falls back to its own order if it
-  // won't start, and the setting is left alone.
+  // won't start, and the setting is left alone. Only this build's choices are listed,
+  // so an API it can't start is never offered.
   {
-    static const char* const kBackendNames[] = {"Auto", "Direct3D 12", "Vulkan", "Direct3D 11"};
-    int choice = static_cast< int >(sGraphicsBackend);
-    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 11.f);
-    if (ImGui::Combo("Renderer", &choice, kBackendNames, PortDebug::kGraphicsBackendCount)) {
-      SetGraphicsBackend(static_cast< PortDebug::EGraphicsBackend >(choice));
+    const std::span<const PortDebug::EGraphicsBackend> choices = PortGraphicsBackend::Choices();
+    // The labels in Choices() order, NUL-separated as ImGui wants them, built from the
+    // choices so the list cannot drift from the span. Auto asks for nothing, so it is
+    // named as such rather than by whatever Aurora picks.
+    static const std::string kBackendLabels = [] {
+      std::string labels;
+      for (const PortDebug::EGraphicsBackend choice : PortGraphicsBackend::Choices()) {
+        labels += choice == PortDebug::kGraphicsBackend_Auto
+                      ? "Auto"
+                      : PortGraphicsBackend::DisplayName(PortGraphicsBackend::ToAurora(choice));
+        labels.push_back('\0');
+      }
+      labels.push_back('\0');
+      return labels;
+    }();
+    // The combo's index is a position in Choices(), never an enum value. A saved choice
+    // this build doesn't offer (a file from another platform) shows as Auto; it applies
+    // again, untouched, where it is offered.
+    int choice = 0;
+    for (size_t i = 0; i < choices.size(); ++i) {
+      if (choices[i] == sGraphicsBackend) {
+        choice = static_cast< int >(i);
+        break;
+      }
     }
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 11.f);
+    if (ImGui::Combo("Renderer", &choice, kBackendLabels.c_str(), static_cast< int >(choices.size()))) {
+      SetGraphicsBackend(choices[static_cast< size_t >(choice)]);
+    }
+#if defined(_WIN32)
     ImGui::SetItemTooltip(
         "Which graphics API to start on. Auto tries Direct3D 12, then Vulkan, then\n"
         "Direct3D 11. Restart to apply. If the chosen API can't start, this run falls\n"
         "back to Auto and the setting is kept.");
+#else
+    ImGui::SetItemTooltip(
+        "Which graphics API to start on. Auto uses Vulkan. OpenGL (4.4 or newer) is for\n"
+        "GPUs whose Vulkan driver is missing or draws wrong. Restart to apply. If the\n"
+        "chosen API can't start, this run falls back to Auto and the setting is kept.");
+#endif
     // What this run asked for is the resolution of the STARTUP selection, not the
     // setting: MP_GRAPHICS_BACKEND outranks the file, and changing the combo must not
     // pretend the API this run started on was the one asked for.

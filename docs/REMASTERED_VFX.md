@@ -44,3 +44,18 @@ the previous formulas. `misc2.y/z` carry gain/bias in the existing uniform
 vec4, without changing its size or layout. No RGB, blending, depth or exposure
 policy changes accompany this extension. Import stage effects is 29; old
 imports require regeneration to receive these new bytes.
+
+## Queen barrier
+
+The Parasite Queen room's barrier is ten effects around five platforms: each platform's
+refraction (VMAT feature bit 29, `VFX_BarrierShield`, MATI `6429c234`) and its glow (bit 30,
+`VFX_BarrierGlow`, MATI `ba0acbd6`). They are staged as one roomfx v4 group and activated
+all-or-none: the barrier's own platform collision, motion and rotation stay retail's, and only
+the visual rings move to the port's effects. A missing or failed member (asset, texture token,
+generation change, or a PART that fails the barrier validation - feature bit, ordinary 2-D maps,
+VMSH v2 with the mesh colour, VPRM's CCH0 row, XFMD 3, the material's real PVRT variables and
+VSMT at 32/33) falls back to the retail rings for the whole group, never part of it. A
+save-state restore invalidates the group until the next area load. The conversion needs a
+re-import (models 19, effects 104, rooms 35); an older import has no converted barrier effects
+and keeps the retail rings. The shaders and their CPU feed are covered by their own tests
+against converted PARTs; no rendered frame is claimed as proof for them.

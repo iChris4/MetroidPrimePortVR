@@ -41,6 +41,7 @@
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <span>
 #include <memory>
@@ -58,10 +59,10 @@ u32 list_index_count(GXPrimitive prim, u16 vtxCount) noexcept {
   case GX_QUADS:
     return (vtxCount / 4u) * 6u;
   case GX_TRIANGLES:
-    return vtxCount;
+    return vtxCount / 3u * 3u;
   case GX_TRIANGLEFAN:
   case GX_TRIANGLESTRIP:
-    return vtxCount < 3 ? vtxCount : (vtxCount - 3u) * 3u + 3u;
+    return vtxCount < 3 ? 0 : (vtxCount - 3u) * 3u + 3u;
   case GX_LINES:
   case GX_LINESTRIP:
   case GX_POINTS:
@@ -198,6 +199,8 @@ struct DrawCache {
   // A cutout caster's own texture group: the receiver layout holds the shadow map being drawn into.
   gfx::PipelineRef cutPipelineRef{};
   bool cutCaster = false;
+  // GX_AURORA_PORT_DEPTH_PREPASS pass 1 and a draw that can't go in it (depth_prepass_eligible)
+  bool prepassSkip = false;
   GXBindGroups cutBindGroups{};
   GXBindGroups bindGroups{};
   uint64_t bindGeneration = 0;
@@ -959,6 +962,198 @@ static bool drop_overflowed_draw(gfx::Range range, const char* buffer) noexcept 
   return true;
 }
 
+// --- Vertex array overrun check (MP_GX_CHECK_ARRAYS) -------------------------------------------------
+//
+// 807013b1e: a skinned PBR draw read its bind pose through GX_VA_TEX7 while TEX7's array held 8-byte UVs.
+// The shader reads 12-byte positions there, so it read past the array, which on Vulkan with Dawn's
+// robustness off crashed. The check below walks a draw's vertex indices and gives the verdict the
+// shader's own fetches would: the index comes out of the vertex (shader.cpp attr_address: raw_fetch_u8_1
+// / raw_fetch_u16_1(..., false)), the element's byte size from the fetch that reads it (fetch_attr,
+// fetch_color_attr). Off unless MP_GX_CHECK_ARRAYS is set to anything but "0"; a build without NDEBUG
+// has it on.
+
+// The bytes one shader fetch reads for an attribute, given the vertex format's component type and count.
+static u32 attr_element_bytes(GXAttr attr, GXCompType type, u32 cnt) noexcept {
+  if (attr == GX_VA_CLR0 || attr == GX_VA_CLR1) {
+    // fetch_color_attr unpacks one packed colour, whatever the format's count says.
+    return comp_type_size(attr, type);
+  }
+  if (type == GX_RGBA8) {
+    return 4; // unpack4x8unorm(load_u32_raw(&abuf, offs))
+  }
+  // A normal's NBT slices read from the same element, up to 3 comps at (cnt - 3) comps in, so the
+  // full cnt covers them.
+  return u32(comp_type_size(attr, type)) * cnt;
+}
+
+struct IndexedAttrFetch {
+  GXAttr attr;
+  u8 descType;   // GX_INDEX8 or GX_INDEX16
+  u32 vtxOffset; // where the vertex holds the index (populate_pipeline_config's walk)
+  u32 elementBytes;
+};
+
+// Whether the shader uses a texture coordinate attribute: a texgen reads it, or it is the PBR lightmap's
+// UV (populate_pipeline_config). The shader loads every attribute in the vertex description, but the
+// load of one nothing uses is dead code. Retail does leave such indices past their array: a packed
+// lightmap draw (VTXFMT2) whose material has no lightmap keeps TEX0 in its description, with the
+// unpacked UVs bound and packed-UV indices, and its one texgen reading another attribute.
+static bool tex_attr_used(GXAttr attr) noexcept {
+  const auto& state = g_gxState;
+  if (state.pbr != 0 && state.pbrLightmapAttr == attr) {
+    return true;
+  }
+  const auto src = static_cast<GXTexGenSrc>(GX_TG_TEX0 + (attr - GX_VA_TEX0));
+  for (u32 t = 0; t < state.numTexGens; ++t) {
+    if (state.tcgs[t].src == src) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// The attributes the vertex shader fetches from an array, with the offset of their index in the vertex.
+static u32 collect_indexed_attr_fetches(GXVtxFmt fmt, IndexedAttrFetch* out) noexcept {
+  const auto& vtxFmt = g_gxState.vtxFmts[fmt];
+  u32 count = 0;
+  u32 vtxOffset = 0;
+  for (int i = GX_VA_PNMTXIDX; i <= GX_VA_TEX7; ++i) {
+    const auto attr = static_cast<GXAttr>(i);
+    const auto descType = g_gxState.vtxDesc[i];
+    const auto& attrFmt = vtxFmt.attrs[i];
+    const u32 cnt = comp_cnt_count(attr, attrFmt.cnt);
+    const bool nbt3 = attr == GX_VA_NRM && attrFmt.cnt == GX_NRM_NBT3;
+    if (descType == GX_INDEX8 || descType == GX_INDEX16) {
+      // Only VA_POS..VA_TEX7 have a base in DrawImmediateData::arrayStart.
+      if (i >= GX_VA_POS && (i < GX_VA_TEX0 || tex_attr_used(attr))) {
+        out[count++] = IndexedAttrFetch{attr, u8(descType), vtxOffset, attr_element_bytes(attr, attrFmt.type, cnt)};
+      }
+      vtxOffset += descType == GX_INDEX16 ? (nbt3 ? 6u : 2u) : (nbt3 ? 3u : 1u);
+    } else if (descType == GX_DIRECT) {
+      vtxOffset += u32(comp_type_size(attr, attrFmt.type)) * cnt;
+    }
+  }
+  return count;
+}
+
+constexpr std::string_view attr_name(GXAttr attr) noexcept {
+  switch (attr) {
+  case GX_VA_POS:
+    return "POS"sv;
+  case GX_VA_NRM:
+    return "NRM"sv;
+  case GX_VA_CLR0:
+    return "CLR0"sv;
+  case GX_VA_CLR1:
+    return "CLR1"sv;
+  case GX_VA_TEX0:
+    return "TEX0"sv;
+  case GX_VA_TEX1:
+    return "TEX1"sv;
+  case GX_VA_TEX2:
+    return "TEX2"sv;
+  case GX_VA_TEX3:
+    return "TEX3"sv;
+  case GX_VA_TEX4:
+    return "TEX4"sv;
+  case GX_VA_TEX5:
+    return "TEX5"sv;
+  case GX_VA_TEX6:
+    return "TEX6"sv;
+  case GX_VA_TEX7:
+    return "TEX7"sv;
+  default:
+    return "?"sv;
+  }
+}
+
+// True when the array is missing, or the draw's last index's element reads past its end. shaderStride is
+// the step the shader takes between elements, which is the array's own stride except for the bind pose.
+static bool array_overrun(GXAttr attr, const AttrArray& array, u32 shaderStride, u32 maxIndex,
+                          u32 elementBytes) noexcept {
+  const u64 base = u64(array.baseIndex) * array.stride;
+  const u64 needed = base + u64(maxIndex) * shaderStride + elementBytes;
+  if (array.data != nullptr && needed <= array.size) {
+    return false;
+  }
+  // Once per (attribute, array), as drop_overflowed_draw reports a full buffer once.
+  static std::vector<std::pair<GXAttr, const void*>> sReported;
+  const std::pair<GXAttr, const void*> key{attr, array.data};
+  if (sReported.size() < 64 && std::find(sReported.begin(), sReported.end(), key) == sReported.end()) {
+    sReported.push_back(key);
+    Log.error("gx: vertex array overrun: attr {} ({}), max index {}, base index {}, stride {}, element {} bytes: "
+              "needs {} bytes, the array has {}",
+              static_cast<u32>(attr), attr_name(attr), maxIndex, array.baseIndex, shaderStride, elementBytes, needed,
+              array.size);
+  }
+  testing::vertexArrayOverruns.fetch_add(1, std::memory_order_relaxed);
+  return true;
+}
+
+// Whether the draw's bind pose is read from TEX7's array (shader.cpp, pbrBindPos): bind_pos_active, less
+// the actor shadow decal pass, which drops the PBR mode and with it the bind pose (populate_pipeline_config).
+static bool bind_pos_read(GXPrimitive prim) noexcept {
+  if (!bind_pos_active()) {
+    return false;
+  }
+  const auto& state = g_gxState;
+  const bool depthOnly = state.depthPrepass == 1 || state.depthPrepass == 3;
+  const bool drawId = state.drawIdMode && !depthOnly;
+  const bool shadow =
+      state.shadowCaster && state.shadowActive && prim != GX_LINES && prim != GX_LINESTRIP && prim != GX_POINTS;
+  return !(state.actorDecal && shadow && !drawId && !depthOnly);
+}
+
+// True when this draw must be dropped: one of the arrays its shader reads does not hold the elements its
+// indices reach. vtxData is the draw's vertices as they are in the FIFO (or the display list) and
+// vtxStride their size in bytes.
+static bool check_indexed_arrays(const u8* vtxData, GXVtxFmt fmt, GXPrimitive prim, u16 vtxCount,
+                                 u32 vtxStride) noexcept {
+  if (!testing::vertexArrayCheck.load(std::memory_order_relaxed)) {
+    LIKELY { return false; }
+  }
+  if (vtxData == nullptr || vtxCount == 0) {
+    return false;
+  }
+  auto& state = g_gxState;
+  IndexedAttrFetch fetches[MaxIndexAttr];
+  const u32 fetchCount = collect_indexed_attr_fetches(fmt, fetches);
+  // The largest index each array is read with, over the draw's vertices.
+  u32 maxIndex[MaxIndexAttr] = {};
+  for (u32 v = 0; v < vtxCount; ++v) {
+    const u8* const vtx = vtxData + size_t(v) * vtxStride;
+    for (u32 a = 0; a < fetchCount; ++a) {
+      // raw_fetch_u16_1(..., false): the index is big-endian, as GX data is.
+      const u32 idx = fetches[a].descType == GX_INDEX8
+                          ? u32{vtx[fetches[a].vtxOffset]}
+                          : (u32{vtx[fetches[a].vtxOffset]} << 8) | u32{vtx[fetches[a].vtxOffset + 1]};
+      maxIndex[a] = std::max(maxIndex[a], idx);
+    }
+  }
+  bool drop = false;
+  for (u32 a = 0; a < fetchCount; ++a) {
+    const auto& array = state.arrays[fetches[a].attr];
+    drop = array_overrun(fetches[a].attr, array, array.stride, maxIndex[a], fetches[a].elementBytes) || drop;
+  }
+  if (bind_pos_read(prim)) {
+    // The bind pose is GX_VA_POS's index into TEX7's array, read as a 12-byte position's y (shader.cpp:
+    // `imm_array_start + index * 12u + 4u`, 4 bytes), whatever TEX7's array holds: 807013b1e was an
+    // 8-byte-UV array read that way.
+    u32 maxPosIndex = 0;
+    for (u32 a = 0; a < fetchCount; ++a) {
+      if (fetches[a].attr == GX_VA_POS) {
+        maxPosIndex = maxIndex[a];
+      }
+    }
+    drop = array_overrun(GX_VA_TEX7, state.arrays[GX_VA_TEX7], 12, maxPosIndex, 8) || drop;
+  }
+  if (drop) {
+    // Whatever was pushed before the drop is orphaned: the next draw must not merge into it.
+    sDrawCache.lastDrawFmt = GX_MAX_VTXFMT;
+  }
+  return drop;
+}
+
 static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u32 vtxCount, gfx::Range vertRange, gfx::Range idxRange,
                          u32 numIndices, bool cachedGeometry = false) noexcept {
   auto& state = g_gxState;
@@ -1006,17 +1201,24 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u32 vtxCount, gfx::Rang
     const bool prevUsesVolFog = cache.shaderInfo.usesVolFog;
     const bool prevShadowReceive = cache.shaderInfo.shadowReceive;
     const bool prevActorDecal = cache.shaderInfo.actorDecal;
+    const bool prevUsesShell = cache.shaderInfo.usesShell;
     const bool prevUsesLightmap = cache.shaderInfo.usesLightmap;
     populate_pipeline_config(cache.config, prim, fmt);
     // PrimedGun: the eye passes' pipelines (multiviewPipelineRefs) were the previous config's.
     cache.multiviewPipelineMask = 0;
+    // GX_AURORA_PORT_DEPTH_PREPASS: pass 2 shades an eligible draw where the depth is equal without
+    // writing it, yet it casts as the draw it stands for (LEQUAL, writing). Its config can equal a
+    // plain EQUAL draw's, which doesn't cast, so it bypasses the memo.
+    const bool prepassEligible = state.depthPrepass != 0 && depth_prepass_eligible(lineMode);
+    const bool prepassShade = state.depthPrepass == 2 && prepassEligible;
+    cache.prepassSkip = (state.depthPrepass == 1 || state.depthPrepass == 3) && !prepassEligible;
     // A frame switches pipelines hundreds of times between a few hundred configs. The config's
     // hash is the pipeline's ref, so a config seen before reuses its shader info and shadow
     // pipeline without the second lookup (shader info depends on the config alone). With blocking
     // pipelines the lookup must still happen, since it is what waits for this draw's pipeline.
     const bool blocking = blocking_pipelines();
     const gfx::PipelineRef ref = xxh3_hash(cache.config, static_cast<HashType>(gfx::ShaderType::GX));
-    auto memoIt = blocking ? sPipelineMemo.end() : sPipelineMemo.find(ref);
+    auto memoIt = blocking || prepassShade ? sPipelineMemo.end() : sPipelineMemo.find(ref);
     if (memoIt != sPipelineMemo.end() && gfx::touch_pipeline(ref) &&
         (!memoIt->second.shadowCaster || gfx::touch_pipeline(memoIt->second.shadowPipelineRef)) &&
         (!memoIt->second.cutCaster || gfx::touch_pipeline(memoIt->second.cutPipelineRef))) {
@@ -1037,29 +1239,37 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u32 vtxCount, gfx::Rang
       const bool opaque = cache.config.blendMode == GX_BM_NONE ||
                           (cache.config.blendMode == GX_BM_BLEND && cache.config.blendFacSrc == GX_BL_ONE &&
                            cache.config.blendFacDst == GX_BL_ZERO);
-      cache.shadowCaster = cache.shaderInfo.usesShadow && cache.config.depthCompare && cache.config.depthUpdate &&
-                           opaque && !sc.alphaCompare && sc.depthOnly == 0;
+      cache.shadowCaster = cache.shaderInfo.usesShadow && cache.config.depthCompare &&
+                           (cache.config.depthUpdate || prepassShade) && opaque && !sc.alphaCompare &&
+                           sc.depthOnly == 0;
+      // The caster pipelines take the draw's own depth state, not pass 2's.
+      const auto casterConfig = [&](u8 shadowPass) {
+        PipelineConfig config = cache.config;
+        config.shadowPass = shadowPass;
+        config.msaaSamples = 1;
+        if (prepassShade) {
+          config.depthFunc = state.depthFunc;
+          config.depthUpdate = true;
+        }
+        return config;
+      };
       if (cache.shadowCaster) {
-        PipelineConfig shadowConfig = cache.config;
-        shadowConfig.shadowPass = 1;
-        shadowConfig.msaaSamples = 1;
-        cache.shadowPipelineRef = gfx::pipeline_ref(shadowConfig, blocking);
+        cache.shadowPipelineRef = gfx::pipeline_ref(casterConfig(1), blocking);
       }
       // A Remastered cutout (the PBR cut bit of a draw's mode) casts through its own cut test.
       cache.cutCaster = cache.shadowCaster && sc.pbr != 0 && sc.shadow && shader_has_cut_caster(sc);
       if (cache.cutCaster) {
-        PipelineConfig cutConfig = cache.config;
-        cutConfig.shadowPass = 2;
-        cutConfig.msaaSamples = 1;
-        cache.cutPipelineRef = gfx::pipeline_ref(cutConfig, blocking);
+        cache.cutPipelineRef = gfx::pipeline_ref(casterConfig(2), blocking);
       }
-      sPipelineMemo.insert_or_assign(cache.pipelineRef, PipelineMemo{
-                                                            .shaderInfo = cache.shaderInfo,
-                                                            .shadowPipelineRef = cache.shadowPipelineRef,
-                                                            .cutPipelineRef = cache.cutPipelineRef,
-                                                            .shadowCaster = cache.shadowCaster,
-                                                            .cutCaster = cache.cutCaster,
-                                                        });
+      if (!prepassShade) {
+        sPipelineMemo.insert_or_assign(cache.pipelineRef, PipelineMemo{
+                                                              .shaderInfo = cache.shaderInfo,
+                                                              .shadowPipelineRef = cache.shadowPipelineRef,
+                                                              .cutPipelineRef = cache.cutPipelineRef,
+                                                              .shadowCaster = cache.shadowCaster,
+                                                              .cutCaster = cache.cutCaster,
+                                                          });
+      }
     }
     cache.fmt = fmt;
     cache.lineMode = lineMode;
@@ -1072,7 +1282,7 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u32 vtxCount, gfx::Rang
         prevSampledIndTextures != cache.shaderInfo.sampledIndTextures ||
         prevUsesVolFog != cache.shaderInfo.usesVolFog || prevUsesLightmap != cache.shaderInfo.usesLightmap ||
         prevShadowReceive != cache.shaderInfo.shadowReceive || prevActorDecal != cache.shaderInfo.actorDecal ||
-        cache.cutCaster) {
+        prevUsesShell != cache.shaderInfo.usesShell || cache.cutCaster) {
       cache.bindGeneration = 0;
     }
   }
@@ -1202,6 +1412,9 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u32 vtxCount, gfx::Rang
       .stereoTextureBindGroup = cache.stereoBindGroups,
       .multiviewPipeline = multiviewPipeline,
   };
+  if (cache.prepassSkip) {
+    return;
+  }
   if (!state.shadowCasterOnly) {
     gfx::push_draw_command(draw);
   }
@@ -1210,7 +1423,7 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u32 vtxCount, gfx::Rang
     caster.pipeline = cache.shadowPipelineRef;
     caster.bindGroups = {};
     // The PBR mode's cut bit (512): the colour pass discards the pixel, so it casts no shadow either.
-    if (cache.cutCaster && (static_cast<u32>(std::max(state.pbrBacklight.w(), 0.f)) & 512u) != 0) {
+    if (cache.cutCaster && pbr_cut_mode(state.pbrBacklight)) {
       caster.pipeline = cache.cutPipelineRef;
       caster.bindGroups = cache.cutBindGroups;
     }
@@ -1355,6 +1568,22 @@ static void draw_prim(u8 cmd, GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, Byte
   if (totalVtxBytes > reader.remaining())
     UNLIKELY { handle_draw_overrun(totalVtxBytes, reader); }
 
+  // A draw whose indices read past its arrays reads garbage, or crashes where nothing bounds the
+  // read (807013b1e): dropped instead. Checked before a merge, whose vertices it would otherwise add.
+  if (check_indexed_arrays(reader.data() + reader.offset(), fmt, prim, vtxCount, vtxSize)) UNLIKELY {
+    reader.skip(totalVtxBytes);
+    return;
+  }
+
+  // One that makes no whole triangle draws nothing on GX (a 2-vertex strip, as Trilogy's scan
+  // lens draws for a one-degree run); kept, it would be a draw without indices that a following
+  // merge extends as if its vertices were triangles.
+  const bool trianglePrim = prim != GX_LINES && prim != GX_LINESTRIP && prim != GX_POINTS;
+  if (trianglePrim && vtxCount < (prim == GX_QUADS ? 4 : 3)) UNLIKELY {
+    reader.skip(totalVtxBytes);
+    return;
+  }
+
   // The GPU expands each strip segment to an independent quad already. Give it
   // independent endpoint pairs so adjacent strips can share one instanced draw
   // without creating a segment between strips. Expand the FIFO records before
@@ -1387,7 +1616,7 @@ static void draw_prim(u8 cmd, GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, Byte
   const bool formatDiffers = fmt != sDrawCache.lastDrawFmt || sDrawCache.lineMode != lineMode;
   // Independent lines and points are instances of the same quad. Line strips
   // cannot concatenate: doing so would connect the end of one to the next.
-  const bool cleanState = drawDirty == 0 && !g_gxState.shadowCasterOnly && g_gxState.actorLayer < 0 &&
+  const bool cleanState = drawDirty == 0 && !g_gxState.shadowCasterOnly && !sDrawCache.prepassSkip && g_gxState.actorLayer < 0 &&
                           !formatDiffers && prim != GX_LINESTRIP;
   auto* lastDraw = cleanState ? gfx::get_last_draw_command<DrawData>() : nullptr;
   ByteBuffer* const verts = lastDraw != nullptr ? gfx::staging_verts() : nullptr;
@@ -1875,9 +2104,15 @@ static bool build_resident_dl(resident::Entry& entry) noexcept {
           .vertSize = 0,
           .idxOffset = static_cast<u32>(indices.size()),
           .idxCount = 0,
+          .srcOffset = static_cast<u32>(pos),
+          .srcContiguous = true,
       });
     }
     resident::Chunk& chunk = chunks.back();
+    if (static_cast<u32>(pos) != chunk.srcOffset + chunk.vertSize) {
+      // Skipped bytes between the draws: the chunk has no contiguous run to read in the list's bytes.
+      chunk.srcContiguous = false;
+    }
     verts.insert(verts.end(), bytes.begin() + pos, bytes.begin() + pos + vtxBytes);
     pos += vtxBytes;
     idxBuf.clear();
@@ -1930,6 +2165,11 @@ static void call_resident_dl(const void* key, u32 size) noexcept {
   for (const resident::Chunk& chunk : entry->chunks) {
     const gfx::Range vertRange{entry->vert.offset + chunk.vertOffset, chunk.vertSize};
     const gfx::Range idxRange{entry->idx.offset + chunk.idxOffset, chunk.idxCount * u32(sizeof(u16))};
+    // The same vertices as they are in the list's bytes, which is what the array check reads.
+    const u8* const vtxData = chunk.srcContiguous ? entry->bytes->data() + chunk.srcOffset : nullptr;
+    if (check_indexed_arrays(vtxData, chunk.fmt, GX_TRIANGLES, chunk.vtxCount, current_vtx_size(chunk.fmt))) UNLIKELY {
+      continue;
+    }
     push_gx_draw(GX_TRIANGLES, chunk.fmt, chunk.vtxCount, vertRange, idxRange, chunk.idxCount);
   }
   // The next draw must not merge into these: its vertices are not after them.
@@ -2273,10 +2513,14 @@ void handle_aurora(ByteReader& reader) noexcept {
     }
     const u32 totalVtxBytes = vtxCount * vtxSize;
     const auto vertexData = reader.take(totalVtxBytes);
-    const DeindexPlan* const plan = g_gxState.deindexVertices ? &deindex_plan(fmt) : nullptr;
-    const auto vertRange = push_vertex_records(plan, vertexData, vtxCount, 4);
-    if (indexCount != 0 && vertRange) {
-      push_gx_draw(prim, fmt, vtxCount, *vertRange, idxRange, indexCount);
+    if (check_indexed_arrays(vertexData.data(), fmt, prim, vtxCount, vtxSize)) UNLIKELY {
+      sDrawCache.lastDrawFmt = GX_MAX_VTXFMT;
+    } else {
+      const DeindexPlan* const plan = g_gxState.deindexVertices ? &deindex_plan(fmt) : nullptr;
+      const auto vertRange = push_vertex_records(plan, vertexData, vtxCount, 4);
+      if (indexCount != 0 && vertRange) {
+        push_gx_draw(prim, fmt, vtxCount, *vertRange, idxRange, indexCount);
+      }
     }
   } else if (subCmd == GX_AURORA_DEBUG_GROUP_PUSH) {
     auto label = reader.read_string();
@@ -2319,6 +2563,60 @@ void handle_aurora(ByteReader& reader) noexcept {
     if (g_gxState.hudDyin != dyin) {
       g_gxState.hudDyin = dyin;
       g_gxState.dirty |= DirtyUniform;
+    }
+  } else if (subCmd == GX_AURORA_SET_CLIP_PLANE) {
+    const bool on = reader.read<u8>() != 0;
+    Vec4<float> eq;
+    eq.x() = reader.read<f32>();
+    eq.y() = reader.read<f32>();
+    eq.z() = reader.read<f32>();
+    eq.w() = reader.read<f32>();
+    if (g_gxState.clipPlane != on) {
+      g_gxState.clipPlane = on;
+      g_gxState.dirty |= DirtyPipeline;
+    }
+    if (g_gxState.clipPlaneEq != eq) {
+      g_gxState.clipPlaneEq = eq;
+      g_gxState.dirty |= DirtyUniform;
+    }
+  } else if (subCmd == GX_AURORA_PORT_SHELL) {
+    const u8 mode = reader.read<u8>();
+    auto& st = g_gxState;
+    if (mode == 1 || mode == 2) {
+      for (size_t i = 0; i < 6; ++i) {
+        auto& v = st.shellUniform[i];
+        v.x() = reader.read<f32>();
+        v.y() = reader.read<f32>();
+        v.z() = reader.read<f32>();
+        v.w() = reader.read<f32>();
+      }
+      // The fragment's position over the target it draws into is the scene copy's uv.
+      const auto target = gfx::get_render_target_size();
+      auto& size = st.shellUniform[6];
+      size.x() = 1.f / static_cast<float>(std::max(target.x, 1u));
+      size.y() = 1.f / static_cast<float>(std::max(target.y, 1u));
+      size.z() = 0.f;
+      size.w() = 0.f;
+      st.dirty |= DirtyUniform;
+    }
+    if (mode == 1) {
+      // The slots' binds are resolved only at a draw, so they still hold the last draw's maps.
+      st.shellTexObjs = {st.loadedTextures[GX_TEXMAP0], st.loadedTextures[GX_TEXMAP1]};
+      st.shellTextures = {};
+      st.dirty |= DirtyTextures;
+    } else if (mode == 0) {
+      st.shellTexObjs = {};
+      st.shellTextures = {};
+    }
+    const u8 shell = mode <= 2 ? mode : 0;
+    if (st.shell != shell) {
+      st.shell = shell;
+      // Slot 2 holds the scene copy while the colour pass is on; re-emit the bind groups either way.
+      sDrawCache.hasPipeline = false;
+      sDrawCache.bindGeneration = 0;
+      sDrawCache.uniformRange = {};
+      sDrawCache.lastDrawFmt = GX_MAX_VTXFMT;
+      st.dirty |= DirtyPipeline | DirtyUniform | DirtyTextures;
     }
   } else if (subCmd == GX_AURORA_PORT_DEPTH_PREPASS) {
     const u8 pass = reader.read<u8>();
@@ -2593,12 +2891,12 @@ void handle_aurora(ByteReader& reader) noexcept {
     const u8 requested = reader.read<u8>();
     // Eye replay has no HDR composite pass; keep immersive frames on the LDR path.
     const u8 value = gfx::stereo_shadow::active() ? 0 : requested;
-    if (value > 1) {
+    if (value > 2) {
       Log.warn("GX_AURORA_PORT_SCENE_HDR: invalid value {}", value);
     } else if (value != 0 && g_gxState.drawIdMode) {
       Log.warn("GX_AURORA_PORT_SCENE_HDR: refused in draw-id mode");
-    } else if (gfx::scene_hdr_active() != (value != 0)) {
-      if (gfx::set_scene_hdr(value != 0)) {
+    } else if (value == 2 || gfx::scene_hdr_active() != (value != 0)) {
+      if (gfx::set_scene_hdr(value != 0, value == 2)) {
         g_gxState.dirty |= DirtyPipeline;
       } else {
         Log.warn("GX_AURORA_PORT_SCENE_HDR: switch to {} refused", value);
@@ -2831,6 +3129,16 @@ void handle_aurora(ByteReader& reader) noexcept {
       g_gxState.pbrModelCoverage = coverage;
       g_gxState.dirty |= DirtyUniform;
     }
+  } else if (subCmd == GX_AURORA_SET_PBR_THERMAL) {
+    const f32 x = reader.read<f32>();
+    const f32 y = reader.read<f32>();
+    const f32 blended = reader.read<f32>();
+    const bool on = reader.read<u32>() != 0;
+    const Vec4<float> value = on ? Vec4<float>{x, y, blended, 1.f} : Vec4<float>{};
+    if (g_gxState.pbrThermal != value) {
+      g_gxState.pbrThermal = value;
+      g_gxState.dirty |= DirtyUniform;
+    }
   } else if (subCmd == GX_AURORA_SET_PBR_MATERIAL) {
     for (Vec4<float>* v :
          {&g_gxState.pbrEmissive, &g_gxState.pbrBacklight, &g_gxState.pbrLayer, &g_gxState.pbrLayerHeight,
@@ -2841,6 +3149,10 @@ void handle_aurora(ByteReader& reader) noexcept {
       const f32 w = reader.read<f32>();
       const Vec4<float> value{x, y, z, w};
       if (*v != value) {
+        // The cut bit is in the shader key (ShaderConfig::pbrCut).
+        if (v == &g_gxState.pbrBacklight && pbr_cut_mode(*v) != pbr_cut_mode(value)) {
+          g_gxState.dirty |= DirtyPipeline;
+        }
         *v = value;
         g_gxState.dirty |= DirtyUniform;
       }
@@ -2900,3 +3212,26 @@ void reset_draw_cache() noexcept {
 extern "C" void aurora_set_gx_deindex_vertices(bool enabled) {
   aurora::gx::fifo::sDeindexRequested.store(enabled, std::memory_order_relaxed);
 }
+namespace aurora::gx::testing {
+namespace {
+// Read once, at start-up: MP_GX_CHECK_ARRAYS=0 keeps it off, any other value turns it on, and with no
+// environment a build without NDEBUG has it on.
+bool check_on_by_default() noexcept {
+  if (const char* value = std::getenv("MP_GX_CHECK_ARRAYS"); value != nullptr) {
+    return std::strcmp(value, "0") != 0;
+  }
+#ifdef NDEBUG
+  return false;
+#else
+  return true;
+#endif
+}
+} // namespace
+
+std::atomic<bool> vertexArrayCheck{check_on_by_default()};
+std::atomic<uint32_t> vertexArrayOverruns{0};
+
+void set_vertex_array_check(bool enabled) noexcept {
+  vertexArrayCheck.store(enabled, std::memory_order_relaxed);
+}
+} // namespace aurora::gx::testing

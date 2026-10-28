@@ -80,12 +80,21 @@ public:
 class CREInitialRandom : public CRealElement {
   CRealElement* x4_min;
   CRealElement* x8_max;
+#ifdef TARGET_PC
+  const bool xPortLoadConstant;
+#endif
 
 public:
   CREInitialRandom(CRealElement* min, CRealElement* max);
   ~CREInitialRandom() override;
   bool GetValue(int frame, float& valOut) const override;
-  bool IsConstant() const override { return true; }
+  bool IsConstant() const override {
+#ifdef TARGET_PC
+    return xPortLoadConstant;
+#else
+    return true;
+#endif
+  }
 };
 
 class CRETimeChain : public CRealElement {
@@ -251,6 +260,18 @@ class CREPortSwooshNodeTime : public CRealElement {
 public:
   explicit CREPortSwooshNodeTime(CRealElement* a);
   ~CREPortSwooshNodeTime() override;
+  bool GetValue(int frame, float& valOut) const override;
+};
+
+// Port-only KESP wrapper: Remastered's CREKeyframeParticle (GetValue 0x296430) with time type 3
+// reads time slot 2 (CParticleGlobals::xPortSlot2*) instead of the particle's; its child is the
+// converted percent KEYP, evaluated at that key.
+class CREPortSlot2Time : public CRealElement {
+  CRealElement* x4_a;
+
+public:
+  explicit CREPortSlot2Time(CRealElement* a);
+  ~CREPortSlot2Time() override;
   bool GetValue(int frame, float& valOut) const override;
 };
 

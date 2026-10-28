@@ -56,7 +56,8 @@ void PutConstant(std::vector<uint8_t>& out, uint32_t word) {
 void PutGenerator(std::vector<uint8_t>& out, bool root) {
   PutFourCC(out, "GPSM");
   out.resize(out.size() + 17);
-  Put32(out, root ? 1 : 0);
+  out[out.size() - 16] = 1; // nonnil base MTRL; null-material dispatch has separate cases
+  Put32(out, root ? 2 : 0); // GPSM header encodes primitive + 1; sprite = 2.
 }
 
 void PutGuid(std::vector<uint8_t>& out, const EffectGuid& guid) { out.insert(out.end(), guid.begin(), guid.end()); }
@@ -94,11 +95,16 @@ struct Retail {
     bytes.insert(bytes.end(), text, text + 4);
     return *this;
   }
-  // The end of a converted PART: Remastered's default PSLT, the port-only PIRN marker, then _END.
-  Retail& end() { return pslt().f("PIRN").f("CNST").w(1).f("_END"); }
-  // An embedded child's end: PSLT, PIRN, then PGID with its GUID's first word read little-endian.
+  // Converted PART: insert early PIRN, then finish with default PSLT and _END.
+  Retail& pirn() {
+    const uint8_t marker[] = {'P','I','R','N','C','N','S','T',0,0,0,1};
+    bytes.insert(bytes.begin() + 4, std::begin(marker), std::end(marker));
+    return *this;
+  }
+  Retail& end() { return pirn().pslt().f("_END"); }
+  // An embedded child's end also carries PGID (GUID's first word read little-endian).
   Retail& end(const EffectGuid& id) {
-    return pslt().f("PIRN").f("CNST").w(1).f("PGID").f("CNST")
+    return pirn().pslt().f("PGID").f("CNST")
         .w(uint32_t(id[0]) | uint32_t(id[1]) << 8 | uint32_t(id[2]) << 16 | uint32_t(id[3]) << 24)
         .f("_END");
   }
@@ -484,6 +490,7 @@ void TestConvert() {
 
   Retail root;
   root.f("GPSM");
+  root.f("DVVN").f("CNST").w(4);
   root.f("MAXP").f("CNST").w(20);
   root.f("LTME").f("CNST").w(29);  // LTM2 is one frame longer
   root.f("SIZE").f("MULT").f("CNST").w(Bits(2.0f)).f("CNST").w(Bits(3.0f));
@@ -499,7 +506,7 @@ void TestConvert() {
   root.end();
   CHECK_MSG(parts[0].root && parts[0].part == root.bytes, "root converts to retail's bytes");
   CHECK_MSG(parts[0].droppedRetail == 1, "PMDL with no retail id is the one retail property dropped");
-  CHECK_MSG(parts[0].dropped.size() == 2, "DVVN and PMDL dropped");
+  CHECK_MSG(parts[0].dropped.size() == 2, "PMDL and IEXP without a material are diagnosed");
 
   Retail child;
   child.f("GPSM");
@@ -516,8 +523,8 @@ void TestConvert() {
     CHECK_MSG(SplitRetailPart(part.part.data(), part.part.size(), properties, error), "converted PART reads as retail");
   }
   std::vector<RetailPartProperty> properties;
-  CHECK_MSG(SplitRetailPart(root.bytes.data(), root.bytes.size(), properties, error) && properties.size() == 11 &&
-            properties[5].fourcc == EffectFourCC("COLR") && properties[5].value.size() == 4 + 22 + 32,
+  CHECK_MSG(SplitRetailPart(root.bytes.data(), root.bytes.size(), properties, error) && properties.size() == 12 &&
+            properties[7].fourcc == EffectFourCC("COLR") && properties[7].value.size() == 4 + 22 + 32,
         "retail PART splits into its properties");
 }
 
@@ -1789,11 +1796,12 @@ void TestPortSpawnComponents() {
 
 // A one-generator effect whose body (properties) `body` writes.
 template <typename Body>
-std::vector<uint8_t> OneGenerator(Body body) {
+std::vector<uint8_t> OneGenerator(Body body, int primitive = 1) {
   std::vector<uint8_t> out(0x3c, 0);
   std::memcpy(out.data(), "RFRM", 4);
   std::memcpy(out.data() + 0x14, "GENP", 4);
   PutGenerator(out, true);
+  out[0x3c + 21] = uint8_t(primitive + 1);
   body(out);
   PutProperty(out, "_END", 4);
   Put32(out, 0);
@@ -1950,19 +1958,19 @@ void TestPortMover() {
     putSmvr(o, 0.5f, false);
   }), {});
   Retail want;
-  want.f("GPSM").f("SIZE").f("CNST").w(0).f("XFMD").f("CNST").w(4).f("PSMV").f("CNST").w(1);
+  want.f("GPSM").f("XFMD").f("CNST").w(4).f("PSMV").f("CNST").w(1);
   want.f("EXTT").w(Bits(0.f)).w(Bits(0.f)).w(Bits(0.5f)).f("NONE").f("NONE");
   want.end();
   CHECK_MSG(parts.size() == 1 && parts[0].part == want.bytes, "an SMVR under XFMD 4 becomes PSMV");
   CHECK_MSG(parts.size() == 1 && parts[0].approximated.empty() && parts[0].dropped.empty(),
             "PSMV leaves nothing out");
   CHECK_MSG(parts.size() == 1 && SplitRetailPart(parts[0].part.data(), parts[0].part.size(), properties, error) &&
-                properties.size() == 5,
-            "PSMV reads back");  // SIZE, XFMD, PSMV, PIRN
+                properties.size() == 4,
+            "PSMV reads back");  // XFMD, PSMV, PSLT, PIRN
 
   parts = ConvertOne(OneGenerator(xfmd4), {});
   Retail none;
-  none.f("GPSM").f("SIZE").f("CNST").w(0).f("XFMD").f("CNST").w(4).f("PSMV").f("CNST").w(0).end();
+  none.f("GPSM").f("XFMD").f("CNST").w(4).f("PSMV").f("CNST").w(0).end();
   CHECK_MSG(parts.size() == 1 && parts[0].part == none.bytes, "XFMD 4 with no SMVR writes an empty PSMV");
 
   parts = ConvertOne(OneGenerator([&](auto& o) {
@@ -1970,7 +1978,7 @@ void TestPortMover() {
     putSmvr(o, 0.f, true);
   }), {});
   Retail identity;
-  identity.f("GPSM").f("SIZE").f("CNST").w(0).f("XFMD").f("CNST").w(4).end();
+  identity.f("GPSM").f("XFMD").f("CNST").w(4).end();
   CHECK_MSG(parts.size() == 1 && parts[0].part == identity.bytes, "the identity SMVR writes no PSMV");
 }
 
@@ -2049,13 +2057,11 @@ void TestColourChoice() {
       want.f("CNST").w(Bits(c));
     }
   }
-  // An untextured generator draws no quads: SIZE 0 is written for it.
-  want.f("SIZE").f("CNST").w(Bits(0.0f));
   want.end();
   CHECK_MSG(parts.size() == 1 && parts[0].part == want.bytes, "SLCT of three colours keeps all three");
   CHECK_MSG(!parts.empty() && parts[0].droppedRetail == 0, "the colour choice drops nothing");
   CHECK_MSG(!parts.empty() && SplitRetailPart(parts[0].part.data(), parts[0].part.size(), properties, error) &&
-                properties.size() == 4,
+                properties.size() == 3,
             "a colour SLCT reads as retail");
 
   Retail empty;
@@ -2088,12 +2094,11 @@ void TestRealChoice() {
     want.f("CNST").w(Bits(e));
   }
   want.f("CNST").w(Bits(-1.0f));
-  want.f("SIZE").f("CNST").w(Bits(0.0f));
   want.end();
   CHECK_MSG(parts.size() == 1 && parts[0].part == want.bytes, "SLCT of four reals keeps all four");
   CHECK_MSG(!parts.empty() && parts[0].droppedRetail == 0, "the real choice drops nothing");
   CHECK_MSG(!parts.empty() && SplitRetailPart(parts[0].part.data(), parts[0].part.size(), properties, error) &&
-                properties.size() == 4,
+                properties.size() == 3,
             "a real SLCT reads as retail");
 }
 
@@ -2108,14 +2113,12 @@ void TestModelChoice() {
   for (uint32_t i = 0; i < 4; ++i) {
     want.f("CNST").w(0xC0DE000A + i);
   }
-  // A models-only generator draws no quads: SIZE 0 is written for it.
-  want.f("SIZE").f("CNST").w(Bits(0.0f));
   want.end();
   CHECK_MSG(parts.size() == 1 && parts[0].part == want.bytes, "SLCT of four models is PMDL and PMDV");
   CHECK_MSG(!parts.empty() && parts[0].droppedRetail == 0, "the model choice drops nothing");
   CHECK_MSG(!parts.empty() && SplitRetailPart(parts[0].part.data(), parts[0].part.size(), properties, error) &&
-                properties.size() == 5,
-            "PMDL, PMDV and SIZE read as retail");
+                properties.size() == 4,
+            "PMDL and PMDV read as retail");
 
   // Remastered takes entry index % n: the PMDV lists IRND's h + 1 outcomes.
   const auto variants = [](std::initializer_list<uint32_t> picks) {
@@ -2127,7 +2130,6 @@ void TestModelChoice() {
         out.f("CNST").w(0xC0DE000A + pick);
       }
     }
-    out.f("SIZE").f("CNST").w(Bits(0.0f));
     out.end();
     return out.bytes;
   };
@@ -2174,6 +2176,46 @@ void TestModelChoice() {
 // left out and a SIZE of 0 written before _END instead. One with a TEXR keeps
 // its SIZE.
 void TestDrawsNothing() {
+  // Material resource selection precedes sprite drawing. TEXR is merely an
+  // instance parameter: it cannot replace a null header MTRL and nil MTIN.
+  for (int primitive : {1, 2}) {
+    for (unsigned mask = 0; mask < 16; ++mask) {
+      auto data = OneGenerator([&](auto& out) {
+        PutProperty(out, "SIZE", 3);
+        PutConstant(out, Bits(2.f));
+        if (mask & 2) PutTexr(out, 0x1234ABCD);
+        if (mask & 4) {
+          PutProperty(out, "MTIN", 0);
+          out.push_back(0);
+          PutGuid(out, (mask & 8) ? Fresh(1) : EffectGuid{});
+        }
+      }, primitive);
+      if (!(mask & 1)) std::fill(data.begin() + 0x41, data.begin() + 0x51, 0);
+      EffectNode parsed;
+      std::string error;
+      CHECK_MSG(ParseEffect(data.data(), data.size(), parsed, error), "material header parses");
+      CHECK_MSG((parsed.baseMaterial != EffectGuid{}) == bool(mask & 1), "header MTRL is retained");
+      auto converted = ConvertOne(data, {});
+      const bool missing = !(mask & 1) && (mask & 12) != 12;
+      CHECK_MSG(converted.size() == 1 && converted[0].drawsNothing == missing,
+                "only absent base MTRL AND absent/nil MTIN skip sprite dispatch");
+      if (converted.empty()) continue;
+      std::vector<RetailPartProperty> props;
+      CHECK_MSG(SplitRetailPart(converted[0].part.data(), converted[0].part.size(), props, error), "dispatch parses");
+      Retail size;
+      size.f("CNST").w(Bits(2.f));
+      CHECK_MSG(std::any_of(props.begin(), props.end(), [&](const auto& p) {
+        return p.fourcc == EffectFourCC("SIZE") && p.value == size.bytes;
+      }), "null material leaves the active SIZE evaluator intact");
+      if (missing) {
+        Retail dispatch;
+        dispatch.f("CNST").w(0);
+        CHECK_MSG(std::any_of(props.begin(), props.end(), [&](const auto& p) {
+          return p.fourcc == EffectFourCC("PPRM") && p.value == dispatch.bytes;
+        }), "null material suppresses the draw through PPRM");
+      }
+    }
+  }
   auto parts = ConvertOne(OneGenerator([](auto& o) {
                  PutProperty(o, "MAXP", 1);
                  PutConstant(o, 4);
@@ -2182,11 +2224,23 @@ void TestDrawsNothing() {
                }),
                {});
   Retail want;
-  want.f("GPSM").f("MAXP").f("CNST").w(4).f("SIZE").f("CNST").w(Bits(0.0f)).end();
-  CHECK_MSG(parts.size() == 1 && parts[0].part == want.bytes, "a generator with no texture gets SIZE 0");
-  CHECK_MSG(!parts.empty() && parts[0].dropped.size() == 1 &&
-                parts[0].dropped[0] == "SIZE: the generator draws nothing",
-            "its SIZE is dropped as drawing nothing");
+  want.f("GPSM").f("MAXP").f("CNST").w(4).f("SIZE").f("CNST").w(Bits(2.0f)).end();
+  CHECK_MSG(parts.size() == 1 && parts[0].part == want.bytes, "an untextured sprite retains SIZE");
+  CHECK_MSG(!parts.empty() && !parts[0].drawsNothing, "missing materials do not suppress sprites");
+  for (uint8_t encoded : {0, 1, 2, 3, 4, 5, 6, 7}) {
+    auto data = OneGenerator([](auto& o) {
+      PutProperty(o, "SIZE", 3);
+      PutConstant(o, Bits(2.0f));
+    });
+    data[0x3c + 21] = encoded;
+    EffectNode node;
+    std::string error;
+    CHECK_MSG(ParseEffect(data.data(), data.size(), node, error), "primitive header parses");
+    CHECK_MSG(node.primitiveType == (encoded >= 1 && encoded <= 6 ? int(encoded - 1) : -1),
+              "GPSM header stores primitive type plus one, not merely root status");
+    const auto converted = ConvertEffect(node, data.data(), {});
+    CHECK_MSG(!converted.empty() && converted[0].dropped.empty(), "constant SIZE converts or is proven inactive");
+  }
   CHECK_MSG(!parts.empty() && parts[0].droppedRetail == 0, "drawing nothing drops no retail property");
 
   parts = ConvertOne(OneGenerator([](auto& o) {
@@ -2202,6 +2256,62 @@ void TestDrawsNothing() {
   textured.f("TEXR").f("CNST").f("CNST").w(0x1234ABCD).end();
   CHECK_MSG(parts.size() == 1 && parts[0].part == textured.bytes, "a generator with a TEXR keeps its SIZE");
   CHECK_MSG(!parts.empty() && parts[0].dropped.empty(), "nothing dropped with a TEXR");
+
+  // Exhaust all primitive/material-presence combinations, including a nil BCLR
+  // MATI. These inputs used to select all three suppression heuristics.
+  for (int primitive = 0; primitive <= 5; ++primitive) {
+    for (unsigned mask = 0; mask != 8; ++mask) {
+      auto data = OneGenerator([&](auto& out) {
+        PutProperty(out, "SIZE", 3);
+        PutConstant(out, Bits(2.f));
+        if (mask & 1) PutTexr(out, 0x1234ABCD);
+        if (mask & 2) {
+          PutProperty(out, "MTIN", 0);
+          out.push_back(1);
+          PutGuid(out, Fresh(1));
+        }
+        if (mask & 4) {
+          PutProperty(out, "PMDL", 0);
+          PutFourCC(out, "CNST");
+          PutGuid(out, Legacy(0x98765432));
+        }
+      });
+      data[0x3c + 21] = uint8_t(primitive + 1);
+      EffectConvertIO io;
+      io.materialData = [](const EffectGuid&) {
+        std::vector<uint8_t> bytes = {'B', 'C', 'L', 'R'};
+        bytes.resize(20, 0);
+        return bytes;
+      };
+      auto converted = ConvertOne(data, io);
+      CHECK_MSG(converted.size() == 1, "primitive matrix converts");
+      if (converted.empty()) continue;
+      const bool inactive = primitive == 0 || primitive >= 4 || (primitive == 3 && !(mask & 4));
+      CHECK_MSG(converted[0].drawsNothing == inactive, "only primitive dispatch suppresses geometry");
+      std::vector<RetailPartProperty> properties;
+      std::string error;
+      CHECK_MSG(SplitRetailPart(converted[0].part.data(), converted[0].part.size(), properties, error),
+                "primitive metadata is readable");
+      const auto size = std::find_if(properties.begin(), properties.end(), [](const auto& p) {
+        return p.fourcc == EffectFourCC("SIZE");
+      });
+      CHECK_MSG((size != properties.end()) == !inactive, "SIZE retained for both transformed primitives");
+      if (size != properties.end()) {
+        Retail expected;
+        expected.f("CNST").w(Bits(2.f));
+        CHECK_MSG(size->value == expected.bytes, "active SIZE is not replaced by zero");
+      }
+      const auto dispatch = std::find_if(properties.begin(), properties.end(), [](const auto& p) {
+        return p.fourcc == EffectFourCC("PPRM");
+      });
+      CHECK_MSG((dispatch != properties.end()) == (primitive != 1), "only sprite uses the default dispatch");
+      if (dispatch != properties.end()) {
+        Retail expected;
+        expected.f("CNST").w(inactive ? 0u : uint32_t(primitive));
+        CHECK_MSG(dispatch->value == expected.bytes, "serialized dispatch distinguishes squares from models");
+      }
+    }
+  }
 }
 
 // PBDM is Remastered's blend mode: 2 is retail's additive AAPH, 1 (premultiplied) and
@@ -2365,6 +2475,37 @@ void TestInheritedMotion() {
 // A drawing sprite with DVVN 1..4 and no SIZE gets Remastered's default SIZE 1.0 (retail's is 0.1);
 // DVVN 0 or an authored SIZE writes none.
 void TestDvvnDefaultSize() {
+  // The source reader mutates IEXP at each DVVN/IEXP occurrence; test both orders and resets.
+  for (const bool versionLast : {false, true}) {
+    const auto exposureParts = ConvertOne(OneGenerator([=](auto& o) {
+      const auto property = [&](const char* name, uint8_t value) {
+        PutProperty(o, name, 1);
+        o.push_back(value);
+      };
+      if (versionLast) {
+        property("IEXP", 0);
+        property("DVVN", 4);
+      } else {
+        property("DVVN", 4);
+        property("IEXP", 0);
+      }
+      PutTexr(o, 0x1234ABCD);
+    }), {});
+    std::vector<RetailPartProperty> properties;
+    std::string error;
+    CHECK_MSG(exposureParts.size() == 1 &&
+                  SplitRetailPart(exposureParts[0].part.data(), exposureParts[0].part.size(), properties, error),
+              "exposure properties survive conversion");
+    CHECK_MSG(properties.size() >= 3 && properties[0].fourcc == EffectFourCC("PIRN") &&
+                  std::count_if(properties.begin(), properties.end(), [](const auto& p) {
+                    return p.fourcc == EffectFourCC("PIRN");
+                  }) == 1 &&
+                  properties[1].fourcc == EffectFourCC(versionLast ? "IEXP" : "DVVN") &&
+                  properties[2].fourcc == EffectFourCC(versionLast ? "DVVN" : "IEXP"),
+              "one early PIRN precedes expressions; DVVN/IEXP retain relative source order");
+    CHECK_MSG(exposureParts.size() == 1 && exposureParts[0].dropped.size() == size_t(versionLast),
+              "only enabled inverse exposure needs a material; DVVN itself is handled");
+  }
   const auto one = [](uint8_t dvvn, bool size) {
     return ConvertOne(OneGenerator([=](auto& o) {
                         PutProperty(o, "DVVN", 0);
@@ -2388,12 +2529,26 @@ void TestDvvnDefaultSize() {
   };
   auto parts = one(4, false);
   Retail want;
-  want.f("GPSM").f("TEXR").f("CNST").f("CNST").w(0x1234ABCD).f("SIZE").f("CNST").w(Bits(1.0f)).end();
+  want.f("GPSM").f("DVVN").f("CNST").w(4).f("TEXR").f("CNST").f("CNST").w(0x1234ABCD).f("SIZE").f("CNST").w(Bits(1.0f)).end();
   CHECK_MSG(parts.size() == 1 && parts[0].part == want.bytes, "DVVN 4 without SIZE writes SIZE 1.0");
   parts = one(0, false);
   CHECK_MSG(parts.size() == 1 && sizes(parts[0]) == 0, "DVVN 0 writes no SIZE");
   parts = one(1, true);
   CHECK_MSG(parts.size() == 1 && sizes(parts[0]) == 1, "an authored SIZE is kept alone");
+  for (uint8_t version : {0, 1, 2, 3, 4, 5, 255}) {
+    parts = one(version, true);
+    std::vector<RetailPartProperty> properties;
+    std::string error;
+    CHECK_MSG(parts.size() == 1 && SplitRetailPart(parts[0].part.data(), parts[0].part.size(), properties, error),
+              "DVVN default velocity carrier parses independently of authored SIZE");
+    const auto found = std::find_if(properties.begin(), properties.end(), [](const auto& p) {
+      return p.fourcc == EffectFourCC("DVVN");
+    });
+    CHECK_MSG(found != properties.end(), "all version bytes survive, including versions that reset velocity to zero");
+    if (found != properties.end()) {
+      CHECK_MSG(found->value == Retail().f("CNST").w(version).bytes, "DVVN version is preserved exactly");
+    }
+  }
 }
 
 void TestDepthBias() {
@@ -2867,6 +3022,60 @@ void TestShutdownAndPivot() {
       o.push_back(value);
     });
   };
+  const auto vmpc = [&](uint8_t value) {
+    return convert([&](auto& o) {
+      PutProperty(o, "VMPC", 0);
+      o.push_back(value);
+    });
+  };
+  for (const char* tag : {"VGD1", "VGD2", "VGD3", "VGD4"}) {
+    parts = convert([&](auto& o) { PutProperty(o, tag, 0); o.push_back(1); });
+    Retail global;
+    global.f("GPSM").f(tag).f("CNST").w(1).f("TEXR").f("CNST").f("CNST").w(0x1234ABCD).end();
+    CHECK_MSG(parts.size() == 1 && parts[0].part == global.bytes && parts[0].dropped.empty(),
+              "VGD true preserves the world-space selector");
+    if (!parts.empty()) {
+      std::vector<RetailPartProperty> properties;
+      std::string error;
+      CHECK_MSG(SplitRetailPart(parts[0].part.data(), parts[0].part.size(), properties, error), "VGD carrier reads");
+    }
+    parts = convert([&](auto& o) { PutProperty(o, tag, 0); o.push_back(0); });
+    CHECK_MSG(parts.size() == 1 && parts[0].part == none.bytes && parts[0].dropped.empty(), "VGD false is a no-op");
+  }
+  for (const bool globalLast : {false, true}) {
+    parts = convert([&](auto& o) {
+      PutProperty(o, globalLast ? "VMD2" : "VGD2", 0); o.push_back(1);
+      PutProperty(o, globalLast ? "VGD2" : "VMD2", 0); o.push_back(1);
+      PutProperty(o, "VMD2", 0); o.push_back(0);
+      PutProperty(o, "VGD2", 0); o.push_back(0);
+    });
+    Retail ordered;
+    ordered.f("GPSM");
+    if (globalLast) ordered.f("VMD2").f("CNST").b(1);
+    ordered.f("VGD2").f("CNST").w(1);
+    if (!globalLast) ordered.f("VMD2").f("CNST").b(1);
+    ordered.f("TEXR").f("CNST").f("CNST").w(0x1234ABCD).end();
+    CHECK_MSG(parts.size() == 1 && parts[0].part == ordered.bytes && parts[0].dropped.empty(),
+              "VGD/VMD true order preserved; false does not reset either selector");
+  }
+  parts = vmpc(1);
+  Retail birthVelocity;
+  birthVelocity.f("GPSM").f("VMPC").f("CNST").w(1).f("TEXR").f("CNST").f("CNST").w(0x1234ABCD).end();
+  CHECK_MSG(parts.size() == 1 && parts[0].part == birthVelocity.bytes && parts[0].dropped.empty(),
+            "VMPC 1 survives conversion independently of material support");
+  if (!parts.empty()) {
+    std::vector<RetailPartProperty> properties;
+    std::string error;
+    CHECK_MSG(SplitRetailPart(parts[0].part.data(), parts[0].part.size(), properties, error),
+              "VMPC passes the PART element reader");
+  }
+  parts = vmpc(0);
+  CHECK_MSG(parts.size() == 1 && parts[0].part == none.bytes && parts[0].dropped.empty(),
+            "VMPC 0 leaves retail birth behavior unchanged");
+  parts = vmpc(2);
+  CHECK_MSG(parts.size() == 1 && parts[0].part == none.bytes && parts[0].dropped.size() == 1 &&
+                parts[0].dropped[0] == "VMPC: not a constant 0 or 1",
+            "invalid VMPC remains diagnosed");
   parts = blit(1);
   Retail pblt;
   pblt.f("GPSM").f("PBLT").f("CNST").w(1).f("TEXR").f("CNST").f("CNST").w(0x1234ABCD).end();
@@ -2973,8 +3182,8 @@ void TestIntScale() {
             "INTS MULT(EXTS, RTOV(0.6)) reads the external scale");
   parts = withInts(5, false);
   CHECK_MSG(parts.size() == 1 && parts[0].dropped.empty() &&
-                std::search(parts[0].part.begin(), parts[0].part.end(), want.bytes.begin() + 4,
-                            want.bytes.begin() + 8) == parts[0].part.end(),
+                std::search(parts[0].part.begin(), parts[0].part.end(), want.bytes.begin() + 16,
+                            want.bytes.begin() + 20) == parts[0].part.end(),
             "INTS under XFMD 5 writes no PINS");
 }
 
@@ -3831,6 +4040,27 @@ void TestWaveOrbSwoosh(const std::vector<uint8_t>& mati) {
   CHECK_MSG(features != ~0u && (features & kAlreadyExposedBit) == 0, "a swoosh on the orb's MATI keeps the room's exposure");
 }
 
+// Only the audited material's model draw may opt into the raster-policy bit.
+void TestIceWedgeCullPolicy() {
+  const EffectGuid ice = {0xc6, 0xb1, 0x08, 0xdf, 0x38, 0xe8, 0x7f, 0x4c,
+                          0xbc, 0x9b, 0xfb, 0x67, 0x54, 0x8b, 0xc1, 0xba};
+  constexpr uint32_t bit = 1u << 17;
+  auto mati = Mati(0x84e0fe6c, {{"TCH0", Fresh(8)}});
+  for (int i = 0; i < 4; ++i) mati[0x61 + i] = uint8_t(2u >> (8 * i));
+  const uint32_t target = ConvertBlend(mati, ice, true, 0, 12);
+  const uint32_t other = ConvertBlend(mati, Fresh(7), true, 0, 12);
+  CHECK_MSG(target != ~0u && (target & bit) != 0, "exact Ice model opts into back culling");
+  CHECK_MSG(other != ~0u && (target ^ other) == bit, "other materials keep all prior features");
+  CHECK_MSG(ConvertBlend(mati, ice, false, 0, 12) == other, "same MATI on sprites stays two-sided");
+  CHECK_MSG(ConvertBlend(mati, ice, true) == 0, "Ice alpha blend is unchanged");
+  auto near = Mati(0x461071b8, {{"TCH0", Fresh(8)}});
+  for (int i = 0; i < 4; ++i) near[0x61 + i] = uint8_t(2u >> (8 * i));
+  const uint32_t nearFeatures = ConvertBlend(near, ice, true, 0, 12);
+  CHECK_MSG(nearFeatures != ~0u && (nearFeatures & bit) == 0, "another supported shader cannot opt in");
+  mati[0x61] = 0;
+  CHECK_MSG((ConvertBlend(mati, ice, true, 0, 12) & bit) == 0, "changed material state cannot opt in");
+}
+
 // The exposure policy (aurora::gfx::vfx::AlreadyExposed, the features word's bit 31) is the orb's exact
 // gate only, tested on its own: it is not read off the blend.
 void TestWaveOrbExposurePolicy() {
@@ -4188,8 +4418,14 @@ void TestPowerChargeExposurePolicy() {
   plain.hasIexp = true;
   std::vector<uint8_t> plainBytes;
   const uint32_t plainFeatures = ConvertPowerBallFeatures(plain, &plainBytes);
-  CHECK_MSG(plainFeatures == kPortVfxModelOpacityFeatures, "held charge explicit IEXP keeps room exposure");
-  // Identical render state and material: the only emitted byte delta is feature bit31.
+  CHECK_MSG(plainFeatures == kPortVfxModelOpacityFeatures, "explicit IEXP uses the runtime policy, not the legacy pin");
+  const auto iexpBytes = Retail().f("IEXP").f("CNST").w(plain.iexp).bytes;
+  const auto iexpAt = std::search(plainBytes.begin(), plainBytes.end(), iexpBytes.begin(), iexpBytes.end());
+  CHECK_MSG(iexpAt != plainBytes.end(), "explicit IEXP is serialized for the runtime reader");
+  if (iexpAt != plainBytes.end()) {
+    plainBytes.erase(iexpAt, iexpAt + iexpBytes.size());
+  }
+  // Apart from the new explicit property, only the legacy compatibility feature bit differs.
   size_t differences = 0;
   bool onlyPolicyBit = flaggedBytes.size() == plainBytes.size();
   for (size_t i = 0; i < std::min(flaggedBytes.size(), plainBytes.size()); ++i) {
@@ -4811,6 +5047,297 @@ void TestVmatVisorRainRecipe() {
             "VPRM carries the effect's CCH0 (1, .12, .2, 4)");
 }
 
+// VFX_VisorSteam (53eceaa4, the SteamMP1 billboard's model particle, MATI f4970293; vfx/53eceaa4.md): TCH0
+// the colour slot, TCH1 the second raw sample slot (the Indirect role: the shader's own reads), CCH0..4
+// whole in VPRM v1, and Unfogged without a DFOG (the visor composite pass has no fog).
+void TestVmatVisorSteamRecipe() {
+  constexpr uint32_t kVisorSteam = 1u << 19, kUnfogged = 1u << 22;
+  // The MATI's own CCH0..4.
+  const std::vector<std::array<float, 4>> cch = {
+      {8.f, 10.f, 10.f, 10.f}, {0.f, 0.f, 0.f, 0.25f}, {0.4f, 0.6f, 0.8f, 0.05f}, {1.f, 5.f, 0.25f, 0.15f}, {}};
+  const std::vector<uint8_t> data = VmatEffect(true);
+  const std::vector<uint8_t> mati = MatiCchN(0x53eceaa4, {{"TCH0", Fresh(8)}, {"TCH1", Fresh(8)}}, cch);
+  EffectNode node;
+  std::string error;
+  CHECK_MSG(ParseEffect(data.data(), data.size(), node, error), "the visor steam effect parses");
+  EffectConvertIO io;
+  io.materialTexture = [](const EffectGuid&) { return 0x5EED0007u; };
+  io.materialData = [&mati](const EffectGuid&) { return mati; };
+  io.vfxTexture = [](const EffectGuid& texture) {
+    FlipbookAtlas atlas;
+    if (texture == Fresh(8)) {
+      atlas.id = 0x5EED0008;
+    }
+    return atlas;
+  };
+  io.modelMesh = [](uint32_t) { return std::vector<uint8_t>{0, 0, 0, 2}; };
+  std::vector<ConvertedPart> parts = ConvertEffect(node, data.data(), io);
+  std::vector<RetailPartProperty> properties;
+  if (parts.size() == 1) {
+    SplitRetailPart(parts[0].part.data(), parts[0].part.size(), properties, error);
+  }
+  const auto value = [](const std::vector<RetailPartProperty>& properties, uint32_t fourcc) {
+    for (const RetailPartProperty& property : properties) {
+      if (property.fourcc == fourcc) {
+        return property.value;
+      }
+    }
+    return std::vector<uint8_t>();
+  };
+  const std::vector<uint8_t> vmat = value(properties, EffectFourCC("VMAT"));
+  CHECK_MSG(parts.size() == 1 && !vmat.empty() && parts[0].approximated.empty(),
+            "53eceaa4 writes an exact VMAT");
+  CHECK_MSG(VmatWord(vmat, 12) == (kVisorSteam | kUnfogged) && VmatWord(vmat, 20) == 2,
+            "53eceaa4 VMAT: VisorSteam, Unfogged, two textures");
+  CHECK_MSG(VmatWord(vmat, 112) == 0 && VmatWord(vmat, 116) == ~0u && VmatWord(vmat, 132) == 1 &&
+                VmatWord(vmat, 136) == ~0u,
+            "53eceaa4: TCH0 is the colour slot and TCH1 the indirect sample slot");
+  // VPRM v1: version, the NMAP slot (-1), five rows, then CCH0..4 whole.
+  const std::vector<uint8_t> vprm = value(properties, EffectFourCC("VPRM"));
+  CHECK_MSG(vprm.size() == 8 + 12 + 16 * 5 && VmatWord(vprm, 8) == 1 && VmatWord(vprm, 12) == ~0u &&
+                VmatWord(vprm, 16) == 5,
+            "VPRM v1: no NMAP slot and five CCH rows");
+  bool rows = vprm.size() == 8 + 12 + 16 * 5;
+  for (size_t r = 0; rows && r < cch.size(); ++r) {
+    for (size_t c = 0; c < 4; ++c) {
+      rows = rows && VmatWord(vprm, 20 + r * 16 + c * 4) == Bits(cch[r][c]);
+    }
+  }
+  CHECK_MSG(rows, "VPRM carries the MATI's CCH0..4");
+}
+
+// A MATI with the header's material-flag list appended after its parameters: a LE u32 count then that
+// many four-byte tags (the tags the material enables), as every shipped MATI header carries.
+std::vector<uint8_t> MatiFlags(std::vector<uint8_t> mati, const std::vector<const char*>& flags) {
+  const uint32_t count = uint32_t(flags.size());
+  for (int i = 0; i < 4; ++i) {
+    mati.push_back(uint8_t(count >> (8 * i)));
+  }
+  for (const char* flag : flags) {
+    mati.insert(mati.end(), flag, flag + 4);
+  }
+  return mati;
+}
+
+// VFX_BarrierShield (f197ec38, the Parasite Queen ring barrier's MATI 6429c234): its refraction perm
+// 002, the one the material flag MFC0 (USE_FRAME_BUFFER_DISTORTION) selects. TCH0 is the colour slot,
+// TCH1 the second raw sample slot (the Indirect role, unwarped: this recipe does its own reads), CCH0
+// whole in VPRM v1, the generator's blend kept. Perm 002 carries DFOG 1; without it the material draws
+// the fogged sibling 003, and without MFC0 the perm-000 variant with its own vector displacement. Both
+// are refused (no VMAT) rather than drawn with this perm's maths.
+void TestVmatBarrierShieldRecipe() {
+  constexpr uint32_t kBarrierShield = 1u << 29;
+  // The MATI's own CCH0: (.1, 1, 0, 0).
+  const std::vector<std::array<float, 4>> cch = {{0.1f, 1.f, 0.f, 0.f}};
+  const std::vector<uint8_t> mati =
+      MatiFlags(MatiCchN(0xf197ec38, {{"TCH0", Fresh(8)}, {"TCH1", Fresh(8)}}, cch), {"MFC0"});
+  const std::vector<uint8_t> matiNoFlag = MatiCchN(0xf197ec38, {{"TCH0", Fresh(8)}, {"TCH1", Fresh(8)}}, cch);
+  const std::vector<uint8_t> matiExterior =
+      MatiFlags(MatiCchN(0xf197ec38, {{"TCH0", Fresh(8)}, {"TCH1", Fresh(8)}}, cch), {"MFC1"});
+  const std::vector<uint8_t> matiNoNoise = MatiFlags(MatiCchN(0xf197ec38, {{"TCH0", Fresh(8)}}, cch), {"MFC0"});
+  const auto effect = [](bool dfog) {
+    std::vector<uint8_t> out = VmatEffect(true);
+    if (dfog) {
+      std::vector<uint8_t> extra;
+      PutProperty(extra, "DFOG", 1);
+      PutConstant(extra, 1);
+      out.insert(out.end() - 13, extra.begin(), extra.end());
+    }
+    return out;
+  };
+  const auto convert = [](const std::vector<uint8_t>& data, const std::vector<uint8_t>& material,
+                          std::vector<RetailPartProperty>& properties) {
+    EffectNode node;
+    std::string error;
+    CHECK_MSG(ParseEffect(data.data(), data.size(), node, error), "the barrier effect parses");
+    EffectConvertIO io;
+    io.materialTexture = [](const EffectGuid&) { return 0x5EED0007u; };
+    io.materialData = [&material](const EffectGuid&) { return material; };
+    io.vfxTexture = [](const EffectGuid& texture) {
+      FlipbookAtlas atlas;
+      if (texture == Fresh(8)) {
+        atlas.id = 0x5EED0008;
+      }
+      return atlas;
+    };
+    io.modelMesh = [](uint32_t) { return std::vector<uint8_t>{0, 0, 0, 2}; };
+    std::vector<ConvertedPart> parts = ConvertEffect(node, data.data(), io);
+    if (parts.size() == 1) {
+      SplitRetailPart(parts[0].part.data(), parts[0].part.size(), properties, error);
+    }
+    return parts;
+  };
+  const auto value = [](const std::vector<RetailPartProperty>& properties, uint32_t fourcc) {
+    for (const RetailPartProperty& property : properties) {
+      if (property.fourcc == fourcc) {
+        return property.value;
+      }
+    }
+    return std::vector<uint8_t>();
+  };
+  const auto mentions = [](const std::vector<ConvertedPart>& parts, const char* what) {
+    const std::vector<std::string> notes = parts.size() == 1 ? parts[0].approximated : std::vector<std::string>{};
+    for (const std::string& line : notes) {
+      if (line.find(what) != std::string::npos) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  std::vector<RetailPartProperty> properties;
+  std::vector<ConvertedPart> parts = convert(effect(true), mati, properties);
+  CHECK_MSG(parts.size() == 1 && parts[0].approximated.empty(), "f197ec38 under MFC0 + DFOG 1 writes an exact VMAT");
+  const std::vector<uint8_t> vmat = value(properties, EffectFourCC("VMAT"));
+  CHECK_MSG(VmatWord(vmat, 12) == kBarrierShield && VmatWord(vmat, 16) == 2 && VmatWord(vmat, 20) == 2,
+            "f197ec38 VMAT: BarrierShield, the generator's blend 2 (PBDM), two textures");
+  // The role words follow the two 11-word texture records: TCH0 the colour slot, TCH1 the second raw
+  // sample slot (the Indirect role), the rest absent.
+  CHECK_MSG(VmatWord(vmat, 112) == 0 && VmatWord(vmat, 116) == ~0u && VmatWord(vmat, 132) == 1 &&
+                VmatWord(vmat, 136) == ~0u,
+            "f197ec38: TCH0 is the colour slot and TCH1 the indirect sample slot");
+  const std::vector<uint8_t> vprm = value(properties, EffectFourCC("VPRM"));
+  CHECK_MSG(vprm.size() == 8 + 12 + 16 && VmatWord(vprm, 8) == 1 && VmatWord(vprm, 12) == ~0u &&
+                VmatWord(vprm, 16) == 1,
+            "VPRM v1: no NMAP slot and one CCH row");
+  CHECK_MSG(VmatWord(vprm, 20) == Bits(0.1f) && VmatWord(vprm, 24) == Bits(1.f) && VmatWord(vprm, 28) == Bits(0.f) &&
+                VmatWord(vprm, 32) == Bits(0.f),
+            "VPRM carries the MATI's CCH0 (.1, 1, 0, 0)");
+  CHECK_MSG(!value(properties, EffectFourCC("VMSH")).empty(), "the barrier model keeps its VMSH");
+
+  // Without the material flag the material is perm 000 (its own displacement, no refraction).
+  properties.clear();
+  parts = convert(effect(true), matiNoFlag, properties);
+  CHECK_MSG(value(properties, EffectFourCC("VMAT")).empty() && mentions(parts, "MFC0"),
+            "f197ec38 without MFC0 writes no VMAT and says why");
+  // The exterior flag is another perm (and its own shader).
+  properties.clear();
+  parts = convert(effect(true), matiExterior, properties);
+  CHECK_MSG(value(properties, EffectFourCC("VMAT")).empty(), "f197ec38 with MFC1 is refused");
+  // The second pattern map is required.
+  properties.clear();
+  parts = convert(effect(true), matiNoNoise, properties);
+  CHECK_MSG(value(properties, EffectFourCC("VMAT")).empty() && mentions(parts, "TCH1"),
+            "f197ec38 without TCH1 writes no VMAT");
+  // Perm 002's sibling 003 is fogged, and is not ported.
+  properties.clear();
+  parts = convert(effect(false), mati, properties);
+  CHECK_MSG(value(properties, EffectFourCC("VMAT")).empty() && mentions(parts, "drawn fogged"),
+            "f197ec38 without DFOG 1 writes no VMAT");
+}
+
+// VFX_BarrierGlow (b1eb2b67, the barrier's one-variable MATI ba0acbd6-d2d9-4a58-8e2d-f4802bcba587; FS
+// perm 000, build/s-queenbarrier-20261024/GLOW-IMPLEMENTATION.md): the same barrier's non-refraction
+// perm, whose MATI carries neither MFC0 (USE_FRAME_BUFFER_DISTORTION) nor MFC1 (IS_SHIELD_EXTERIOR).
+// TCH0 is the only map this perm reads (three times, at its own uv) and TCH1 sits in the MATI unused;
+// CCH0 whole in VPRM v1; the generator's PBDM 2 blend kept; the perm carries DFOG 1 and has no fog
+// code, so a material without it is refused rather than drawn with this perm's maths. Only one slot:
+// no scene copy is read, so no indirect (TCH1) slot either.
+void TestVmatBarrierGlowRecipe() {
+  constexpr uint32_t kBarrierGlow = 1u << 30;
+  // The MATI's own CCH0: (.1, 1, 0, 0).
+  const std::vector<std::array<float, 4>> cch = {{0.1f, 1.f, 0.f, 0.f}};
+  const std::vector<uint8_t> mati = MatiCchN(0xb1eb2b67, {{"TCH0", Fresh(8)}, {"TCH1", Fresh(8)}}, cch);
+  const std::vector<uint8_t> matiRefraction = MatiFlags(mati, {"MFC0"});
+  const std::vector<uint8_t> matiExterior = MatiFlags(mati, {"MFC1"});
+  const std::vector<uint8_t> matiNoPattern = MatiCchN(0xb1eb2b67, {}, cch);
+  const std::vector<uint8_t> matiNoCch = Mati(0xb1eb2b67, {{"TCH0", Fresh(8)}});
+  const auto effect = [](bool dfog) {
+    std::vector<uint8_t> out = VmatEffect(true);
+    if (dfog) {
+      std::vector<uint8_t> extra;
+      PutProperty(extra, "DFOG", 1);
+      PutConstant(extra, 1);
+      out.insert(out.end() - 13, extra.begin(), extra.end());
+    }
+    return out;
+  };
+  const auto convert = [](const std::vector<uint8_t>& data, const std::vector<uint8_t>& material,
+                          std::vector<RetailPartProperty>& properties) {
+    EffectNode node;
+    std::string error;
+    CHECK_MSG(ParseEffect(data.data(), data.size(), node, error), "the glow effect parses");
+    EffectConvertIO io;
+    io.materialTexture = [](const EffectGuid&) { return 0x5EED0007u; };
+    io.materialData = [&material](const EffectGuid&) { return material; };
+    io.vfxTexture = [](const EffectGuid& texture) {
+      FlipbookAtlas atlas;
+      if (texture == Fresh(8)) {
+        atlas.id = 0x5EED0008;
+      }
+      return atlas;
+    };
+    io.modelMesh = [](uint32_t) { return std::vector<uint8_t>{0, 0, 0, 2}; };
+    std::vector<ConvertedPart> parts = ConvertEffect(node, data.data(), io);
+    if (parts.size() == 1) {
+      SplitRetailPart(parts[0].part.data(), parts[0].part.size(), properties, error);
+    }
+    return parts;
+  };
+  const auto value = [](const std::vector<RetailPartProperty>& properties, uint32_t fourcc) {
+    for (const RetailPartProperty& property : properties) {
+      if (property.fourcc == fourcc) {
+        return property.value;
+      }
+    }
+    return std::vector<uint8_t>();
+  };
+  const auto mentions = [](const std::vector<ConvertedPart>& parts, const char* what) {
+    const std::vector<std::string> notes = parts.size() == 1 ? parts[0].approximated : std::vector<std::string>{};
+    for (const std::string& line : notes) {
+      if (line.find(what) != std::string::npos) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  std::vector<RetailPartProperty> properties;
+  std::vector<ConvertedPart> parts = convert(effect(true), mati, properties);
+  CHECK_MSG(parts.size() == 1 && parts[0].approximated.empty(),
+            "b1eb2b67 with neither shield flag writes an exact VMAT");
+  const std::vector<uint8_t> vmat = value(properties, EffectFourCC("VMAT"));
+  // The features carry the bit alone: perm 000 needs no unfogged pin (the shader has no fog code).
+  CHECK_MSG(VmatWord(vmat, 12) == kBarrierGlow && VmatWord(vmat, 16) == 2 && VmatWord(vmat, 20) == 1,
+            "b1eb2b67 VMAT: BarrierGlow, the generator's blend 2 (PBDM), one texture");
+  // The role words: TCH0 is the colour slot, and no other slot is bound (TCH1 is in the MATI, unused).
+  CHECK_MSG(VmatWord(vmat, 68) == 0 && VmatWord(vmat, 72) == ~0u && VmatWord(vmat, 88) == ~0u &&
+                VmatWord(vmat, 92) == ~0u,
+            "b1eb2b67: TCH0 is the colour slot, and the indirect slot is not bound");
+  const std::vector<uint8_t> vprm = value(properties, EffectFourCC("VPRM"));
+  CHECK_MSG(vprm.size() == 8 + 12 + 16 && VmatWord(vprm, 8) == 1 && VmatWord(vprm, 12) == ~0u &&
+                VmatWord(vprm, 16) == 1,
+            "VPRM v1: no NMAP slot and one CCH row");
+  CHECK_MSG(VmatWord(vprm, 20) == Bits(0.1f) && VmatWord(vprm, 24) == Bits(1.f) && VmatWord(vprm, 28) == Bits(0.f) &&
+                VmatWord(vprm, 32) == Bits(0.f),
+            "VPRM carries the MATI's CCH0 (.1, 1, 0, 0)");
+  CHECK_MSG(!value(properties, EffectFourCC("VMSH")).empty(), "the glow model keeps its VMSH");
+
+  // Either shield flag is another perm: the refraction 002 with MFC0, the exterior's own shader with MFC1.
+  properties.clear();
+  parts = convert(effect(true), matiRefraction, properties);
+  CHECK_MSG(value(properties, EffectFourCC("VMAT")).empty() && mentions(parts, "non-refraction perm"),
+            "b1eb2b67 with MFC0 writes no VMAT and says why");
+  properties.clear();
+  parts = convert(effect(true), matiExterior, properties);
+  CHECK_MSG(value(properties, EffectFourCC("VMAT")).empty() && mentions(parts, "non-refraction perm"),
+            "b1eb2b67 with MFC1 is refused");
+  // Its perm reads TCH0 and CCH0; without them there is nothing to draw.
+  properties.clear();
+  parts = convert(effect(true), matiNoPattern, properties);
+  CHECK_MSG(value(properties, EffectFourCC("VMAT")).empty() && mentions(parts, "TCH0"),
+            "b1eb2b67 without TCH0 writes no VMAT");
+  properties.clear();
+  parts = convert(effect(true), matiNoCch, properties);
+  CHECK_MSG(value(properties, EffectFourCC("VMAT")).empty() && mentions(parts, "CCH0"),
+            "b1eb2b67 without CCH0 writes no VMAT");
+  // The perm carries DFOG 1 and has no fog code.
+  properties.clear();
+  parts = convert(effect(false), mati, properties);
+  CHECK_MSG(value(properties, EffectFourCC("VMAT")).empty() && mentions(parts, "drawn fogged"),
+            "b1eb2b67 without DFOG 1 writes no VMAT");
+}
+
 bool Contains(const std::vector<uint8_t>& bytes, const std::vector<uint8_t>& what) {
   return std::search(bytes.begin(), bytes.end(), what.begin(), what.end()) != bytes.end();
 }
@@ -5080,26 +5607,23 @@ void TestElc2NclrAndXfmd() {
   }
 }
 
-// A generator with a PMDL but no TEXR or MTIN draws only models: its SIZE is
-// left out and a SIZE of 0 written instead, as with one that draws nothing.
+// Transformed/model primitives consume SIZE, irrespective of TEXR/MTIN.
 void TestModelsOnly() {
   const EffectConvertIO io = AtlasIO();
   auto parts = ConvertOne(OneGenerator([](auto& o) {
                  PutModels(o, 4, 3);
                  PutProperty(o, "SIZE", 3);
                  PutConstant(o, Bits(2.0f));
-               }),
-               io);
+               }, 3),
+                io);
   Retail want;
   want.f("GPSM").f("PMDL").f("CNST").w(0xC0DE000A).f("PMDV").f("CNST").w(4);
   for (uint32_t i = 0; i < 4; ++i) {
     want.f("CNST").w(0xC0DE000A + i);
   }
-  want.f("SIZE").f("CNST").w(Bits(0.0f)).end();
-  CHECK_MSG(parts.size() == 1 && parts[0].part == want.bytes, "a models-only generator gets SIZE 0");
-  CHECK_MSG(!parts.empty() && parts[0].dropped.size() == 1 &&
-                parts[0].dropped[0] == "SIZE: the generator draws models only",
-            "its SIZE is dropped as models only");
+  want.f("SIZE").f("CNST").w(Bits(2.0f)).f("PPRM").f("CNST").w(3).end();
+  CHECK_MSG(parts.size() == 1 && parts[0].part == want.bytes, "a model generator retains SIZE and selects only the model pass");
+  CHECK_MSG(!parts.empty() && parts[0].dropped.empty(), "model SIZE remains an evaluator");
   CHECK_MSG(!parts.empty() && parts[0].droppedRetail == 0, "models only drops no retail property");
 }
 
@@ -5246,6 +5770,9 @@ int main() {
   TestVmatDisintegrationRecipe();
   TestVmatVisorRunOffRecipes();
   TestVmatVisorRainRecipe();
+  TestVmatVisorSteamRecipe();
+  TestVmatBarrierShieldRecipe();
+  TestVmatBarrierGlowRecipe();
   TestVmatVisorSplatRecipe();
   TestVmatSceneWarpRecipes();
   TestVmatIceChargeBeamRecipe();
@@ -5256,6 +5783,7 @@ int main() {
   TestElc2NclrAndXfmd();
   TestWaveOrbHeaderBlend();
   TestWaveOrbExposurePolicy();
+  TestIceWedgeCullPolicy();
   TestPowerBallExposurePolicy();
   TestPowerChargeExposurePolicy();
   TestSmtrCch0Overrides();

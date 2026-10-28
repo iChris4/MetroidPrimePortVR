@@ -153,6 +153,8 @@
 //   EnvironmentFX rain, snow and underwater flakes (CEnvFxManagerMP1::SetColorIntensity), from the
 //   CEnvFxDensityControllerMP1 a RelayAutoFire reaches when the area loads (1 when none does; a
 //   controller only a trigger fires is left out). Older files have 1.
+// Version 29 adds to each sun, after the casts block, a light's links, animation block and
+//   splines (as version 19's lights from u32 links on; the animation's falloff and scale unused).
 // The tonemap is Remastered's: the exposure value without auto exposure, the radiance
 // that comes out as middle grey once exposed, and how far the curve's toe and shoulder
 // are pulled in.
@@ -160,13 +162,17 @@
 // same units as the grid's points.
 namespace PortRoomEnv {
 
+// A probe whose REFL names no cube: Remastered still registers it with CReflectionProbeManager, but its
+// cube data stays null (CReflectionProbe::UpdateTokenReadiness).
+constexpr uint32_t kProbeNoCube = 0xFFFFFFFFu;
+
 struct Probe {
   // Rows of world -> box; a point is inside when every coordinate is within -1..1.
   float worldToBox[12];
   // Rows of world direction -> cube lookup direction.
   float worldToCube[9];
   int32_t layer = -1; // the area's script layer it is on; -1: every layer (ProbeOn)
-  uint32_t cube;
+  uint32_t cube;      // index into the file's cubes; kProbeNoCube: none (Remastered's null cube data)
   float scale; // Remastered's intensity
   // Remastered's ReflectionProbe: how far outside the box (metres) the probe fades out, which
   // probes win where boxes overlap, and the intensity's range for the ambient occlusion
@@ -378,16 +384,7 @@ struct FogTransition {
   std::vector<GradeLink> links;
 };
 
-struct SunLight {
-  int32_t layer = -1;
-  bool on = true;
-  float toSun[3] = {};
-  float color[3] = {};
-  uint32_t group = 0xffffffff;  // PortRoomGeo::kNoGroup
-  bool casts = false;           // version 24: the cast bit (LightFlags a103d675)
-};
-
-// A point or spot LightDynamic (CLightDynamicGOC). Static: colour, range and cone as stored.
+// A LightDynamic (CLightDynamicGOC). Static: colour, range and cone as stored.
 // Animated (its Attributes' animated flag): a playback over `length` seconds
 // (CTimePlaybackManager, steps of 1/60000 s; it advances only while playing and active,
 // stops at the end unless `loop` wraps it; backwards mirrors that) gives t, and then the
@@ -414,17 +411,8 @@ enum LightSpline : uint8_t {
   kLightSplineGradient, // r, g, b, a
   kLightSplines = kLightSplineGradient + 4,
 };
-struct PointLight {
-  int32_t layer = -1;
-  bool on = true;
-  bool spot = false;
-  uint8_t falloff = 3;
-  float pos[3] = {};
-  float toLight[3] = {};
-  float color[3] = {};
-  float nearFar[2] = {};
-  float cone[2] = {};  // inner, outer
-  uint32_t group = 0xffffffff;  // PortRoomGeo::kNoGroup
+// Its links and timeline, which every kind has.
+struct LightTimeline {
   std::vector<GradeLink> links;
   bool animated = false;
   bool playing = false;
@@ -438,17 +426,44 @@ struct PointLight {
   PortMayaSpline splines[kLightSplines];
   bool hasSpline[kLightSplines] = {};
 };
+struct PointLight : LightTimeline {
+  int32_t layer = -1;
+  bool on = true;
+  bool spot = false;
+  uint8_t falloff = 3;
+  float pos[3] = {};
+  float toLight[3] = {};
+  float color[3] = {};
+  float nearFar[2] = {};
+  float cone[2] = {};  // inner, outer
+  uint32_t group = 0xffffffff;  // PortRoomGeo::kNoGroup
+};
+// A directional one (see Sun). Its timeline (version 29) drives its colour as a point light's:
+// the intro's fill suns fade out over their 30 s before the next shot hides them.
+struct SunLight : LightTimeline {
+  int32_t layer = -1;
+  bool on = true;
+  float toSun[3] = {};
+  float color[3] = {};
+  uint32_t group = 0xffffffff;  // PortRoomGeo::kNoGroup
+  bool casts = false;           // version 24: the cast bit (LightFlags a103d675)
+};
 
 // An auto exposure hint with a fluid mode (CAutoExposureHintGOC mode 1 or 2), or one of the pair a
 // CAutoExposureHintMP1 swaps between (role 1 / 2, `pair` the instance, any mode).
 struct FluidHint {
   uint8_t mode = 1;
+  int32_t priority = 0; // version 27: higher values register first
+  bool on = true; // component/entity active at load
   uint8_t role = 0;  // 0 ordinary, 1 pair hint A (normal view), 2 pair hint B (thermal) (unverified)
   uint8_t pair = 0;
   float exposure[2] = {};
   float bias = 0.f;
   float sigma = 32.f;
   float staticLerp = 0.5f;
+  // Version 28: kShow / kHide / kToggle (de)activate its entity, which registers or
+  // unregisters it (eased, type 0: only InsideFluidStateChanged snaps).
+  std::vector<GradeLink> links;
 };
 
 // A box of the world the camera is inside or not (version 22).
@@ -581,6 +596,21 @@ constexpr size_t kMaxBlend = 4;
 // `blend` holds the last frame's list on input. Candidates whose keys repeat count once.
 void UpdateBlend(const BlendCandidate* candidates, size_t count, const float pos[3], Blend& blend);
 
+// What CReflectionProbeManager::ResolveReflectionProbe hands a material that reflects the camera's probe
+// (E2644678) for the blend list: an empty list is the black cube; a lone probe forwards its cube data, which
+// is null for a probe without a cube, and a null result builds no override, so the material draws its
+// permutation without a probe; otherwise the probes' (blended) cube.
+enum class CameraCube { Black, NoOverride, Probe };
+inline CameraCube CameraCubeState(const Blend& blend) {
+  if (blend.entries.empty()) {
+    return CameraCube::Black;
+  }
+  if (blend.entries.size() == 1 && (blend.entries[0].probe == nullptr || blend.entries[0].probe->cube == kProbeNoCube)) {
+    return CameraCube::NoOverride;
+  }
+  return CameraCube::Probe;
+}
+
 // The baked ambient at a point, as Remastered's shaders evaluate it: per colour channel c
 // and for a surface normal n,
 //   mean[c] - lobe[c] + 2 * lobe[c] * (1 + sharpness[c]) * q ^ (1 + 2 * sharpness[c]),
@@ -677,6 +707,10 @@ struct Selection {
 // The room cube and baked ambient for a model at `pos`; false when no loaded area has
 // either (or MP_ROOM_ENV=0).
 bool Select(const float pos[3], Selection& out);
+// The camera's probe for this frame's blend (CameraCubeState), and for Probe its cube and params in `out`
+// (cube 0 while the GPU has not made it). With the blend off (MP_ROOM_ENV_BLEND=0) there is no camera list,
+// and the model's own pick at `pos` stands in for it. Black when room environments are off.
+CameraCube CameraProbe(const float pos[3], Selection& out);
 // The baked ambient at a point as the bake holds it (mean, lobe, sharpness, world-space direction),
 // before the frame's exposure: Remastered's BLPD probe record has these numbers, and its Lit particle
 // material (390fc33b) evaluates them at the fragment. False when no loaded area's grid holds the point
@@ -857,8 +891,8 @@ void SetExposureState(bool unmorphed, bool thermal, bool cinematic);
 //
 // CAutoExposureHintMP1GOC swaps a pair of hints (role 1 = A, 2 = B) on the thermal visor: state
 // = (unmorphed && thermal) ? inCinematic : 1; state 1 enables A and disables B, state 0 the
-// reverse. A disabled hint is out of the pick whatever its mode; a pair hint of mode 0 is
-// registered from the load, one of a mode above 2 (script driven, not modelled) never.
+// reverse. A disabled hint is out of the pick whatever its mode. Mode 0 registers at
+// load; the shipped enum has only modes 0..2 (priority is a separate signed integer).
 struct ExposureHints {
   bool inside = false; // the last fluid state told (the GOC's +0x48)
   bool seen = false; // the fluid state has changed once (mode 2 may be active)
@@ -866,6 +900,8 @@ struct ExposureHints {
   std::vector<uint8_t> active; // per FluidHint
   std::vector<uint8_t> disabled; // per FluidHint: externally disabled by the swap
   std::vector<uint64_t> order; // per FluidHint: registration number, 0 when unregistered
+  std::vector<int32_t> priority;
+  std::vector<uint8_t> on; // per FluidHint: its entity is active (FluidHint::on, then its links)
   uint64_t next = 1;
   // Starts the room's hints as EntityLoaded does with the camera's current state. The pair
   // hints start in `pairState` (without a snap: ConnectAreaFunctors' initial disable is type 0;
@@ -875,6 +911,8 @@ struct ExposureHints {
   bool Set(const std::vector<FluidHint>& hints, bool cameraInside);
   // The swap's state of the frame (see SwapState). True when a hint registered, which snaps.
   bool SetPair(const std::vector<FluidHint>& hints, uint8_t state);
+  // What `sender` does on `state` to the hints' entities; true when one changed. Never snaps.
+  bool Drive(const std::vector<FluidHint>& hints, uint32_t sender, int state);
   static uint8_t SwapState(bool unmorphed, bool thermal, bool cinematic) {
     return (unmorphed && thermal) ? (cinematic ? 1 : 0) : 1;
   }
@@ -931,6 +969,8 @@ void BakedLightModulation(float rgb[3]);
 float MeasureExposure();
 // The frame's exposure (2^(3 - EV)); 0 before it has one.
 float FrameExposure();
+// resolve_inverse_exposure 0x20eba0: blended particle draws use auto, opaque use static.
+float ParticleInverseExposure(bool blended);
 // Whether the exposure follows the frame (MP_ROOM_ENV_AUTO_EXPOSURE, the console's
 // `roomenv auto`); otherwise it is the tonemap's EV.
 void SetAutoExposure(bool on);

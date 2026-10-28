@@ -416,7 +416,7 @@ CRasterFont* CGameGlobalObjects::LoadDefaultFont() {
   std::vector< uint8_t > fontData, fontTexture;
   // PAL's has other bytes (FONT v4): the font naming the same texture. Looked up
   // first there, so a PAL boot doesn't throw (and log) on the way.
-  const bool palFont = PortDisc::Current() == PortDisc::Version::Pal &&
+  const bool palFont = PortDisc::HasPalData() &&
                        PortFindDolFont(0x6065853f, fontData, fontTexture);
   if (!palFont) {
     try {
@@ -694,6 +694,13 @@ void CGameGlobalObjects::AddPaksAndFactories() {
   CResFactory& factory = *gpResourceFactory;
   CGraphics::SetViewPointMatrix(CTransform4f::Identity());
   CGraphics::SetModelMatrix(CTransform4f::Identity());
+  // Trilogy's DOL mounts RS5.pak (the Wii scan ring, bracket and cursor models) and
+  // Strings.pak first. Strings.pak holds the text of IDs whose NoARAM.pak copies are
+  // empty, such as STRG_Credits; ARAM paks are searched before NoARAM.pak.
+  if (PortDisc::IsTrilogy(PortDisc::Current())) {
+    factory.GetResLoader().AddPakFileAsync(rstl::string_l("aram:RS5"), false, false);
+    factory.GetResLoader().AddPakFileAsync(rstl::string_l("aram:Strings"), false, false);
+  }
   factory.GetResLoader().AddPakFileAsync(rstl::string_l("aram:Tweaks"), false, false);
   factory.GetResLoader().AddPakFileAsync(rstl::string_l("NoARAM"), false, false);
   // Mod resources that did not fit in NoARAM.pak (2 GiB file limit).
@@ -1083,7 +1090,7 @@ int CMain::RsMain(int argc, const char* const* argv) {
               (PortPhoto::Active() ? PortPhoto::MouseLook()
                                    : PortDebug::MouseAim() && PortDebug::MouseGameplayActive() &&
                                          !PortPhoto::PanelWantsCursor()) &&
-              !PortDebug::Visible() && !resumePrompt && focused;
+              !PortDebug::Visible() && !PortDebug::TouchEditing() && !resumePrompt && focused;
 #if defined(__ANDROID__) && !defined(MP_ENABLE_OPENXR)
           // A free (hidden) cursor flung to the screen edge brings up the nav bar
           // or taskbar, so keep the pointer captured unless the overlay is open.
@@ -1095,7 +1102,8 @@ int CMain::RsMain(int argc, const char* const* argv) {
 #else
           // Morph ball has no mouse aim, but its bombs are on the mouse buttons:
           // keep the pointer locked so a click can't land outside the window.
-          const bool wantLock = !pointerMenu &&
+          // The touch layout editor drags its controls with the pointer.
+          const bool wantLock = !pointerMenu && !PortDebug::TouchEditing() &&
                                 (wantRelative ||
                                  (PortDebug::MouseAim() && MorphBallHoldsMouse() && !PortDebug::Visible() &&
                                   !PortPhoto::PanelWantsCursor() && !resumePrompt && focused));

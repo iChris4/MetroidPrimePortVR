@@ -891,6 +891,11 @@ const TextureWithSampler& resample_source(const wgpu::CommandEncoder& encoder, c
                                           const TextureWithSampler& source) {
   const uint32_t width = viewport_extent(viewport.width);
   const uint32_t height = viewport_extent(viewport.height);
+  // At the window's size both samplers return each texel as it is and nothing is sharpened,
+  // so the present blit reads the frame itself.
+  if (source.size.width == width && source.size.height == height) {
+    return source;
+  }
   if (!g_resampledFrameBuffer.view || g_resampledFrameBuffer.size.width != width ||
       g_resampledFrameBuffer.size.height != height || g_resampledFrameBuffer.format != source.format) {
     g_resampledFrameBuffer = create_render_texture(width, height, false);
@@ -1083,7 +1088,25 @@ static bool initialize_once(AuroraBackend auroraBackend, bool allowCpu) {
     // MP_GPU_POWER=low asks for the integrated GPU on a machine that also has a discrete one.
     const char* power = std::getenv("MP_GPU_POWER");
     const bool lowPower = power != nullptr && std::string_view{power} == "low";
+#ifdef WEBGPU_DAWN
+    // MP_GL_VERSION=3.3 runs desktop OpenGL as 3.3 core even on a newer driver, to try the
+    // 3.3 paths (GLSL 330, no compute) on hardware that has more.
+    const char* glVersion = std::getenv("MP_GL_VERSION");
+    const bool forceGL33 = backend == wgpu::BackendType::OpenGL && glVersion != nullptr &&
+                           std::string_view{glVersion} == "3.3";
+    static constexpr std::array adapterToggles{"gl_force_desktop_gl_33"};
+    const wgpu::DawnTogglesDescriptor adapterTogglesDescriptor{wgpu::DawnTogglesDescriptor::Init{
+        .enabledToggleCount = adapterToggles.size(),
+        .enabledToggles = adapterToggles.data(),
+    }};
+    if (forceGL33) {
+      Log.info("MP_GL_VERSION=3.3: forcing an OpenGL 3.3 core context");
+    }
+#endif
     wgpu::RequestAdapterOptions options{
+#ifdef WEBGPU_DAWN
+        .nextInChain = forceGL33 ? &adapterTogglesDescriptor : nullptr,
+#endif
         .featureLevel = wgpu::FeatureLevel::Compatibility,
         .powerPreference = lowPower ? wgpu::PowerPreference::LowPower : wgpu::PowerPreference::HighPerformance,
         .backendType = backend,
@@ -1184,9 +1207,59 @@ static bool initialize_once(AuroraBackend auroraBackend, bool allowCpu) {
   {
     wgpu::Limits supportedLimits{};
     g_adapter.GetLimits(&supportedLimits);
+    // Texture vertex fetch (aurora::gfx::g_vertexFetchTexture): a GPU without vertex-stage storage
+    // buffers (OpenGL 3.3) reads the GX shaders' vertex and array data from R32Uint textures, which
+    // every stage can sample. AURORA_VERTEX_FETCH_TEXTURE=1 forces it; otherwise the adapter's own
+    // compatibility-mode limit decides. Fixed for the life of the device, so the generated WGSL and
+    // the bind group layout agree with it.
+    uint32_t adapterVertexStorageBuffers = WGPU_LIMIT_U32_UNDEFINED;
+    {
+      wgpu::Limits probeLimits{};
+      wgpu::CompatibilityModeLimits probeCompatibility{wgpu::CompatibilityModeLimits::Init{}};
+      probeLimits.nextInChain = &probeCompatibility;
+      g_adapter.GetLimits(&probeLimits);
+      adapterVertexStorageBuffers = probeCompatibility.maxStorageBuffersInVertexStage;
+    }
+    const char* forceFetchTexture = std::getenv("AURORA_VERTEX_FETCH_TEXTURE");
+    const bool forced = forceFetchTexture != nullptr && forceFetchTexture[0] == '1' && forceFetchTexture[1] == '\0';
+    const bool adapterHasNone = adapterVertexStorageBuffers != WGPU_LIMIT_U32_UNDEFINED &&
+                                adapterVertexStorageBuffers < 2;
+    gfx::g_vertexFetchTexture = forced || adapterHasNone;
+    if (gfx::g_vertexFetchTexture) {
+      Log.info("Vertex data from textures instead of vertex-stage storage buffers ({})",
+               forced ? "AURORA_VERTEX_FETCH_TEXTURE=1"
+                      : fmt::format("the adapter allows {} of them", adapterVertexStorageBuffers));
+    } else {
+      if (adapterVertexStorageBuffers == WGPU_LIMIT_U32_UNDEFINED) {
+        Log.info("Vertex data from storage buffers (the adapter does not report vertex-stage storage buffers)");
+      } else {
+        Log.info("Vertex data from storage buffers (the adapter allows {} vertex-stage storage buffers)",
+                 adapterVertexStorageBuffers);
+      }
+    }
+    // Compute (aurora::gfx::g_noCompute): OpenGL 3.3 has no compute shaders, so the volumetric fog's
+    // froxels and the depth peek run as render passes with the same per-pixel math instead
+    // (gfx/volfog.cpp, gfx/depth_peek.cpp). AURORA_NO_COMPUTE=1 forces them; otherwise the adapter's
+    // own limits decide, as a device without compute reports no workgroups or no invocations.
+    const char* forceNoCompute = std::getenv("AURORA_NO_COMPUTE");
+    const bool noComputeForced = forceNoCompute != nullptr && forceNoCompute[0] == '1' && forceNoCompute[1] == '\0';
+    const bool adapterNoCompute =
+        supportedLimits.maxComputeWorkgroupsPerDimension == 0 || supportedLimits.maxComputeInvocationsPerWorkgroup == 0;
+    gfx::g_noCompute = noComputeForced || adapterNoCompute;
+    if (gfx::g_noCompute) {
+      Log.info("No compute shaders ({}): the volumetric fog froxels and the depth peek use render passes",
+               noComputeForced ? "AURORA_NO_COMPUTE=1"
+                               : fmt::format("the adapter allows {} workgroups per dimension and {} invocations "
+                                             "per workgroup",
+                                             supportedLimits.maxComputeWorkgroupsPerDimension,
+                                             supportedLimits.maxComputeInvocationsPerWorkgroup));
+    }
+    // Storage buffers hold the vertex data and feed the compute passes; with both on their fallbacks
+    // nothing binds one, so require none (OpenGL 3.3 has no shader storage buffers at all).
+    const bool needStorageBuffers = !gfx::g_vertexFetchTexture || !gfx::g_noCompute;
     wgpu::CompatibilityModeLimits compatibilityModeLimits{wgpu::CompatibilityModeLimits::Init{
-        .maxStorageBuffersInVertexStage = 2,
-        .maxStorageBuffersInFragmentStage = 2,
+        .maxStorageBuffersInVertexStage = gfx::g_vertexFetchTexture ? 0u : 2u,
+        .maxStorageBuffersInFragmentStage = gfx::g_vertexFetchTexture ? 0u : 2u,
     }};
     const wgpu::Limits requiredLimits{
         .nextInChain = &compatibilityModeLimits,
@@ -1202,8 +1275,8 @@ static bool initialize_once(AuroraBackend auroraBackend, bool allowCpu) {
         .maxSampledTexturesPerShaderStage = supportedLimits.maxSampledTexturesPerShaderStage >= 17
                                                 ? 17
                                                 : WGPU_LIMIT_U32_UNDEFINED,
-        .maxStorageBuffersPerShaderStage = 2,
-        .maxStorageBufferBindingSize = supportedLimits.maxStorageBufferBindingSize == 0
+        .maxStorageBuffersPerShaderStage = needStorageBuffers ? 2u : WGPU_LIMIT_U32_UNDEFINED,
+        .maxStorageBufferBindingSize = !needStorageBuffers || supportedLimits.maxStorageBufferBindingSize == 0
                                            ? WGPU_LIMIT_U64_UNDEFINED
                                            : supportedLimits.maxStorageBufferBindingSize,
         .minUniformBufferOffsetAlignment =
@@ -1300,6 +1373,12 @@ static bool initialize_once(AuroraBackend auroraBackend, bool allowCpu) {
           }
           g_hasCoreFeatures = true;
         } else if (feature == wgpu::FeatureName::TextureCompressionBC) {
+          // AURORA_NO_BC=1 leaves it out, so CMPR is decoded to RGBA8 on the CPU (to tell a driver's
+          // broken compressed uploads apart from other texture faults).
+          if (const char* noBc = std::getenv("AURORA_NO_BC"); noBc != nullptr && noBc[0] == '1') {
+            Log.info("AURORA_NO_BC=1: not requesting TextureCompressionBC");
+            continue;
+          }
           g_bcTexturesSupported = true;
         } else if (feature == wgpu::FeatureName::TextureCompressionASTC) {
           g_astcTexturesSupported = true;
@@ -1432,13 +1511,17 @@ static bool initialize_once(AuroraBackend auroraBackend, bool allowCpu) {
     addToggles("driver workaround off", g_config.dawnDisableToggles, false, true);
     addToggles("MP_DAWN_ENABLE", std::getenv("MP_DAWN_ENABLE"), true, false);
     addToggles("MP_DAWN_DISABLE", std::getenv("MP_DAWN_DISABLE"), false, false);
-    // GL is only the fallback for drivers that draw wrong on Vulkan, so it runs without
-    // Dawn's blob cache: cached program binaries crashed Mesa in glProgramBinary.
+    // GL runs without Dawn's blob cache where Mesa drives it: cached program binaries crashed
+    // Mesa in glProgramBinary. Windows desktop GL (vendor drivers) keeps it, or every launch
+    // recompiles every pipeline (about 40 ms each there).
+#if _WIN32
+    const bool glWithoutCache = g_backendType == wgpu::BackendType::OpenGLES;
+#else
+    const bool glWithoutCache =
+        g_backendType == wgpu::BackendType::OpenGLES || g_backendType == wgpu::BackendType::OpenGL;
+#endif
     wgpu::DawnTogglesDescriptor togglesDescriptor(wgpu::DawnTogglesDescriptor::Init{
-        .nextInChain = g_backendType == wgpu::BackendType::OpenGLES ||
-                               g_backendType == wgpu::BackendType::OpenGL
-                           ? nullptr
-                           : &cacheDescriptor,
+        .nextInChain = glWithoutCache ? nullptr : &cacheDescriptor,
         .enabledToggleCount = enableToggles.size(),
         .enabledToggles = enableToggles.data(),
         .disabledToggleCount = disableToggles.size(),

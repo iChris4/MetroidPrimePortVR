@@ -1,5 +1,11 @@
 #include "MetroidPrime/CInGameGuiManager.hpp"
 #include "port_env.h"
+#ifdef TARGET_PC
+#include "port_mods.h"
+#include "port_pause_lighting.h"
+#include "port_room_env.h"
+#include <dolphin/gx/GXExtra.h>
+#endif
 
 #include "Kyoto/Audio/CSfxManager.hpp"
 #include "Kyoto/CFrameDelayedKiller.hpp"
@@ -531,6 +537,27 @@ void CInGameGuiManager::Draw(const CStateManager& mgr) const {
 #endif
   }
 
+  bool pauseDrawn = false;
+#ifdef TARGET_PC
+  const bool ui = !PortVr::VrImmersive() && !x48_pauseScreen.null() && x48_pauseScreen->PortDrawsInventory() &&
+                  PortRoomEnv::Enabled() && PortMods::RoomEnvLoaded();
+  PortPauseLighting::TextPass pauseText(ui);
+#endif
+  {
+#ifdef TARGET_PC
+  float previousTone[3][4];
+  const bool hadTone = PortRoomEnv::Tone(previousTone);
+  // RenderPauseScreenElements (0xfa1428) selects the HDR target BEFORE the
+  // priority-sorted capture/blur backdrop (0xe7cabc / 0xe7cc8c). Preserving
+  // colour is only correct when that full-screen backdrop is redrawn here.
+  const bool hdr = ui && GXPortPauseSceneHdr();
+  const PortPauseLighting::Scope scene(PortPauseLighting::active, ui);
+  if (ui) {
+    float tone[3][4];
+    PortRoomEnv::Tone(tone);
+    GXSetPBRTone(tone);
+  }
+#endif
   const bool preDrawBlur =
       IsInGameplayStateNotTransitioning() || IsInOrTransitioningToOrFromState(kIGGS_MapScreen);
   if (preDrawBlur) {
@@ -695,6 +722,20 @@ void CInGameGuiManager::Draw(const CStateManager& mgr) const {
   if (!preDrawBlur) {
     x3c_pauseScreenBlur->Draw(mgr);
   }
+#ifdef TARGET_PC
+  if (ui) {
+    x48_pauseScreen->Draw();
+    pauseDrawn = true;
+    if (hdr) {
+      float tone[3][4], tints[5][3];
+      PortRoomEnv::Tone(tone);
+      PortPauseLighting::Bloom(tints);
+      GXPortPostProcessScene(GX_TRUE, 0.8f, tints, tone, 0, 0, 0.f, 0.f);
+    }
+    GXSetPBRTone(hadTone ? previousTone : nullptr);
+  }
+#endif
+  } // Restore gameplay lighting before the helmet, drawn after UI post (0xfa0be0).
   if (x1e0_helmetVisMode != 0u && notInCine && !PortDebug::HideHelmet()) {
     const float cameraOffset = x48_pauseScreen.null() ? 0.f : x48_pauseScreen->GetHelmetCamYOff();
 #ifdef TARGET_PC
@@ -731,6 +772,10 @@ void CInGameGuiManager::Draw(const CStateManager& mgr) const {
                                                      : AURORA_STEREO_ROUTE_ANCHORED_SCREEN);
     CGraphics::SetDepthRange(0.f, 0.f);
   }
+  // CGuiTextPane::Draw -> QueueRender_HUD -> StoreVisorHUDCommand in MPR.
+  // RenderHUD consumes that list after RenderPauseScreenElements (including
+  // its helmet): text and embedded prompt images must not feed UI bloom.
+  pauseText.Flush();
 #endif
   if (!x4c_saveUI.null()) {
     x4c_saveUI->Draw();
@@ -760,7 +805,7 @@ void CInGameGuiManager::Draw(const CStateManager& mgr) const {
     PortVr::VrSetPauseScreenRoute(route);
   }
 #endif
-  if (!x48_pauseScreen.null()) {
+  if (!pauseDrawn && !x48_pauseScreen.null()) {
     x48_pauseScreen->Draw();
   }
 #ifdef TARGET_PC

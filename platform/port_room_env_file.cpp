@@ -1,5 +1,6 @@
 // The .roomenv file: parsing, and picking the probe for a point. See port_room_env.h.
 #include "port_room_env.h"
+#include "port_room_geo.h"
 #include "port_hash.h"
 #include "port_strings.h"
 #include "port_bytes.h"
@@ -14,7 +15,7 @@ namespace PortRoomEnv {
 namespace {
 
 constexpr uint32_t kMagic = 0x5645504D; // 'MPEV'
-constexpr uint32_t kVersion = 26;
+constexpr uint32_t kVersion = 29;
 constexpr uint32_t kMaxGrades = 64;
 // A fog record up to its link count (inclusive).
 constexpr size_t kFogBytes = 368;
@@ -153,6 +154,73 @@ bool ParseTiles(const std::vector<uint8_t>& data, size_t& at, PortRoomEnvTiles::
   return true;
 }
 
+// A light's links, animation block and splines at `at` (version 19's, from u32 links on).
+constexpr size_t kTimelineAnimBytes = 36;
+constexpr size_t kTimelineLeast = 4 + kTimelineAnimBytes + 4 * kLightSplines;
+bool ParseTimeline(const std::vector<uint8_t>& data, size_t& at, LightTimeline& l, std::string& error) {
+  if (data.size() - at < 4) {
+    error = "cut short";
+    return false;
+  }
+  const uint32_t links = ReadLE32(data.data() + at);
+  at += 4;
+  if (links > kMaxGradeLinks || (data.size() - at) / 8 < links) {
+    error = "cut short";
+    return false;
+  }
+  l.links.resize(links);
+  for (GradeLink& link : l.links) {
+    const uint8_t* k = data.data() + at;
+    link.sender = ReadLE32(k);
+    link.state = k[4];
+    link.action = k[5];
+    at += 8;
+  }
+  if (data.size() - at < kTimelineAnimBytes) {
+    error = "cut short";
+    return false;
+  }
+  const uint8_t* a = data.data() + at;
+  l.animated = a[0] != 0;
+  l.playing = a[1] != 0;
+  l.loop = a[2] != 0;
+  l.offAtStart = a[3] != 0;
+  l.animFalloff = a[4];
+  l.length = ReadLEFloat(a + 8);
+  l.scale[0] = ReadLEFloat(a + 12);
+  l.scale[1] = ReadLEFloat(a + 16);
+  l.intensity = ReadLEFloat(a + 20);
+  for (int i = 0; i < 3; ++i) {
+    l.rgb[i] = ReadLEFloat(a + 24 + 4 * i);
+  }
+  at += kTimelineAnimBytes;
+  if (!std::isfinite(l.length) || l.length < 0.f) {
+    l.length = 0.f;
+  }
+  for (int i = 0; i < kLightSplines; ++i) {
+    if (data.size() - at < 4) {
+      error = "cut short";
+      return false;
+    }
+    const uint32_t size = ReadLE32(data.data() + at);
+    at += 4;
+    const size_t padded = (size_t(size) + 3) & ~size_t(3);
+    if (data.size() - at < padded) {
+      error = "cut short";
+      return false;
+    }
+    if (size != 0) {
+      if (!l.splines[i].Load(data.data() + at, size)) {
+        error = "bad light spline";
+        return false;
+      }
+      l.hasSpline[i] = true;
+    }
+    at += padded;
+  }
+  return true;
+}
+
 } // namespace
 
 bool ParseTileSet(const std::vector<uint8_t>& data, size_t& at, PortRoomEnvTiles::TileSet& set, std::string& error) {
@@ -233,7 +301,7 @@ bool Parse(std::vector<uint8_t>&& data, File& out, std::string& error) {
       probe.scale = 1.f;
     }
     SetExtents(probe);
-    if (probe.cube >= cubes) {
+    if (probe.cube >= cubes && probe.cube != kProbeNoCube) {
       error = "a probe names a cube the file does not have";
       return false;
     }
@@ -816,12 +884,17 @@ bool Parse(std::vector<uint8_t>&& data, File& out, std::string& error) {
     const uint32_t suns = ReadLE32(data.data() + at);
     at += 4;
     const size_t size = version >= 24 ? 40 : version >= 17 ? 36 : 32;
-    if ((data.size() - at) / size < suns) {
+    const size_t least = size + (version >= 29 ? kTimelineLeast : 0);
+    if ((data.size() - at) / least < suns) {
       error = "cut short";
       return false;
     }
     out.suns.resize(suns);
     for (SunLight& s : out.suns) {
+      if (data.size() - at < size) {
+        error = "cut short";
+        return false;
+      }
       const uint8_t* q = data.data() + at;
       s.layer = int32_t(ReadLE32(q));
       s.on = q[4] != 0;
@@ -834,6 +907,9 @@ bool Parse(std::vector<uint8_t>&& data, File& out, std::string& error) {
       }
       s.casts = version >= 24 && q[36] != 0;
       at += size;
+      if (version >= 29 && !ParseTimeline(data, at, s, error)) {
+        return false;
+      }
     }
   }
   if (version >= 18) {
@@ -877,8 +953,7 @@ bool Parse(std::vector<uint8_t>&& data, File& out, std::string& error) {
     at += 4;
     // The fixed part, the link count, the animation block and the spline sizes.
     constexpr size_t kSize = 64;
-    constexpr size_t kAnimBytes = 36;
-    constexpr size_t kLeast = kSize + 4 + kAnimBytes + 4 * kLightSplines;
+    constexpr size_t kLeast = kSize + kTimelineLeast;
     if ((data.size() - at) / kLeast < lights) {
       error = "cut short";
       return false;
@@ -905,61 +980,8 @@ bool Parse(std::vector<uint8_t>&& data, File& out, std::string& error) {
       }
       l.group = ReadLE32(q + 60);
       at += kSize;
-      const uint32_t links = ReadLE32(data.data() + at);
-      at += 4;
-      if (links > kMaxGradeLinks || (data.size() - at) / 8 < links) {
-        error = "cut short";
+      if (!ParseTimeline(data, at, l, error)) {
         return false;
-      }
-      l.links.resize(links);
-      for (GradeLink& link : l.links) {
-        const uint8_t* k = data.data() + at;
-        link.sender = ReadLE32(k);
-        link.state = k[4];
-        link.action = k[5];
-        at += 8;
-      }
-      if (data.size() - at < kAnimBytes) {
-        error = "cut short";
-        return false;
-      }
-      const uint8_t* a = data.data() + at;
-      l.animated = a[0] != 0;
-      l.playing = a[1] != 0;
-      l.loop = a[2] != 0;
-      l.offAtStart = a[3] != 0;
-      l.animFalloff = a[4];
-      l.length = ReadLEFloat(a + 8);
-      l.scale[0] = ReadLEFloat(a + 12);
-      l.scale[1] = ReadLEFloat(a + 16);
-      l.intensity = ReadLEFloat(a + 20);
-      for (int i = 0; i < 3; ++i) {
-        l.rgb[i] = ReadLEFloat(a + 24 + 4 * i);
-      }
-      at += kAnimBytes;
-      if (!std::isfinite(l.length) || l.length < 0.f) {
-        l.length = 0.f;
-      }
-      for (int i = 0; i < kLightSplines; ++i) {
-        if (data.size() - at < 4) {
-          error = "cut short";
-          return false;
-        }
-        const uint32_t size = ReadLE32(data.data() + at);
-        at += 4;
-        const size_t padded = (size_t(size) + 3) & ~size_t(3);
-        if (data.size() - at < padded) {
-          error = "cut short";
-          return false;
-        }
-        if (size != 0) {
-          if (!l.splines[i].Load(data.data() + at, size)) {
-            error = "bad light spline";
-            return false;
-          }
-          l.hasSpline[i] = true;
-        }
-        at += padded;
       }
     }
   }
@@ -970,15 +992,39 @@ bool Parse(std::vector<uint8_t>&& data, File& out, std::string& error) {
     }
     const uint32_t hints = ReadLE32(data.data() + at);
     at += 4;
-    constexpr size_t kHintBytes = 24;
+    // Version 28 follows each with its links (a count, then 8 bytes each).
+    const size_t kHintBytes = version >= 28 ? 32 : version >= 27 ? 28 : 24;
     if ((data.size() - at) / kHintBytes < hints) {
       error = "cut short";
       return false;
     }
-    for (uint32_t i = 0; i < hints; ++i, at += kHintBytes) {
+    for (uint32_t i = 0; i < hints; ++i) {
+      if (data.size() - at < kHintBytes) {
+        error = "cut short";
+        return false;
+      }
       const uint8_t* q = data.data() + at;
+      at += kHintBytes;
       FluidHint h;
+      if (version >= 28) {
+        const uint32_t links = ReadLE32(q + 28);
+        if (links > kMaxGradeLinks || (data.size() - at) / 8 < links) {
+          error = "cut short";
+          return false;
+        }
+        h.links.resize(links);
+        for (GradeLink& link : h.links) {
+          link.sender = ReadLE32(data.data() + at);
+          link.state = data[at + 4];
+          link.action = data[at + 5];
+          at += 8;
+        }
+      }
       h.mode = q[0];
+      if (version >= 27) {
+        h.on = q[3] != 0;
+        h.priority = int32_t(ReadLE32(q + 24));
+      }
       if (version >= 25 && q[1] <= 2) {
         h.role = q[1];
         h.pair = q[2];
@@ -988,8 +1034,8 @@ bool Parse(std::vector<uint8_t>&& data, File& out, std::string& error) {
       h.bias = ReadLEFloat(q + 12);
       h.sigma = ReadLEFloat(q + 16);
       h.staticLerp = ReadLEFloat(q + 20);
-      if ((h.role == 0 && h.mode != 1 && h.mode != 2) || !std::isfinite(h.exposure[0]) || !std::isfinite(h.exposure[1]) ||
-          h.exposure[1] < h.exposure[0]) {
+      if (h.mode > 2 || (version < 27 && h.role == 0 && h.mode == 0) ||
+          !std::isfinite(h.exposure[0]) || !std::isfinite(h.exposure[1]) || h.exposure[1] < h.exposure[0]) {
         continue;
       }
       if (!std::isfinite(h.bias)) {
@@ -1128,6 +1174,10 @@ bool ExposureHints::Load(const std::vector<FluidHint>& hints, bool cameraInside,
   active.assign(hints.size(), 0);
   disabled.assign(hints.size(), 0);
   order.assign(hints.size(), 0);
+  on.resize(hints.size());
+  for (size_t i = 0; i < hints.size(); ++i) {
+    on[i] = hints[i].on ? 1 : 0;
+  }
   if (cameraInside) {
     inside = seen = true;
   }
@@ -1151,20 +1201,52 @@ bool ExposureHints::SetPair(const std::vector<FluidHint>& hints, uint8_t state) 
   return Update(hints, true);
 }
 
+bool ExposureHints::Drive(const std::vector<FluidHint>& hints, uint32_t sender, int state) {
+  if (on.size() != hints.size()) {
+    return false;
+  }
+  bool changed = false;
+  for (size_t i = 0; i < hints.size(); ++i) {
+    for (const GradeLink& link : hints[i].links) {
+      if (link.sender != sender || link.state != state) {
+        continue;
+      }
+      const uint8_t now = link.action == PortRoomGeo::kShow     ? 1
+                          : link.action == PortRoomGeo::kHide   ? 0
+                          : link.action == PortRoomGeo::kToggle ? uint8_t(on[i] == 0)
+                                                                : on[i];
+      changed |= now != on[i];
+      on[i] = now;
+    }
+  }
+  if (changed) {
+    Update(hints, false);
+  }
+  return changed;
+}
+
 bool ExposureHints::Update(const std::vector<FluidHint>& hints, bool snapMode0) {
   if (active.size() != hints.size()) {
     active.assign(hints.size(), 0);
     disabled.assign(hints.size(), 0);
     order.assign(hints.size(), 0);
   }
-  bool registered = false;
+  if (on.size() != hints.size()) {
+    on.resize(hints.size());
+    for (size_t i = 0; i < hints.size(); ++i) {
+      on[i] = hints[i].on ? 1 : 0;
+    }
+  }
+  const uint64_t firstRegistration = next;
+  priority.resize(hints.size());
   for (size_t i = 0; i < hints.size(); ++i) {
     const FluidHint& hint = hints[i];
+    priority[i] = hint.priority;
     disabled[i] = hint.role == 0 ? 0 : (hint.role == 1 ? pairState == 0 : pairState != 0) ? 1 : 0;
     bool eligible = false;
     switch (hint.mode) {
     case 0:
-      eligible = hint.role != 0;
+      eligible = true;
       break;
     case 1:
       eligible = inside;
@@ -1175,25 +1257,31 @@ bool ExposureHints::Update(const std::vector<FluidHint>& hints, bool snapMode0) 
     default:
       break;
     }
-    const uint8_t now = eligible && !disabled[i] ? 1 : 0;
+    const uint8_t now = eligible && on[i] != 0 && !disabled[i] ? 1 : 0;
     if (now == active[i]) {
       continue;
     }
     active[i] = now;
     if (now != 0) {
       order[i] = next++;
-      registered = registered || hint.mode != 0 || snapMode0;
     } else {
       order[i] = 0;
     }
   }
-  return registered;
+  const int selected = Pick(hints.size());
+  // The transition type belongs to the selected registration, not any other
+  // hint that happened to register this frame (UpdateTonemapping 0xaffb18).
+  return selected >= 0 && order[selected] >= firstRegistration && (hints[selected].mode != 0 || snapMode0);
 }
 
 int ExposureHints::Pick(size_t count) const {
   int best = -1;
   for (size_t i = 0; i < count && i < order.size(); ++i) {
-    if (order[i] != 0 && (best < 0 || order[i] > order[best])) {
+    // RegisterAutoExposureHintObject 0xb0029c inserts before the first priority <=
+    // the new one. UpdateTonemapping 0xaffb18 takes the first matching area:
+    // higher priority first, newest registration first only for equal priorities.
+    if (order[i] != 0 && (best < 0 || priority[i] > priority[best] ||
+                         (priority[i] == priority[best] && order[i] > order[best]))) {
       best = int(i);
     }
   }

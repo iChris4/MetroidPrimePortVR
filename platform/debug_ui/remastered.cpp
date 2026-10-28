@@ -16,6 +16,7 @@
 #include "port_remastered_text.h"
 #include "port_savestate.h"
 #include "port_disc.h"
+#include "port_log.h"
 #include "port_pal_languages.h"
 
 #include "MetroidPrime/Cameras/CCameraManager.hpp"
@@ -58,6 +59,12 @@ void DrawRemasteredWarning() {
 
 // The PAL disc's languages for a USA one (port_pal_languages.h).
 void DrawPalLanguages() {
+  if (PortDisc::IsTrilogy(PortDisc::Current())) {
+    ImGui::TextDisabled("Trilogy disc: support is experimental.");
+    ItemHelp("The port runs the USA 1.00 code on the Trilogy disc's Metroid Prime data, which "
+             "already has its languages.");
+    return;
+  }
   if (PortDisc::Current() == PortDisc::Version::Pal) {
     ImGui::TextDisabled("PAL disc: support is experimental.");
     ItemHelp("The port runs the USA 1.00 code on the PAL disc's data. Checked on every room, but "
@@ -260,6 +267,8 @@ void DrawBuiltinModToggle(const char* modName, const char* label, bool stale) {
     ImGui::TextDisabled("Off, not loaded.");
   } else if (PortMods::Suspended()) {
     ImGui::TextDisabled("Not loaded while an import runs.");
+  } else if (modsOn && mod->pendingRestart) {
+    ImGui::TextColored(ThemeWarnColor(), "Not loaded: Restart the application to apply.");
   } else if (modsOn) {
     ImGui::TextColored(ThemeWarnColor(), "Not loaded: reload the mods to apply.");
   }
@@ -305,6 +314,12 @@ void DrawBuiltinMods() {
   if (ImGui::CollapsingHeader("Metroid Dread")) {
     ImGui::Indent();
     DrawBuiltinModToggle(PortDreadSamus::kModName, "Use the Dread Suit models", DreadImportStale(status));
+    bool cannon = PortDreadSamus::FirstPersonCannonShown();
+    if (ImGui::Checkbox("Dread arm cannon in first person", &cannon)) {
+      PortDreadSamus::SetFirstPersonCannonShown(cannon);
+      MarkDirty();
+    }
+    ItemHelp("Off keeps Prime's own arm cannon in first person; the Dread Suit bodies stay. Applies at once.");
     ImGui::SeparatorText("Import");
     DrawDreadSamusImport();
     ImGui::Unindent();
@@ -350,6 +365,13 @@ void DrawRemasteredDebug() {
     ImGui::SetItemTooltip("Recommended: off. Not saved. Needs \"Draw nearest first\".\nDraws grass "
                           "and leaves for depth first, then shades only what stays visible.\n"
                           "Looks the same; slower on the phones tried so far.");
+    bool opaquePrepass = PortRoomGeo::OpaquePrepass();
+    if (ImGui::Checkbox("Depth pre-pass for all room models", &opaquePrepass)) {
+      PortRoomGeo::SetOpaquePrepass(opaquePrepass);
+    }
+    ImGui::SetItemTooltip("Recommended: on, off on phones (the default). Not saved.\nDraws every room "
+                          "model for depth first, then shades only what stays visible.\n"
+                          "Looks the same; faster on desktop GPUs short of shading power.");
     static constexpr const char* kCostTests[] = {"Off", "Flat", "No lights", "No ambient volume",
                                                  "No reflections", "No normal maps", "No ORM/emissive maps",
                                                  "Maps only", "Maps without anisotropy",
@@ -503,6 +525,42 @@ void DrawRemasteredDebug() {
       ImGui::TreePop();
     }
   }
+}
+
+void ToggleRemastered() {
+  const PortMods::Status& status = PortMods::CurrentStatus();
+  const auto mod = std::find_if(status.mods.begin(), status.mods.end(), [](const PortMods::ModInfo& m) {
+    return m.name == PortRemastered::kImportModName;
+  });
+  if (mod == status.mods.end()) {
+    ShowNote("Remastered: not imported");
+    return;
+  }
+  if (!ModsEnabled()) {
+    ShowNote(sOriginalExperience ? "Remastered: off (Original experience is on)" : "Remastered: off (mods are off)");
+    return;
+  }
+  std::vector<std::string> disabled = PortMods::SplitDisabled(sModsDisabled);
+  const auto found = std::find(disabled.begin(), disabled.end(), mod->name);
+  const bool on = found != disabled.end();
+  if (on) {
+    disabled.erase(found);
+  } else {
+    disabled.push_back(mod->name);
+  }
+  // Saved now: outside the overlay, changes are otherwise written at exit, which a phone's
+  // app rarely reaches before Android kills it.
+  SetModsDisabled(PortMods::JoinDisabled(disabled));
+  SaveSettingsNow();
+  PortLog::Write("port: remastered %s\n", on ? "on" : "off");
+  if (on && mod->pendingRestart) {
+    ShowNote("Remastered: on after a restart");
+    return;
+  }
+  if (!PortMods::Suspended()) {
+    ReloadUntilDone();
+  }
+  ShowNote(on ? "Remastered: on" : "Remastered: off");
 }
 
 } // namespace PortDebug

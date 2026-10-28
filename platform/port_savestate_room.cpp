@@ -10,6 +10,7 @@
 #include "MetroidPrime/CObjectList.hpp"
 #include "MetroidPrime/CPhysicsActor.hpp"
 #include "MetroidPrime/CScriptLayerManager.hpp"
+#include "MetroidPrime/ScriptObjects/CScriptSpecialFunction.hpp"
 #include "MetroidPrime/CStateManager.hpp"
 #include "MetroidPrime/CWorld.hpp"
 #include "MetroidPrime/Cameras/CCinematicCamera.hpp"
@@ -481,6 +482,8 @@ void CaptureObject(CStateManager& mgr, CEntity& ent, RoomObject& obj) {
     if (!state.open) {
       state.pendingClose = door->PortClosingPending();
       state.refusedClosePending = door->PortRefusedClosePending();
+    } else {
+      state.partner = static_cast< DoorSaveState::Partner >(door->PortPartnerSide());
     }
     state.doClose = door->PortDoClosePending();
     obj.blocks.push_back({kTagDoor, EncodeDoorSaveState(state)});
@@ -674,6 +677,10 @@ void ApplyObject(CStateManager& mgr, CEntity& ent, const RoomObject& obj, RoomAp
       }
     }
   }
+  // Add-on effects and barrier progress are not serialized. This also clears a completed
+  // group's suppression when restoring an earlier point in an already resident area.
+  if (CScriptSpecialFunction* special = TCastToPtr< CScriptSpecialFunction >(&ent))
+    special->PortInvalidateBarrierForRestore(mgr);
   // Omega Pirate keeps its health in a collision actor and needs its intro's Reset later.
   if (COmegaPirate* omega = dynamic_cast< COmegaPirate* >(&ent))
     omega->PortRestoredFromSave(mgr);
@@ -710,6 +717,7 @@ void ApplyObject(CStateManager& mgr, CEntity& ent, const RoomObject& obj, RoomAp
         flags.normalClosePending = want.pendingClose;
         flags.refusedClosePending = want.refusedClosePending;
         flags.doClose = want.doClose;
+        flags.partner = want.partner;
         // Applied even when the door already reads closed: that is what restores
         // the message an interrupted close still owes, and the block on opening
         // again a close in flight carries.

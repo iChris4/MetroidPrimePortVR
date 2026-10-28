@@ -109,6 +109,13 @@ void SetDistance(float m) { sParams.distance = Clamp(m, kDistanceMin, kDistanceM
 void SetShoulder(float m) { sParams.shoulder = Clamp(m, kShoulderMin, kShoulderMax, sParams.shoulder); }
 void SetHeight(float m) { sParams.height = Clamp(m, kHeightMin, kHeightMax, sParams.height); }
 
+void Reset() {
+  sActive = false;
+  sAimValid = false;
+  sLength = sPrevLength = 0.f;
+  PortThirdPersonBody::Release();
+}
+
 void Update(CStateManager& mgr, float dt) {
   const bool allowed = StateAllows(mgr);
   if (!allowed) {

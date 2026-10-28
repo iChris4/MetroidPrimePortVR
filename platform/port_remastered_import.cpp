@@ -1,7 +1,11 @@
 #include "port_remastered_import_internal.h"
 #include "port_remastered_effect_convert.h"
+#include "port_queen_barrier_validate.h"
 #include "port_envfx_file.h"
+#include "port_shell_file.h"
 #include "port_retail_placement.h"
+#include "port_dread_reskin.h"
+#include "port_remastered_anim.h"
 
 namespace PortRemastered {
 namespace ImportDetail {
@@ -13,7 +17,6 @@ constexpr const char* kTrashPrefix = PortRemasteredStorage::kTrashPrefix;
 constexpr const char* kMarkerName = "import-complete";
 constexpr const char* kRoomFolder = "roomenv";
 constexpr const char* kGeometryFolder = "roomgeo";
-constexpr const char* kTextFolder = "text";
 constexpr const char* kFontFolder = "font";
 constexpr const char* kFontName = "deface.sdfont";
 constexpr const char* kHudFolder = "hud";
@@ -261,6 +264,25 @@ std::string UuidText(const ModelUuid& uuid) {
     text += pair;
   }
   return text;
+}
+
+// A GUID string as the bytes of a ModelUuid, in the order written, else the mixed-endian one
+// the pak may hold it in.
+void GuidUuids(const char* text, ModelUuid& plain, ModelUuid& swapped) {
+  size_t n = 0;
+  for (const char* c = text; *c != 0 && n < 16; ++c) {
+    if (*c == '-') {
+      continue;
+    }
+    const auto hex = [](char h) { return h <= '9' ? h - '0' : (h | 0x20) - 'a' + 10; };
+    plain[n++] = uint8_t(hex(c[0]) << 4 | hex(c[1]));
+    ++c;
+  }
+  swapped = plain;
+  std::swap(swapped[0], swapped[3]);
+  std::swap(swapped[1], swapped[2]);
+  std::swap(swapped[4], swapped[5]);
+  std::swap(swapped[6], swapped[7]);
 }
 
 // The same for the same set of ids, in any order.
@@ -1421,6 +1443,57 @@ private:
   uint64_t m_hits = 0, m_misses = 0;
 };
 
+// One level of a shell texture's chain: each texel the mean of the 2x2 above it. An odd or
+// 1-wide edge reads its last column/row twice, so a side never halves below 1. An sRGB level
+// averages its colour in linear light (the shader samples colour as sRGB) and its alpha
+// plainly; a linear one averages every channel plainly.
+void ShellLevel(const uint8_t* src, uint32_t sw, uint32_t sh, uint8_t* dst, uint32_t dw, uint32_t dh,
+                bool srgb) {
+  for (uint32_t y = 0; y < dh; ++y) {
+    const uint32_t y0 = std::min(y * 2, sh - 1);
+    const uint32_t y1 = std::min(y * 2 + 1, sh - 1);
+    for (uint32_t x = 0; x < dw; ++x) {
+      const uint32_t x0 = std::min(x * 2, sw - 1);
+      const uint32_t x1 = std::min(x * 2 + 1, sw - 1);
+      const uint8_t* p[4] = {src + (size_t(y0) * sw + x0) * 4, src + (size_t(y0) * sw + x1) * 4,
+                             src + (size_t(y1) * sw + x0) * 4, src + (size_t(y1) * sw + x1) * 4};
+      uint8_t* out = dst + (size_t(y) * dw + x) * 4;
+      for (int c = 0; c < 4; ++c) {
+        if (srgb && c < 3) {
+          const float sum = SrgbByteToLinear(p[0][c]) + SrgbByteToLinear(p[1][c]) +
+                            SrgbByteToLinear(p[2][c]) + SrgbByteToLinear(p[3][c]);
+          out[c] = LinearToSrgbByteExact(sum * 0.25f);
+        } else {
+          out[c] = uint8_t((unsigned(p[0][c]) + p[1][c] + p[2][c] + p[3][c] + 2) / 4);
+        }
+      }
+    }
+  }
+}
+
+// `tex`'s top mip and every level below it, down to 1x1, as shell.bin holds them (port_shell_file.h):
+// the shell shader samples the chain, so the import makes it rather than coding down to 1x1.
+void BuildShellImage(const TxtrImage& tex, PortShell::Image& out) {
+  out = PortShell::Image();
+  out.width = tex.width;
+  out.height = tex.height;
+  out.srgb = tex.srgb;
+  for (uint32_t side = std::max(tex.width, tex.height); side != 0; side >>= 1) {
+    ++out.mips;
+  }
+  out.rgba = tex.rgba;
+  for (uint32_t level = 1; level < out.mips; ++level) {
+    const uint32_t sw = std::max(out.width >> (level - 1), 1u);
+    const uint32_t sh = std::max(out.height >> (level - 1), 1u);
+    const uint32_t dw = std::max(out.width >> level, 1u);
+    const uint32_t dh = std::max(out.height >> level, 1u);
+    const size_t from = out.rgba.size() - size_t(sw) * sh * 4;
+    const size_t to = out.rgba.size();
+    out.rgba.resize(to + size_t(dw) * dh * 4);
+    ShellLevel(out.rgba.data() + from, sw, sh, out.rgba.data() + to, dw, dh, out.srgb);
+  }
+}
+
 void Run(std::string nspPath, std::string keysPath, int threads, fs::path staging) {
   YieldToGame();
   std::error_code ec;
@@ -2011,6 +2084,97 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
   const bool modelsReused =
       beginStage("models", std::to_string(ImportStage::kModels) + " table " + TableKey() + keyConverter, true,
                   "reports/parts/models.materials.tsv");
+  // Each skinned model's skeletons, for the votes (ConvertOptions::jointPivots):
+  // the retail ANCS that binds the model to its first skin names the CINF, and
+  // the CHPR under that ANCS's id is the Remastered character, whose joints are
+  // the model's if its skinned model is the one converted.
+  struct Rig {
+    std::vector<std::array<double, 3>> pivots;
+    std::vector<ConvertOptions::RetailBone> bones;
+  };
+  std::vector<Rig> rigs(modelsReused ? 0 : count);
+  if (!modelsReused) {
+    SetMessage("Reading the skeletons");
+    std::unordered_map<uint64_t, std::vector<size_t>> byPair;
+    for (size_t i = 0; i < count; ++i) {
+      if (table[i].skinCount > 0 && looks[i].ok) {
+        byPair[uint64_t(table[i].retail) << 32 | TableSkins(table[i])[0]].push_back(i);
+      }
+    }
+    size_t rigged = 0;
+    for (uint32_t ancs : retail.Ids(kANCS)) {
+      std::vector<uint8_t> data;
+      if (byPair.empty() || !retail.Read(kANCS, ancs, data)) {
+        continue;
+      }
+      std::vector<std::pair<size_t, uint32_t>> bound;  // table entry, CINF
+      for (size_t at = 0; at + 12 <= data.size(); ++at) {
+        const auto it = byPair.find(uint64_t(port::ReadBE32(&data[at])) << 32 | port::ReadBE32(&data[at + 4]));
+        if (it != byPair.end()) {
+          for (size_t i : it->second) {
+            bound.emplace_back(i, port::ReadBE32(&data[at + 8]));
+          }
+        }
+      }
+      if (bound.empty()) {
+        continue;
+      }
+      ModelUuid chprId = {0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0xf0, 0x00, 0xf0, 0x00, 0x00, 0x00,
+                          uint8_t(ancs >> 24), uint8_t(ancs >> 16), uint8_t(ancs >> 8), uint8_t(ancs)};
+      std::vector<uint8_t> chpr;
+      std::string why;
+      PortRemasteredAnim::Character character;
+      if (!remastered.ReadCharacter(chprId, chpr, why) ||
+          !PortRemasteredAnim::ReadCharacter(chpr, character, why, false) || character.inverseBind.empty()) {
+        continue;
+      }
+      // The CHPR names its models in property order; a pak id swaps the first three fields.
+      // Searched for rather than read from Character::skinnedModel, whose position is wrong
+      // in some files (the Queen's AAA2D50D, with 2 stream infos).
+      static const int kOrder[16] = {3, 2, 1, 0, 5, 4, 7, 6, 8, 9, 10, 11, 12, 13, 14, 15};
+      const auto names = [&chpr](const uint8_t* rem) {
+        uint8_t id[16];
+        for (int b = 0; b < 16; ++b) {
+          id[kOrder[b]] = rem[b];
+        }
+        return std::search(chpr.begin(), chpr.end(), id, id + 16) != chpr.end();
+      };
+      for (const auto& [i, cinf] : bound) {
+        std::vector<uint8_t> cinfData;
+        PortDread::PrimeSkeleton skeleton;
+        if (!rigs[i].pivots.empty() || !names(table[i].rem) ||
+            !retail.Read(kCINF, cinf, cinfData) ||
+            !PortDread::ParseCinf(cinfData.data(), cinfData.size(), skeleton, &why)) {
+          continue;
+        }
+        // A joint's pivot: the translation of its inverse bind's inverse, -R^-1 t,
+        // R^-1 by the adjugate (the bind is a rotation, maybe scaled).
+        for (const auto& m : character.inverseBind) {
+          const double a = m[0], b = m[1], c = m[2], d = m[4], e = m[5], f = m[6], g = m[8], h = m[9], k = m[10];
+          const double det = a * (e * k - f * h) - b * (d * k - f * g) + c * (d * h - e * g);
+          const double inv[3][3] = {{e * k - f * h, c * h - b * k, b * f - c * e},
+                                    {f * g - d * k, a * k - c * g, c * d - a * f},
+                                    {d * h - e * g, b * g - a * h, a * e - b * d}};
+          auto& p = rigs[i].pivots.emplace_back();
+          for (int r = 0; r < 3; ++r) {
+            p[size_t(r)] = std::abs(det) > 1e-12
+                               ? -(inv[r][0] * m[3] + inv[r][1] * m[7] + inv[r][2] * m[11]) / det
+                               : 0.0;
+          }
+        }
+        for (const PortDread::PrimeJoint& joint : skeleton.joints) {
+          auto& bone = rigs[i].bones.emplace_back();
+          bone.id = joint.id;
+          bone.parent = joint.parent;
+          for (int a = 0; a < 3; ++a) {
+            bone.head[a] = joint.head[a];
+          }
+        }
+        ++rigged;
+      }
+    }
+    AddLine("skeletons: " + std::to_string(rigged) + " skinned models with their Remastered joints");
+  }
   auto work = [&](int worker) {
     YieldToGame();
     ConvertIO io = makeIO(worker, staging);
@@ -2035,6 +2199,10 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
         options.outputModel = look.model;
         options.source = UuidText(id);
         options.outputSkins = look.skins;
+        if (i < rigs.size()) {
+          options.jointPivots = rigs[i].pivots;
+          options.retailBones = rigs[i].bones;
+        }
         ok = look.ok && remastered.ReadModel(id, raw, modelError) &&
              ParseModel(raw.data(), raw.size(), model, modelError) && converter.Convert(model, options, modelError);
       } catch (const std::exception& e) {
@@ -2289,7 +2457,26 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
           taken.insert(id);
         }
       }
-      AddLine("effects: " + std::to_string(roomGenps) + " effects of the rooms' own effect actors, " +
+      // The unnamed Remastered-only effects port actors build (kActorEffectGuids), the same way.
+      for (const EffectGuid& genp : effectIO.effects) {
+        const bool actor = std::any_of(std::begin(kActorEffectGuids), std::end(kActorEffectGuids),
+                                       [&](const char* text) { return EffectIdIs(genp, text); });
+        if (!actor || std::find(effectIO.roomOnly.begin(), effectIO.roomOnly.end(), genp) != effectIO.roomOnly.end()) {
+          continue;
+        }
+        ++roomGenps;
+        const uint32_t id = RoomEffectId(genp);
+        if (retail.HasId(id) || !synthetic.insert(id).second) {
+          ++collisions;
+          PortLog::Write("remastered import: actor effect %s: its id %s is taken, left out\n",
+                         EffectGuidString(genp).c_str(), Hex8(id).c_str());
+          continue;
+        }
+        effectIO.roomOnly.push_back(genp);
+        std::lock_guard<std::mutex> lock(takenMutex);
+        taken.insert(id);
+      }
+      AddLine("effects: " + std::to_string(roomGenps) + " effects of the rooms' own effect actors and port actors, " +
               std::to_string(collisions) + " left out (id taken)");
     }
     std::set<std::string> effectWritten;  // the files the effects wrote (the converters write on every thread)
@@ -2622,12 +2809,13 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
       io.piece = pieceId;
       io.liquid = liquidId;
       io.water = waterSurface;
-      // A room effect actor's PART: the one the effects step wrote for its GENP, else the disc's
-      // it carries the id of.
+      // A room effect actor's PART: the one the effects step wrote for its GENP (or the ELSC for
+      // an ELC2 slot), else the disc's it carries the id of.
       io.effect = [&](const std::array<uint8_t, 16>& genp) -> uint32_t {
         std::error_code ec;
         const uint32_t own = RoomEffectId(genp);
-        if (fs::exists(staging / PathFromString(Hex8(own) + ".PART"), ec)) {
+        if (fs::exists(staging / PathFromString(Hex8(own) + ".PART"), ec) ||
+            fs::exists(staging / PathFromString(Hex8(own) + ".ELSC"), ec)) {
           return own;
         }
         std::array<uint8_t, 16> property = genp;
@@ -2641,6 +2829,25 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
       // The retail PARTs the effects step wrote this GENP under by its own table (one GENP can
       // stand for two, the lava spit's): only those the mod has a PART for, or the retail object
       // would be pointed at nothing.
+      io.barrierEffect = [&](uint32_t part, uint32_t feature,
+                             const std::vector<std::array<uint8_t, 16>>& vars) {
+        const fs::path path = staging / PathFromString(Hex8(part) + ".PART");
+        std::ifstream in(path, std::ios::binary | std::ios::ate);
+        if (!in) return false;
+        const auto length = in.tellg();
+        if (length <= 0 || length > 64 * 1024 * 1024) return false;
+        std::vector<uint8_t> bytes(static_cast<size_t>(length));
+        in.seekg(0);
+        if (!in.read(reinterpret_cast<char*>(bytes.data()), std::streamsize(bytes.size()))) return false;
+        std::string reason;
+        const auto dependency = [&](uint32_t type, uint32_t id) {
+          if (type != 0x54585452) return false;
+          std::error_code ec;
+          const fs::path texture = staging / PathFromString(Hex8(id) + ".TXTR");
+          return fs::is_regular_file(texture, ec) && !ec && fs::file_size(texture, ec) > 0 && !ec;
+        };
+        return PortQueenBarrier::ValidatePart(bytes, feature, vars, dependency, reason);
+      };
       io.matched = [&](const std::array<uint8_t, 16>& genp) {
         std::vector<uint32_t> out;
         for (uint32_t id : MatchedRetailEffects(genp)) {
@@ -2835,6 +3042,23 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
       const auto last = std::find_if(first, retailPlacements.end(),
                                      [&](const RetailPlacement& p) { return p.retail != first->retail; });
       if (!remastered.HasModel(first->model)) {
+        first = last;
+        continue;
+      }
+      if (std::any_of(first, last, [](const RetailPlacement& p) { return p.animated; })) {
+        // Retail draws an animation set's character there, not this model, and that character's
+        // own model can be this one: Remastered's copy (a stand-in box in 8_courtyard's gate,
+        // whose look is the CHPR's) must not replace it.
+        ++statusCount["animated"];
+        char head[32];
+        std::snprintf(head, sizeof(head), "%08X\tanimated\t-\t-\t-\t-\t", first->retail);
+        report += head;
+        for (auto p = first; p != last; ++p) {
+          char text[48];
+          std::snprintf(text, sizeof(text), " %08X #%d", p->object, p->entity);
+          report += (p == first ? "" : "; ") + p->room + text;
+        }
+        report += '\n';
         first = last;
         continue;
       }
@@ -3267,24 +3491,22 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
     }
     if (textTables == 0) {
       fs::remove(textFolder, ec);
+    } else {
+      const std::string disc = PortDisc::Name(PortDisc::Current());
+      if (!writeFile(textFolder / kTextDiscName, std::vector<uint8_t>(disc.begin(), disc.end()))) {
+        AddLine(std::string("text/") + kTextDiscName + ": cannot write");
+      }
     }
     made["text"].counts["tables"] = textTables;
     made["text"].counts["strings"] = textStrings;
     made["text"].counts["translated"] = textTranslated;
     endStage();
   }
-  // Remastered's typeface, which the port draws the disc's text with.
-  bool fontWritten = false;
-  if (beginStage("font", std::to_string(ImportStage::kText) + keyConverter, false)) {
-    fontWritten = made["font"].counts["written"] != 0;
-  } else {
+  // Remastered's typeface, which the port draws the disc's text with: the font
+  // with the most characters, so that every language's text is covered.
+  auto largestFont = [&](PortHdFont::Font& font, ModelUuid& atlas, std::string& fontError) {
     std::vector<uint8_t> raw;
-    std::vector<uint8_t> out;
-    ModelUuid atlas{};
-    PortHdFont::Font font;
-    TxtrImage image;
-    std::string fontError = "not in the image";
-    // The one with the most characters, so that every language's text is covered.
+    fontError = "not in the image";
     for (const ModelUuid& id : remastered.Fonts()) {
       ModelUuid candidateAtlas{};
       PortHdFont::Font candidate;
@@ -3297,6 +3519,18 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
         atlas = candidateAtlas;
       }
     }
+  };
+  bool fontWritten = false;
+  if (beginStage("font", std::to_string(ImportStage::kText) + keyConverter, false)) {
+    fontWritten = made["font"].counts["written"] != 0;
+  } else {
+    std::vector<uint8_t> raw;
+    std::vector<uint8_t> out;
+    ModelUuid atlas{};
+    PortHdFont::Font font;
+    TxtrImage image;
+    std::string fontError;
+    largestFont(font, atlas, fontError);
     if (font.glyphs.empty() || !remastered.ReadTexture(atlas, raw, fontError) ||
         !DecodeTxtr(raw.data(), raw.size(), image, fontError)) {
       AddLine("font: " + fontError);
@@ -3329,6 +3563,19 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
     fs::create_directories(hudFolder, ec);
     HudConverter converter(makeIO(0, hudFolder));
     HudCounts counts;
+    {
+      // Text panes are sized by the capital the port's text is fitted by.
+      PortHdFont::Font font;
+      ModelUuid atlas{};
+      std::string fontError;
+      largestFont(font, atlas, fontError);
+      const PortHdFont::Glyph* const capital = font.Find(U'H');
+      if (capital != nullptr && capital->height > 2.f * font.padding) {
+        converter.SetGlyphInk(capital->height - 2.f * font.padding);
+      } else {
+        AddLine("hud: no capital in Remastered's font (" + fontError + "); the text keeps the disc's size");
+      }
+    }
     {
       // Remastered colours each beam's icon in the beam menu.
       std::vector<uint8_t> tweak;
@@ -3404,23 +3651,6 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
     // The EnvironmentFX textures (port_envfx_file.h) as envfx.bin: the rain, snow and underwater
     // flakes and the fade gradient the native EnvFX draw samples. All four or no file.
     {
-      // A GUID string as the bytes of a ModelUuid, in the order written, else the mixed-endian one.
-      const auto uuids = [](const char* text, ModelUuid& plain, ModelUuid& swapped) {
-        size_t n = 0;
-        for (const char* c = text; *c != 0 && n < 16; ++c) {
-          if (*c == '-') {
-            continue;
-          }
-          const auto hex = [](char h) { return h <= '9' ? h - '0' : (h | 0x20) - 'a' + 10; };
-          plain[n++] = uint8_t(hex(c[0]) << 4 | hex(c[1]));
-          ++c;
-        }
-        swapped = plain;
-        std::swap(swapped[0], swapped[3]);
-        std::swap(swapped[1], swapped[2]);
-        std::swap(swapped[4], swapped[5]);
-        std::swap(swapped[6], swapped[7]);
-      };
       PortEnvFx::Assets envfx;
       std::string envfxError;
       for (int i = 0; i < 4 && envfxError.empty(); ++i) {
@@ -3428,7 +3658,7 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
         PortEnvFx::Image& image = i == 0 ? envfx.gradient : envfx.flake[i - 1];
         ModelUuid plain{};
         ModelUuid swapped{};
-        uuids(guid, plain, swapped);
+        GuidUuids(guid, plain, swapped);
         std::vector<uint8_t> raw;
         std::string error;
         if (!remastered.ReadTexture(plain, raw, error) && !remastered.ReadTexture(swapped, raw, error)) {
@@ -3478,6 +3708,50 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
         AddLine("EnvironmentFX textures: " + envfxError);
       } else if (!makeIO(0, hudFolder).write("envfx.bin", file)) {
         AddLine("EnvironmentFX textures: cannot write");
+      }
+    }
+
+    // Remastered's silhouette-shell textures (port_shell_file.h) as shell.bin: the strength
+    // gradient the shell reads through, and the indirect noise map the player body and the
+    // Samus doll each sample (build/mpr/kb topic/model-black-silhouette.md). All three or no file.
+    {
+      PortShell::Assets shell;
+      std::string shellError;
+      for (int i = 0; i < PortShell::kCount && shellError.empty(); ++i) {
+        const char* guid = PortShell::kGuid[i];
+        ModelUuid plain{};
+        ModelUuid swapped{};
+        GuidUuids(guid, plain, swapped);
+        std::vector<uint8_t> raw;
+        std::string error;
+        TxtrImage tex;
+        if (!remastered.ReadTexture(plain, raw, error) && !remastered.ReadTexture(swapped, raw, error)) {
+          shellError = std::string(guid) + ": " + error;
+          break;
+        }
+        if (!DecodeTxtr(raw.data(), raw.size(), tex, error)) {
+          shellError = std::string(guid) + ": " + error;
+          break;
+        }
+        if (tex.width < 1 || tex.height < 1 || tex.width > 4096 || tex.height > 4096) {
+          shellError = std::string(guid) + ": " + std::to_string(tex.width) + "x" + std::to_string(tex.height);
+          break;
+        }
+        // The whole chain, down to 1x1: the shader's scene lookup is a textureLod.
+        BuildShellImage(tex, shell.image[i]);
+      }
+      PortShell::Assets check;
+      std::vector<uint8_t> file;
+      if (shellError.empty()) {
+        file = PortShell::Serialize(shell);
+        if (!PortShell::Parse(file.data(), file.size(), check, shellError)) {  // the sizes the draw expects
+          shellError = "unexpected size: " + shellError;
+        }
+      }
+      if (!shellError.empty()) {
+        AddLine("silhouette shell textures: " + shellError);
+      } else if (!makeIO(0, hudFolder).write("shell.bin", file)) {
+        AddLine("silhouette shell textures: cannot write");
       }
     }
     if (hudFrames == 0 && compassModels == 0) {

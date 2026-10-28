@@ -14,6 +14,7 @@
 #include "port_savestate.h"
 
 #include <aurora/imgui.h>
+#include <dolphin/gx/GXExtra.h>
 #include <imgui_internal.h>
 #include <SDL3/SDL_misc.h>
 
@@ -177,6 +178,15 @@ void DrawRemasteredImport() {
     ImGui::TextColored(ThemeWarnColor(),
                        "Re-import needed: the installed models were made by an older version.");
   }
+  bool performance = GXPortGetPerformance() != 0;
+  if (ImGui::Checkbox("Performance mode##remastered", &performance)) {
+    GXPortSetPerformance(performance ? GX_PORT_PERF_ALL : 0);
+    MarkDirty();
+  }
+  ItemHelp("Faster drawing that is no longer exactly Remastered's (at most 2/255 apart): glass "
+           "refraction updated every second frame, exposure measured from a smaller image, "
+           "volumetric fog blended onto the scene instead of rewriting it, and the world left "
+           "unshaded behind the arm cannon.");
   ImGui::BeginDisabled(state.running);
 #if defined(__ANDROID__)
   // No path to type here: the files are picked, and shown by name.
@@ -500,17 +510,25 @@ void DrawMods() {
   // What the settings would load next time, against what this launch loaded: every mod, the
   // built-in ones included, so their switches share this line and button.
   bool changed = ModsEnabled() != status.active;
+  bool restartRequired = false;
   {
     const std::vector<std::string> disabled = PortMods::SplitDisabled(sModsDisabled);
     for (const PortMods::ModInfo& mod : status.mods) {
       const bool on = std::find(disabled.begin(), disabled.end(), mod.name) == disabled.end();
-      changed = changed || (ModsEnabled() && on) != mod.enabled;
+      const bool wanted = ModsEnabled() && on;
+      restartRequired = restartRequired || (wanted && mod.pendingRestart);
+      changed = changed || (wanted != mod.enabled && !(wanted && mod.pendingRestart));
     }
   }
   if (PortMods::Suspended()) {
     ImGui::TextColored(ThemeWarnColor(), "Unloaded while an import runs; they load again when it ends.");
-  } else if (changed) {
-    ImGui::TextColored(ThemeWarnColor(), "Reload the mods to apply.");
+  } else {
+    if (changed) {
+      ImGui::TextColored(ThemeWarnColor(), "Reload the mods to apply.");
+    }
+    if (restartRequired) {
+      ImGui::TextColored(ThemeWarnColor(), "Restart the application to apply pending room geometry mods.");
+    }
   }
   if (ImGui::Button("Reload mods")) {
     PortSaveState::RequestModReload();
@@ -565,6 +583,8 @@ void DrawMods() {
       } else {
         ImGui::TextDisabled("%d file(s), %d resource(s)", mod.files, mod.resources);
       }
+    } else if (ModsEnabled() && on && mod.pendingRestart) {
+      ImGui::TextColored(ThemeWarnColor(), "not loaded: Restart the application to apply.");
     } else {
       ImGui::TextDisabled("not loaded");
     }

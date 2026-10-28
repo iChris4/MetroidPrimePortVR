@@ -8,6 +8,7 @@
 #include "port_gyro_motion.h"
 #include "port_photo.h"
 #include "port_pointer.h"
+#include "port_radial.h"
 #include "port_log.h"
 #include "port_paths.h"
 #include "port_config_reset.h"
@@ -24,7 +25,7 @@
 #include <SDL3/SDL_gamepad.h>
 #include <SDL3/SDL_timer.h>
 
-#if defined(__ANDROID__)
+#if defined(PORT_TOUCH_CONTROLS)
 #include "touch_pad.h"
 #endif
 
@@ -85,6 +86,8 @@ PortMouse::PointerAim sPointerAim;
 bool sPointerAimFree = false;
 // The last update left the pointer free under a lock (lock-on free aim).
 bool sPointerAimLocked = false;
+// The last update held the pointer still under a lock (UpdateMouseAim's pointerHold).
+bool sPointerAimHeld = false;
 // A locked update this tick moved the pointer (TickAim's job for the pointer under a lock).
 bool sLockPointerRecorded = false;
 PortMouse::ButtonGate sMouseMenuGate;
@@ -460,7 +463,8 @@ void PollGyro() {
   const float scale = sInput.gyroSensitivity * dt / perPixel;
   const float ySense = sInput.gyroSplit ? sInput.gyroSensitivityY : sInput.gyroSensitivity;
   const float scaleY = ySense * dt / perPixel;
-  if (!PointerAim()) {
+  // A lock-on free aim pointer is a pointer too, with or without pointer aim (issue #188).
+  if (!PointerAim() && !sPointerAimLocked) {
     sGyroPendingX += sx * yaw * scale;
     sGyroPendingY -= sy * pitch * scaleY;
     return;
@@ -487,6 +491,7 @@ void ResetMouseAim() {
   sPointerAim.Center();
   sPointerAimFree = false;
   sPointerAimLocked = false;
+  sPointerAimHeld = false;
   sMouseGameplayActive = false;
   sMouseButtonGate.Reset();
   sMousePendingX = sMousePendingY = sMouseFrameX = sMouseFrameY = 0.f;
@@ -520,18 +525,16 @@ bool MouseInvertX() { EnsureInitialized(); return sInput.mouseInvertX; }
 bool MouseInvertY() { EnsureInitialized(); return sInput.mouseInvertY; }
 bool MouseButtons() { EnsureInitialized(); return sInput.mouseButtons; }
 bool MouseCrosshair() { EnsureInitialized(); return sInput.mouseCrosshair; }
-// Window travel (pixels) to pointer units (-1..1 of the half view). At the default
-// sensitivity the pointer follows the cursor's speed; the sensitivity slider scales it.
+// Window travel (pixels) to pointer units (-1..1 of the half view). At a sensitivity of
+// kAimPixelRadians the pointer follows the cursor's speed; the sensitivity slider scales it.
 static void PointerAimScale(float& sx, float& sy) {
-  constexpr float kReferenceSensitivity = 0.0035f;
   int width = 0, height = 0;
   if (!WindowSize(width, height)) {
     width = 640;
     height = 480;
   }
-  const float speed = MouseSensitivity() / kReferenceSensitivity;
-  sx = 2.f / static_cast<float>(width) * speed;
-  sy = 2.f / static_cast<float>(height) * speed;
+  sx = PortMouse::PointerUnitsPerCount(static_cast<float>(width), MouseSensitivity());
+  sy = PortMouse::PointerUnitsPerCount(static_cast<float>(height), MouseSensitivity());
 }
 
 bool AimCrosshair() { return MouseCrosshair() || PointerAim(); }
@@ -563,6 +566,9 @@ bool PointerAimPosition(float& x, float& y) {
 }
 bool PresentedPointerAimPosition(float fraction, float& x, float& y) {
   if (!PointerAimPosition(x, y)) return false;
+  // Held, the pointer stays put: travel since the tick does not move it.
+  // So does it under an open radial menu, which takes the travel.
+  if (sPointerAimHeld || PortRadial::Capturing()) return true;
   // The travel since the tick, so the drawn pointer moves every frame, and the
   // last tick's stick travel drawn after its tick (PresentedAimDelta).
   float touchX = 0.f, touchY = 0.f;
@@ -606,7 +612,8 @@ void NoteMouseButton(bool synthetic, unsigned mask, bool down) {
 void ClearMouseButtons() { sMouseHeldButtons.Clear(); }
 unsigned MouseHeldButtons() { return sMouseHeldButtons.Held(); }
 
-bool UpdateMouseAim(bool active, bool locked, float x, float y, float z, bool pointerLock) {
+bool UpdateMouseAim(bool active, bool locked, float x, float y, float z, bool pointerLock,
+                    bool pointerHold) {
   SetMouseGameplayActive(active);
   const PortMouse::AimState lastAim = sMouseAimState;
   const PortMouse::PointerAim lastPointer = sPointerAim;
@@ -615,6 +622,9 @@ bool UpdateMouseAim(bool active, bool locked, float x, float y, float z, bool po
   // centre, where the target is.
   const bool lockFree = active && locked && pointerLock && LockOnFreeAim();
   const bool pointer = PointerAim() || lockFree;
+  // A held pointer stays where the lock found it, and neither moves nor turns the view.
+  const bool held = active && locked && !lockFree && pointerHold && PointerAim();
+  sPointerAimHeld = held;
   if (lockFree != sPointerAimLocked) {
     sPointerAim.Center();
     sPointerAimLocked = lockFree;
@@ -629,6 +639,14 @@ bool UpdateMouseAim(bool active, bool locked, float x, float y, float z, bool po
       sMouseAimState.pitch = 0.f;
       sMouseAimState.lagPitch = 0.f;
     }
+  }
+  // An open Trilogy radial menu takes the aim travel as its selection (the Wii pointed at
+  // it), and the view holds still meanwhile.
+  if (PortRadial::Capturing()) {
+    PortRadial::AddTravel(sMouseFrameX + sStickFrameX + sGyroCameraFrameX,
+                          sMouseFrameY + sStickFrameY + sGyroCameraFrameY);
+    sMouseFrameX = sMouseFrameY = sStickFrameX = sStickFrameY = 0.f;
+    sGyroCameraFrameX = sGyroCameraFrameY = 0.f;
   }
   // Under pointer aim the stick moves the pointer, unless the gyro does: then the
   // stick (and the keyboard look keys) turn the camera as they do without
@@ -648,6 +666,8 @@ bool UpdateMouseAim(bool active, bool locked, float x, float y, float z, bool po
       } else {
         sPointerAim.MoveLagged(dx * sx, dy * sy, sStickFrameX * sx, sStickFrameY * sy);
       }
+    } else if (held) {
+      sPointerAim.lagX = sPointerAim.lagY = 0.f;
     } else {
       sPointerAim.Center();
     }
@@ -666,7 +686,7 @@ bool UpdateMouseAim(bool active, bool locked, float x, float y, float z, bool po
                                   dpitch);
     sMouseAimState.Turn(dyaw, dpitch);
   }
-  sPointerAimFree = pointer && (applied || lockFree);
+  sPointerAimFree = pointer && (applied || lockFree || held);
   if (!sPointerAimFree) sPointerAim.Center();
   if (applied) {
     sAimTick.Applied(sMouseAimState, lastAim, sPointerAim, lastPointer, sPointerAimFree);
@@ -1035,9 +1055,12 @@ void AddTouchAim(float dxDp, float dyDp) {
       !std::isfinite(dyDp)) {
     return;
   }
+  // As stick aim: a touch pixel turns kAimPixelRadians whatever the mouse sensitivity.
+  const float sensitivity = MouseSensitivity();
   std::lock_guard lock(sTouchAimMutex);
-  sTouchAimPendingX += dxDp * sInput.touchAimSpeed;
-  sTouchAimPendingY += dyDp * (sInput.touchAimSplit ? sInput.touchAimSpeedY : sInput.touchAimSpeed);
+  sTouchAimPendingX += PortMouse::AimPixelsAsCounts(dxDp * sInput.touchAimSpeed, sensitivity);
+  sTouchAimPendingY += PortMouse::AimPixelsAsCounts(
+      dyDp * (sInput.touchAimSplit ? sInput.touchAimSpeedY : sInput.touchAimSpeed), sensitivity);
 }
 
 void BeginFrameMouse() {
@@ -1051,8 +1074,9 @@ void BeginFrameMouse() {
   }
   // On the direct aim path (mouse aim, twin stick, or the modern touch layout) the
   // touch travel joins the mouse's; in the classic GameCube scheme
-  // CPlayer::UpdateTouchLook takes it instead (TakeTouchLook).
-  const bool directAim = DirectAim();
+  // CPlayer::UpdateTouchLook takes it instead (TakeTouchLook). While a radial menu
+  // captures input it joins the mouse's either way, so a look drag points the menu.
+  const bool directAim = DirectAim() || PortRadial::Capturing();
   sTouchLookFrameX = directAim ? 0.f : touchX;
   sTouchLookFrameY = directAim ? 0.f : touchY;
   sMouseFrameX = sMousePendingX + sGyroPendingX + (directAim ? touchX : 0.f);
@@ -1102,8 +1126,10 @@ bool TakeTouchLook(float& dyaw, float& dpitch) {
 
 bool PresentedAimDelta(float fraction, float& dyaw, float& dpitch) {
   dyaw = dpitch = 0.f;
+  // An open radial menu takes the travel as its selection (UpdateMouseAim), so the view
+  // must not show it turning before the tick, then snap back.
   if (!FrameInterpolation() || !sMouseGameplayActive || !sAimAppliedLastTick ||
-      !std::isfinite(fraction) || fraction < 0.f) {
+      PortRadial::Capturing() || !std::isfinite(fraction) || fraction < 0.f) {
     return false;
   }
   // What the next tick will consume: the mouse, gyro and touch travel so far,

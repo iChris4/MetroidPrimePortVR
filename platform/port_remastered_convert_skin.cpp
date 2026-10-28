@@ -71,7 +71,10 @@ static std::vector<size_t> AssignRows(const std::vector<double>& cost, size_t n,
 // seam falls where retail has it.
 std::vector<WeightKey> SkinWeights(const std::vector<double>& P, size_t n, const std::vector<uint16_t>* J,
                                    const std::vector<float>* W, const Retail& retail, Span cskr,
-                                   const std::function<void(const std::string&)>& log) {
+                                   const std::function<void(const std::string&)>& log,
+                                   const std::vector<std::array<double, 3>>* pivots,
+                                   const std::vector<ConvertOptions::RetailBone>* skeleton,
+                                   const std::vector<uint32_t>* tris) {
   const std::vector<SkinGroup> groups = ReadCskr(cskr);
   std::vector<uint32_t> gid;
   for (size_t i = 0; i < groups.size(); ++i) {
@@ -145,6 +148,65 @@ std::vector<WeightKey> SkinWeights(const std::vector<double>& P, size_t n, const
         assign[j].push_back(order[0]);
       }
       ++mapped;
+    }
+    // A joint whose pivot sits on one retail bone's head is that bone, and the
+    // vote's share for the bone's ancestors only says the retail skin blends
+    // there: split onto them, the joint's vertices stay with the parent as the
+    // bone turns (the Parasite Queen's jaw on Jaw_1 and Head_1 tore the mouth
+    // open). Those ancestors leave the joint's bones. "Sits on" is a nearest
+    // head at most kPivotMatch of the second nearest's distance; a joint
+    // between two heads (a collar, a leaf's tip) keeps its vote.
+    size_t pivoted = 0;
+    if (pivots && skeleton && !skeleton->empty()) {
+      constexpr double kPivotMatch = 0.55;
+      std::map<uint32_t, size_t> boneOf;
+      for (size_t i = 0; i < skeleton->size(); ++i) {
+        boneOf.emplace((*skeleton)[i].id, i);
+      }
+      for (size_t j = 0; j < nj && j < pivots->size(); ++j) {
+        if (assign[j].size() < 2) {
+          continue;
+        }
+        const double* p = (*pivots)[j].data();
+        double d1 = -1.0, d2 = -1.0;
+        size_t nearestCol = 0;
+        for (size_t c = 0; c < nb; ++c) {
+          const auto it = boneOf.find(bones[c]);
+          if (it == boneOf.end()) {
+            continue;
+          }
+          const double* h = (*skeleton)[it->second].head;
+          const double d = std::sqrt((p[0] - h[0]) * (p[0] - h[0]) + (p[1] - h[1]) * (p[1] - h[1]) +
+                                     (p[2] - h[2]) * (p[2] - h[2]));
+          if (d1 < 0.0 || d < d1) {
+            d2 = d1;
+            d1 = d;
+            nearestCol = c;
+          } else if (d2 < 0.0 || d < d2) {
+            d2 = d;
+          }
+        }
+        if (d2 <= 0.0 || d1 > kPivotMatch * d2 ||
+            std::find(assign[j].begin(), assign[j].end(), uint32_t(nearestCol)) == assign[j].end()) {
+          continue;
+        }
+        std::vector<uint32_t> ancestors;
+        auto it = boneOf.find(bones[nearestCol]);
+        for (size_t guard = 0; it != boneOf.end() && guard < skeleton->size(); ++guard) {
+          it = boneOf.find((*skeleton)[it->second].parent);
+          if (it != boneOf.end()) {
+            ancestors.push_back((*skeleton)[it->second].id);
+          }
+        }
+        const size_t before = assign[j].size();
+        assign[j].erase(std::remove_if(assign[j].begin(), assign[j].end(),
+                                       [&](uint32_t c) {
+                                         return std::find(ancestors.begin(), ancestors.end(), bones[c]) !=
+                                                ancestors.end();
+                                       }),
+                        assign[j].end());
+        pivoted += assign[j].size() != before;
+      }
     }
     // A rig cut finer than retail's, both of rigid pieces (the iris doors: each
     // of six leaves is a stack of layers and plates there, one piece here): a
@@ -344,6 +406,7 @@ std::vector<WeightKey> SkinWeights(const std::vector<double>& P, size_t n, const
       }
     }
     log("  joints mapped " + std::to_string(mapped) + ", " + std::to_string(split) + " split" +
+        (pivoted ? ", " + std::to_string(pivoted) + " off their bone's ancestors" : std::string()) +
         (rehomed ? ", " + std::to_string(rehomed) + (paired ? " rigid paired by piece" : " rigid by nearest piece")
                  : std::string()));
     std::vector<double> VW(n * nb, 0.0);
@@ -423,8 +486,63 @@ std::vector<WeightKey> SkinWeights(const std::vector<double>& P, size_t n, const
     }
   } else {
     log("  static Remastered model on a skinned retail one: weights from the nearest retail vertex");
+    // The group each vertex takes. Where retail binds every vertex of a
+    // connected Remastered piece rigidly, the piece takes the group most of its
+    // vertices are nearest to: per vertex, a piece lying across two retail
+    // bones (the gunship's hatch rim, its iris petals) tears when they move.
+    std::vector<uint32_t> take(n);
     for (size_t v = 0; v < n; ++v) {
-      for (const auto& w : groups[gid[nn[v]]].weights) {
+      take[v] = gid[nn[v]];
+    }
+    if (tris) {
+      std::vector<uint32_t> root(n);
+      for (size_t v = 0; v < n; ++v) {
+        root[v] = uint32_t(v);
+      }
+      auto find = [&](uint32_t v) {
+        while (root[v] != v) {
+          v = root[v] = root[root[v]];
+        }
+        return v;
+      };
+      for (size_t t = 0; t + 2 < tris->size(); t += 3) {
+        for (int k = 1; k < 3; ++k) {
+          const uint32_t a = find((*tris)[t]), b = find((*tris)[t + k]);
+          if (a != b) {
+            root[b] = a;
+          }
+        }
+      }
+      std::map<uint32_t, std::map<uint32_t, size_t>> votes;  // piece -> group -> vertices
+      std::vector<char> smooth(n, 0);                          // per piece root: some vertex is blended
+      for (size_t v = 0; v < n; ++v) {
+        const uint32_t r = find(uint32_t(v));
+        ++votes[r][take[v]];
+        smooth[r] |= groups[take[v]].weights.size() != 1;
+      }
+      size_t moved = 0;
+      std::map<uint32_t, uint32_t> pick;
+      for (const auto& [r, by] : votes) {
+        if (by.size() < 2 || smooth[r]) {
+          continue;
+        }
+        // Most votes; a tie goes to the lower group, so the result is stable.
+        pick[r] = std::max_element(by.begin(), by.end(), [](const auto& a, const auto& b) { return a.second < b.second; })->first;
+      }
+      for (size_t v = 0; v < n; ++v) {
+        const auto it = pick.find(find(uint32_t(v)));
+        if (it != pick.end() && take[v] != it->second) {
+          take[v] = it->second;
+          ++moved;
+        }
+      }
+      if (moved) {
+        log("  " + std::to_string(pick.size()) + " rigid pieces across retail bones: " + std::to_string(moved) +
+            " vertices moved to their piece's bone");
+      }
+    }
+    for (size_t v = 0; v < n; ++v) {
+      for (const auto& w : groups[take[v]].weights) {
         bool found = false;
         for (auto& have : weights[v]) {
           if (have.first == w.first) {

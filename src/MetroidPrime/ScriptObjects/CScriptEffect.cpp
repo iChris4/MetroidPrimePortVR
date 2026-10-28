@@ -20,6 +20,10 @@
 #include "MetroidPrime/TCastTo.hpp"
 
 #include "rstl/math.hpp"
+#ifdef TARGET_PC
+#include <cmath>
+#include "MetroidPrime/ScriptObjects/CScriptSpecialFunction.hpp"
+#endif
 uint CScriptEffect::mNumParticlesDrawing = 0;
 uint CScriptEffect::mNumParticlesUpdating = 0;
 
@@ -93,6 +97,13 @@ CScriptEffect::CScriptEffect(const TUniqueId uid, const rstl::string& name, cons
 }
 
 void CScriptEffect::Think(float dt, CStateManager& mgr) {
+#ifdef TARGET_PC
+  if (xPortBarrierPlatform != kInvalidUniqueId) {
+    if (const CActor* source = TCastToConstPtr<CActor>(mgr.GetObjectById(xPortBarrierPlatform))) {
+      if (source->GetActive()) PortFollowBarrier(*source);
+    }
+  }
+#endif
   if (GetTransformDirtySpare()) {
     if (x104_particleSystem.get()) {
       x104_particleSystem->SetOrientation(ClearTrans(GetTransform()));
@@ -277,6 +288,13 @@ void CScriptEffect::AcceptScriptMsg(EScriptObjectMessage msg, TUniqueId uid, CSt
 }
 
 void CScriptEffect::AddToRenderer(const CFrustumPlanes& frustum, const CStateManager& mgr) const {
+#ifdef TARGET_PC
+  if (xPortBarrierController != kInvalidUniqueId) {
+    const CScriptSpecialFunction* owner =
+        TCastToConstPtr<CScriptSpecialFunction>(mgr.GetObjectById(xPortBarrierController));
+    if (!owner || !owner->PortBarrierVisible(mgr)) return;
+  }
+#endif
   if (!x111_26_canRender) {
     x12c_remTime = rstl::max_val(x134_durationResetWhileVisible, x12c_remTime);
     return;
@@ -313,6 +331,13 @@ void CScriptEffect::AddToRenderer(const CFrustumPlanes& frustum, const CStateMan
 }
 
 void CScriptEffect::Render(const CStateManager& mgr) const {
+#ifdef TARGET_PC
+  if (xPortBarrierController != kInvalidUniqueId) {
+    const CScriptSpecialFunction* owner =
+        TCastToConstPtr<CScriptSpecialFunction>(mgr.GetObjectById(xPortBarrierController));
+    if (!owner || !owner->PortBarrierVisible(mgr)) return;
+  }
+#endif
   if (x138_actorLights.get()) {
     x138_actorLights->ActivateLights();
   }
@@ -365,6 +390,34 @@ void CScriptEffect::PortSetExternalVars(const std::vector< SPortExternalVar >& v
     for (size_t i = 0; i < vars.size(); ++i) {
       x104_particleSystem->PortBindExternal(vars[i]);
     }
+  }
+}
+
+bool CScriptEffect::PortSetExternalReal(const PortGuid& guid, float value) {
+  if (!std::isfinite(value) || !x104_particleSystem.get() ||
+      x104_particleSystem->PortGetRealHandle(guid) == kPortNoVar) {
+    return false;
+  }
+  for (SPortExternalVar& var : xPortExternalVars) {
+    if (var.guid == guid) {
+      var.real = value;
+      x104_particleSystem->PortBindReal(guid, value);
+      return true;
+    }
+  }
+  SPortExternalVar var;
+  var.guid = guid;
+  var.real = value;
+  xPortExternalVars.push_back(var);
+  x104_particleSystem->PortBindReal(guid, value);
+  return true;
+}
+
+void CScriptEffect::PortFollowBarrier(const CActor& source) {
+  SetTransform(source.GetTransform());
+  if (x104_particleSystem.get()) {
+    x104_particleSystem->SetOrientation(ClearTrans(GetTransform()));
+    x104_particleSystem->SetGlobalTranslation(GetTranslation());
   }
 }
 #endif

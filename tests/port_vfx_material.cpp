@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <new>
+#include <limits>
 #include <stdexcept>
 
 // The fixtures have no textures. Fail hard if parsing/building unexpectedly reaches asset loading.
@@ -24,6 +25,16 @@ void CTexture::PortLoad(GXTexMapID, EClampMode, EClampMode) const { std::abort()
 void* IElement::operator new(size_t n, const char*, const char*) { return ::operator new(n); }
 void IElement::operator delete(void* p, size_t) { ::operator delete(p); }
 const CPortVarMemory* CPortVarGlobals::sCurrent = nullptr;
+
+// Distinct exposures verify which frame the production renderer selects.
+namespace PortRoomEnv {
+float ParticleInverseExposure(bool blended) { return blended ? 0.25f : 0.5f; }
+bool testEnabled = true, testHasTone = true;
+float testFrameExposure = 4.f;
+bool Enabled() { return testEnabled; }
+bool Tone(float rows[3][4]) { rows[1][0] = 1.f; return testHasTone; }
+float FrameExposure() { return testFrameExposure; }
+}
 
 namespace {
 int failures = 0;
@@ -137,6 +148,40 @@ public:
     return false;
   }
 };
+class ConstReal : public CRealElement {
+  float value_;
+public:
+  explicit ConstReal(float v) : value_(v) {}
+  bool GetValue(int, float& value) const override { value = value_; return false; }
+};
+// The bomb ring's first TMTR, TRSS(-0.15, 0, 4, 1, 90, 1): E is degrees (GetValue 0x2de7dc), and the
+// shipped VS (5f2a0715/461071b8 perm 000) unpacks the u16 fields and rotates by -E.
+void TestTrss() {
+  Check(std::fabs(PortVfxTrssOffset(-1.15f) + 0.15f) < 1e-4f && std::fabs(PortVfxTrssOffset(2.25f) - 0.25f) < 1e-4f,
+        "TRSS offsets keep their signed fraction");
+  Check(PortVfxTrssOffset(0.f) == std::fma(32767.f, 2.f / 65535.f, -1.f), "a zero offset unpacks to u16 32767");
+  Check(PortVfxTrssAngle(90.f) == 16383.f * 9.58752644e-05f, "90 degrees packs to u16 16383");
+  Check(PortVfxTrssAngle(450.f) == PortVfxTrssAngle(90.f), "angles wrap to one turn");
+  Check(std::fabs(PortVfxTrssAngle(-90.f) - 4.712389f) < 2e-4f, "negative angles wrap into [0, 2pi)");
+  Check(PortVfxTrssAngle(0.f) == 0.f, "no rotation stays exact");
+  CPortVfxData vfx;
+  vfx.vtmtCount = 1;
+  for (float v : {-0.15f, 0.f, 4.f, 1.f, 90.f, 1.f}) {
+    vfx.vtmt.push_back(new ConstReal(v));
+  }
+  CPortVfxUvXf xf;
+  xf.Eval(vfx, 0);
+  float uv[3][3];
+  xf.Apply(1.f, 0.75f, uv);
+  // The shader's o1.xy: off + 0.5 - 0.5 (c X + s Y) + (c X u + s Y v), off + 0.5 + 0.5 (s X - c Y) + (c Y v - s X u).
+  const float e = 16383.f * 9.58752644e-05f, c = std::cos(e), sn = std::sin(e);
+  const float u = PortVfxTrssOffset(-0.15f) + 0.5f - 0.5f * (c * 4.f + sn * 1.f) + (c * 4.f * 1.f + sn * 1.f * 0.75f);
+  const float v = PortVfxTrssOffset(0.f) + 0.5f + 0.5f * (sn * 4.f - c * 1.f) + (c * 1.f * 0.75f - sn * 4.f * 1.f);
+  Check(std::fabs(uv[0][0] - u) < 1e-5f && std::fabs(uv[0][1] - v) < 1e-5f && uv[0][2] == 1.f,
+        "TRSS applies like the shipped vertex shader");
+  Check(std::fabs(uv[0][0] - 0.6f) < 1e-3f && std::fabs(uv[0][1] + 1.5f) < 1e-3f,
+        "90 degrees turns +u into -v");
+}
 void TestHdrEvaluation() {
   CGenDescription desc;
   desc.xPortVfx = std::make_unique<CPortVfxData>();
@@ -237,8 +282,74 @@ void TestDynamic() {
 }
 } // namespace
 
+void TestModelExposureOverride() {
+  using aurora::gfx::vfx::Blend;
+  CGenDescription desc;
+  Check(!PortVfxModelExposureOverride(desc), "missing VMAT has no exposure override");
+  desc.xPortVfx = std::make_unique<CPortVfxData>();
+  desc.xPortExposurePolicy = desc.xPortInverseExposure = true;
+  desc.xPortVfx->mat.blend = uint32_t(Blend::Alpha);
+  const auto snapshot = PortVfxModelExposureOverride(desc);
+  Check(snapshot && *snapshot == 4.f && *snapshot * PortVfxExposureGain(desc, true) == 1.f,
+        "transparent model snapshots forward frame exposure matching CPU inverse");
+  PortRoomEnv::testFrameExposure = 8.f;
+  Check(*snapshot == 4.f && *PortVfxModelExposureOverride(desc) == 8.f,
+        "submission snapshot is a value, not a later frame-state reference");
+  PortRoomEnv::testFrameExposure = 4.f;
+  desc.xPortVfx->mat.features = aurora::gfx::vfx::ParticleLit;
+  Check(PortVfxModelExposureOverride(desc) == snapshot && PortVfxExposureGain(desc) == 1.f,
+        "lit models still consume inverse; lit sprite selection is unchanged");
+  aurora::gfx::vfx::DrawDesc sprite;
+  Check(!sprite.exposureOverride, "unselected draws default to inherited policy");
+  desc.xPortVfx->mat.blend = uint32_t(Blend::Opaque);
+  Check(!PortVfxModelExposureOverride(desc) && PortVfxExposureGain(desc, true) == 0.5f,
+        "opaque model retains static inverse and inherited exposure");
+  desc.xPortVfx->mat.blend = uint32_t(Blend::Alpha);
+  desc.xPortInverseExposure = false;
+  Check(!PortVfxModelExposureOverride(desc), "explicit inverse disabled retains inherited exposure");
+  desc.xPortInverseExposure = true;
+  desc.xPortExposurePolicy = false;
+  Check(!PortVfxModelExposureOverride(desc), "legacy exposure policy remains unchanged");
+  desc.xPortVfx->mat.features = aurora::gfx::vfx::AlreadyExposed;
+  Check(!PortVfxModelExposureOverride(desc), "legacy AlreadyExposed material is not selected");
+  desc.xPortExposurePolicy = true;
+  // Existing explicit-policy handling clears the legacy material bit at draw construction.
+  Check(PortVfxModelExposureOverride(desc) == snapshot, "explicit inverse policy selects matching forward exposure");
+  PortRoomEnv::testEnabled = false;
+  Check(!PortVfxModelExposureOverride(desc), "disabled room exposure has no override");
+  PortRoomEnv::testEnabled = true;
+  PortRoomEnv::testHasTone = false;
+  Check(!PortVfxModelExposureOverride(desc), "no-tone frame has no override");
+  PortRoomEnv::testHasTone = true;
+  for (float value : {0.f, -1.f, std::numeric_limits<float>::infinity(),
+                      std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::denorm_min()}) {
+    PortRoomEnv::testFrameExposure = value;
+    Check(!PortVfxModelExposureOverride(desc), "invalid frame exposure or inverse has no override");
+  }
+  PortRoomEnv::testFrameExposure = 1.f;
+  Check(PortVfxModelExposureOverride(desc) == 1.f, "pause's neutral forward exposure stays neutral");
+  PortRoomEnv::testFrameExposure = 4.f;
+}
+
 int main() {
-  TestParsing(); TestPhysicalTruncation(); TestDynamic(); TestHdrEvaluation();
+  TestModelExposureOverride();
+  TestParsing(); TestPhysicalTruncation(); TestDynamic(); TestHdrEvaluation(); TestTrss();
+  CGenDescription exposure;
+  exposure.xPortVfx = std::make_unique<CPortVfxData>();
+  exposure.xPortExposurePolicy = true;
+  exposure.xPortInverseExposure = true;
+  exposure.xPortVfx->mat.blend = uint32_t(aurora::gfx::vfx::Blend::Opaque);
+  Check(PortVfxExposureGain(exposure) == 0.5f, "opaque particles select static inverse exposure");
+  exposure.xPortVfx->mat.blend = uint32_t(aurora::gfx::vfx::Blend::Alpha);
+  Check(PortVfxExposureGain(exposure) == 0.25f, "blended particles select auto inverse exposure");
+  exposure.xPortVfx->mat.features = aurora::gfx::vfx::ParticleLit;
+  Check(PortVfxExposureGain(exposure) == 1.f, "lit sprites do not consume the intensity scalar");
+  Check(PortVfxExposureGain(exposure, true) == 0.25f, "model instances consume inverse exposure even when lit");
+  exposure.xPortInverseExposure = false;
+  Check(PortVfxExposureGain(exposure, true) == 1.f, "explicit IEXP false leaves intensity unchanged");
+  exposure.xPortInverseExposure = true;
+  exposure.xPortExposurePolicy = false;
+  Check(PortVfxExposureGain(exposure, true) == 1.f, "legacy PART keeps its separate compatibility policy");
   if (!failures) { std::puts("port_vfx_material: ok"); }
   return failures ? 1 : 0;
 }

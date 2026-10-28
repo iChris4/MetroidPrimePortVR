@@ -35,6 +35,7 @@
 // (tests/port_remastered_storage.cpp).
 
 #include <algorithm>
+#include <cstdint>
 #include <filesystem>
 #include <string>
 #include <system_error>
@@ -120,6 +121,12 @@ struct ModFolder {
   std::string path;
   bool builtin = false;  // the built-in import, which lives outside the mods folder
 };
+
+// The built-in barrier now uses roomfx effects; never let its obsolete platform
+// override replace the disc fallback. Other mods' deliberate replacements stay.
+inline bool RejectObsoleteBarrierModel(bool builtin, uint32_t type, uint32_t id) {
+  return builtin && type == 0x434D444C && id == 0x6556EEC5;
+}
 
 inline std::filesystem::path PathFromUtf8(const std::string& text) {
   return std::filesystem::path(std::u8string(text.begin(), text.end()));

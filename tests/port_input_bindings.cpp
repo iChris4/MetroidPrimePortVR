@@ -103,7 +103,10 @@ void TestInputText() {
   REQUIRE(InputToText(In(Device::Touch, 3)) == "touch:a");
   REQUIRE(InputToText(In(Device::Touch, 28)) == "touch:tturbo");
   REQUIRE(InputToText(In(Device::Touch, 32)) == "touch:beam_shift");
-  REQUIRE(InputToText(In(Device::Touch, 40)) == "touch:40");
+  REQUIRE(InputToText(In(Device::Touch, 35)) == "touch:35");
+  REQUIRE(InputToText(In(Device::Touch, 40)) == "touch:bbomb");
+  REQUIRE(InputToText(In(Device::Touch, 44)) == "touch:bunmorph");
+  REQUIRE(InputToText(In(Device::Touch, 45)) == "touch:45");
   REQUIRE(InputToText(In(Device::Touch, 63)) == "touch:63");
   REQUIRE(InputFromText("touch:missile", in) && in == In(Device::Touch, 20));
   REQUIRE(InputFromText("touch:map_tap", in) && in == In(Device::Touch, 34));
@@ -384,7 +387,7 @@ void TestTouchButtons() {
   // Bad slots, field counts and actions are skipped, the rest still load.
   for (const char* bad : {"k64:0,0,1,100,0,pad_a", "k-1:0,0,1,100,0,pad_a", "k:0,0,1,100,0,pad_a",
                           "k01:0,0,1,100,0,pad_a", "kx:0,0,1,100,0,pad_a", "k100:0,0,1,100,0,pad_a",
-                          "k1:0,0,1,100,pad_a", "k1:0,0,1,100,0,pad_a,1", "k1:0,0,1,100,0,", "k1:0,0,1,100,0,warp",
+                          "k1:0,0,1,100,pad_a", "k1:0,0,1,100,0,pad_a,1,0", "k1:0,0,1,100,0,", "k1:0,0,1,100,0,warp",
                           "k1:0,0,1,100,0,none", "k1:0,0,1,100,0,stick_up", "k1:0,0,1,100,0,look_x",
                           "k1:0,0,1,100,0,layer_1", "k1:0,0,1,100,0,menu_a", "k1", "K1:0,0,1,100,0,pad_a"}) {
     const std::string text = std::string(bad) + ";k2:0,0,1,100,0,pad_y";
@@ -395,6 +398,11 @@ void TestTouchButtons() {
   // A repeated slot keeps its last valid entry.
   const std::vector<TouchButton> twice = ParseTouchButtons("k4:0,0,1,100,0,pad_a;k4:0,0,1,100,0,pad_b;k4:0,0,1,100,0,warp");
   REQUIRE(twice.size() == 1 && twice[0].action == Action::PadB);
+  // A 7th field is the overlay's page; the action stays the 6th.
+  const std::vector<TouchButton> paged = ParseTouchButtons("k5:0,0,1,100,0,ball_bomb,1;k6:0,0,1,100,0, pad_x ,2");
+  REQUIRE(paged.size() == 2);
+  REQUIRE((paged[0] == TouchButton{5, Action::BallBomb}));
+  REQUIRE((paged[1] == TouchButton{6, Action::PadX}));
   // All 64 at once.
   std::string full;
   for (int slot = 0; slot < kTouchButtonSlots; ++slot)
@@ -449,6 +457,154 @@ void TestTouchButtons() {
   Input back;
   REQUIRE(InputFromText("touch:k9", back) && back == In(Device::Touch, 73));
 }
+// Custom actions: Action values past the fixed enum, named custom:<id> in the
+// file and defined by [[custom_action]] tables before the profiles.
+void TestCustomActions() {
+  REQUIRE(ActionFromKey("custom:1") == CustomAction(1));
+  REQUIRE(ActionKey(CustomAction(12)) == "custom:12");
+  REQUIRE(ActionKey(Action::PadA) == "pad_a");
+  REQUIRE(ActionFromKey("custom:0") == Action::None);
+  REQUIRE(ActionFromKey("custom:x") == Action::None);
+  REQUIRE(ActionFromKey("custom:70000") == Action::None);
+  REQUIRE(ActionFromKey("custom:") == Action::None);
+  REQUIRE(ActionFromKey("custom:61439") == CustomAction(uint16_t(kMaxCustomId)));
+  REQUIRE(IsCustom(CustomAction(1)) && !IsCustom(Action::PadA) && CustomId(Action::PadA) == 0);
+  REQUIRE(CustomId(CustomAction(7)) == 7);
+  REQUIRE(Info(CustomAction(2)).kind == ActionKind::Digital);
+  REQUIRE(Info(CustomAction(2)).key == "custom");
+  REQUIRE(TouchButtonAction(CustomAction(2)));
+
+  // Two definitions and binds on them, with inputs and triggers: a round trip.
+  UserBindings in;
+  CustomActionDef warp;
+  warp.id = 2;
+  warp.name = "Warp \"home\"";
+  warp.preset = "warp";
+  warp.arg = "MLVL:MREA";
+  in.customActions.push_back(warp);
+  CustomActionDef spawn;
+  spawn.id = 5;
+  spawn.name = "Spawn";
+  spawn.renamed = true;
+  spawn.preset = "command";
+  spawn.mode = "on";
+  spawn.command = "spawn 12";
+  in.customActions.push_back(spawn);
+  UserProfile base;
+  base.name = "Default";
+  Binding hold = Bind(CustomAction(2), {In(Device::Key, 44)});
+  hold.trigger = Trigger::Hold;
+  hold.holdMs = 400;
+  base.bindings.push_back(hold);
+  Binding chord = Bind(CustomAction(5), {In(Device::PadButton, 9), In(Device::PadButton, 0)});
+  chord.trigger = Trigger::Toggle;
+  chord.turboHz = 12;
+  base.bindings.push_back(chord);
+  base.unbind.push_back({CustomAction(5), Family::Touch});
+  in.profiles.push_back(base);
+
+  std::string text = SerializeUserBindings(in);
+  UserBindings back;
+  std::string error;
+  REQUIRE(ParseUserBindings(text, back, &error));
+  REQUIRE(back == in);
+  REQUIRE(SerializeUserBindings(back) == text);
+  REQUIRE(text.find("[[custom_action]]") != std::string::npos);
+  REQUIRE(text.find("action = \"custom:5\"") != std::string::npos);
+  REQUIRE(text.find("custom:5@touch") != std::string::npos);
+  REQUIRE(text.find("mode = \"on\"") != std::string::npos);
+  REQUIRE(text.find("command = \"spawn 12\"") != std::string::npos);
+
+  // A [[custom_action]] after a [[profile]] starts a new top-level table.
+  const char* hand = "[[profile]]\n"
+                     "name = \"x\"\n"
+                     "\n"
+                     "[[custom_action]]\n"
+                     "id = 4\n"
+                     "name = \"Look back\"\n"
+                     "preset = \"setting\"\n"
+                     "arg = \"invert_y\"\n"
+                     "mode = \"toggle\"\n"
+                     "\n"
+                     "[[profile.bind]]\n"
+                     "action = \"custom:4\"\n"
+                     "inputs = [\"pad:dpright\"]\n";
+  REQUIRE(ParseUserBindings(hand, back, &error));
+  REQUIRE(back.profiles.size() == 1 && back.profiles[0].bindings.size() == 1);
+  REQUIRE(back.customActions.size() == 1);
+  REQUIRE(back.customActions[0].id == 4 && back.customActions[0].name == "Look back");
+  REQUIRE(back.customActions[0].mode == "toggle" && !back.customActions[0].renamed);
+  REQUIRE(back.profiles[0].bindings[0].action == CustomAction(4));
+
+  // Bad ids and a repeated one are errors with their line.
+  REQUIRE(ErrorLine("[[custom_action]]\nid = 0\nname = \"x\"\n") == 2);
+  REQUIRE(ErrorLine("[[custom_action]]\nid = 61440\n") == 2);
+  REQUIRE(ErrorLine("[[custom_action]]\nid = \"3\"\n") == 2);
+  REQUIRE(ErrorLine("[[custom_action]]\nid = 2\nname = \"a\"\n[[custom_action]]\nid = 2\n") == 5);
+  REQUIRE(ErrorLine("[[custom_action]]\nname = \"a\"\n") == 1);
+  REQUIRE(ErrorLine("[[custom_action]]\nid = 2\nnope = 1\n") == 3);
+
+  // The next id is the highest plus one, at least 1.
+  REQUIRE(NextCustomId({}) == 1);
+  UserBindings ids;
+  ids.customActions.emplace_back();
+  ids.customActions.back().id = 3;
+  REQUIRE(NextCustomId(ids) == 4);
+  ids.customActions.emplace_back();
+  ids.customActions.back().id = 9;
+  REQUIRE(NextCustomId(ids) == 10);
+
+  // Deleting a custom action takes its definition, its bindings and its unbinds
+  // out of every profile, and leaves the others alone.
+  UserBindings del;
+  CustomActionDef keep;
+  keep.id = 2;
+  keep.preset = "refill_energy";
+  del.customActions.push_back(keep);
+  CustomActionDef gone;
+  gone.id = 7;
+  gone.preset = "refill_ammo";
+  del.customActions.push_back(gone);
+  UserProfile a;
+  a.bindings.push_back(Bind(CustomAction(7), {In(Device::Key, 44)}));
+  a.bindings.push_back(Bind(CustomAction(2), {In(Device::Key, 45)}));
+  a.unbind.push_back({CustomAction(7), Family::Pad});
+  del.profiles.push_back(a);
+  UserProfile b;
+  b.bindings.push_back(Bind(CustomAction(7), {In(Device::Touch, 3)}));
+  b.bindings.push_back(Bind(Action::PadA, {In(Device::Key, 46)}));
+  del.profiles.push_back(b);
+  RemoveCustomAction(del, 7);
+  REQUIRE(del.customActions.size() == 1 && del.customActions[0].id == 2);
+  REQUIRE(del.profiles[0].bindings.size() == 1 && del.profiles[0].bindings[0].action == CustomAction(2));
+  REQUIRE(del.profiles[0].unbind.empty());
+  REQUIRE(del.profiles[1].bindings.size() == 1 && del.profiles[1].bindings[0].action == Action::PadA);
+  RemoveCustomAction(del, 9); // an id nothing has
+  REQUIRE(del.customActions.size() == 1 && del.profiles[0].bindings.size() == 1);
+
+  // The overlay rule is per (action, family): a custom action's other families
+  // are kept, and two custom ids stay apart.
+  Profile p;
+  p.bindings.push_back(Bind(CustomAction(5), {In(Device::PadButton, 0)}));
+  p.bindings.push_back(Bind(CustomAction(5), {In(Device::Key, 44)}));
+  p.bindings.push_back(Bind(CustomAction(6), {In(Device::PadButton, 0)}));
+  UserProfile user;
+  user.bindings.push_back(Bind(CustomAction(5), {In(Device::Key, 6)}));
+  Overlay(p, user);
+  REQUIRE(p.bindings.size() == 3);
+  REQUIRE((p.bindings[0] == Bind(CustomAction(5), {In(Device::PadButton, 0)})));
+  REQUIRE((p.bindings[1] == Bind(CustomAction(6), {In(Device::PadButton, 0)})));
+  REQUIRE((p.bindings[2] == Bind(CustomAction(5), {In(Device::Key, 6)})));
+  // An unbind of one custom id leaves the other's bindings alone.
+  UserProfile unbindUser;
+  unbindUser.unbind.push_back({CustomAction(6), Family::Pad});
+  Profile q;
+  q.bindings = p.bindings;
+  Overlay(q, unbindUser);
+  REQUIRE(q.bindings.size() == 2);
+  REQUIRE(q.bindings[0] == p.bindings[0]);
+}
+
 // Polls `p` with nothing down, then with `buttons` (pad bits) and `mouse` down.
 const Output& PollWith(Runtime& runtime, const Profile& p, uint16_t contexts, uint32_t buttons,
                        uint32_t mouse = 0, float rightTrigger = 0.f) {
@@ -468,7 +624,7 @@ void TestBallButtons() {
   REQUIRE(BallRowForGame(Action::PadR)->row == Action::BallSpider);
   REQUIRE(FindBallRow(Action::PadA) == nullptr && BallRowForGame(Action::PadZ) == nullptr);
   REQUIRE(ActionFromKey("ball_power_bomb") == Action::BallPowerBomb);
-  REQUIRE(!TouchButtonAction(Action::BallBomb));
+  REQUIRE(TouchButtonAction(Action::BallBomb));
 
   const Input lb = In(Device::PadButton, 9), rb = In(Device::PadButton, 10);
   const uint32_t kLB = 1u << 9, kRB = 1u << 10;
@@ -539,6 +695,39 @@ void TestBallButtons() {
   REQUIRE(inBall.Held(Action::BallBomb) && !inBall.Held(Action::SpringBall));
   REQUIRE(!PollWith(runtime, l, kCtxGameplay, kLB | kRB).Held(Action::BallBomb));
   REQUIRE(!PollWith(runtime, l, kCtxMorphBall, kRB).Held(Action::BallBomb));
+  // Without the layer the input keeps its other bindings in the ball.
+  REQUIRE(l.bindings[1].blocked == 0);
+  REQUIRE(PollWith(runtime, l, kCtxMorphBall, kRB).Held(Action::SpringBall));
+
+  // A bound row replaces its game button in the ball for that family only: the
+  // pad's A stops bombing, the key and the touch turbo still press A.
+  Profile r;
+  r.chordWindowMs = 0;
+  const Input padA = In(Device::PadButton, 0), keyA = In(Device::Key, 4), turbo = In(Device::Touch, 33);
+  r.bindings = {Bind(Action::PadA, {padA}), Bind(Action::PadA, {keyA}), Bind(Action::PadA, {turbo}),
+                Bind(Action::BallBomb, {rb}), Bind(Action::BallBomb, {In(Device::Touch, 3)})};
+  ApplyBallButtons(r);
+  REQUIRE(r.bindings[0].blocked == kCtxMorphBall && r.bindings[1].blocked == 0 && r.bindings[2].blocked == 0);
+  REQUIRE(PollWith(runtime, r, kCtxGameplay, 1u).Held(Action::PadA));
+  REQUIRE(!PollWith(runtime, r, kCtxMorphBall, 1u).Held(Action::PadA));
+  REQUIRE(PollWith(runtime, r, kCtxMorphBall, kRB).Held(Action::BallBomb));
+  // A row only under a layer adds to the button.
+  Profile rl = r;
+  rl.bindings[3].contexts = kCtxLayer1;
+  rl.bindings[0].blocked = 0;
+  ApplyBallButtons(rl);
+  REQUIRE(rl.bindings[0].blocked == 0);
+  // The overlay's ball page is one button per row, on touch codes 40..44.
+  REQUIRE(std::size(kTouchBallControls) == std::size(kBallRows));
+  for (size_t i = 0; i < std::size(kTouchBallControls); ++i) {
+    const TouchBallControl& c = kTouchBallControls[i];
+    REQUIRE(FindBallRow(c.row) != nullptr && c.control == 40 + int(i));
+  }
+  // An added button's row is scoped to the ball like any other.
+  Profile tb;
+  BindTouchButtons(tb, "k2:0,0,1,100,0,ball_boost,1");
+  ApplyBallButtons(tb);
+  REQUIRE(tb.bindings.size() == 1 && tb.bindings[0].contexts == kCtxMorphBall);
 
   // everywhereOnly (the Menu rows) leaves bindings scoped under Advanced alone.
   Profile e;
@@ -551,6 +740,7 @@ void TestBallButtons() {
 } // namespace
 
 int main() {
+  TestCustomActions();
   TestBallButtons();
   TestTouchButtons();
   TestDuplicateBindings();

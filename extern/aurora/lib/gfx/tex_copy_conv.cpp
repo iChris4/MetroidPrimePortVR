@@ -10,6 +10,7 @@
 #include "../gx/gx_fmt.hpp"
 
 #include <absl/container/flat_hash_map.h>
+#include <absl/container/flat_hash_set.h>
 
 #include "texture_convert.hpp"
 #include "hdr_tone.hpp"
@@ -388,6 +389,8 @@ static constexpr std::array DepthConvPipelines{
 
 static wgpu::BindGroupLayout g_bindGroupLayout;
 static wgpu::BindGroupLayout g_depthBindGroupLayout;
+static wgpu::BindGroupLayout g_depthBindGroupLayoutMS;
+static absl::flat_hash_map<GXTexFmt, wgpu::RenderPipeline> g_depthPipelinesMS; // Core devices only
 static wgpu::Sampler g_nearestSampler;
 static wgpu::Sampler g_depthCompareSampler; // Compatibility: LessEqual, for mp_depth_load
 static wgpu::Sampler g_linearSampler;
@@ -577,6 +580,16 @@ static wgpu::BindGroupLayout hdr_bind_group_layout() {
 // A scaled HdrDisplay copy filters the light and post-tones the filtered sample, where an LDR copy
 // filters display values: the two are not filter-for-filter equal, by design (no exact copy-filter
 // parity is claimed; the curve is not linear, so they differ only where the filter mixes texels).
+// Once per kind and format: a copy with no pipeline is skipped (see run).
+static void warn_missing_pipeline(std::string_view kind, GXTexFmt fmt) {
+  static std::mutex mutex;
+  static absl::flat_hash_set<std::pair<std::string_view, GXTexFmt>> warned;
+  std::lock_guard lock{mutex};
+  if (warned.emplace(kind, fmt).second) {
+    Log.warn("No {} pipeline for format {}; copy not supported; skipped", kind, static_cast<int>(fmt));
+  }
+}
+
 static wgpu::RenderPipeline domain_pipeline(GXTexFmt fmt, CopyDomain domain, wgpu::TextureFormat outputFormat) {
   std::lock_guard lock{g_domainMutex};
   const auto key = std::make_tuple(fmt, domain, outputFormat);
@@ -587,8 +600,8 @@ static wgpu::RenderPipeline domain_pipeline(GXTexFmt fmt, CopyDomain domain, wgp
   if (fmt != GX_TF_RGBA8) {
     const auto it = std::ranges::find(ConvPipelines, fmt, &ConvPipeline::fmt);
     if (it == ConvPipelines.end() || (domain == CopyDomain::Linear && fmt != GX_TF_RGB565)) {
-      Log.fatal("No {} copy pipeline for format {}", domain == CopyDomain::Linear ? "linear" : "HDR",
-                static_cast<int>(fmt));
+      warn_missing_pipeline(domain == CopyDomain::Linear ? "linear copy" : "HDR copy", fmt);
+      return {};
     }
     frag = it->fragShader;
   }
@@ -687,6 +700,16 @@ void initialize() {
       .entries = depthBindGroupLayoutEntries.data(),
   };
   g_depthBindGroupLayout = g_device.CreateBindGroupLayout(&depthBindGroupLayoutDescriptor);
+  if (webgpu::g_hasCoreFeatures) {
+    auto msEntries = depthBindGroupLayoutEntries;
+    msEntries[0].texture.multisampled = true;
+    const wgpu::BindGroupLayoutDescriptor msDescriptor{
+        .label = "TexCopyConv Depth MS Bind Group Layout",
+        .entryCount = 2,
+        .entries = msEntries.data(),
+    };
+    g_depthBindGroupLayoutMS = g_device.CreateBindGroupLayout(&msDescriptor);
+  }
 
   g_blitPipeline = create_pipeline(
       {GX_TF_RGBA8, FragPassthrough, webgpu::g_graphicsConfig.surfaceConfiguration.format, "TexCopyConv Blit"},
@@ -705,6 +728,15 @@ void initialize() {
       g_pipelines[conv.fmt] = create_pipeline(conv, depthPreamble, g_depthBindGroupLayout);
       if (conv.outputFormat != to_wgpu(conv.fmt)) {
         Log.fatal("Output format mismatch for {}", conv.fmt);
+      }
+    }
+    if (webgpu::g_hasCoreFeatures) {
+      // The same shaders on a multisampled source: textureLoad's last argument becomes the sample index.
+      std::string msPreamble = DepthShaderPreamble;
+      const std::string_view single = "texture_depth_2d";
+      msPreamble.replace(msPreamble.find(single), single.size(), "texture_depth_multisampled_2d");
+      for (const auto& conv : DepthConvPipelines) {
+        g_depthPipelinesMS[conv.fmt] = create_pipeline(conv, msPreamble, g_depthBindGroupLayoutMS);
       }
     }
     const std::string compatSnapshot = std::string(DepthSnapshotShaderCompatHead) + std::string(CompatDepthLoad);
@@ -754,6 +786,8 @@ void shutdown() {
   g_blitPipeline = {};
   g_bindGroupLayout = {};
   g_depthBindGroupLayout = {};
+  g_depthBindGroupLayoutMS = {};
+  g_depthPipelinesMS.clear();
   g_nearestSampler = {};
   g_depthCompareSampler = {};
   g_linearSampler = {};
@@ -786,7 +820,7 @@ static void execute(const wgpu::CommandEncoder& cmd, const ConvRequest& req, con
         },
     };
     const wgpu::BindGroupDescriptor bindGroupDescriptor{
-        .layout = g_depthBindGroupLayout,
+        .layout = req.srcSamples > 1 ? g_depthBindGroupLayoutMS : g_depthBindGroupLayout,
         .entryCount = webgpu::g_hasCoreFeatures ? 2u : 3u,
         .entries = bindGroupEntries.data(),
     };
@@ -870,14 +904,23 @@ static void execute(const wgpu::CommandEncoder& cmd, const ConvRequest& req, con
 
 void run(const wgpu::CommandEncoder& cmd, const ConvRequest& req) {
   if (req.domain != CopyDomain::Display) {
-    execute(cmd, req, domain_pipeline(req.fmt, req.domain, req.dst->format));
+    if (const auto pipeline = domain_pipeline(req.fmt, req.domain, req.dst->format)) {
+      execute(cmd, req, pipeline);
+    }
     return;
   }
-  const auto it = g_pipelines.find(req.fmt);
-  if (it == g_pipelines.end()) {
-    Log.fatal("No copy conversion pipeline for format {}", static_cast<int>(req.fmt));
+  // A format with no pipeline leaves the destination as it was, rather than ending the game.
+  const auto& pipelines = req.srcSamples > 1 ? g_depthPipelinesMS : g_pipelines;
+  const auto it = pipelines.find(req.fmt);
+  if (it == pipelines.end()) {
+    warn_missing_pipeline(req.srcSamples > 1 ? "multisampled conversion" : "conversion", req.fmt);
+    return;
   }
   execute(cmd, req, it->second);
+}
+
+bool depth_conversion_supported(GXTexFmt fmt, uint32_t msaaSamples) noexcept {
+  return msaaSamples > 1 ? g_depthPipelinesMS.contains(fmt) : g_pipelines.contains(fmt);
 }
 
 void blit(const wgpu::CommandEncoder& cmd, const ConvRequest& req) {

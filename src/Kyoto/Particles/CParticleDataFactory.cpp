@@ -7,6 +7,7 @@
 #include "aurora/vfx.hpp"
 #include "port_log.h"
 #include "port_vfx_read.h"
+#include "Kyoto/Particles/CPortParticleParseScope.hpp"
 #endif
 #include "Kyoto/CFactoryFnReturn.hpp"
 #include "Kyoto/CRandom16.hpp"
@@ -483,6 +484,9 @@ void CParticleDataFactory::LoadGPSMTokens(CGenDescription* desc) {
 
 bool CParticleDataFactory::CreateGPSM(CGenDescription* desc, CInputStream& in,
                                       rstl::vector< CAssetId >& resources, CSimplePool* pool) {
+#ifdef TARGET_PC
+  CPortParticleParseScope parseScope;
+#endif
   bool done = false;
   CRandom16 random(99);
   CGlobalRandom context(random);
@@ -563,16 +567,47 @@ bool CParticleDataFactory::CreateGPSM(CGenDescription* desc, CInputStream& in,
       break;
     case SBIG('VMD1'):
       desc->x31_28_VMD1 = GetBool(in);
+#ifdef TARGET_PC
+      if (desc->x31_28_VMD1) {
+        desc->xPortVelocityGlobal[0] = false;
+      }
+#endif
       break;
     case SBIG('VMD2'):
       desc->x31_29_VMD2 = GetBool(in);
+#ifdef TARGET_PC
+      if (desc->x31_29_VMD2) {
+        desc->xPortVelocityGlobal[1] = false;
+      }
+#endif
       break;
     case SBIG('VMD3'):
       desc->x31_30_VMD3 = GetBool(in);
+#ifdef TARGET_PC
+      if (desc->x31_30_VMD3) {
+        desc->xPortVelocityGlobal[2] = false;
+      }
+#endif
       break;
     case SBIG('VMD4'):
       desc->x31_31_VMD4 = GetBool(in);
+#ifdef TARGET_PC
+      if (desc->x31_31_VMD4) {
+        desc->xPortVelocityGlobal[3] = false;
+      }
+#endif
       break;
+#ifdef TARGET_PC
+    case SBIG('VGD1'):
+    case SBIG('VGD2'):
+    case SBIG('VGD3'):
+    case SBIG('VGD4'):
+      GetClassID(in);
+      if (in.ReadLong() != 0) {
+        desc->xPortVelocityGlobal[clsId - SBIG('VGD1')] = true;
+      }
+      break;
+#endif
     case SBIG('VEL1'):
       desc->x68_VEL1 = GetModVectorElement(in);
       break;
@@ -702,6 +737,10 @@ bool CParticleDataFactory::CreateGPSM(CGenDescription* desc, CInputStream& in,
     case SBIG('PIRN'):
       GetClassID(in);
       desc->xPortIrnd = in.ReadLong() != 0;
+      // Must precede expressions. A legacy trailing PIRN cannot undo earlier folding.
+      CPortParticleParseScope::particleInitialRandom = desc->xPortIrnd;
+      // PPRM overrides the converted format's default sprite primitive.
+      if (desc->xPortIrnd && desc->xPortPrimitive == 255) desc->xPortPrimitive = 1;
       break;
     // Port-only visor effect data of a converted Remastered PART: present, and the splat size
     // range (VESN/VESM as float bits).
@@ -876,6 +915,10 @@ bool CParticleDataFactory::CreateGPSM(CGenDescription* desc, CInputStream& in,
       desc->xPortMover = std::move(mover);
       break;
     }
+    case SBIG('PPRM'):
+      GetClassID(in);
+      desc->xPortPrimitive = u8(in.ReadLong());
+      break;
     // Port-only: Remastered's sprite polygon (SSHP 3-6; xPortSpriteShape).
     case SBIG('PSHP'):
       GetClassID(in);
@@ -927,6 +970,21 @@ bool CParticleDataFactory::CreateGPSM(CGenDescription* desc, CInputStream& in,
     case SBIG('PBLT'):
       GetClassID(in);
       desc->xPortBakedLighting = in.ReadLong() != 0;
+      break;
+    case SBIG('VMPC'):
+      GetClassID(in);
+      desc->xPortVelocityAtCreation = in.ReadLong() != 0;
+      break;
+    case SBIG('DVVN'):
+      GetClassID(in);
+      desc->xPortDefaultValuesVersion = u8(in.ReadLong());
+      desc->xPortExposurePolicy = true;
+      desc->xPortInverseExposure = desc->xPortDefaultValuesVersion == 3 || desc->xPortDefaultValuesVersion == 4;
+      break;
+    case SBIG('IEXP'):
+      GetClassID(in);
+      desc->xPortExposurePolicy = true;
+      desc->xPortInverseExposure = in.ReadLong() != 0;
       break;
     case SBIG('PSHT'):
       delete desc->xPortShutdownTime;
@@ -1330,8 +1388,9 @@ CRealElement* CParticleDataFactory::GetRealElement(CInputStream& in) {
     }
     return rs_new CREPortInitialRandomSign(slot, value);
   }
-  // MPXV (MPT_CREExternalValue 0x29715c): the index, then the fallback real.
-  case SBIG('MPXV'): {
+  // Port-only PMXV, the converter's name for Remastered's MPXV (MPT_CREExternalValue 0x29715c):
+  // the index, then the fallback real.
+  case SBIG('PMXV'): {
     CIntElement* index = GetIntElement(in);
     CRealElement* fallback = GetRealElement(in);
     if (index == nullptr || fallback == nullptr) {
@@ -1468,6 +1527,9 @@ CRealElement* CParticleDataFactory::GetRealElement(CInputStream& in) {
   }
   case SBIG('KEWS'): {
     return rs_new CREPortSwooshNodeTime(GetRealElement(in));
+  }
+  case SBIG('KESP'): {
+    return rs_new CREPortSlot2Time(GetRealElement(in));
   }
   case SBIG('PKYF'): {
     // Remastered's KEYF: the loop byte, the key count, the loop start, start and rate, the keys,

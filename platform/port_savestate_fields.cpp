@@ -260,8 +260,15 @@ struct PortStateCodec {
     CBodyStateInfo& info = bc.x2a4_bodyStateInfo;
     // The rebuilt enemy's controller is started by its first Think (into the default
     // state, which would then replace the saved one): start it here, as that Think would.
-    if (!bc.x300_25_active && (bits & 2) != 0)
+    // The default state may read a command the game delivers before that Think (Generate
+    // does, and dereferences it): the saved commands stand in for it, as below.
+    if (!bc.x300_25_active && (bits & 2) != 0) {
+      CBodyStateCmdMgr& cmds = bc.x4_cmdMgr;
+      const uint delivered = cmds.xb4_deliveredCmdMask;
+      cmds.xb4_deliveredCmdMask = ~0u;
       bc.Activate(mgr);
+      cmds.xb4_deliveredCmdMask = delivered;
+    }
     if (bc.x300_25_active && (bits & 2) != 0) {
       if (fits && state != info.x14_state && info.x0_stateMap.find(state) != info.x0_stateMap.end()) {
         if (info.x0_stateMap.find(info.x14_state) != info.x0_stateMap.end())
@@ -278,7 +285,13 @@ struct PortStateCodec {
         info.SetAdditiveState(additive);
         if (info.GetCurrentAdditiveState() != now) {
           now->Shutdown(bc);
+          // As above: CABSReaction::Start dereferences its command (an enemy saved mid hit
+          // reaction crashed every load of the state).
+          CBodyStateCmdMgr& cmds = bc.x4_cmdMgr;
+          const uint delivered = cmds.xb4_deliveredCmdMask;
+          cmds.xb4_deliveredCmdMask = ~0u;
           info.GetCurrentAdditiveState()->Start(bc, mgr);
+          cmds.xb4_deliveredCmdMask = delivered;
         }
       }
     }

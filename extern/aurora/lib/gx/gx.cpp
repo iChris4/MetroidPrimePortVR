@@ -398,7 +398,7 @@ DstAlphaMode dst_alpha_mode(const PipelineConfig& config) noexcept {
   }
   // The draw-id and actor-decal shaders end in their own return (alpha 1).
   const auto& sc = config.shaderConfig;
-  if (sc.drawId || (sc.actorDecal != 0 && sc.lineMode == 0)) {
+  if (sc.drawId || sc.shell != 0 || (sc.actorDecal != 0 && sc.lineMode == 0)) {
     return DstAlphaMode::None;
   }
   const auto usesSourceAlpha = [](GXBlendFactor factor) {
@@ -550,6 +550,14 @@ static u8 vol_fog_mode(bool depthOnly) noexcept {
   return VolFogNone;
 }
 
+bool depth_prepass_eligible(u8 lineMode) noexcept {
+  const auto& st = g_gxState;
+  const bool opaque = st.blendMode == GX_BM_NONE ||
+                      (st.blendMode == GX_BM_BLEND && st.blendFacSrc == GX_BL_ONE && st.blendFacDst == GX_BL_ZERO);
+  return lineMode == 0 && st.depthCompare && st.depthUpdate && st.depthFunc == GX_LEQUAL && st.colorUpdate &&
+         (st.alphaUpdate || !efb_has_alpha(st.pixelFmt)) && opaque && st.shell == 0 && !st.actorDecal;
+}
+
 void populate_pipeline_config(PipelineConfig& config, GXPrimitive primitive, GXVtxFmt fmt) noexcept {
   ZoneScoped;
 
@@ -563,12 +571,14 @@ void populate_pipeline_config(PipelineConfig& config, GXPrimitive primitive, GXV
   config.shaderConfig.pbr = g_gxState.pbr;
   if (g_gxState.pbr != 0) {
     config.shaderConfig.pbrKind = static_cast<u8>(std::clamp(std::lround(g_gxState.pbrLayer.y()), 0L, 255L));
+    config.shaderConfig.pbrCut = pbr_cut_mode(g_gxState.pbrBacklight);
     // The lightmap's UV attribute, when the bound vertex format has it (and the device a slot for the lightmap).
     const u8 lightmapAttr = g_gxState.pbrLightmapAttr;
     if (webgpu::g_lightmapBinding && lightmapAttr >= GX_VA_TEX0 && lightmapAttr <= GX_VA_TEX7 &&
         g_gxState.vtxDesc[lightmapAttr] != GX_NONE) {
       config.shaderConfig.pbrLightmapAttr = lightmapAttr;
     }
+    config.shaderConfig.pbrThermal = config.shaderConfig.sceneHdr && g_gxState.pbrThermal.w() > 0.5f;
   }
   // Port (VR fork): the shader reads the bind pose with the vertex's own POS index, which a
   // de-indexed record (GXState::deindexVertices, and the native/cached records built from it)
@@ -645,6 +655,7 @@ void populate_pipeline_config(PipelineConfig& config, GXPrimitive primitive, GXV
   } else {
     config.shaderConfig.lineMode = 0;
   }
+  config.shaderConfig.clipPlane = g_gxState.clipPlane && config.shaderConfig.lineMode == 0;
   config.shaderConfig.tevSwapTable = g_gxState.tevSwapTable;
   for (u8 i = 0; i < g_gxState.numTevStages; ++i) {
     config.shaderConfig.tevStages[i] = g_gxState.tevStages[i];
@@ -682,11 +693,13 @@ void populate_pipeline_config(PipelineConfig& config, GXPrimitive primitive, GXV
   const auto [polygonOffset, polygonOffsetScale] = polygon_offset_for_cull_mode(cullMode);
   // GX_AURORA_PORT_DEPTH_PREPASS: pass 1 writes only the depth, pass 2 shades where it is equal.
   // Both keep the vertex stage and the polygon offset, so their depths match exactly (the
-  // position is @invariant).
-  const bool writesDepth = g_gxState.depthCompare && g_gxState.depthUpdate;
-  const bool depthOnly = g_gxState.depthPrepass == 1;
-  const bool depthEqual = g_gxState.depthPrepass == 2 && writesDepth;
-  config.shaderConfig.depthOnly = depthOnly;
+  // position is @invariant). Only depth_prepass_eligible draws take part: the others are left out
+  // of pass 1 (push_gx_draw) and draw unchanged in pass 2.
+  const bool depthOnly = g_gxState.depthPrepass == 1 || g_gxState.depthPrepass == 3;
+  // Pass 3's mark: only in an EFB without alpha, where nothing reads it.
+  const bool depthMark = g_gxState.depthPrepass == 3 && !efb_has_alpha(g_gxState.pixelFmt);
+  const bool depthEqual = g_gxState.depthPrepass == 2 && depth_prepass_eligible(config.shaderConfig.lineMode);
+  config.shaderConfig.depthOnly = depthMark ? 2 : depthOnly ? 1 : 0;
   // The "drawid" view: flat colours that must reach the frame as they are, so no fog and no blend (a
   // depth-only pass stays one).
   const bool drawId = g_gxState.drawIdMode && !depthOnly;
@@ -704,6 +717,8 @@ void populate_pipeline_config(PipelineConfig& config, GXPrimitive primitive, GXV
     sc.actorDecal = 1;
     sc.pbr = 0;
     sc.pbrKind = 0;
+    sc.pbrCut = 0;
+    sc.pbrThermal = 0;
     sc.pbrBindPos = false;
     sc.pbrBindLe = false;
     sc.pbrLightmapAttr = GX_VA_NULL;
@@ -722,6 +737,37 @@ void populate_pipeline_config(PipelineConfig& config, GXPrimitive primitive, GXV
     sc.tevStageCount = 1;
   } else if (g_gxState.actorDecal) {
     config.shaderConfig.shadow = false;
+  }
+  // GX_AURORA_PORT_SHELL: Remastered's Model_SilhouetteShell. The shell is the model pushed out along
+  // its normals; pass 1 writes its depth alone, pass 2 shades it from the scene copy and the shell's
+  // two textures, so none of the draw's own shading reaches the shader.
+  const u8 shell = config.shaderConfig.lineMode == 0 && !drawId ? g_gxState.shell : 0;
+  config.shaderConfig.shell = shell;
+  if (shell != 0) {
+    auto& sc = config.shaderConfig;
+    sc.depthOnly = shell == 1;
+    sc.actorDecal = 0;
+    sc.pbr = 0;
+    sc.pbrKind = 0;
+    sc.pbrCut = 0;
+    sc.pbrThermal = 0;
+    sc.pbrBindPos = false;
+    sc.pbrBindLe = false;
+    sc.pbrLightmapAttr = GX_VA_NULL;
+    sc.sdf = 0;
+    sc.hudSample = 0;
+    sc.perPixelLight = 0;
+    sc.fogType = GX_FOG_NONE;
+    sc.fogRangeEnabled = false;
+    sc.volFog = VolFogNone;
+    sc.alphaCompare = {};
+    sc.numIndStages = 0;
+    sc.indStages = {};
+    for (auto& ts : sc.tevStages) {
+      ts = {};
+    }
+    sc.tevStageCount = 1;
+    sc.shadow = false;
   }
   // Field by field: an aggregate assignment would copy the 2.7 KB shader config twice more on
   // every pipeline switch. Every field outside shaderConfig is written here.
@@ -763,8 +809,19 @@ void populate_pipeline_config(PipelineConfig& config, GXPrimitive primitive, GXV
     // The receiver keeps its own cull (back faces for the world's geometry), as Remastered's
     // decal draw does.
   }
-  config.alphaUpdate = hasAlpha && g_gxState.alphaUpdate && !depthOnly;
-  config.colorUpdate = g_gxState.colorUpdate && !depthOnly;
+  if (shell != 0) {
+    // Both passes test LEQUAL, write depth (the model flags Remastered draws them with, Normal)
+    // and keep the model's cull; the colour pass replaces the frame where the shell's depth won.
+    config.blendMode = GX_BM_NONE;
+    config.depthFunc = GX_LEQUAL;
+    config.depthCompare = true;
+    config.depthUpdate = true;
+  }
+  config.alphaUpdate = (hasAlpha && g_gxState.alphaUpdate && !depthOnly && shell != 1) || depthMark;
+  if (depthMark) {
+    config.blendMode = GX_BM_NONE;
+  }
+  config.colorUpdate = g_gxState.colorUpdate && !depthOnly && shell != 1;
   static_assert(sizeof(PipelineConfig) == sizeof(ShaderConfig) + 13 * sizeof(uint32_t) + 4 * sizeof(bool),
                 "a new PipelineConfig field must be written above");
 }
@@ -831,7 +888,8 @@ gfx::BindGroupRef build_texture_bind_group(const ShaderInfo& info, const ViewFor
     }
   }
   for (u32 i = 0; i < MaxTextures; ++i) {
-    const auto& tex = g_gxState.textures[i];
+    const auto& tex = info.shellScene && i < g_gxState.shellTextures.size() ? g_gxState.shellTextures[i]
+                                                                             : g_gxState.textures[i];
     WGPUBindGroupEntry& textureEntry = textureEntries[i * 2];
     WGPUBindGroupEntry& samplerEntry = textureEntries[i * 2 + 1];
     textureEntry.binding = i * 2;
@@ -868,6 +926,22 @@ gfx::BindGroupRef build_texture_bind_group(const ShaderInfo& info, const ViewFor
       textureEntry.textureView = multiview ? sEmptyArrayTextureView.Get() : sEmptyTextureView.Get();
       samplerEntry.sampler = sEmptySampler.Get();
     }
+  }
+  // The shell's colour pass reads the scene copy (CBUF, textureLod 1, bilinear, clamped) in slot 2;
+  // without this frame's copy it reads the empty texture, and the caller draws no colour pass.
+  wgpu::TextureView shellScene;
+  if (info.shellScene) {
+    static const wgpu::Sampler shellSceneSampler = gfx::sampler_ref(wgpu::SamplerDescriptor{
+        .addressModeU = wgpu::AddressMode::ClampToEdge,
+        .addressModeV = wgpu::AddressMode::ClampToEdge,
+        .magFilter = wgpu::FilterMode::Linear,
+        .minFilter = wgpu::FilterMode::Linear,
+        .mipmapFilter = wgpu::MipmapFilterMode::Linear,
+        .maxAnisotropy = 1,
+    });
+    shellScene = gfx::vfx::scene_copy_view(gfx::scene_hdr_pass_active());
+    textureEntries[GX_TEXMAP2 * 2].textureView = shellScene ? shellScene.Get() : sEmptyTextureView.Get();
+    textureEntries[GX_TEXMAP2 * 2 + 1].sampler = shellSceneSampler.Get();
   }
   const WGPUBindGroupDescriptor textureBindGroupDescriptor{
       .label = {multiview ? "GX Multiview Texture Bind Group" : "GX Texture Bind Group", WGPU_STRLEN},

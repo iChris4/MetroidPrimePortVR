@@ -165,6 +165,7 @@ GXBindGroups build_bind_groups(const ShaderInfo& info) noexcept {
   return {.textureBindGroup = ++testing::bindBuilds};
 }
 gfx::BindGroupRef build_multiview_bind_group(const ShaderInfo&) noexcept { return ++testing::multiviewBuilds; }
+bool depth_prepass_eligible(u8) noexcept { return false; }
 ShaderInfo build_shader_info(const ShaderConfig& config) noexcept {
   ShaderInfo info{};
   info.sampledTextures[0] = testing::sampledTexture;
@@ -322,7 +323,7 @@ bool g_testSceneHdr = false;
 uint32_t g_testSceneHdrSwitches = 0;
 // Tests set it to see a refused switch.
 bool g_testSceneHdrRefuse = false;
-bool set_scene_hdr(bool on) {
+bool set_scene_hdr(bool on, bool pause) {
   if (g_testSceneHdrRefuse) {
     return false;
   }

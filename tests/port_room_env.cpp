@@ -1,6 +1,7 @@
 #include "port_room_env.h"
 
 #include "port_room_env_lod.h"
+#include "port_room_geo.h"
 #include "port_test.h"
 
 #include <algorithm>
@@ -610,6 +611,14 @@ void TestParse() {
   bad = good;
   bad[32 + 88] = 2;
   CHECK_MSG(!PortRoomEnv::Parse(std::vector<uint8_t>(bad), file, error), "parse: cube index");
+  // A probe without a cube (its REFL texture id invalid) is kept, with no cube.
+  bad = good;
+  for (int i = 0; i < 4; ++i) {
+    bad[32 + 88 + i] = 0xFF;
+  }
+  CHECK_MSG(PortRoomEnv::Parse(std::vector<uint8_t>(bad), file, error) && !file.probes.empty() &&
+                file.probes[0].cube == PortRoomEnv::kProbeNoCube,
+            "parse: probe without a cube");
   bad = good;
   bad[32 + 300] = 6; // the first cube's size
   CHECK_MSG(!PortRoomEnv::Parse(std::vector<uint8_t>(bad), file, error), "parse: cube size");
@@ -928,6 +937,31 @@ void TestExposureHints() {
   g.Set(one, true);
   CHECK_MSG(!g.Set(one, false) && g.Pick(1) == -1, "hints: leaving only unregisters mode 1");
 
+  // Shipped registration is priority descending, insertion-before-equal. A
+  // priority of 1 or 2 is not a fluid mode (SLdrAutoExposureHint::Load 0x538b54).
+  {
+    std::vector<FluidHint> ranked(4);
+    for (auto& hint : ranked) {
+      hint.mode = 0;
+    }
+    ranked[0].priority = 6;
+    ranked[1].priority = 1;
+    ranked[2].priority = 6;
+    ranked[3].priority = 10;
+    ranked[3].on = false;
+    ExposureHints r;
+    CHECK(!r.Load(ranked, false));
+    CHECK_MSG(r.Pick(4) == 2, "highest active priority, newest first on ties");
+    CHECK_MSG(!r.Set(ranked, true) && r.Pick(4) == 2, "plain priority-6 hints do not change underwater");
+    ranked[2].mode = 1;
+    r.Load(ranked, false);
+    CHECK(r.Pick(4) == 0);
+    CHECK(r.Set(ranked, true) && r.Pick(4) == 2);
+    ranked[2].priority = -1;
+    r.Load(ranked, false);
+    CHECK_MSG(!r.Set(ranked, true) && r.Pick(4) == 0, "a newer lower-priority fluid hint cannot override or snap");
+  }
+
   // CAutoExposureHintMP1: pair A (role 1) and B (role 2), plus an ordinary mode 1 hint.
   {
     using Swap = ExposureHints;
@@ -1127,6 +1161,55 @@ void TestWorldVolumes() {
   PortRoomEnv::File file;
   std::string error;
   const std::vector<uint8_t> good = MakeVolumeFile({a, b});
+  {
+    auto v27 = MakeVolumeFile({});
+    v27[4] = 27;
+    v27.resize(v27.size() - 8); // replace the empty hint and volume lists
+    Put32(v27, 2);
+    for (int i = 0; i < 2; ++i) {
+      v27.insert(v27.end(), {0, 0, 0, uint8_t(i == 0)}); // plain, ordinary, active/inactive
+      for (float f : {5.75f, 6.f, 0.f, 32.f, 0.5f}) PutFloat(v27, f);
+      Put32(v27, uint32_t(i == 0 ? -2 : 6));
+    }
+    Put32(v27, 0); // world volumes
+    for (float f : {0.f, 0.f, 0.f, 1.f}) PutFloat(v27, f);
+    CHECK_MSG(PortRoomEnv::Parse(std::vector<uint8_t>(v27), file, error), "hint v27 record stride");
+    CHECK(file.fluidHints.size() == 2);
+    CHECK(file.fluidHints[0].mode == 0 && file.fluidHints[0].on && file.fluidHints[0].priority == -2);
+    CHECK(!file.fluidHints[1].on && file.fluidHints[1].priority == 6);
+    CHECK(file.fluidHints[1].exposure[0] == 5.75f && file.envFxIntensity == 1.f);
+    v27.resize(v27.size() - 20); // truncate inside the second priority
+    CHECK(!PortRoomEnv::Parse(std::move(v27), file, error));
+  }
+  {
+    // Version 28: each hint ends with the script links that (de)activate its entity.
+    auto v28 = MakeVolumeFile({});
+    v28[4] = 28;
+    v28.resize(v28.size() - 8);
+    Put32(v28, 2);
+    for (int i = 0; i < 2; ++i) {
+      v28.insert(v28.end(), {0, 0, 0, 0}); // both start inactive
+      for (float f : {5.75f, 6.f, 0.f, 32.f, 0.5f}) PutFloat(v28, f);
+      Put32(v28, uint32_t(i + 1));
+      Put32(v28, 1);
+      Put32(v28, 0x172);
+      v28.insert(v28.end(), {0, uint8_t(i == 0 ? PortRoomGeo::kShow : PortRoomGeo::kToggle), 0, 0});
+    }
+    Put32(v28, 0);
+    for (float f : {0.f, 0.f, 0.f, 1.f}) PutFloat(v28, f);
+    CHECK_MSG(PortRoomEnv::Parse(std::vector<uint8_t>(v28), file, error), "hint v28 links");
+    CHECK(file.fluidHints.size() == 2 && file.fluidHints[1].priority == 2);
+    CHECK(file.fluidHints[0].links.size() == 1 && file.fluidHints[0].links[0].sender == 0x172 &&
+          file.fluidHints[0].links[0].state == 0 && file.fluidHints[0].links[0].action == PortRoomGeo::kShow);
+    PortRoomEnv::ExposureHints hints;
+    hints.Load(file.fluidHints, false);
+    CHECK_MSG(hints.Pick(2) < 0, "hint links: nothing on before the sender fires");
+    CHECK_MSG(!hints.Drive(file.fluidHints, 0x172, 1), "hint links: another state drives nothing");
+    CHECK_MSG(hints.Drive(file.fluidHints, 0x172, 0) && hints.Pick(2) == 1, "hint links: show and toggle on");
+    CHECK_MSG(hints.Drive(file.fluidHints, 0x172, 0) && hints.Pick(2) == 0, "hint links: toggle off again");
+    v28.resize(v28.size() - 24); // inside the second hint's link
+    CHECK(!PortRoomEnv::Parse(std::move(v28), file, error));
+  }
   CHECK_MSG(PortRoomEnv::Parse(std::vector<uint8_t>(good), file, error), "volumes: parse");
   CHECK_MSG(file.worldVolumes.size() == 2 && PortRoomEnv::SameWorldVolumes(file.worldVolumes, {a, b}),
             "volumes: read back");
@@ -1229,7 +1312,29 @@ void TestExposureAverage() {
 }
 } // namespace
 
+// What the camera's blend overrides a material's cube with (CMaterialMgr::ResolveReflectionProbe):
+// no probe around is a black cube, a lone probe without a cube no override at all.
+void TestCameraCube() {
+  using PortRoomEnv::CameraCube;
+  PortRoomEnv::Probe withCube;
+  withCube.cube = 0;
+  PortRoomEnv::Probe noCube;
+  noCube.cube = PortRoomEnv::kProbeNoCube;
+  PortRoomEnv::Blend blend;
+  CHECK_MSG(PortRoomEnv::CameraCubeState(blend) == CameraCube::Black, "camera cube: empty is black");
+  blend.entries.push_back({1, &withCube, 1.f});
+  CHECK_MSG(PortRoomEnv::CameraCubeState(blend) == CameraCube::Probe, "camera cube: lone probe");
+  blend.entries[0].probe = &noCube;
+  CHECK_MSG(PortRoomEnv::CameraCubeState(blend) == CameraCube::NoOverride, "camera cube: lone probe without a cube");
+  blend.entries[0].probe = nullptr;
+  CHECK_MSG(PortRoomEnv::CameraCubeState(blend) == CameraCube::NoOverride, "camera cube: null result");
+  blend.entries[0].probe = &noCube;
+  blend.entries.push_back({2, &withCube, 0.5f});
+  CHECK_MSG(PortRoomEnv::CameraCubeState(blend) == CameraCube::Probe, "camera cube: two probes");
+}
+
 int main() {
+  TestCameraCube();
   TestWorldVolumes();
   TestTileSection();
   TestBrdfLut();

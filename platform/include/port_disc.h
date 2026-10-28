@@ -22,8 +22,10 @@ bool PortFindDolFont(uint32_t textureId, std::vector<uint8_t>& font, std::vector
 namespace PortDisc {
 
 // The releases the port knows. The game code is always 1.00's; the other
-// discs only supply their data.
-enum class Version { Unknown, Usa100, Usa101, Usa102, Pal };
+// discs only supply their data. Trilogy is Metroid Prime Trilogy (Wii, USA),
+// TrilogyPal its European disc (R3MP01, the same MP1 world data): the MP1/
+// directory, mounted as the root, holds the PAL revision's data.
+enum class Version { Unknown, Usa100, Usa101, Usa102, Pal, Trilogy, TrilogyPal };
 
 // Game id (six characters, not terminated), disc number and revision byte.
 Version Identify(const char* id6, unsigned diskNumber, unsigned revision);
@@ -33,5 +35,11 @@ Version Current();
 const char* Name(Version version);
 // Whether the port accepts this disc: USA 1.00, 1.01, 1.02 and PAL.
 bool IsAccepted(Version version);
+// Whether the data is the PAL revision's (PAL, Trilogy): its string table
+// layouts, FONT v4, 50 Hz jump windows and save layout.
+bool HasPalData(Version version);
+inline bool HasPalData() { return HasPalData(Current()); }
+// Either Metroid Prime Trilogy disc (USA or PAL).
+inline bool IsTrilogy(Version version) { return version == Version::Trilogy || version == Version::TrilogyPal; }
 
 } // namespace PortDisc

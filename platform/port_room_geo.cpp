@@ -4,6 +4,7 @@
 #include "port_strings.h"
 #include "port_bytes.h"
 #include "port_room_geo.h"
+#include "port_room_geometry_handedness.h"
 #include "port_maya_spline.h"
 #include "port_room_sky.h"
 
@@ -11,6 +12,7 @@
 #include "port_log.h"
 #include "port_mods.h"
 #include "port_room_env.h"
+#include "port_visor_mesh.h"
 
 #include "Kyoto/Alloc/CMemory.hpp"
 #include "Kyoto/CResFactory.hpp"
@@ -128,6 +130,9 @@ struct Placed {
   // A platform's slave (0: none): the platform's editor id, where it stood when its area
   // was made, and how far from there it was when `xf` was last moved with it.
   uint32_t platform = 0;
+  bool actorTransform = false;
+  bool actorVisible = true;
+  CTransform4f actorLocal = CTransform4f::Identity();
   CVector3f platformStart = CVector3f::Zero();
   CVector3f dragged = CVector3f::Zero();
   // A DamageableTrigger's linked actor (kFollow; 0: none): the trigger's editor id, whether
@@ -135,6 +140,8 @@ struct Placed {
   uint32_t follow = 0;
   bool following = false;
   float alpha = 1.f;
+  bool modulated = false;
+  CModelFlags modulation = CModelFlags::Normal();
   size_t cluster = SIZE_MAX; // the Cluster it is drawn in, if any
   float scaleSq = 1.f; // the largest of its transform's axes, squared: model distances to world ones
   int level = -1;      // this frame's level of detail (Model::levels), -1 for the model itself
@@ -193,6 +200,14 @@ struct Cluster {
 
 // A script node now (see ScriptNode).
 struct NodeState {
+  struct TargetFlags {
+    size_t item;
+    bool modulated;
+    float alpha;
+    CModelFlags flags;
+  };
+  std::vector<TargetFlags> targetFlags;
+  AlphaModulateState modulation;
   bool active = true;
   bool inside = false; // a camera volume: the camera was in it when last looked at
   uint32_t count = 0;  // a counter's value
@@ -222,6 +237,9 @@ struct Area {
   std::vector< Model > models;
   std::vector< Placed > items;
   std::vector< const Placed* > sorted; // this frame's, with blended surfaces still to draw
+  // This frame's drawn models and where (DrawThermalHot): an item's transform, a cluster's
+  // identity.
+  std::vector< std::pair< const CModel*, const CTransform4f* > > hot;
   // The items grouped by model, the order Draw goes in: a model's instances one after another
   // keep its pipelines and textures bound, which is most of the cost of a draw on a phone.
   std::vector< size_t > drawOrder;
@@ -267,6 +285,11 @@ float sMinPixels = -1.f; // < 0 until MinPixels reads MP_ROOM_GEO_MIN_PX
 bool sMergedDraws = true;
 bool sFrontToBack = true;
 bool sDepthPrepass = false;
+#ifdef __ANDROID__
+bool sOpaquePrepass = false;
+#else
+bool sOpaquePrepass = true;
+#endif
 bool sOffscreenCasters = true;
 // Out-of-view models drawn caster-only, summed over the frame's areas (the last whole frame's in
 // sLastCasterCount), for the console.
@@ -494,28 +517,23 @@ std::vector< uint8_t > MergeCmdl(const std::vector< uint8_t >& source, const CCu
     const Surface& surface = surfaces[s];
     std::vector< uint8_t >& out = lists[s];
     for (size_t copy = 0; copy < copies; ++copy) {
+      const bool mirrored = PortRoomGeometryHandedness::Mirrored(*places[copy]);
+      const PortRoomGeometryHandedness::PrimitiveLayout layout{
+          surface.stride, surface.normalAt,
+          size_t(surface.bases[0]) + copy * positionCount,
+          size_t(surface.bases[1]) + copy * normalCount};
       for (size_t i = 0; i < listSize;) {
         if (list[i] == 0) {
           ++i;
           continue;
         }
         const size_t count = size_t(list[i + 1] << 8 | list[i + 2]);
-        out.insert(out.end(), list + i, list + i + 3);
-        i += 3;
-        for (size_t v = 0; v < count; ++v, i += surface.stride) {
-          const size_t start = out.size();
-          out.insert(out.end(), list + i, list + i + surface.stride);
-          const auto move = [&](size_t at, uint32_t base, size_t perCopy) {
-            const uint32_t index = base + (uint32_t(out[start + at]) << 8 | out[start + at + 1]) + uint32_t(copy * perCopy);
-            out[start + at] = uint8_t(index >> 8);
-            out[start + at + 1] = uint8_t(index);
-            return index < 0x10000;
-          };
-          if (!move(0, surface.bases[0], positionCount) ||
-              (surface.normalAt != SIZE_MAX && !move(surface.normalAt, surface.bases[1], normalCount))) {
-            return {};
-          }
+        const uint8_t opcode = list[i];
+        const std::span<const uint8_t> vertices(list + i + 3, count * surface.stride);
+        if (!PortRoomGeometryHandedness::AppendPrimitive(opcode, count, vertices, layout, mirrored, out)) {
+          return {}; // unsupported primitive or layout: retain the individual draw path
         }
+        i += 3 + count * surface.stride;
       }
     }
     out.resize(aligned(out.size()), 0);
@@ -914,12 +932,25 @@ CTransform4f Pose(const Instance::AnimClip& clip, double seconds) {
                       r[7], r[8], a[6] + (b[6] - a[6]) * w);
 }
 
+void RegisterNodes(Area& area);
+
 // The script objects as the file has them: a counter at 0, the camera in no volume.
 void ResetNodes(Area& area) {
   area.nodes.assign(area.script.nodes.size(), NodeState());
   area.groupShown.clear();
   for (size_t i = 0; i < area.nodes.size(); ++i) {
     area.nodes[i].active = area.script.nodes[i].active;
+  }
+  RegisterNodes(area);
+  // CacheTargetFlags (0xd5f1bc), at InitializedInArea: each modulator owns
+  // a copy of the actual target state, not an inferred Normal endpoint.
+  for (const ScriptEdge& edge : area.script.edges) {
+    if (edge.retail || edge.action != kGroupModulate || edge.from >= area.nodes.size() ||
+        edge.to >= area.groups.size()) continue;
+    for (size_t i : area.groups[edge.to]) {
+      const Placed& item = area.items[i];
+      area.nodes[edge.from].targetFlags.push_back({i, item.modulated, item.alpha, item.modulation});
+    }
   }
 }
 
@@ -1071,6 +1102,12 @@ void Load(uint32_t mrea, Area& area) {
       }
     }
     for (const Link& link : instance.links) {
+      if (link.action == kActorTransform) {
+        item.platform = link.sender;
+        item.actorTransform = true;
+        item.actorLocal = item.xf;
+        continue;
+      }
       if (link.action == kFollow) {
         // GetIdForScript wants the layer bits too.
         item.follow = link.sender;
@@ -1157,8 +1194,50 @@ void Send(Area& area, uint32_t node, uint8_t event, int depth) {
   }
 }
 
+void RegisterNodes(Area& area) {
+  // Registered precedes InitializedInArea's target snapshot. Use the same
+  // Decrement state transition and target writes as AcceptScriptMsg0xd5fdb8.
+  for (size_t i = 0; i < area.nodes.size(); ++i) {
+    const ScriptNode& node = area.script.nodes[i];
+    NodeState& state = area.nodes[i];
+    if (node.kind == kAlphaModulate && state.modulation.Registered(node.AlphaConfig(), state.active)) {
+      sApplyBudget = kApplyBudget;
+      Send(area, uint32_t(i), 3, 0);
+    }
+  }
+}
+
 void Apply(Area& area, const ScriptEdge& edge, int depth) {
   --sApplyBudget;
+  if (edge.action == kGroupModulate) {
+    if (edge.to >= area.groups.size()) {
+      return;
+    }
+    const auto& state = area.nodes[edge.from].modulation;
+    const auto config = area.script.nodes[edge.from].AlphaConfig();
+    for (size_t i : area.groups[edge.to]) {
+      Placed& item = area.items[i];
+      if (state.restore) {
+        for (const auto& cached : area.nodes[edge.from].targetFlags) {
+          if (cached.item != i) continue;
+          item.modulated = cached.modulated;
+          item.alpha = cached.alpha;
+          item.modulation = cached.flags;
+          break;
+        }
+        continue;
+      }
+      item.modulated = true;
+      item.alpha = state.alpha;
+      CModelFlags flags = item.alpha == 1.f ? CModelFlags::Normal() : CModelFlags::AlphaBlended(item.alpha);
+      flags = flags.DepthCompareUpdate((config.flags & 4) != 0, (config.flags & 8) != 0);
+      unsigned extra = flags.GetOtherFlags();
+      if (config.flags & 16) extra |= CModelFlags::kF_DepthGreater;
+      if ((config.flags & 512) && item.alpha != 1.f) extra |= CModelFlags::kF_DrawNormal;
+      item.modulation = CModelFlags(flags, extra);
+    }
+    return;
+  }
   if (edge.action == kGroupNextClip) {
     if (edge.to >= area.groups.size()) {
       return;
@@ -1215,6 +1294,12 @@ void Apply(Area& area, const ScriptEdge& edge, int depth) {
     break;
   }
   if (!node.active) {
+    return;
+  }
+  if (kind.kind == kAlphaModulate && (edge.action == kIncrement || edge.action == kDecrement)) {
+    if (node.modulation.Message(kind.AlphaConfig(), edge.action == kIncrement)) {
+      Send(area, edge.to, 3, depth);
+    }
     return;
   }
   if (edge.action == kFire && kind.kind == kRelay) {
@@ -1343,6 +1428,7 @@ void DrawShadowReceivers(const float lo[3], const float hi[3]) {
         b.GetZ() < lo[2] || a.GetZ() > hi[2]) {
       continue;
     }
+    const PortRoomGeometryHandedness::CullScope cull(PortRoomGeometryHandedness::Mirrored(*r.xf));
     gpRender->SetModelMatrix(*r.xf);
     r.model->DrawUnsortedParts(CModelFlags::Normal());
   }
@@ -1359,6 +1445,7 @@ bool Draw(const CStateManager& mgr, const CGameArea& gameArea, const CFrustumPla
   }
   Area& area = found->second;
   area.sorted.clear();
+  area.hot.clear();
   if (!area.placed) {
     for (Placed& item : area.items) {
       item.xf = gameArea.GetTM() * item.xf;
@@ -1375,6 +1462,15 @@ bool Draw(const CStateManager& mgr, const CGameArea& gameArea, const CFrustumPla
     }
     const CActor* const platform =
         TCastToConstPtr< CActor >(mgr.GetObjectById(mgr.GetIdForScript(TEditorId(item.platform))));
+    if (item.actorTransform) {
+      // A shared transform does not replace this entity's script activation.
+      item.actorVisible = platform != nullptr && platform->GetActive();
+      if (platform != nullptr) {
+        item.xf = item.base = platform->GetTransform() * item.actorLocal;
+        item.bounded = false;
+      }
+      continue;
+    }
     if (platform == nullptr) {
       continue;
     }
@@ -1572,6 +1668,7 @@ bool Draw(const CStateManager& mgr, const CGameArea& gameArea, const CFrustumPla
     // volume instead)
     const float* lightmap;
     const Placed* driven; // its float driver's instance, or null
+    const CModelFlags* flags;
   };
   static std::vector< Visible > visible;
   visible.clear();
@@ -1581,9 +1678,9 @@ bool Draw(const CStateManager& mgr, const CGameArea& gameArea, const CFrustumPla
   static const CTransform4f kIdentity = CTransform4f::Identity();
   const auto add = [&](Model& model, const CModel& drawn, const CTransform4f& xf, CActorLights* lights,
                        const CAABox& bounds, const float* glow = nullptr, const float* lightmap = nullptr,
-                       bool inView = true, const Placed* driven = nullptr) {
+                        bool inView = true, const Placed* driven = nullptr, const CModelFlags* flags = nullptr) {
     (inView ? visible : casters)
-        .push_back({cutout(model), distanceSq(bounds), &drawn, &xf, lights, &bounds, glow, lightmap, driven});
+        .push_back({cutout(model), distanceSq(bounds), &drawn, &xf, lights, &bounds, glow, lightmap, driven, flags});
     if (inView && !visible.back().cutout) {
       sShadowReceivers.push_back({&drawn, &xf, bounds});
     }
@@ -1625,7 +1722,7 @@ bool Draw(const CStateManager& mgr, const CGameArea& gameArea, const CFrustumPla
   for (const size_t index : area.drawOrder) {
     Placed& item = area.items[index];
     Model& model = area.models[item.model];
-    if (item.sky || !model.loaded || model.hidden || !item.shown || item.alpha <= 0.f ||
+    if (item.sky || !model.loaded || model.hidden || !item.shown || !item.actorVisible || item.alpha <= 0.f ||
         (item.cluster != SIZE_MAX && !area.clusters[item.cluster].split)) {
       continue;
     }
@@ -1657,6 +1754,16 @@ bool Draw(const CStateManager& mgr, const CGameArea& gameArea, const CFrustumPla
     if (item.level >= 0) {
       ++sDrawnCoarse;
     }
+    if (item.modulated) {
+      const auto plan = PlanAlphaRender(item.alpha, (item.modulation.GetOtherFlags() & CModelFlags::kF_DrawNormal) != 0);
+      if (plan.unsorted) {
+        add(model, cmodel, item.xf, item.lights.get(), item.bounds, item.glows ? item.glow : nullptr,
+            item.lightmap, true, item.driven ? &item : nullptr, &item.modulation);
+      }
+      if (plan.sortedOpaque || !cmodel.IsDefinitelyOpaque()) area.sorted.push_back(&item);
+      ++sDrawn;
+      continue;
+    }
     if (item.alpha < 1.f) {
       area.sorted.push_back(&item);
       ++sDrawn;
@@ -1676,7 +1783,11 @@ bool Draw(const CStateManager& mgr, const CGameArea& gameArea, const CFrustumPla
       return a.cutout != b.cutout ? b.cutout : a.distanceSq < b.distanceSq;
     });
   }
+  for (const Visible& draw : visible) {
+    area.hot.emplace_back(draw.model, draw.xf);
+  }
   const auto drawOne = [&](const Visible& draw) {
+    const PortRoomGeometryHandedness::CullScope cull(PortRoomGeometryHandedness::Mirrored(*draw.xf));
     if (bakes(draw.lightmap)) {
       const CVector3f centre = draw.bounds->GetCenterPoint();
       const float at[3] = {centre.GetX(), centre.GetY(), centre.GetZ()};
@@ -1692,7 +1803,7 @@ bool Draw(const CStateManager& mgr, const CGameArea& gameArea, const CFrustumPla
     if (draw.driven != nullptr) {
       CCubeModel::PortSetKindParam(draw.driven->driverSlot, draw.driven->driverValue);
     }
-    draw.model->DrawUnsortedParts(CModelFlags::Normal());
+    draw.model->DrawUnsortedParts(draw.flags != nullptr ? *draw.flags : CModelFlags::Normal());
     if (draw.driven != nullptr) {
       CCubeModel::PortSetKindParam(-1, 0.f);
     }
@@ -1701,16 +1812,20 @@ bool Draw(const CStateManager& mgr, const CGameArea& gameArea, const CFrustumPla
     }
   };
   // With the sort, the cut-outs come last, after every opaque model: they go twice, depth only
-  // and then shaded where the depth is equal, so the grass hidden behind grass isn't shaded.
-  const auto firstCutout = sFrontToBack && sDepthPrepass
-                               ? std::find_if(visible.begin(), visible.end(), [](const Visible& v) { return v.cutout; })
-                               : visible.end();
-  std::for_each(visible.begin(), firstCutout, drawOne);
-  if (firstCutout != visible.end()) {
+  // and then shaded where the depth is equal, so the grass hidden behind grass isn't shaded. The
+  // opaque pre-pass does the same with every model.
+  auto firstPrepass = visible.end();
+  if (sOpaquePrepass) {
+    firstPrepass = visible.begin();
+  } else if (sFrontToBack && sDepthPrepass) {
+    firstPrepass = std::find_if(visible.begin(), visible.end(), [](const Visible& v) { return v.cutout; });
+  }
+  std::for_each(visible.begin(), firstPrepass, drawOne);
+  if (firstPrepass != visible.end()) {
     GXPortSetDepthPrepass(1);
-    std::for_each(firstCutout, visible.end(), drawOne);
+    std::for_each(firstPrepass, visible.end(), drawOne);
     GXPortSetDepthPrepass(2);
-    std::for_each(firstCutout, visible.end(), drawOne);
+    std::for_each(firstPrepass, visible.end(), drawOne);
     GXPortSetDepthPrepass(0);
   }
   if (sCasterFrame != CGraphics::GetFrameCounter()) {
@@ -1730,6 +1845,29 @@ bool Draw(const CStateManager& mgr, const CGameArea& gameArea, const CFrustumPla
     PortRoomEnv::ClearVolumeHint();
   }
   return GetMode() == Mode::Replace;
+}
+
+void DrawThermalHot(const CStateManager&, const CGameArea& gameArea, const CFrustumPlanes&) {
+  const auto found = Areas().find(gameArea.GetAreaAssetId());
+  if (found == Areas().end()) {
+    return;
+  }
+  // Remastered's hot pass (RenderPrimaryPass, 0xfb11f0): the meshes with bit 19 and without
+  // 22, unsorted and depth-sorted, through the thermal override at the world's global
+  // (1.0, 0.2509804), taken as they are (no actor data to scale them).
+  CCubeModel::PortSetThermalPass(PortVisorMesh::kTP_Hot);
+  CCubeModel::PortSetThermalOverrideConstants(1.f, 0.2509804f);
+  CGraphics::DisableAllLights();
+  for (const auto& [model, xf] : found->second.hot) {
+    const CCubeModel* const cube = model->GetCubeModel();
+    if (cube == nullptr || !cube->TryLockTextures()) {
+      continue;
+    }
+    gpRender->SetModelMatrix(*xf);
+    cube->PortDrawThermalOverride(nullptr, nullptr, CModelFlags::Normal(), kSS_All);
+  }
+  CCubeModel::PortClearThermalOverride();
+  CCubeModel::PortSetThermalPass(PortVisorMesh::kTP_None);
 }
 
 void AddSorted(const CGameArea& gameArea) {
@@ -1770,6 +1908,7 @@ void DrawSorted(const void* drawable) {
     PortRoomEnv::SetVolumeHint(item.volume, at);
     PortRoomEnv::SetLightmapHint(item.lightmap);
   }
+  const PortRoomGeometryHandedness::CullScope cull(PortRoomGeometryHandedness::Mirrored(item.xf));
   gpRender->SetModelMatrix(item.xf);
   item.lights->ActivateLights();
   const CModelData& data =
@@ -1781,7 +1920,19 @@ void DrawSorted(const void* drawable) {
   if (item.driven) {
     CCubeModel::PortSetKindParam(item.driverSlot, item.driverValue);
   }
-  if (item.alpha < 1.f) {
+  if (item.modulated) {
+    const auto plan = PlanAlphaRender(item.alpha, (item.modulation.GetOtherFlags() & CModelFlags::kF_DrawNormal) != 0);
+    // The retail wrappers interpret DrawNormal as an extra colour draw. The
+    // Remastered state (0xb42074) instead requests a depth-only opaque group.
+    const CModelFlags flags(item.modulation, item.modulation.GetOtherFlags() & ~CModelFlags::kF_DrawNormal);
+    if (plan.depthOpaque) {
+      GXPortSetDepthPrepass(1);
+      cmodel.DrawUnsortedParts(flags.DepthCompareUpdate((flags.GetOtherFlags() & CModelFlags::kF_DepthCompare) != 0, true));
+      GXPortSetDepthPrepass(0);
+    }
+    if (plan.sortedOpaque) cmodel.DrawUnsortedParts(flags);
+    if (plan.visible) cmodel.DrawSortedParts(flags);
+  } else if (item.alpha < 1.f) {
     cmodel.Draw(CModelFlags(CModelFlags::kT_Blend, item.alpha));
   } else {
     cmodel.DrawSortedParts(CModelFlags::Normal());
@@ -1814,7 +1965,7 @@ bool Hides(const CGameArea& gameArea, uint32_t editorId) {
       gpGameState != nullptr ? gpGameState->CurrentWorldState().GetLayerState().GetPtr() : nullptr;
   for (const auto& [id, at] : found->second.hides) {
     const Placed& item = found->second.items[at];
-    if (id == editorId && item.shown &&
+    if (id == editorId && item.shown && item.actorVisible &&
         (item.layer == kEveryLayer || layers == nullptr ||
          layers->IsLayerActive(gameArea.GetAreaId(), item.layer))) {
       return true;
@@ -1912,15 +2063,18 @@ uint32_t sSkyDrawnFor = 0;
 
 bool HidesSky(const CGameArea& gameArea, const CActor& actor) {
   // Retail's sky domes are 314 to 1867 units across (scaled); the next largest actor in a room
-  // with a sky of its own is 139 (Artifact Temple's bird eyes).
+  // with a sky of its own is 139 (Artifact Temple's bird eyes). A dome is that big across two
+  // axes at least; a box long in one only is no dome (Sun Tower's spiked door cover F6EAE8D8
+  // reaches 5000 units down and is 4 across).
   constexpr float kDomeSize = 250.f;
   if (sSkyDrawnFor == 0 || TCastToConstPtr< CScriptActor >(&actor) == nullptr || !actor.HasModelData()) {
     return false;
   }
   const CAABox box = actor.GetModelData()->GetBounds();
   const CVector3f size = box.GetMaxPoint() - box.GetMinPoint();
-  return std::max({std::fabs(size.GetX()), std::fabs(size.GetY()), std::fabs(size.GetZ())}) > kDomeSize &&
-         HasSky(gameArea);
+  float extents[3] = {std::fabs(size.GetX()), std::fabs(size.GetY()), std::fabs(size.GetZ())};
+  std::sort(extents, extents + 3);
+  return extents[1] > kDomeSize && HasSky(gameArea);
 }
 
 void OnScriptState(CStateManager& mgr, uint32_t editorId, int state) {
@@ -2032,6 +2186,12 @@ void Think(CStateManager& mgr, float dt) {
     for (size_t n = 0; n < area.nodes.size(); ++n) {
       const ScriptNode& node = area.script.nodes[n];
       NodeState& state = area.nodes[n];
+      if (node.kind == kAlphaModulate && state.active && state.modulation.enabled) {
+        const bool ended = state.modulation.Tick(node.AlphaConfig(), dt);
+        sApplyBudget = kApplyBudget;
+        Send(area, uint32_t(n), 3, 0);
+        if (ended) Send(area, uint32_t(n), 2, 0);
+      }
       // An inactive trigger does not think (CScriptTrigger::Think), so it sees nothing.
       if (node.kind != kCameraVolume || !state.active) {
         continue;
@@ -2119,7 +2279,6 @@ int GroupShown(uint32_t mrea, uint32_t group) {
 
 void ResetScriptState() {
   for (auto& [mrea, area] : Areas()) {
-    ResetNodes(area);
     area.animTime = 0.;
     area.clock = 0.;
     area.pending.clear();
@@ -2130,11 +2289,14 @@ void ResetScriptState() {
       item.clipStart = 0.;
       item.following = false;
       item.alpha = 1.f;
+      item.modulated = false;
+      item.modulation = CModelFlags::Normal();
       if (item.driven) {
         item.startAt = 1e300;
         item.driverValue = item.driverSpline.Eval(item.driverSpline.FirstTime());
       }
     }
+    ResetNodes(area);
   }
 }
 
@@ -2436,6 +2598,10 @@ bool FrontToBack() { return sFrontToBack; }
 void SetDepthPrepass(bool on) { sDepthPrepass = on; }
 
 bool DepthPrepass() { return sDepthPrepass; }
+
+void SetOpaquePrepass(bool on) { sOpaquePrepass = on; }
+
+bool OpaquePrepass() { return sOpaquePrepass; }
 
 void SetMode(Mode mode) {
   sMode = int(mode);

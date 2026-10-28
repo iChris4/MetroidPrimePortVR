@@ -3,25 +3,25 @@
 Written by `tools/gen_entity_schema.py`; do not edit. The table itself is
 `platform/generated/port_entity_schema.inc`, its types `platform/include/port_entity_schema.h`.
 
-159 classes (CEntity and every subclass a header defines), 3384 own fields; 2641 of them plain data (`statedump` writes those under `fields` when the object's `kTagFields` block saves them, else under `fields_other`).
+159 classes (CEntity and every subclass a header defines), 3420 own fields; 2664 of them plain data (`statedump` writes those under `fields` when the object's `kTagFields` block saves them, else under `fields_other`).
 
 | kind | fields |
 |---|---|
-| bool | 111 |
-| int | 514 |
-| float | 951 |
-| bitfield | 641 |
-| math | 271 |
-| uid | 153 |
-| pod | 199 |
-| pointer | 1 |
-| smart_ptr | 205 |
-| container | 185 |
+| bool | 114 |
+| int | 522 |
+| float | 956 |
+| bitfield | 642 |
+| math | 272 |
+| uid | 158 |
+| pod | 203 |
+| pointer | 2 |
+| smart_ptr | 209 |
+| container | 187 |
 | state_machine | 1 |
 | body_controller | 1 |
 | anim_data | 14 |
 | path_search | 19 |
-| other | 118 |
+| other | 120 |
 
 ## `other`: types without a codec yet (by field count)
 
@@ -43,6 +43,7 @@ Written by `tools/gen_entity_schema.py`; do not edit. The table itself is
 - 1 `SPositionHistory`
 - 1 `CFlaahgraData`
 - 1 `CFlameWarp`
+- 1 `CFlameThrower::PortCollisionWarp`
 - 1 `CFlyingPirate::CFlyingPirateData`
 - 1 `CProjectileWeapon`
 - 1 `CMarkerGrid`
@@ -63,6 +64,7 @@ Written by `tools/gen_entity_schema.py`; do not edit. The table itself is
 - 1 `TReservedAverage<float, 8>`
 - 1 `std::vector<SPortExternalVar>`
 - 1 `TAverage<float>`
+- 1 `PortQueenBarrier::State`
 - 1 `CVisorFlare`
 - 1 `CSpacePirate::CSpacePirateData`
 - 1 `CThardusSomething[4]`
@@ -70,11 +72,11 @@ Written by `tools/gen_entity_schema.py`; do not edit. The table itself is
 
 ## `pod`: trivially copyable, pointer-free structs and arrays (raw bytes)
 
-`CDamageInfo` 42, `CColor` 25, `CHealthInfo` 19, `CDamageVulnerability` 19, `CSegId` 16, `CSpindleCameraInterpolant` 15, `CCameraSpring` 6, `CSteeringBehaviors` 4, `TAreaId` 3, `CMaterialList` 3, `CChozoGhost::CBehaveChance` 3, `CAnimRes` 3, `CRandom16` 3, `TEditorId` 2, `CMaterialFilter` 2, `int[4]` 2, `CGrappleParameters` 2, `CModelFlags` 1, `CBabygothData` 1, `uchar[7]` 1, `CBouncyGrenadeData` 1, `CLight` 1, `CEPGrenadeLauncherData` 1, `CIceSheegothData` 1, `CFlameInfo` 1, `CPatternedInfo` 1, `CMetroidBetaData` 1, `CMetroidPrimeIceAttack` 1, `float[4]` 1, `CMotionState` 1, `CPlayer::CVisorSteam` 1, `PortRemasteredGround::RetainedResult` 1, `PortRemasteredGroundRider::RiderController` 1, `CBeamInfo` 1, `CScriptGunTurretData` 1, `CHUDMemoParms` 1, `EffectReverbHiInfo` 1, `EffectChorusInfo` 1, `EffectReverbStdInfo` 1, `EffectDelayInfo` 1, `CAnimationParameters` 1, `CShockWaveInfo` 1, `uchar[4]` 1, `CIkChain` 1, `CTeamAiMgr::CUnknown` 1, `CCollisionSurface` 1, `u16[2]` 1
+`CDamageInfo` 42, `CColor` 25, `CHealthInfo` 19, `CDamageVulnerability` 19, `CSegId` 16, `CSpindleCameraInterpolant` 15, `CCameraSpring` 6, `CSteeringBehaviors` 4, `TAreaId` 3, `CMaterialList` 3, `CChozoGhost::CBehaveChance` 3, `CAnimRes` 3, `CRandom16` 3, `TEditorId` 2, `CMaterialFilter` 2, `int[4]` 2, `CAssetId[4]` 2, `CPlayer::SPortVisorSteamShip1Params` 2, `CGrappleParameters` 2, `CModelFlags` 1, `CBabygothData` 1, `uchar[7]` 1, `CBouncyGrenadeData` 1, `CLight` 1, `CEPGrenadeLauncherData` 1, `CIceSheegothData` 1, `CFlameInfo` 1, `CPatternedInfo` 1, `CMetroidBetaData` 1, `CMetroidPrimeIceAttack` 1, `float[4]` 1, `CMotionState` 1, `CPlayer::CVisorSteam` 1, `PortRemasteredGround::RetainedResult` 1, `PortRemasteredGroundRider::RiderController` 1, `CBeamInfo` 1, `CScriptGunTurretData` 1, `CHUDMemoParms` 1, `EffectReverbHiInfo` 1, `EffectChorusInfo` 1, `EffectReverbStdInfo` 1, `EffectDelayInfo` 1, `CAnimationParameters` 1, `CShockWaveInfo` 1, `uchar[4]` 1, `CIkChain` 1, `CTeamAiMgr::CUnknown` 1, `CCollisionSurface` 1, `u16[2]` 1
 
 ## `smart_ptr` / `container` templates
 
-`rstl::single_ptr` 106, `rstl::reserved_vector` 79, `rstl::vector` 59, `TLockedToken` 48, `rstl::optional_object` 38, `rstl::auto_ptr` 22, `TToken` 21, `TCachedToken` 6, `rstl::basic_string` 5, `rstl::list` 4, `rstl::ncrc_ptr` 2
+`rstl::single_ptr` 110, `rstl::reserved_vector` 79, `rstl::vector` 59, `TLockedToken` 48, `rstl::optional_object` 40, `rstl::auto_ptr` 22, `TToken` 21, `TCachedToken` 6, `rstl::basic_string` 5, `rstl::list` 4, `rstl::ncrc_ptr` 2
 
 ## Not in the table
 

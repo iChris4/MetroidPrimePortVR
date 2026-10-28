@@ -1,4 +1,7 @@
 #include "MetroidPrime/ScriptObjects/CScriptPlatform.hpp"
+#ifdef TARGET_PC
+#include "MetroidPrime/ScriptObjects/CScriptSpecialFunction.hpp"
+#endif
 
 #include "MetaRender/CCubeRenderer.hpp"
 #include "MetroidPrime/CActorModelParticles.hpp"
@@ -703,7 +706,21 @@ CAABox CScriptPlatform::GetSortingBounds(const CStateManager& mgr) const {
   return CActor::GetSortingBounds(mgr);
 }
 
+#ifdef TARGET_PC
+void CScriptPlatform::AddToRenderer(const CFrustumPlanes& planes, const CStateManager& mgr) const {
+  const CScriptSpecialFunction* owner =
+      TCastToConstPtr<CScriptSpecialFunction>(mgr.GetObjectById(xPortBarrierController));
+  if (owner && owner->PortBarrierCovers(GetUniqueId(), mgr)) return;
+  CPhysicsActor::AddToRenderer(planes, mgr);
+}
+#endif
+
 void CScriptPlatform::Render(const CStateManager& mgr) const {
+#ifdef TARGET_PC
+  const CScriptSpecialFunction* owner =
+      TCastToConstPtr<CScriptSpecialFunction>(mgr.GetObjectById(xPortBarrierController));
+  if (owner && owner->PortBarrierCovers(GetUniqueId(), mgr)) return;
+#endif
   const bool xray = mgr.GetPlayerState()->GetActiveVisor(mgr) == CPlayerState::kPV_XRay;
   if (xray && !x356_31_xrayFog) {
     gpRender->SetWorldFog(kRFM_None, 0.f, 1.f, CColor::Black());

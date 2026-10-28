@@ -36,10 +36,17 @@
 
 #ifdef TARGET_PC
 #include "port_debug.h"
+#include "port_disc.h"
 #include "port_room_env.h"
 
 #include "Kyoto/Graphics/CCubeMaterial.hpp"
 #include "Kyoto/Graphics/CCubeModel.hpp"
+
+// Port: Trilogy's scan lens clock (CPlayerVisor +0x660): reset as the scan visor comes in,
+// advanced by UpdateScanWindow (fn_801A5460); TriDrawScanLens animates by it.
+#ifdef TARGET_PC
+static float sPortTriLensTime = 0.f;
+#endif
 
 // Port: the Remastered scan indicators (kb func/CPlayerVisorMP1-DrawScanObjectIndicators) apply
 // when the scan icon's CMDL is the converted one (the Remastered models mod puts
@@ -199,6 +206,9 @@ void CPlayerVisor::BeginTransitionIn(const CStateManager& mgr) {
                           CSfxManager::kAllAreas);
     x64_scanDim.SetFilter(CCameraFilterPass::kFT_Multiply, CCameraFilterPass::kFS_Fullscreen, 0.f,
                           CColor::White(), kInvalidAssetId);
+#ifdef TARGET_PC
+    sPortTriLensTime = 0.f;
+#endif
     break;
   case CPlayerState::kPV_Thermal:
     CSfxManager::SfxStart(0x567, x24_visorSfxVol, 64, false, CSfxManager::kMedPriority, false,
@@ -442,6 +452,8 @@ float CPlayerVisor::PortWindowShapeY() {
 // The zoomed copy (sharp scan window), keyed apart from the spare buffer; valid for the frame
 // that made it, until DrawScanEffect takes it.
 static u8 sPortScanZoomCopy[32];
+// The whole-view copy that clears the EFB after the zoomed pass; never drawn.
+static u8 sPortScanZoomClear[32];
 static bool sPortScanZoomCopied = false;
 static int sPortScanZoomWidth = 0;
 static int sPortScanZoomHeight = 0;
@@ -484,12 +496,18 @@ void CPlayerVisor::PortCopyScanZoom(int width, int height, float zoom) {
   GXSetTexCopySrc(vpLeft + (vpWidth - zoomWidth) / 2, vpTop + (vpHeight - zoomHeight) / 2,
                   zoomWidth, zoomHeight);
   GXSetTexCopyDst(zoomWidth, zoomHeight, GX_TF_RGB565, GX_FALSE);
-  // A clearing copy clears the whole EFB on aurora (the next pass's load op), not only the
-  // copied rectangle as on the GameCube: the frame's world then draws on a clean EFB.
+  // A clearing copy clears only the rectangle it copies, as on the GameCube: a second one over
+  // the whole view clears the rest, so the frame's world draws on a clean EFB.
   CGX::SetZMode(true, GX_LEQUAL, true);
   GXSetColorUpdate(GX_TRUE);
   GXSetAlphaUpdate(GX_TRUE);
   GXCopyTex(sPortScanZoomCopy, GX_TRUE);
+  GXPixModeSync();
+  const int clearWidth = (vpWidth + 1) & ~1;
+  const int clearHeight = (vpHeight + 1) & ~1;
+  GXSetTexCopySrc(vpLeft, vpTop, clearWidth, clearHeight);
+  GXSetTexCopyDst(clearWidth, clearHeight, GX_TF_RGB565, GX_FALSE);
+  GXCopyTex(sPortScanZoomClear, GX_TRUE);
   GXPixModeSync();
   sPortScanZoomWidth = zoomWidth;
   sPortScanZoomHeight = zoomHeight;
@@ -497,6 +515,16 @@ void CPlayerVisor::PortCopyScanZoom(int width, int height, float zoom) {
 }
 
 void CPlayerVisor::PortDropScanZoom() { sPortScanZoomCopied = false; }
+
+float CPlayerVisor::PortScanWindowOpen() const {
+  const float scanSidesStart = gpTweakGui->GetScanSidesStartTime();
+  const float scanSidesDuration = gpTweakGui->GetScanSidesDuration();
+  if (x34_nextState == kSWS_Scan)
+    return 1.f - (x3c_windowInterpTimer < scanSidesDuration
+                      ? 0.f
+                      : (x3c_windowInterpTimer - scanSidesDuration) / scanSidesStart);
+  return x3c_windowInterpTimer > scanSidesStart ? 1.f : x3c_windowInterpTimer / scanSidesStart;
+}
 
 void CPlayerVisor::PortDrawScanOverlay(const CStateManager& mgr,
                                        const CTargetingManager* const tgtMgr) const {
@@ -509,6 +537,152 @@ void CPlayerVisor::PortDrawScanOverlay(const CStateManager& mgr,
     CGraphics::SetDepthRange(0.125f + FLT_EPSILON, 0.125f + FLT_EPSILON);
     tgtMgr->Draw(mgr, false);
     CGraphics::SetDepthRange(0.015625f, 0.03125f);
+  }
+}
+#endif
+
+#ifdef TARGET_PC
+// Trilogy's scan lens (drawn by its DrawScanEffect, fn_801A3428, in place of the scan dim):
+// vignette rings and a flickering outline round the window that morph from a circle into the
+// window's square as it opens. Sizes are Wii view pixels, scaled here as the frame's 17 is.
+
+// fn_801A3314: the direction at `angle`, morphed toward the square of half-size `square`.
+static CVector2f TriLensDir(float angle, float morph, float square) {
+  const float x = CMath::FastCosR(angle);
+  const float y = CMath::FastSinR(angle);
+  const float s = square / rstl::max_val(fabsf(x), fabsf(y));
+  return CVector2f(x * (1.f - morph) + x * s * morph, y * (1.f - morph) + y * s * morph);
+}
+
+struct STriLensDir {
+  float x;
+  float y;
+};
+
+static void TriLensVertex(float cx, float cy, float r, const CVector2f& v) {
+  gpRender->PrimVertex(CVector3f(cx + r * v.GetX(), 0.f, cy + r * v.GetY()));
+}
+
+// fn_801A3148: a band between two radii over degrees start..end, turned by rot.
+static void TriLensArc(int start, int end, int rot, const CColor& color, const STriLensDir* table,
+                       float cx, float cy, float rIn, float rOut) {
+  gpRender->BeginTriangleStrip((end - start + 360) % 360 + 2);
+  gpRender->PrimColor(color);
+  for (int i = rot + start; i <= rot + end; i += 2) {
+    const CVector2f v(table[i % 360].x, table[i % 360].y);
+    TriLensVertex(cx, cy, rIn, v);
+    TriLensVertex(cx, cy, rOut, v);
+  }
+  gpRender->EndPrimitive();
+}
+
+// t: the visor transition; open: the window's open factor (ScanWindowCopySize's t); cx, cy: the
+// lens centre in the -4096..4096 ortho; px: view pixels per Wii pixel.
+static void TriDrawScanLens(float t, float open, float cx, float cy, float px) {
+  // lbl_804C3528, lbl_80474C58
+  static const float kRingRgb[3][3] = {{0.f, 0.f, 0.f}, {0.f, 0.f, 0.f}, {0.f, 0.2f, 0.3f}};
+  static const float kRingClosed[3] = {100.f, 150.f, 400.f};
+  static const float kRingOpen[3] = {115.f, 120.f, 400.f};
+  static const float kRingAlpha[3] = {0.f, 0.67f, 0.f};
+  static const float kNoiseSpeed[4] = {1.f, -1.5f, 2.5f, -3.5f};
+  static const float kNoiseFreq[4] = {4.f, 6.f, 10.f, 14.f};
+  static const float kNoisePhase[4] = {0.f, 5.f, 7.f, 6.f};
+  const float time = sPortTriLensTime;
+  float radius[3];
+  for (int i = 0; i < 3; ++i)
+    radius[i] = px * ((1.f - open) * kRingClosed[i] + open * kRingOpen[i]);
+  gpRender->SetDepthReadWrite(false, false);
+  gpRender->SetBlendMode_AlphaBlended();
+  for (int ring = 0; ring < 2; ++ring) {
+    const float* rgbIn = kRingRgb[ring];
+    const float* rgbOut = kRingRgb[ring + 1];
+    const CColor inner(rgbIn[0], rgbIn[1], rgbIn[2], t * kRingAlpha[ring]);
+    const CColor outer(rgbOut[0], rgbOut[1], rgbOut[2], t * kRingAlpha[ring + 1]);
+    gpRender->BeginTriangleStrip(74);
+    for (int i = 0; i <= 36; ++i) {
+      const CVector2f d = TriLensDir(static_cast< float >(i % 36) * 0.17453292f, open, 0.72f);
+      gpRender->PrimColor(inner);
+      TriLensVertex(cx, cy, radius[ring], d);
+      gpRender->PrimColor(outer);
+      // The outer ring's rim is about the view's centre, not the lens's (as shipped).
+      if (ring == 0)
+        TriLensVertex(cx, cy, radius[1], d);
+      else
+        TriLensVertex(0.f, 0.f, radius[2], d);
+    }
+    gpRender->EndPrimitive();
+  }
+  const CColor arcColor(0.5f, 0.8f, 1.f, 0.3f * t * (1.f - open));
+  const CColor glowColor(0.2f, 0.2f, 0.2f, 0.1f * t);
+  const CColor clearColor(0.f, 0.f, 0.f, 0.f);
+  const float shadowRadius = px * 400.f * ((1.f - open) + open * 1.3888888f);
+  STriLensDir table[360];
+  bool on[360];
+  for (int deg = 0; deg < 360; ++deg) {
+    const float angle = static_cast< float >(deg) * 0.017453292f;
+    const CVector2f dir = TriLensDir(angle, open, 0.72f);
+    table[deg].x = dir.GetX();
+    table[deg].y = dir.GetY();
+    float noise = 0.f;
+    for (int i = 0; i < 4; ++i)
+      noise += CMath::FastSinR(kNoisePhase[i] + time * kNoiseSpeed[i] + kNoiseFreq[i] * angle);
+    on[deg] = noise > 0.5f;
+  }
+  const int rot1 = static_cast< int >(30.f * time) % 360;
+  TriLensArc(0, 160, rot1, arcColor, table, cx, cy, px * 115.f, px * 120.f);
+  TriLensArc(200, 246, rot1, arcColor, table, cx, cy, px * 115.f, px * 120.f);
+  TriLensArc(250, 350, rot1, arcColor, table, cx, cy, px * 115.f, px * 120.f);
+  const CColor& active = gpTweakGuiColors->GetScanFrameActiveColor();
+  const CColor activeArc = active.WithAlphaOf(active.GetAlpha() * (t * (1.f - open)));
+  const int rot2 = 360 - static_cast< int >(45.f * time) % 360;
+  TriLensArc(100, 270, rot2, activeArc, table, cx, cy, px * 110.f, px * 112.f);
+  TriLensArc(290, 440, rot2, activeArc, table, cx, cy, px * 110.f, px * 112.f);
+  // The outline: each run of lit degrees is a band with a glow out to the shadow's radius and
+  // a tick at its middle as long as the run.
+  const float rIn = px * 122.f;
+  const float rOut = px * 124.f;
+  for (int deg = 0; deg < 360; ++deg) {
+    if (on[(deg + 359) % 360] || !on[deg])
+      continue;
+    int n = 1;
+    while (on[(deg + n) % 360] && n < 360)
+      ++n;
+    const int count = (n / 2 + 1) * 2;
+    gpRender->BeginTriangleStrip(count);
+    gpRender->PrimColor(arcColor);
+    for (int j = 0; j <= n; j += 2) {
+      const CVector2f v(table[(deg + j) % 360].x, table[(deg + j) % 360].y);
+      TriLensVertex(cx, cy, rIn, v);
+      TriLensVertex(cx, cy, rOut, v);
+    }
+    gpRender->EndPrimitive();
+    gpRender->BeginTriangleStrip(count);
+    for (int j = 0; j <= n; j += 2) {
+      const CVector2f v(table[(deg + j) % 360].x, table[(deg + j) % 360].y);
+      gpRender->PrimColor(glowColor);
+      TriLensVertex(cx, cy, rOut, v);
+      gpRender->PrimColor(clearColor);
+      TriLensVertex(0.f, 0.f, shadowRadius, v);
+    }
+    gpRender->EndPrimitive();
+    const float vx = table[(deg + n / 2) % 360].x;
+    const float vy = table[(deg + n / 2) % 360].y;
+    const float baseX = cx + rOut * vx;
+    const float baseY = cy + rOut * vy;
+    const float tipR = rOut + px * static_cast< float >(n);
+    const float tipX = cx + tipR * vx;
+    const float tipY = cy + tipR * vy;
+    // Across the band (3 either side at the base, 1 at the tip), set 0.5 inside it.
+    const float baseW = px * 3.f;
+    const float tipW = px * 1.f;
+    const float in = px * -0.5f;
+    gpRender->BeginTriangleStrip(4);
+    gpRender->PrimColor(arcColor);
+    gpRender->PrimVertex(CVector3f(baseX - baseW * vy + in * vx, 0.f, baseY + baseW * vx + in * vy));
+    gpRender->PrimVertex(CVector3f(baseX + baseW * vy + in * vx, 0.f, baseY - baseW * vx + in * vy));
+    gpRender->PrimVertex(CVector3f(tipX - tipW * vy, 0.f, tipY + tipW * vx));
+    gpRender->PrimVertex(CVector3f(tipX + tipW * vy, 0.f, tipY - tipW * vx));
+    gpRender->EndPrimitive();
   }
 }
 #endif
@@ -545,13 +719,20 @@ void CPlayerVisor::DrawScanEffect(const CStateManager& mgr,
   const float fit = ScanWindowFit(vpWidth, vpHeight);
   void* buffer = CGraphics::GetDolphinSpareBuffer();
 #ifdef TARGET_PC
+  // Trilogy copies and draws the window only while it is open, at the open factor's alpha.
+  const bool trilogy = PortDisc::IsTrilogy(PortDisc::Current());
+  const float windowOpen = PortScanWindowOpen();
+  const bool windowOn = !trilogy || !(fabsf(windowOpen) < 0.00001f);
+  const float windowAlpha = trilogy ? windowOpen * transFactor : transFactor;
   float pointerX = 0.f;
   float pointerY = 0.f;
   const bool portPointer = PortScanWindowPointer(pointerX, pointerY);
   // The window's centre in pixels from the view's centre (+y down).
   const float portShiftX = pointerX * 0.5f * static_cast< float >(vpWidth);
   const float portShiftY = pointerY * 0.5f * static_cast< float >(vpHeight);
-  if (sPortScanZoomCopied) {
+  if (!windowOn) {
+    sPortScanZoomCopied = false;
+  } else if (sPortScanZoomCopied) {
     sPortScanZoomCopied = false;
     buffer = sPortScanZoomCopy;
     width = sPortScanZoomWidth;
@@ -578,15 +759,23 @@ void CPlayerVisor::DrawScanEffect(const CStateManager& mgr,
     GXPixModeSync();
   }
 #ifdef TARGET_PC
-  // PortVr: the dim tints the whole view, not just the plane.
   AuroraSetStereoDrawRoute(AURORA_STEREO_ROUTE_FULLSCREEN);
+  if (trilogy) {
+    // The lens centres on the pointer, as the window does.
+    gpRender->SetViewportOrtho(true, -4096.f, 4096.f);
+    TriDrawScanLens(transFactor, windowOpen, portPointer ? portShiftX : 0.f,
+                    portPointer ? -portShiftY : 0.f, fit);
+  } else
 #endif
-  x64_scanDim.Draw();
+    x64_scanDim.Draw();
+
 #ifdef TARGET_PC
   AuroraSetStereoDrawRoute(AURORA_STEREO_ROUTE_HEAD_LOCKED_2D);
 #endif
   gpRender->SetViewportOrtho(true, -1.f, 1.f);
 #ifdef TARGET_PC
+  if (!windowOn)
+    return;
   // Moving the view the other way draws the window and its frame around the pointer.
   if (portPointer)
     CGraphics::SetViewPointMatrix(CTransform4f::Translate(-portShiftX, 0.f, portShiftY));
@@ -606,14 +795,22 @@ void CPlayerVisor::DrawScanEffect(const CStateManager& mgr,
   gpRender->SetModelMatrix(mm);
   CGraphics::LoadDolphinSpareTexture(width, height, GX_TF_RGB565, buffer, GX_TEXMAP0);
   GXInvalidateTexAll();
+#ifdef TARGET_PC
+  const CColor paneColor = CColor::White().WithAlphaOf(windowAlpha);
+#else
   const CColor paneColor = CColor::White().WithAlphaOf(transFactor);
+#endif
   if (const CModel* pane = x108_newScanPane.GetObject())
     pane->Draw(CModelFlags::AlphaBlended(paneColor).DontLoadTextures());
   CGraphics::SetCullMode(kCM_None);
   const CColor& inactiveColor = gpTweakGuiColors->GetScanFrameInactiveColor();
   const CColor& activeColor = gpTweakGuiColors->GetScanFrameActiveColor();
   CColor frameColor = CColor::Lerp(inactiveColor, activeColor, x54c_scanFrameColorInterp);
+#ifdef TARGET_PC
+  frameColor = frameColor.WithAlphaOf(windowAlpha);
+#else
   frameColor = frameColor.WithAlphaOf(transFactor);
+#endif
   const CColor impulseColor =
       CColor::Modulate(gpTweakGuiColors->xd0_scanFrameImpulseColor,
                        CColor(x550_scanFrameColorImpulseInterp, x550_scanFrameColorImpulseInterp,
@@ -744,6 +941,9 @@ CPlayerVisor::GetDesiredScanWindowState(const CStateManager& mgr) const {
 
 void CPlayerVisor::UpdateScanWindow(float dt, const CStateManager& mgr) {
   UpdateScanObjectIndicators(mgr, dt);
+#ifdef TARGET_PC
+  sPortTriLensTime += dt;
+#endif
   float scanTimer = mgr.GetPlayer()->GetScanTimer();
   if (mgr.GetPlayer()->GetPlayerScanState() == CPlayer::kSS_Scanning) {
     if (!x60_scanningLoopSfx)

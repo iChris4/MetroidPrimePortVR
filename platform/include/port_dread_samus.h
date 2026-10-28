@@ -51,7 +51,43 @@ inline constexpr Target kTargets[] = {
     {"samusvaria", "game20", 0xA496DA02, 0xE449874A, {0x8F66289C, 0}},
     {"samusgravity", "game20", 0xA496DA02, 0x57489AD3, {0x3C673505, 0}},
     {"samushyper", "game20", 0xA496DA02, 0x891E00FD, {0xE231AF2B, 0}},
+    // The pause screen's doll (ANCS_ItemScreenSamus 72DCEC67, NoARAM.pak): each suit's first
+    // part on CINF F76E70A6. The doll then leaves out the suit's other parts, boots, beam and visor.
+    {"samuspower", "doll49", 0xF76E70A6, 0xCC25E002, {0xA70A4FD4, 0}},
+    {"samusvaria", "doll49", 0xF76E70A6, 0xA602C954, {0xCD2D6682, 0}},
+    {"samusgravity", "doll49", 0xF76E70A6, 0x11A5BC8A, {0x7A8A135C, 0}},
+    {"samushyper", "doll49", 0xF76E70A6, 0x5644E7A1, {0x3D6B4877, 0}},
 };
+
+// The first-person cannons (FirstPersonCannon, port_dread_samus_mod.h): each cutscene body's cannon
+// meshes in the gun model's axes, scaled to its length. That is CGunWeapon's gun CMDL 19AE626C on
+// CINF 46ED31E0: the barrel up +Y to the LBEAM joint, one material set per beam. The cannon's tip
+// is the model origin, so CGunWeapon draws it on the live LBEAM locator, where the shots spawn.
+inline constexpr uint32_t kGunModel = 0x19AE626C;
+inline constexpr uint32_t kGunCinf = 0x46ED31E0;
+inline constexpr uint32_t kBeams = 5;
+struct CannonTarget {
+  const char* suit;  // a cine50 row of kTargets
+  int primeSuit;     // CPlayerState::EPlayerSuit, the kSuitArms index
+};
+// The Phazon Suit takes the Gravity Suit's cannon: samushyper's is the Metroid-shell arm, which
+// reads as part of the suit rather than a gun.
+inline constexpr CannonTarget kCannonTargets[] = {
+    {"samuspower", 0}, {"samusgravity", 1}, {"samusvaria", 2}, {"samusgravity", 3}};
+
+// The meshes of `body` (a cine50 re-skin in bind pose) whose name holds "cannon" (any case), plus
+// the body's right-arm skin (triangles weighted at least half to R_shoulder's subtree), turned so
+// the barrel (the cannon's longest principal axis, away from R_elbow) runs +Y with the body's up
+// on +X (the bind pose is palm down; the gun is held thumb up), and scaled so the cannon spans the retail gun's length: its tip (the mean of the vertices
+// within 2 cm of the far end) spans `muzzle` to Y = `backY` and lands on the origin. False when
+// there are no cannon meshes.
+bool FitCannon(const PortDread::ReskinResult& body, const float muzzle[3], float backY, PortDread::ReskinResult& out,
+               float& scale, std::string* error);
+// The texture of material 0 in every material set of a retail CMDL, in set order.
+bool FirstTextureOfSets(const std::vector<uint8_t>& cmdl, std::vector<uint32_t>& out, std::string* error);
+// A beam's colour from its gun texture: the mean of the texels weighted by max(rgb)^4 (the glow,
+// not the dark metal), its largest channel scaled to 1.
+bool BeamTint(const PortRemastered::Image& image, float out[3]);
 
 struct Io {
   // A file of the Dread RomFS by its path ("packs/players/samus.pkg", "textures/actors/...").

@@ -8,6 +8,7 @@
 #include "Kyoto/Streams/CMemoryInStream.hpp"
 #include "MetroidPrime/CStateManager.hpp"
 #include "MetroidPrime/ScriptObjects/CScriptEffect.hpp"
+#include "MetroidPrime/ScriptObjects/CScriptSpecialFunction.hpp"
 #include "MetroidPrime/TCastTo.hpp"
 
 #include <algorithm>
@@ -27,6 +28,7 @@ File sFile;
 std::set<uint32_t> sSkips;
 std::map<uint32_t, std::vector<Spawned>> sSpawned;  // by MREA
 std::map<uint32_t, size_t> sSkipped;                // by MREA
+size_t sPatched = 0;                                // property patches applied, this area
 
 }  // namespace
 
@@ -35,6 +37,7 @@ bool Enabled() { return port::EnvFlag("MP_REMASTERED_EFFECT_ACTORS", true); }
 void BeginArea(uint32_t mrea) {
   sLoading = true;
   sMrea = mrea;
+  sPatched = 0;
   sFile = {};
   sSkips.clear();
   sSpawned.erase(mrea);
@@ -60,6 +63,10 @@ void BeginArea(uint32_t mrea) {
 }
 
 void EndArea() {
+  if (sLoading && !sFile.patches.empty()) {
+    PortLog::Write("room effects: %08X: %zu of %zu particle property patch(es) applied\n", sMrea, sPatched,
+                   sFile.patches.size());
+  }
   sLoading = false;
   sFile = {};
   sSkips.clear();
@@ -83,6 +90,54 @@ const Override* FindOverride(uint32_t eid) {
     }
   }
   return nullptr;
+}
+
+const PatternedEffect* FindPatternedEffect(uint32_t eid, uint32_t slot) {
+  if (!sLoading) {
+    return nullptr;
+  }
+  for (const PatternedEffect& p : sFile.patterned) {
+    if (p.slot == slot && (p.id & 0x3FFFFFF) == (eid & 0x3FFFFFF)) {
+      return &p;
+    }
+  }
+  return nullptr;
+}
+
+const Steam* FindSteam(uint32_t eid) {
+  if (!sLoading) {
+    return nullptr;
+  }
+  for (const Steam& s : sFile.steams) {
+    if ((s.id & 0x3FFFFFF) == (eid & 0x3FFFFFF)) {
+      return &s;
+    }
+  }
+  return nullptr;
+}
+
+const ActorSlotEffect* FindActorSlotEffect(uint32_t eid, uint32_t slot) {
+  if (!sLoading) {
+    return nullptr;
+  }
+  for (const ActorSlotEffect& a : sFile.actorSlots) {
+    if (a.slot == slot && (a.id & 0x3FFFFFF) == (eid & 0x3FFFFFF)) {
+      return &a;
+    }
+  }
+  return nullptr;
+}
+
+bool HasPatches(uint32_t eid) {
+  return sLoading && std::any_of(sFile.patches.begin(), sFile.patches.end(), [eid](const PropertyPatch& p) {
+           return (p.id & 0x3FFFFFF) == (eid & 0x3FFFFFF);
+         });
+}
+
+size_t ApplyPatches(uint32_t eid, uint8_t* props, size_t size, bool (*canBuild)(uint32_t part)) {
+  const size_t n = sLoading ? ApplyPatches(sFile.patches, eid, props, size, canBuild) : 0;
+  sPatched += n;
+  return n;
 }
 
 std::vector< SPortExternalVar > ExternalVars(const std::vector< Variable >& vars) {
@@ -129,6 +184,20 @@ void LoadLayer(CStateManager& mgr, int area, uint32_t layer, std::vector<uint32_
       }
       sSpawned[sMrea].push_back({sMrea, made.first.value, made.second.value, info.part, info.name,
                                  i < l.vars.size() ? l.vars[i].size() : 0});
+    }
+  }
+  for (const BarrierGroup& group : sFile.barriers) {
+    if ((group.controller >> 26) != layer) continue;
+    const TUniqueId uid = mgr.GetIdForScript(TEditorId(group.controller));
+    if (CScriptSpecialFunction* controller = TCastToPtr< CScriptSpecialFunction >(mgr.ObjectById(uid))) {
+      controller->PortConfigureBarrier(group, sMrea);
+    }
+    for (const BarrierRing& ring : group.rings) {
+      for (uint32_t eid : {ring.refraction, ring.glow}) {
+        if (CScriptEffect* e = TCastToPtr< CScriptEffect >(mgr.ObjectById(mgr.GetIdForScript(TEditorId(eid))))) {
+          e->PortAttachBarrier(uid, mgr.GetIdForScript(TEditorId(ring.platform)));
+        }
+      }
     }
   }
 }

@@ -23,6 +23,7 @@
 #include <imgui_internal.h>
 #include <SDL3/SDL_dialog.h>
 #include <SDL3/SDL_misc.h>
+#include <SDL3/SDL_timer.h>
 
 #if defined(__ANDROID__)
 #include "touch_pad.h"
@@ -34,6 +35,7 @@
 #include <atomic>
 #include <cctype>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
@@ -210,7 +212,7 @@ std::string CardImportDolphin() {
   // Dolphin uses one or the other, per its settings: try the one written last.
   std::error_code ec;
   std::filesystem::file_time_type folderTime = std::filesystem::file_time_type::min();
-  for (const std::filesystem::path& file : PortGci::GameFiles(dolphin.gciFolder)) {
+  for (const std::filesystem::path& file : PortGci::ImportableFiles(dolphin.gciFolder)) {
     folderTime = std::max(folderTime, std::filesystem::last_write_time(file, ec));
   }
   const auto rawTime = dolphin.rawImage.empty() ? std::filesystem::file_time_type::min()
@@ -401,7 +403,16 @@ std::string CardQueueExport(const std::filesystem::path& folder, const std::stri
         sCardExportQueue.clear();
         return "Could not read " + PortGci::PathString(file.filename()) + ".";
       }
-      sCardExportQueue.push_back({PortGci::PathString(file.filename()), std::move(bytes), {}});
+      // Named by the format's game code (a Trilogy disc's keep R3ME/R3MP).
+      PortGci::Header header;
+      std::string error;
+      if (!PortGci::ParseHeader(bytes.data(), bytes.size(), header, error)) {
+        sCardExportQueue.clear();
+        return "Could not read " + PortGci::PathString(file.filename()) + ": " + error;
+      }
+      std::memcpy(bytes.data(), PortGci::GameCodeOf(to), 4);
+      header.game = PortGci::GameCodeOf(to);
+      sCardExportQueue.push_back({PortGci::DiskName(header), std::move(bytes), {}});
     }
     return {};
   }
@@ -572,16 +583,20 @@ void DrawEmulatorCard() {
     SaveSettings();
   }
   ImGui::EndDisabled();
-  ItemHelp("The port and the emulator share the same saves: never run both at once. GameCube "
-           "Metroid Prime only; Randomizer and Archipelago keep their own cards. Takes effect at "
-           "the title screen.");
+  ItemHelp("The port and the emulator share the same saves: never run both at once. On a Trilogy "
+           "disc the port's card is mirrored with the emulator's Trilogy save instead. Randomizer "
+           "and Archipelago keep their own cards. Takes effect at the title screen.");
   if (!share) {
     return;
   }
   std::string why;
   const std::filesystem::path base = PortGci::SharedCardBase(&why);
   if (base.empty()) {
-    ImGui::TextColored(ThemeWarnColor(), "%s", why.c_str());
+    if (PortGci::TrilogyShareBin().empty()) {
+      ImGui::TextColored(ThemeWarnColor(), "%s", why.c_str());
+    } else {
+      ImGui::TextWrapped("%s", why.c_str());
+    }
     return;
   }
   ImGui::BeginDisabled(inGame || sCardDialogOpen);
@@ -637,6 +652,24 @@ void DrawMemoryCard() {
             "/Card A, GC/MemoryCardA." + PortGci::CardRegion() + ".raw).")
                .c_str());
 #endif
+  // Saves another disc left on the card (each release keeps its own files).
+  // Rescanned every two seconds: it reads every file's header.
+  static std::vector<PortGci::OtherRelease> sOthers;
+  static Uint64 sOthersNext = 0;
+  if (SDL_GetTicks() >= sOthersNext) {
+    sOthers = PortGci::OtherReleaseSaves();
+    sOthersNext = SDL_GetTicks() + 2000;
+  }
+  for (size_t i = 0; i < sOthers.size(); ++i) {
+    ImGui::PushID(static_cast<int>(i));
+    if (ImGui::Button(("Restore from " + sOthers[i].label).c_str())) {
+      sCardStatus = "From " + sOthers[i].label + ": " + PortGci::RestoreFrom(sOthers[i]).Summary("Restored");
+      sOthersNext = 0;
+    }
+    ItemHelp("Copies that version's save onto this disc's card, converted; this card's saves move to "
+             "_replaced first, and the other version's saves are left as they are.");
+    ImGui::PopID();
+  }
   ImGui::EndDisabled();
   ImGui::BeginDisabled(busy || saves == 0);
   const std::string asIs = std::string("As on the card (") +
@@ -845,7 +878,7 @@ static std::string sImportModName = PortRemastered::kImportModName;
 static int sReloadAwaited = -1;
 static double sReloadRetry = 0.0;
 
-static void ReloadUntilDone() {
+void ReloadUntilDone() {
   sReloadAwaited = PortSaveState::ModReloads();
   sReloadRetry = ImGui::GetTime() + 2.0;
   PortSaveState::RequestModReload();

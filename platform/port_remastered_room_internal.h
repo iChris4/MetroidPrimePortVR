@@ -196,12 +196,20 @@ constexpr uint32_t kPropFogWindVec = 0x0ad3c808;
 constexpr uint32_t kPropFogWindOn = 0x33c69fd5;
 constexpr uint32_t kPropHintMin = 0x682f8a1f;
 constexpr uint32_t kPropHintMax = 0x839d334c;
-constexpr uint32_t kPropHintMode = 0x590d6843;
+constexpr uint32_t kPropExposureHintPriority = 0x590d6843;
+constexpr uint32_t kPropHintMode = 0xa9aef33e;
+// LdrToEnum_AutoExposureFluidVisibilityEnum 0x89e9a0, table 0x1d16b5c.
+inline uint8_t ExposureHintMode(uint32_t value) {
+  return value == 0xe1fee72e ? 1 : value == 0xabccc097 ? 2 : 0;
+}
 constexpr uint32_t kPropHintBias = 0x038f85da;
 constexpr uint32_t kPropHintSigma = 0x3dace129;
 constexpr uint32_t kPropHintStaticLerp = 0xb9f6606a;
 constexpr uint32_t kPropModConMcon = 0xa8e2ba93;
 constexpr uint32_t kPropActorModel = 0xcb1c52f6;
+constexpr uint32_t kPlatformComponent = 0xa12967fb;
+constexpr uint32_t kPropPlatformModel = 0xf8b4c8da;
+constexpr uint32_t kPropPlatformAnim = 0xcee67c05;
 // Unnamed in retrotool's templates; what they mean is read off which actors carry them.
 constexpr uint32_t kPropActorAdded = 0x9a25df3b;
 // The actor's animation: a character (CHPR) and the name of the animation it plays, as an
@@ -492,7 +500,10 @@ public:
   // property list is a nested group, which is not a top level key.
   std::map<uint32_t, Span> Flat(const Component& c) const;
   // A property inside nested groups, named by the groups' ids and then its own.
-  bool Nested(const Component& c, std::initializer_list<uint32_t> path, Span& out) const;
+  bool Nested(const Component& c, std::initializer_list<uint32_t> path, Span& out) const {
+    return Nested(c, path.begin(), path.size(), out);
+  }
+  bool Nested(const Component& c, const uint32_t* path, size_t count, Span& out) const;
   // The `size` bytes at `offset` in the room's string pool (STRP); false when they lie outside it.
   bool String(uint32_t offset, uint32_t size, std::string& out) const {
     if (offset > m_strings.size || size > m_strings.size - offset) {
@@ -540,11 +551,19 @@ bool PropList(const uint8_t* b, size_t len, std::vector<Prop>* out);
 
 // A retail script object (SCLY), as far as matching Remastered's entities to it needs.
 struct ScriptObject {
+  // One connection: the state it is sent in and the message, as the enums in
+  // MetroidPrime/CEntityInfo.hpp number them, and the editor id it reaches.
+  struct Link {
+    uint32_t state = 0;
+    uint32_t message = 0;
+    uint32_t target = 0;
+  };
   uint32_t id = 0;  // editor id, layer bits included
   uint8_t type = 0;
   int layer = 0;    // the SCLY layer it is in
   uint32_t propCount = 0;
   std::vector<uint32_t> targets;  // of its connections
+  std::vector<Link> links;        // the same connections, with their state and message
   bool hasPos = false;            // the three floats after its name, for any type
   Vec3 pos{};
   // The six floats after those: an editor transform's rotation (degrees) and scale for the
@@ -628,6 +647,12 @@ constexpr uint32_t kActionTriggerDeactivate = 0xb5dd4543;
 // animation (property kPropKeyframeAnim, a name in STRP; kPropKeyframeLoop: it loops).
 constexpr uint32_t kActorKeyframeMP1 = 0x3ce6630a;
 constexpr uint32_t kActionPlayAnim = 0x7ae20cd8;
+// The same Play sent to a PlatformMP1: action hashes are per target type (the Watery Hall
+// gate's keyframe; ActorRotateMP1 drives platforms with it too).
+constexpr uint32_t kActionPlatformPlayAnim = 0x511ddd00;
+constexpr bool IsKeyframePlay(uint32_t action) {
+  return action == kActionPlayAnim || action == kActionPlatformPlayAnim;
+}
 constexpr uint32_t kPropKeyframeAnim = 0x589ff022;
 constexpr uint32_t kPropKeyframeLoop = 0x3c3ec403;
 // What turns a ColorGradeHint's request on and off, and the senders of it retail has no
@@ -676,6 +701,9 @@ constexpr uint8_t kRetailIdPrefix[12] = {0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x0
 constexpr uint8_t kRetailActor = 0x00;
 // How far Remastered moved a scenery actor off the retail one it stands for (0.38 at most).
 constexpr double kRetailActorNear = 0.5;
+// How far outside a Remastered stand-in model's world box a dropped retail Actor's origin
+// may lie and still be hidden with it (WriteGeometry): a floor's box is a few cm thick.
+constexpr double kStandinMargin = 0.25;
 // Retail's debris: what a scenery actor that breaks apart is made of, shown when it does.
 constexpr uint8_t kRetailDebris = 0x1B;
 constexpr uint8_t kRetailDebrisExtended = 0x45;
@@ -717,6 +745,7 @@ struct SceneryScripts {
   std::map<int, std::string> unresolvedHow;              // a grade hint's: sender type/event/action
   std::map<std::string, std::pair<size_t, std::set<int>>> missStats;  // MP_REMASTERED_MISS: class -> connections, entities
   std::map<int, const ScriptObject*> platform;           // by entity: the platform carrying it
+  std::map<int, const ScriptObject*> platformTransform;  // own/co-driven retail platform, full transform
   std::map<int, size_t> retail;                           // by entity: the retail object it matched
   size_t entities = 0, matched = 0;
   // Remastered's own objects in between (camera volumes, counters, relays) and the
@@ -745,8 +774,35 @@ constexpr uint32_t kEffectMP1 = 0xb421cdcb;
 // (port_room_effects.h); a line for the log, empty when there is nothing to say.
 std::string WriteRoomEffects(const std::string& name, const Room& room, uint32_t mrea, const Area& area,
                              const SceneryScripts& scripts, const RoomIO& io);
+// The GENPs (in a pak's byte order) those actors are for: the room's unconnected ones, and the
+// barrier's ten when its graph validates.
+std::vector<std::array<uint8_t, 16>> RoomEffectGenpsOf(const Room& room);
 // The entities (their Entity components) that some connection in the room reaches.
 std::set<int> ConnectedEntities(const Room& room);
+
+// The Parasite Queen barrier's Remastered graph, which the import validates as a whole before
+// it treats the ten effects as anything but connected actors (port_queen_barrier_assets.h has
+// the ids). By ring, in the table's order: the PlatformMP1 whose component guid the table names,
+// the two EffectMP1s it has Active links to (the two-variable refraction family and the
+// one-variable glow one), and the WaypointMP1 its Play link names.
+struct BarrierRingRefs {
+  size_t platform = 0;
+  size_t refraction = 0;
+  size_t glow = 0;
+  size_t waypoint = 0;
+};
+struct BarrierGraph {
+  size_t controller = 0;  // the SpecialFunctionMP1 whose function is the ring controller
+  float duration = 0;     // seconds, its fourth float
+  std::array<BarrierRingRefs, 5> rings{};
+};
+// Whether the room ships that graph whole and unambiguous: one main controller, exactly its
+// fifteen links (five platforms, ten effects), each platform's two effects and one waypoint,
+// and one type 19 follower per platform-effect pair (unlinked ones are allowed). False for a
+// partial, mutated or ambiguous graph, and then nothing is admitted.
+bool BarrierGraphOf(const Room& room, BarrierGraph& out, std::string* why = nullptr);
+// The GENP (in a pak's byte order) of an EffectMP1 component, or an all-zero id when it has none.
+Id16 EffectGenpOf(const Room& room, size_t component);
 
 bool SingleDriverStart(const std::vector<PortRoomGeo::Link>& starts, PortRoomGeo::Link& first);
 int DriverSlot(const std::vector<PortRemastered::ModelMaterial>& materials, const SceneryScripts::Driver& d);

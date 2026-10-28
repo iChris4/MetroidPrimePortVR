@@ -127,6 +127,7 @@ int main(int argc, char** argv) {
     CHECK_MSG(Count(modsList, "remastered-models") == 1, "one folder per name");
     CHECK_MSG(Find(modsList, "remastered-models").path == builtin, "the private one shadows the shared one");
     CHECK_MSG(Find(modsList, "remastered-models").builtin, "and is marked as the built-in import");
+    CHECK_MSG(!Find(modsList, "aaa").builtin && !Find(modsList, "zzz").builtin, "no shared mod is");
   }
 
   // Only installed mods: a staging folder, a held one or a trash one is never listed.
@@ -173,6 +174,15 @@ int main(int argc, char** argv) {
     CHECK_MSG(Names(both) == std::vector<std::string>({"aaa", "remastered-models", "zzz"}),
               "the private import joins the same order");
     CHECK_MSG(Find(both, "remastered-models").path == privatePath, "the private import wins the name");
+    // The built-in flag is what the loose scan hands the barrier policy: only the installed
+    // import carries it, so its obsolete platform model is refused and a user mod's is not.
+    CHECK_MSG(Find(both, "remastered-models").builtin, "the installed import is the built-in one");
+    CHECK_MSG(!Find(both, "aaa").builtin && !Find(both, "zzz").builtin, "and the user mods are not");
+    CHECK_MSG(PortRemasteredStorage::RejectObsoleteBarrierModel(
+                  Find(both, "remastered-models").builtin, 0x434D444Cu, 0x6556EEC5u),
+              "so its obsolete barrier model is refused");
+    CHECK_MSG(!PortRemasteredStorage::RejectObsoleteBarrierModel(Find(both, "aaa").builtin, 0x434D444Cu, 0x6556EEC5u),
+              "while a user mod's copy of it is kept");
 
     // Its staging folder is not a mod, however it is handed in.
     const std::vector<ModFolder> staged = PortRemasteredStorage::ScanFolders(user.string(), stagingPath);
@@ -209,6 +219,25 @@ int main(int argc, char** argv) {
     CHECK_MSG(!ShouldDeleteLegacy(true, false, true, false), "no usable private import keeps the legacy one");
     CHECK_MSG(!ShouldDeleteLegacy(true, true, false, false), "a symlink or missing folder is left alone");
     CHECK_MSG(!ShouldDeleteLegacy(true, true, true, true), "the private import itself is never deleted");
+  }
+
+  // The built-in import's obsolete barrier platform model (6556EEC5) is refused when it is found
+  // loose, so the disc's own model keeps standing: the port draws the barrier through roomfx and
+  // must not resurrect the old Remastered replacement. Nothing else is touched, and another mod's
+  // deliberate replacement stays its own choice.
+  {
+    using PortRemasteredStorage::RejectObsoleteBarrierModel;
+    constexpr uint32_t kCmdl = 0x434D444Cu;  // 'CMDL'
+    constexpr uint32_t kObsolete = 0x6556EEC5u;
+    constexpr uint32_t kDummyPlatform = 0x1C0B0BEFu;  // the built-in dummy the barrier platforms use
+    constexpr uint32_t kTxtr = 0x54585452u;           // 'TXTR'
+    constexpr uint32_t kMrea = 0x4D524541u;           // 'MREA'
+    CHECK_MSG(RejectObsoleteBarrierModel(true, kCmdl, kObsolete), "the built-in import's obsolete barrier model is refused");
+    CHECK_MSG(!RejectObsoleteBarrierModel(false, kCmdl, kObsolete), "another mod's replacement of it stands");
+    CHECK_MSG(!RejectObsoleteBarrierModel(true, kCmdl, kDummyPlatform), "the built-in dummy platform model is not it");
+    CHECK_MSG(!RejectObsoleteBarrierModel(true, kCmdl, 0x6556EEC4u), "nor a neighbouring model id");
+    CHECK_MSG(!RejectObsoleteBarrierModel(true, kTxtr, kObsolete), "a texture with that id is not a model");
+    CHECK_MSG(!RejectObsoleteBarrierModel(true, kMrea, kObsolete), "nor is a room");
   }
 
   // The movies-only import: the staged import is the newer one, and on Android it never writes into

@@ -79,7 +79,8 @@ Report MigrateLegacyPal(const std::filesystem::path& folder);
 // The same, reading the file first.
 Report ImportFile(const std::filesystem::path& source, const std::filesystem::path& folder,
                   const std::filesystem::path& scratch);
-// Imports every Metroid Prime file from another GCI folder (a Dolphin card).
+// Imports the Metroid Prime save from another GCI folder (a Dolphin card),
+// converted to the disc's release if it is another one's.
 Report ImportFolder(const std::filesystem::path& source, const std::filesystem::path& folder);
 
 // The Quest launcher's hand-over: it cannot read a raw card itself, so it
@@ -91,8 +92,11 @@ Report ImportFolder(const std::filesystem::path& source, const std::filesystem::
 // show. False when nothing was waiting.
 bool ImportPending(const std::filesystem::path& userFolder, const std::filesystem::path& folder);
 
-// Metroid Prime's .gci files in a GCI folder, sorted by disk name.
+// The disc's .gci files in a GCI folder, sorted by disk name.
 std::vector<std::filesystem::path> GameFiles(const std::filesystem::path& folder);
+// What ImportFolder takes from a folder: the disc's own files if there are
+// any, else one other release's (a Trilogy disc imports GameCube saves).
+std::vector<std::filesystem::path> ImportableFiles(const std::filesystem::path& folder);
 
 // What an export writes: the card's own files as they are (the disc's native
 // format), or the newest save converted to the other GameCube release.
@@ -154,6 +158,21 @@ std::filesystem::path SharedCardBase(std::string* why = nullptr);
 std::string CardTargetDirectory(const std::string& apDirectory);
 // Dolphin's Trilogy save.bin (USA, else PAL), or empty when it has none.
 std::filesystem::path FindDolphinTrilogy();
+// Sharing on a Trilogy disc: the emulator keeps Trilogy's saves in a Wii
+// save.bin, not a GCI folder, so nothing is mounted (SharedCardBase is empty);
+// the port keeps its own card and mirrors it with that save.bin instead. The
+// emulator's save.bin for the running disc's region, or empty when not sharing
+// on a Trilogy disc or the emulator has none.
+std::filesystem::path TrilogyShareBin();
+// Mirrors card folder and save.bin: a newer card goes out (ExportTrilogy), and
+// with `pull` a newer save.bin comes in (marked for remount). The replaced side
+// is kept (save.bin.bak, _replaced); afterwards both have the same time, which
+// means in step. True when the card changed.
+bool SyncTrilogy(const std::filesystem::path& folder, const std::filesystem::path& saveBin, bool pull);
+// SyncTrilogy on the mounted card and TrilogyShareBin, at most twice a second;
+// nothing when that is empty. Pull only in the front end: in game the card
+// never changes.
+bool SyncTrilogyShare(bool pull);
 
 // The mounted card's GCI folder, or empty when the card is a raw image or
 // there is none.
@@ -161,6 +180,27 @@ std::filesystem::path MountedCardFolder();
 // MigrateLegacyPal on the card folder in use (nothing off the PAL disc). Run once
 // the card API is up, and again when another card folder is switched in.
 Report MigrateMountedLegacyPal();
+
+// Saves another release left on the port's card: each disc keeps its own files
+// (GM8E, GM8P, R3ME, R3MP; PAL ones under EUR), so after switching discs the
+// old saves are still there but the game does not see them.
+struct OtherRelease {
+  std::filesystem::path folder;
+  std::string code;  // game code of its files
+  std::string label; // "Metroid Prime (USA GameCube)"
+  std::filesystem::file_time_type written{};
+};
+// Those beside the mounted card, newest first; empty when the card is not a
+// GCI folder.
+std::vector<OtherRelease> OtherReleaseSaves();
+// Copies one into the mounted card, converted to this disc's release; the
+// card's own saves move to _replaced, as an import does.
+Report RestoreFrom(const OtherRelease& source);
+// What the startup offer asks (CMemoryCardSys): the mounted card has no save
+// of this release, others are there, and it was not asked on this card for
+// this release before (a marker file in the card folder remembers).
+std::vector<OtherRelease> RestoreToOffer();
+void MarkRestoreOffered();
 // After an import: the front end's save screen remounts the card and probes it
 // again once the card is idle. Returns true (once) when it did the remount.
 void MarkCardChanged();

@@ -58,7 +58,7 @@ bool sVsyncEnabled = true;
 bool sVsyncEnabled = false;
 #endif
 // Android hides the status and navigation bars by default; a desktop starts windowed.
-#if defined(__ANDROID__)
+#if defined(__ANDROID__) || defined(SDL_PLATFORM_IOS)
 bool sFullscreen = true;
 #else
 bool sFullscreen = false;
@@ -95,7 +95,7 @@ std::atomic< int > sPromptGlyphs{0};
 bool sShowShaderCompilation = true;
 bool sShowMenuHint = true;
 int sHudScale = PortDebug::kHudScaleMax;
-#if defined(__ANDROID__)
+#if defined(PORT_TOUCH_CONTROLS)
 int sScanSpread = PortDebug::kScanSpreadMin; // touch controls cover the screen edges
 #else
 int sScanSpread = PortDebug::kScanSpreadMax;
@@ -174,8 +174,8 @@ bool sProjectedShadows = true;
 // Setting `opengles`; sOpenGlesAtStart is what this run was started with.
 bool sOpenGles = false;
 bool sOpenGlesAtStart = false;
-// Setting `graphics_backend` (Windows, issue #135); sGraphicsBackendAtStart is what
-// this run was started with, so the Video page can say when a change needs a restart
+// Setting `graphics_backend` (Windows and desktop Linux, issue #135); sGraphicsBackendAtStart
+// is what this run was started with, so the Video page can say when a change needs a restart
 // and when Aurora fell back from it.
 PortDebug::EGraphicsBackend sGraphicsBackend = PortDebug::kGraphicsBackend_Auto;
 PortDebug::EGraphicsBackend sGraphicsBackendAtStart = PortDebug::kGraphicsBackend_Auto;
@@ -522,6 +522,8 @@ void EnsureInitialized() {
       sCrosshairStyle = PortDebug::kCrosshairStyle_Classic;
     } else if (std::strcmp(style, "remastered") == 0) {
       sCrosshairStyle = PortDebug::kCrosshairStyle_Remastered;
+    } else if (std::strcmp(style, "gamecube") == 0) {
+      sCrosshairStyle = PortDebug::kCrosshairStyle_GameCube;
     }
   }
   sMenuStandardButtons = port::EnvFlag("MP_MENU_STANDARD_BUTTONS", sMenuStandardButtons);

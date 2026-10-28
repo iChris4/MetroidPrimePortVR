@@ -269,7 +269,12 @@ public:
   EOrbitValidationResult ValidateOrbitTargetId(TUniqueId target, CStateManager& mgr) const;
   void DoSfxEffects(CSfxHandle sfx);
   bool GetFrozenState() const;
-  void SetFrozenState(CStateManager& stateMgr, CAssetId steamTxtr, ushort sfx, CAssetId iceTxtr);
+  void SetFrozenState(CStateManager& stateMgr, CAssetId steamTxtr, ushort sfx, CAssetId iceTxtr
+#ifdef TARGET_PC
+                      ,
+                      CAssetId portFrozenFx = kInvalidAssetId
+#endif
+  );
   void BreakFrozenState(CStateManager& mgr);
   void SetFrozenTimeoutBias(float bias) { x758_frozenTimeoutBias = bias; }
   void UpdateCinematicState(CStateManager& mgr);
@@ -382,6 +387,8 @@ public:
   bool MouseLookIsFree(const CStateManager& mgr) const;
   // port: lock-on free aim, a combat lock a pointer moves under.
   bool PortLockFreeAim(const CStateManager& mgr) const;
+  // port: whether the free-aim crosshair is forced open (not over Trilogy's own cursor).
+  bool PortAimCrosshairsOpen(const CStateManager& mgr) const;
   // port: direct aim, locked onto an empty orbit point (keeps the camera pitch).
   bool PortEmptyLockKeepsPitch(const CStateManager& mgr) const;
   void UpdateMouseAim(CStateManager& mgr);
@@ -392,6 +399,10 @@ public:
   void UpdateAimTarget(CStateManager& mgr);
   void UpdateAimTargetTimer(float dt);
   void UpdateOrbitModeTimer(float dt);
+#ifdef TARGET_PC
+  // Trilogy's lock fade in [0, 1] (player +0x11A4): 0 free, 1 fully locked.
+  float PortTriOrbitFade() const;
+#endif
   void UpdateOrbitPreventionTimer(float dt);
   void UpdateGunAlpha();
   void UpdateVisorTransition(float dt, CStateManager& mgr);
@@ -656,6 +667,11 @@ private:
   CVector3f x314_orbitPoint;
   CVector3f x320_orbitVector;
   float x32c_orbitModeTimer;
+#ifdef TARGET_PC
+  // Port: Trilogy's lock fade timer (player +0x328, fn_8019BDFC). Not x32c, which is retail's
+  // decay-only cooldown.
+  float m_triOrbitFadeTimer;
+#endif
   EPlayerZoneInfo x330_orbitZoneMode;
   EPlayerZoneType x334_orbitType;
   uint x338_;
@@ -842,6 +858,49 @@ private:
   uint xa50_deferredCarryTick = ~0u;
   SPortDeferredCarry xa54_deferredCarry[4];
   float xad4_carriedYaw = 0.f;
+  // Port: Remastered's frozen VFX (SPlayerFrozenStateDataShip1 +0x10, CPlayerMP1 +0x10d0), a
+  // HUD billboard that replaces the visor steam while frozen. Its id, the effect (+0x1110)
+  // and the amount bound to its de3a3b53 real (+0x1114).
+  CAssetId xPortFrozenFxId = kInvalidAssetId;
+  TUniqueId xPortFrozenFx = kInvalidUniqueId;
+  float xPortFrozenFxAmount = 0.f;
+  void PortCreateFrozenFx(CStateManager& mgr);
+  void PortTickFrozenFx(CStateManager& mgr, float dt);
+  void PortBindFrozenFx(CStateManager& mgr);
+
+public:
+  // Port: Remastered's visor steam (CPlayerMP1::SVisorSteamShip1Parameters), set each frame by
+  // a Steam object a mod's .roomfx gave its SteamMP1 (CScriptSteam).
+  struct SPortVisorSteamShip1Params {
+    bool flag;       // +0x0: bind the colour
+    float colour[4]; // +0x4: CColor4f
+    CVector3f dir;   // +0x14: camera-space direction of the steam source
+    float b;         // +0x20: thermal cold scale
+    float i;         // +0x24
+    float s1;        // +0x28: fade-in rate
+    float a;         // +0x2c: fade-out rate
+    float s2;        // +0x30: post-FX scale
+    float g;         // +0x34: second amount's rise rate
+    float h;         // +0x38: its fall rate
+  };
+  // CScriptSteamMP1::Think 0xf36498 tail: start the effect, or retarget the running one.
+  void PortSetVisorSteamShip1(CAssetId part, const SPortVisorSteamShip1Params& params,
+                              CStateManager& mgr);
+
+private:
+  // CPlayerMP1::CVisorSteamShip1 (+0xab0): the HUD billboard (+0x0), active this frame (+0x4),
+  // the first direction (+0x8), current (+0x14) and target (+0x50) parameters, state (+0x8c),
+  // amount (+0x90), time (+0x94) and second amount (+0x98).
+  TUniqueId xPortSteamFx = kInvalidUniqueId;
+  bool xPortSteamActive = false;
+  CVector3f xPortSteamInitDir = CVector3f(0.f, 0.f, 0.f);
+  SPortVisorSteamShip1Params xPortSteamCur = {};
+  SPortVisorSteamShip1Params xPortSteamTgt = {};
+  int xPortSteamState = 0;
+  float xPortSteamAmount = 0.f;
+  float xPortSteamTime = 0.f;
+  float xPortSteamAmount2 = 0.f;
+  void PortUpdateVisorSteamShip1(float dt, CStateManager& mgr);
 #endif
 };
 NESTED_CHECK_SIZEOF(CPlayer, CPlayerStuckTracker, 0x2e0);

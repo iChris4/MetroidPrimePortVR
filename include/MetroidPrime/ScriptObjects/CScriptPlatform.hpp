@@ -54,6 +54,10 @@ public:
   // CActor
   void PreRender(CStateManager&, const CFrustumPlanes&) override;
   void Render(const CStateManager&) const override;
+#ifdef TARGET_PC
+  void AddToRenderer(const CFrustumPlanes&, const CStateManager&) const override;
+  void PortSetBarrierController(TUniqueId uid) { xPortBarrierController = uid; }
+#endif
   CHealthInfo* HealthInfo(CStateManager&) override;
   const CDamageVulnerability* GetDamageVulnerability() const override;
   rstl::optional_object< CAABox > GetTouchBounds() const override;
@@ -157,6 +161,7 @@ private:
   CTransform4f xPortPreThinkXf = CTransform4f::Identity();
   CTransform4f xPortPreThinkEnd = CTransform4f::Identity();
   uint xPortPoseTick = ~0u;
+  TUniqueId xPortBarrierController = kInvalidUniqueId;
 #endif
 };
 CHECK_SIZEOF(CScriptPlatform, (VERSION >= VERSION_GM8P_00 ? 0x368 : 0x358))

@@ -25,6 +25,50 @@ bool Color(const float* out, float r, float g, float b, float a) {
 int main() {
   using namespace PortParticleMath;
 
+  // Primitive 2 uses the particle's model matrix. Opposite UV corners remain
+  // on the authored plane under nonuniform scale/rotation, not a billboard.
+  {
+    const CTransform4f model(0.f, 0.f, -4.f, 10.f,
+                             0.f, 3.f, 0.f, 20.f,
+                             2.f, 0.f, 0.f, 30.f);
+    CHECK_MSG(NearVector(model * PlanarSquareCorner(0.f, 0.f), CVector3f(12.f, 20.f, 31.f)),
+              "planar UV origin follows B and the complete model transform");
+    CHECK_MSG(NearVector(model * PlanarSquareCorner(1.f, 1.f), CVector3f(8.f, 20.f, 29.f)),
+              "planar opposite corner is a unit square before model scale");
+    CHECK_MSG(NearVector(PlanarSquareCorner(0.5f, 0.5f), CVector3f::Zero()),
+              "planar default pivot is centered");
+  }
+
+  // VGD (0x292710/0x292810 and inverse): gravity authored in world units must not
+  // be multiplied by the emitter's scale, while position-sensitive modifiers see world translation.
+  {
+    const CVector3f translation(10.f, 20.f, 30.f);
+    const auto toWorld = CTransform4f::Translate(translation) * CTransform4f::Scale(2.f, 3.f, 4.f);
+    const auto fromWorld = CTransform4f::Scale(0.5f, 1.f / 3.f, 0.25f) * CTransform4f::Translate(-translation);
+    CVector3f position(1.f, 2.f, 3.f);
+    CVector3f velocity(2.f, 3.f, 4.f);
+    const bool killed = EvaluateGlobalVelocity(toWorld, fromWorld, velocity, position,
+        [&](CVector3f& v, CVector3f& p) {
+          CHECK_MSG(&v == &velocity && &p == &position, "VGD exposes live particle fields to element reads");
+          CHECK_MSG(NearVector(p, CVector3f(12.f, 26.f, 42.f)), "VGD position includes translation and scale");
+          CHECK_MSG(NearVector(v, CVector3f(4.f, 9.f, 16.f)), "VGD velocity excludes translation");
+          p += CVector3f(2.f, 3.f, 4.f);
+          v += CVector3f(0.f, 0.f, -8.f);
+          return true;
+        });
+    CHECK_MSG(killed, "VGD propagates modifier death");
+    CHECK_MSG(NearVector(position, CVector3f(2.f, 3.f, 4.f)), "VGD converts position writes back to simulation space");
+    CHECK_MSG(NearVector(velocity, CVector3f(2.f, 3.f, 2.f)), "VGD world acceleration is inverse-scaled on return");
+  }
+
+  CHECK_MSG(NearVector(DefaultParticleVelocity(0), CVector3f::Zero()), "DVVN 0 has no default motion");
+  CHECK_MSG(NearVector(DefaultParticleVelocity(1), CVector3f(0.f, 1.1f, 0.f)), "DVVN 1 default forward velocity");
+  CHECK_MSG(NearVector(DefaultParticleVelocity(2), CVector3f(0.f, 0.f, 1.1f)), "DVVN 2 default up velocity");
+  CHECK_MSG(NearVector(DefaultParticleVelocity(3), CVector3f(0.f, 0.f, 1.1f)), "DVVN 3 default up velocity");
+  CHECK_MSG(NearVector(DefaultParticleVelocity(4), CVector3f(0.f, 0.f, 0.25f)), "DVVN 4 default up velocity");
+  CHECK_MSG(NearVector(DefaultParticleVelocity(5), CVector3f::Zero()) &&
+                NearVector(DefaultParticleVelocity(255), CVector3f::Zero()), "unknown DVVN versions have no motion");
+
   // DFCS/DFCP, CalculateBlendValue 0x298f44: (d - B) / (A - B), clamped; 1 at A, 0 at B.
   CHECK_MSG(Near(DistanceBlend(10.f, 10.f, 2.f), 1.f), "blend 1 at A");
   CHECK_MSG(Near(DistanceBlend(2.f, 10.f, 2.f), 0.f), "blend 0 at B");

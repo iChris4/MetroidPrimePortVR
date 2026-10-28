@@ -162,7 +162,12 @@ void CPlasmaProjectile::UpdatePlayerEffects(float dt, CStateManager& mgr) {
     switch (GetType()) {
     case kWT_Ice: {
       const ushort freezeSfx = x544_freezeSfx;
-      player.SetFrozenState(mgr, x524_freezeSteamTxtr, freezeSfx, x528_freezeIceTxtr);
+      player.SetFrozenState(mgr, x524_freezeSteamTxtr, freezeSfx, x528_freezeIceTxtr
+#ifdef TARGET_PC
+                            ,
+                            xPortFrozenFxId
+#endif
+      );
       break;
     }
     case kWT_Wave:
@@ -241,7 +246,40 @@ void CPlasmaProjectile::UpdateFx(const CTransform4f& xf, float dt, CStateManager
     x4cc_energyPulseStartY = 0.f;
   }
   UpdateLights(expansion, dt, mgr);
+#ifdef TARGET_PC
+  // CPlasmaProjectileMP1::UpdateFx 0x1020fc4: while the beam is out (Attack/Sustain/Release) the
+  // electric runs from the beam's origin to its current end; otherwise a started one is reset.
+  if (xPortBeamElectric.get()) {
+    if (x4b4_expansionState == kES_Attack || x4b4_expansionState == kES_Sustain ||
+        x4b4_expansionState == kES_Release) {
+      const CVector3f start = GetBeamTransform().GetTranslation();
+      const CVector3f end = start + GetCurrentLength() * GetBeamTransform().GetColumn(kDY);
+      xPortBeamElectric->SetParticleEmission(xPortBeamElectric->PortBeamAllowEmission());
+      xPortBeamElectric->PortBeamSetStartAndEnd(start, end);
+      xPortBeamElectric->Update(dt);
+    } else if (xPortBeamElectric->PortEmitterTimeSeconds() > 0.0) {
+      PortResetBeamElectric();
+    }
+  }
+#endif
 }
+
+#ifdef TARGET_PC
+void CPlasmaProjectile::PortSetBeamElectric(CAssetId id) {
+  xPortBeamElectric = rs_new CParticleElectric(gpSimplePool->GetObj(SObjectTag('ELSC', id)));
+  xPortBeamElectric->SetParticleEmission(false);
+  xPortBeamElectric->SetModulationColor(CColor::White());
+}
+
+// Beam_Reset, emission off, one step, then the clock back to 0 (UpdateFx 0x1020fc4 and
+// ResetBeam).
+void CPlasmaProjectile::PortResetBeamElectric() {
+  xPortBeamElectric->PortBeamReset();
+  xPortBeamElectric->SetParticleEmission(false);
+  xPortBeamElectric->Update(1.0 / 60.0);
+  xPortBeamElectric->PortResetSystemTime();
+}
+#endif
 
 bool CPlasmaProjectile::CanRenderUnsorted(const CStateManager&) const { return false; }
 
@@ -251,6 +289,11 @@ void CPlasmaProjectile::AddToRenderer(const CFrustumPlanes&, const CStateManager
     if (x478_beamAttributes & 2) {
       gpRender->AddParticleGen(*x51c_pulseGen);
     }
+#ifdef TARGET_PC
+    if (xPortBeamElectric.get()) {
+      gpRender->AddParticleGen(*xPortBeamElectric);
+    }
+#endif
   }
   const CVector3f pos = GetBeamTransform().GetTranslation();
   EnsureRendered(mgr, pos, GetSortingBounds(mgr));
@@ -347,6 +390,11 @@ void CPlasmaProjectile::ResetBeam(CStateManager& mgr, bool fullReset) {
     x548_26_firing = false;
     x518_contactGen->SetParticleEmission(false);
     x51c_pulseGen->SetParticleEmission(false);
+#ifdef TARGET_PC
+    if (xPortBeamElectric.get()) {
+      PortResetBeamElectric();
+    }
+#endif
   } else {
     x548_26_firing = false;
     x4b4_expansionState = kES_Release;

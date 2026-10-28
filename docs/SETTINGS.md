@@ -303,7 +303,7 @@
   none): a second controller button or trigger per GameCube button. Aurora maps
   one native button to each PAD button, so the port reads the alt one itself and
   ORs it in (`PortControls::HeldAltPadButtons`, from `CDolphinController`).
-- Control presets (Controls > Remap, "Reset..." beside the device list: Keyboard & mouse and Controllers). Keyboard: **Classic** (the first-run layout)
+- Control presets (Controls > Remap, "Presets..." beside the device list: one click applies a layout to Keyboard & mouse or to all Controllers, replacing your own bindings there; a selected kind or model keeps its own on top). Keyboard: **Classic** (the first-run layout)
   and **Mouse & keyboard** (WASD, E fire, Space jump, left ctrl/C morph, F
   missile, Q lock on, left alt free look, Tab/M map, 1-4 beams and 5-8 visors
   through whichever C-stick direction or D-pad button the disc's tweak gives
@@ -319,6 +319,13 @@
 - Swap the Scan and X-Ray visor buttons (Controls > Options, persisted as
   `swap_scan_xray`, off by default): each visor takes the other's D-pad
   direction, as in Remastered (D-pad right Scan, left X-Ray).
+- Radial beam and visor menus (Controls > Options, persisted as `radial_menus`,
+  off by default; Metroid Prime Trilogy discs only): holding the Beam menu or
+  Visor menu action (Remap, unbound by default) opens the Wii version's radial
+  menu. Mouse, stick, gyro or C-stick point at an entry, the view holds still,
+  and letting go picks it. On touch, add a Beam menu or Visor menu button in the
+  layout editor: slide the finger from where it pressed toward an entry (about
+  72 dp reaches one) and lift to pick; a look drag points the menu too.
 - Button glyphs (Controls > Options, persisted as `prompt_glyphs`: `auto`, the
   default, `xbox`, `playstation`, `switch`, `gamecube` or `keyboard`): which
   buttons the game's prompts and tutorials show. Auto follows the keyboard,
@@ -368,7 +375,7 @@
   Record accepts keyboard, mouse or controller input; repeated identical
   mappings are ignored. Editing a default makes it yours, and "Revert" gives the default back. Keyboard &
   mouse, Touch and Controllers are the Default profile restricted to that family of input;
-  a kind or model is its own profile on top. "Reset..." restores a preset (after a confirmation).
+  a kind or model is its own profile on top. "Reset..." removes a device's own bindings (after a confirmation), bringing back the Classic and GameCube layouts.
   "Separate menu buttons" (on by default; `menu_standard_buttons=`,
   `MP_MENU_STANDARD_BUTTONS`) makes a controller read the "Menus and map" rows instead of
   the game buttons in the pause screen, front end, map, save stations and upgrade messages
@@ -382,13 +389,29 @@
   the option off, menus and the map follow the gameplay bindings and the rows do nothing.
   The Morph Ball rows (issue #167: Bomb, Power Bomb, Boost Ball, Spider Ball, Unmorph;
   `ball_bomb`, `ball_power_bomb`, `ball_boost`, `ball_spider`, `ball_unmorph` in
-  controls.toml) press A, Y, B, R and X only in Morph Ball. They start unbound, so the ball
-  uses the game buttons until one is set. A key, mouse button or controller input bound to
-  one does only that in the ball, held layers included (the same mouse button under any of
+  controls.toml) press A, Y, B, R and X only in Morph Ball, so the ball's controls are
+  separate from gameplay's; the stick, Start, Z (map) and the C-stick are shared. On
+  keyboard & mouse and controller they start unbound, and an unbound row follows gameplay:
+  the game button's inputs do it in the ball. Once a row is set in one of those kinds, it
+  replaces that button in the ball for that kind only (setting Bomb on the controller
+  stops the pad's A bombing; the keyboard's A key still does). An input bound to a row
+  does only that in the ball, held layers included (the same mouse button under any of
   its codes, an axis at any threshold); outside the ball its other bindings work as before,
   and the prompts in the ball follow it. A combo on a row replaces the same combo; its
   buttons alone keep what they do, as with any combo. A row given layers in controls.toml
-  works in the ball while one is held. Touch buttons can't take them; touch is unchanged.
+  works in the ball while one is held and adds to the game button rather than replacing
+  it; without the layer, its input does what it did. A preset from Reset… also sets the
+  rows where the game button would clash: Remastered and Modern pads put Spider Ball on
+  LT (their R is the right stick click), Mouse & keyboard on Q; the rest follow gameplay.
+  On touch the overlay has a Morph Ball page, shown instead of the gameplay one while
+  morphed (not in the map, pause menu or a message box). It has its own buttons, Bomb,
+  Boost, P.Bomb, Spider and Unmorph, which are the rows themselves (bound by default;
+  a touch remap of a row moves it, and the label follows); the stick, START, MENU, the
+  map and the eye are on both pages, and a drag on free screen still aims (the Spring
+  swipe). The face buttons, pills, D-pad or wheels, right stick and Turbo are only on
+  the gameplay page. The layout editor's "Ball page" button edits the other page, where
+  the ball buttons move, resize, hide and delete like any; an added button belongs to
+  the page it was added on, and its "On …" button moves it to Gameplay, Ball or Both.
   "Point and click menus" (on by default; `pointer_menus=`, `MP_POINTER_MENUS`) lets
   the mouse and touch work the game's own menus (front end, pause screen, save stations,
   upgrade messages) and the map. A hover selects (a tap on touch), a click confirms (a
@@ -413,7 +436,10 @@
   its "Layer n (hold)" binding is held, like a shift key, and its bindings win over the same
   input's normal ones). Actions are the pad's buttons and stick halves, plus beam and
   visor picks (direct or next/previous), Spring Ball, the port menu, save/load state,
-  screenshot and Original experience. Bindings are layered over the other pages:
+  screenshot, Original experience and Remastered graphics (unbound by default: turns the
+  Remastered import on or off as the Mods page does, saved, and reloads the room; a note at
+  the top of the screen says which; a layer binding such as Layer 1 + a button keeps it from
+  being pressed by accident). Bindings are layered over the other pages:
   binding an action from one kind of device (keyboard & mouse, controller,
   touch) replaces what the other pages bind to it from that kind only, and
   "Removed built-in bindings" drops one without adding another. A profile can
@@ -425,9 +451,26 @@
   bindings stay. Touch inputs are named after the overlay controls (`touch:a`,
   `touch:fire`, `touch:missile`, `touch:morph`, ..., plus `touch:beam_shift`,
   `touch:turbo_held`, `touch:map_tap`); a bound touch control no longer sends
-  its own button. The overlay hides while F1 is open, so Record can't see touch
+  its own button wherever its binding works. The overlay hides while F1 is open, so Record can't see touch
   controls: the editor's "Add a touch control..." list picks them instead.
   The D-pad, the sticks and the menu button can't be remapped.
+  "Custom actions (advanced)" (issue #218) holds actions the player makes, as many as
+  wanted: "+ Add action" picks what one does from a searchable list, then it binds like any
+  row (chords, layers, triggers and touch buttons included); Edit and Delete are on its row,
+  and Delete drops its bindings in every profile too. The list: Settings (turn any on/off
+  setting of the port menu on, off or toggle it), Cheats (Invincibility, Phazon Beam, free
+  camera, freeze the game, show Samus in free camera, refill energy, refill missiles and
+  power bombs, give or take an item, kill the locked-on enemy), Travel (warp to a room picked
+  by its in-game name, or to where a world starts; another world or a room not loaded yet
+  reloads the world, a loaded room of this world is instant), Save states (save to or load
+  from a given slot; the F5/F9 slot stays), Display (show a message on the HUD, text language)
+  and Advanced (any debug console command line, `docs/CONSOLE.md`; it must be given a name).
+  The on/off ones take Toggle, Turn on or Turn off. Its name is made from what it does
+  ("Phazon Beam (on/off)", "Warp to Ice Ruins West (Phendrana Drifts)") unless one is typed.
+  A press shows what it did as a note at the top of the screen; Cheats, Travel and console
+  commands refuse in the Original experience and with Archipelago connected. Saved in `controls.toml` as `[[custom_action]]` tables (`id`, `name`,
+  `preset`, `arg`, `mode`, `command`) and bound as action `custom:<id>`; a preset or setting
+  this build doesn't know is kept and does nothing.
 - `MP_CINEMA_BARS=0|1` (Video > Display "Cutscene black bars", persisted as `cinema_bars`,
   default off): the scripted 16:9 cutscene letterbox. Off, cutscenes narrower than 16:9
   show the cinematic camera's full shot (Vert+); elevator rides and credits keep theirs.
@@ -526,25 +569,46 @@
   retail blob quad is drawn. Known gaps: dynamic receivers (platforms) and
   sorted/cutout geometry are not decaled; at most 16 actors per frame.
   Console: `projshadow [0|1]`.
-- Renderer (Video > Compatibility, **Windows only**, persisted as
-  `graphics_backend`: `auto`, `d3d12`, `vulkan` or `d3d11`, default `auto`,
-  issue #135): which graphics API the port asks Aurora for. `auto` asks for
-  nothing in particular, so Aurora takes its own order (Direct3D 12, then Vulkan,
-  then Direct3D 11); an explicit choice is tried first, and if the driver can't
-  start it, that run falls back to the same order. The setting is left as it was
-  by a fallback, so the page keeps showing the choice and names the API actually
-  in use, including "no graphics device" when nothing started.
-  `MP_GRAPHICS_BACKEND=auto|d3d12|vulkan|d3d11` overrides the setting for one run
-  and outranks it (per-run `MP_*` precedence, like `MP_OPENGLES`); any other value
-  warns and starts on the saved selection. While an override is set the page names
-  the API it starts on and says the saved selection applies once the variable is
-  unset, and the fallback message describes what the override asked for, not what
-  the file says. Read at window creation, so a change needs a restart: the page
-  shows "Restart to apply" while the saved selection differs from the one this run
-  started with, and selecting the startup choice again clears it.
+- Renderer (Video > Compatibility, **Windows and desktop Linux**, persisted as
+  `graphics_backend`: `auto`, `d3d12`, `vulkan`, `d3d11` or `opengl`, default
+  `auto`, issue #135): which graphics API the port asks Aurora for. Only this
+  platform's choices are offered: Windows lists Auto, Direct3D 12, Vulkan,
+  Direct3D 11 and OpenGL; desktop Linux lists Auto, Vulkan and OpenGL. OpenGL
+  is Dawn's desktop GL, through EGL on Linux and WGL on Windows, for GPUs whose
+  other drivers are missing or draw wrong. It runs on 3.3 or newer; below 4.3
+  the driver also needs GL_ARB_shading_language_420pack,
+  GL_ARB_explicit_uniform_location, GL_ARB_texture_storage and
+  GL_ARB_texture_view. Without compute shaders and storage buffers (most 3.3
+  drivers) Aurora reads vertex data from textures and draws the volumetric fog
+  and depth peek with render passes instead (same output). Windows support is
+  new and less tested. `auto` asks for nothing in particular, so Aurora takes
+  its own order (Direct3D 12, then Vulkan, then Direct3D 11 on Windows; Vulkan,
+  then OpenGL ES on Linux); an explicit choice is tried first, and if the driver
+  can't start it, that run falls back to the same order. The setting is left as it
+  was by a fallback, so the page keeps showing the choice and names the API
+  actually in use, including "no graphics device" when nothing started.
+  `MP_GRAPHICS_BACKEND=<one of that platform's names>` overrides the setting for
+  one run and outranks it (per-run `MP_*` precedence, like `MP_OPENGLES`); any
+  other value warns, listing the names this build accepts, and starts on the saved
+  selection. While an override is set the page names the API it starts on and says
+  the saved selection applies once the variable is unset, and the fallback message
+  describes what the override asked for, not what the file says. Read at window
+  creation, so a change needs a restart: the page shows "Restart to apply" while
+  the saved selection differs from the one this run started with, and selecting
+  the startup choice again clears it. OpenGL starts through a driver that can
+  crash outright (Mesa does); an `opengl_starting` marker in the
+  user folder outlives such a crash and the next start logs "the last start on
+  OpenGL did not finish", sets the setting back to Auto and uses Vulkan. OpenGL ES
+  still has its own toggle on Linux (`opengles`), and it wins over this setting.
+  Android ignores `graphics_backend`; its GL switch is `opengles`.
   On Windows this replaces asking for OpenGL ES: Dawn's Windows build has no GLES
   backend. Elsewhere the setting is ignored and Android's choice stays `opengles` /
   `MP_OPENGLES`.
+  `MP_GL_VERSION=3.3` runs desktop OpenGL as a 3.3 core context even when the
+  driver offers newer (Dawn's `gl_force_desktop_gl_33` adapter toggle): Dawn then
+  uses only 3.3 plus extensions, like a 3.3-only GPU would, and the adapter's
+  driver description in game.log ends in "(treated as 3.3)". For testing the 3.3
+  paths on a newer GPU; any other value is ignored.
 - Vulkan driver (Android, Video > Compatibility, persisted as `gpu_driver`: an
   installed driver's id, empty for the phone's own, the default): a custom Vulkan
   driver such as Mesa Turnip, installed from a driver zip with "Install driver
@@ -568,7 +632,9 @@
   `d3d11_disable_cpu_buffers`; `unmonitored_fence` ("Alternative GPU sync") turns on
   `d3d11_use_unmonitored_fence`; `validation` ("Driver error checks") turns off
   `skip_validation` and `disable_robustness`, so Dawn names a rejected command in the
-  log (slower). The first three are passed only to a Direct3D 11 device; on another
+  log (slower); `no_bc` ("Decode compressed textures on the CPU") sets `AURORA_NO_BC=1`,
+  so the device is made without BC texture compression and CMPR textures are decoded
+  to RGBA8 (Remastered BC replacements are then skipped). The first three are passed only to a Direct3D 11 device; on another
   API the log lists them as `(ignored: not Direct3D 11)`. The log's `Dawn toggles`
   block lists what the device got, each one also as a `driver workaround on|off:` line;
   `MP_DAWN_ENABLE` / `MP_DAWN_DISABLE` apply after them.
@@ -615,8 +681,11 @@
   The opacity is the crosshair's alpha, so 100% draws it at full strength (the
   game's own alpha is 19%).
   Original experience ignores both.
-- Crosshair style (Video > Display, `crosshair_style`, `MP_CROSSHAIR_STYLE`, `classic`
-  or `remastered`, default `classic`; console `crosshair style ...`): `remastered` draws
+- Crosshair style (Video > Display, `crosshair_style`, `MP_CROSSHAIR_STYLE`, `classic`,
+  `remastered` or `gamecube`, default `classic`; console `crosshair style ...`): `classic` is the
+  disc's own crosshair, Trilogy's aiming cursor on a Trilogy disc. `gamecube` draws the GameCube
+  crosshair in place of that cursor, turned down the pointer ray so it marks the aim (issue #219);
+  on a GameCube disc it is `classic`. `remastered` draws
   Remastered's combat aiming cursor in place of the ring, built by the port (no Remastered
   assets): a small soft centre dot and three tapered spikes turned 120 degrees apart (one up,
   two down), tips toward the centre. Like Remastered's, the dot and spikes shrink with the
@@ -626,6 +695,11 @@
   size is Remastered's size at a 55 degree vertical FOV (it scales with the screen height);
   the size slider scales it. A custom crosshair colour replaces the idle colour, opacity
   multiplies the alpha. Classic under Original experience.
+- On Trilogy discs these crosshair settings act on Trilogy's own aiming cursor (centre and
+  arms) and the old crosshair it still draws: a custom colour replaces their colour, opacity
+  scales their alpha (the defaults leave them as on the Wii), the size slider scales them under
+  direct aim, and `remastered` draws the Remastered cursor where the aiming cursor is, without
+  the old crosshair.
 - Secondary crosshairs (Video > Display, `secondary_crosshairs`, `MP_SECONDARY_CROSSHAIRS`,
   default on): off hides the next-target reticles: the combat visor's seeker and the
   X-ray ring and thermal crosshair on the target Lock-On would pick. The lock-on
@@ -657,10 +731,10 @@
   cutscene clips and hiding the arm cannon and helmet. The Morph Ball,
   cutscenes and scripted cameras are unchanged. The camera pulls in at walls.
   It is how the Dread Samus bodies are seen in play (`docs/DREAD_SAMUS.md`).
-  `third_person_distance` (metres behind, 0.5..10, default 3),
+  `third_person_distance` (metres behind, 0.5..10, default 3.5),
   `third_person_shoulder` (metres right, -2..2, default 0.6) and
   `third_person_height` (metres above the first-person eye, -1..2, default
-  0.4) place it. Console: `thirdperson [on|off] [distance N] [shoulder N]
+  0.1) place it. Console: `thirdperson [on|off] [distance N] [shoulder N]
   [height N]`.
 - Speedrun timer and LiveSplit (F1 > Game > Speedrun; the timer also in pause Options >
   Display as In-Game Timer). `speedrun_timer` draws the in-game time (the play
@@ -866,7 +940,9 @@
 - Settings other pages keep, described with them: F1 > Mods' "Load mods"
   (`mods`, on by default) and every mod's box, the built-in ones included
   (`mods_disabled`, the names left out, `/`-separated), read at startup
-  (`MODS.md`); the Remastered import's "What to import" (`remastered_skip`: the
+  (`MODS.md`); the Metroid Dread section's "Dread arm cannon in first person"
+  (`dread_first_person_cannon`, on by default; off keeps Prime's arm cannon,
+  `DREAD_SAMUS.md`); the Remastered import's "What to import" (`remastered_skip`: the
   parts left out, comma-separated from `geometry`, `effects`, `hud`, `text`,
   `movies` and `gallery`; `MODS.md`); the
   Randomizer page's options (`rando_settings`, one line of JSON;
@@ -1035,7 +1111,13 @@ other `X:\Users\<name>`: `X:\Users\<user>`); the
   cannot be shared. The card needs to exist (set the emulator's Slot A to "GCI
   Folder", start the game once). Randomizer/Archipelago keep their own cards.
   "Copy port saves into shared card" copies the port's own card over (its old
-  files move to `_replaced`). Logic in `platform/port_gci.cpp` and
+  files move to `_replaced`). Switching discs (USA, PAL, Trilogy) leaves the
+  new release's card empty: at boot (and when a randomizer or Archipelago
+  seed's own card mounts; seeds are version-neutral) the port asks once per card and release
+  whether to copy the newest other release's saves over, converted (skipped
+  under `MP_CONSOLE`/`MP_NO_DISC_DIALOG`); "Restore from <release>" in the
+  Memory card section (console `gci restore [n]`) does it any time, the card's
+  earlier files moving to `_replaced`. Logic in `platform/port_gci.cpp` and
   `platform/port_save_convert.cpp`, covered by `port_gci_tests` and
   `port_save_convert`. Console: `gci list | import <path> | export [usa|pal]
   <dir or .raw> | export trilogy <save.bin> | dolphin import | dolphin export
@@ -1104,7 +1186,8 @@ other `X:\Users\<name>`: `X:\Users\<user>`); the
 - Mouse mode requests the GC aiming crosshair without holding R or entering the
   console's movement-restricting free-look mode. While locked on (aim follows the
   target) the crosshair shrinks away as in the original and returns on release
-  (issue #112). `MP_DISABLE_MOUSE_CROSSHAIR=1`
+  (issue #112). On a Trilogy disc Trilogy's own aiming cursor is the crosshair and the
+  GC one stays closed unless Crosshair style is `gamecube` or `remastered` (issue #219). `MP_DISABLE_MOUSE_CROSSHAIR=1`
   opts out. The Controls > Mouse settings sub-tab exposes inversion, weapon-button and crosshair toggles.
 - Crosshair size (Controls > Mouse settings and pause Options > Controller, persisted as
   `crosshair_size`, 25-100 percent, default 50): scales the free-aim crosshair
@@ -1227,6 +1310,11 @@ other `X:\Users\<name>`: `X:\Users\<user>`); the
   Remastered room models > Skip small models, console `roomgeo minpx <n>`; default 0): leaves out room
   geometry instances that span fewer than n pixels of the game's 480-line
   screen.
+- `remastered_performance=<0|1>` (Mods > Prime Remastered > Performance mode;
+  default 1): faster Remastered drawing that is no longer exact (glass copy
+  every second frame, quarter-size exposure measure, blended volumetric fog,
+  arm cannon depth laid first); see `docs/MODS.md`. Console `roomgeo perf
+  [mask]` sets single shortcuts (1 glass, 2 measure, 4 fog, 8 gun), not saved.
 - `MP_ROOM_GEO_LOD=<scale>` (setting `room_geo_lod`, F1 > Debug >
   Remastered room models > Detail distance, console `roomgeo lod <scale>`;
   default 1): the import also converts each room model's coarser Remastered

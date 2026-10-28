@@ -108,6 +108,38 @@ void CHUDBillboardEffect::PreRender(CStateManager& mgr, const CFrustumPlanes& fr
       xe8_generator->SetGlobalOrientation(camXf * hudToCamera);
       xe8_generator->SetLocalScale(
           CVector3f(cam.GetAspectRatio() * halfHeight, 1.f, halfHeight));
+    } else if (PortIsRemasteredHUD()) {
+      // CHUDBillboardEffectMP1 ctor 0xd7e75c: Remastered drops the retail dist/scale/translation.
+      // Its only caller, the GOC Create 0xd80010, passes scale skOneVector and offset
+      // skZeroVector, so the effect sits in the HUD camera's space at (0, 0, -D), D the visor
+      // plane depth, with scale (1, 1, 1), times GetHUDVisorEffectScale 0xcb0ef8 =
+      // (aspect * D * tan(fov / 2), D * tan(fov / 2), 1) for scale type 1. Type 1 maps a particle
+      // at (x, y) to (x, y) in normalized screen coordinates, sprites stretched with it (16:9);
+      // type 0 leaves HUD units, one of them 1 / (D * tan(fov / 2)) of the half-height. The port
+      // scales that HUD scene by d / D onto its own near plane, keeping each particle's
+      // direction from the eye (and the VisorRain depth ratio, vfx.cpp). Remastered ran at 16:9
+      // only: other aspects keep the 16:9 sprite size and spread the spawns instead
+      // (PortUpdateSpawnSpread).
+      const CGameCamera& cam = mgr.GetCameraManager()->GetCurrentCamera(mgr);
+      const float d = GetNearClipDistance(mgr);
+      const float unit = d * std::tan(cam.GetRenderFov() * (M_PIF / 180.f) * 0.5f) *
+                         rstl::min_val(1.f, cam.GetAspectRatio() / kPortHUDAspect);
+      const CTransform4f hudToCamera(1.f, 0.f, 0.f, 0.f, 0.f, 0.f, -1.f, 0.f, 0.f, 1.f, 0.f, 0.f);
+      xe8_generator->SetGlobalTranslation(camXf * CVector3f(0.f, d, 0.f));
+      xe8_generator->SetGlobalOrientation(camXf * hudToCamera);
+      if (xPortScaleType == 1) {
+        xe8_generator->SetLocalScale(CVector3f(kPortHUDAspect * unit, d / kPortHUDDepth, unit));
+      } else {
+        const float hudUnit = unit / (kPortHUDDepth * kPortHUDTanHalfFov);
+        xe8_generator->SetLocalScale(CVector3f(hudUnit, d / kPortHUDDepth, hudUnit));
+      }
+      // The HUD camera clips at kPortHUDNear (CGuiCamera ctor 0xbd4e60), nearer than the visor
+      // plane the port puts on its own near plane: a 3D model (VisorSteam) would lose its part
+      // in between, so the generator draws models that much farther out from the eye.
+      if (x104_26_isElementGen) {
+        static_cast< CElementGen& >(*xe8_generator)
+            .PortSetHudScene(cam.GetNearClipDistance() * kPortHUDDepth / (d * kPortHUDNear));
+      }
     } else
 #endif
     {
@@ -136,10 +168,20 @@ void CHUDBillboardEffect::Render(const CStateManager& mgr) const {
 // Port: the effects are authored to fill a 4:3 view (GetScaleForPOV). Wider screens keep the
 // vertical FOV and extend sideways, narrower ones extend vertically (Vert+), so spread where the
 // particles and bolts spawn along the extended axis. Scaling the system instead would stretch
-// every sprite and bolt with it. The visor goo manager places its splats itself.
+// every sprite and bolt with it. The visor goo manager places its splats itself. Remastered's
+// HUD-space effects are authored for 16:9, with HUD y up.
 void CHUDBillboardEffect::PortUpdateSpawnSpread(const CStateManager& mgr) {
   CVector3f spread(1.f, 1.f, 1.f);
-  if (xPortManagedType != 4) {
+  if (xPortManagedType == 4) {
+    // Placed by PortAddVisorGooSplat.
+  } else if (PortIsRemasteredHUD()) {
+    const float aspect = mgr.GetCameraManager()->GetCurrentCamera(mgr).GetAspectRatio();
+    if (aspect > kPortHUDAspect) {
+      spread.SetX(aspect / kPortHUDAspect);
+    } else if (aspect > 0.f) {
+      spread.SetY(kPortHUDAspect / aspect);
+    }
+  } else {
     const float kMinAspect = 4.f / 3.f;
     const float aspect = mgr.GetCameraManager()->GetCurrentCamera(mgr).GetAspectRatio();
     if (aspect > kMinAspect) {
@@ -149,6 +191,14 @@ void CHUDBillboardEffect::PortUpdateSpawnSpread(const CStateManager& mgr) {
     }
   }
   PortApplySpawnSpread(spread);
+}
+
+// Remastered marks its PARTs and its ELC2s (the GunTurret visor ELSC): the ctor 0xd7e75c places
+// a generator and an electric alike, so both take the HUD space. Retail effects stay retail.
+bool CHUDBillboardEffect::PortIsRemasteredHUD() const {
+  return x104_26_isElementGen
+             ? static_cast< const CElementGen& >(*xe8_generator).PortIsRemastered()
+             : static_cast< const CParticleElectric& >(*xe8_generator).PortIsRemastered();
 }
 
 void CHUDBillboardEffect::PortApplySpawnSpread(const CVector3f& spread) {

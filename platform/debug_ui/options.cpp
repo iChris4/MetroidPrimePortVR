@@ -31,7 +31,7 @@
 #include <SDL3/SDL_dialog.h>
 #include <SDL3/SDL_timer.h>
 
-#if defined(__ANDROID__)
+#if defined(PORT_TOUCH_CONTROLS)
 #include "touch_pad.h"
 #endif
 
@@ -259,6 +259,9 @@ static void UpdateDynamicRes(double fps, unsigned frames) {
   sample.fps = fps;
   sample.frames = frames;
   sample.targetFps = DynamicResTargetFps();
+  AuroraPipelineStats pipelines{};
+  aurora_get_pipeline_stats(&pipelines);
+  sample.compiling = pipelines.pending > 0;
   sample.top = top;
   sample.bottom = bottom;
   if (gpuTimes) {
@@ -895,6 +898,14 @@ void BeginDriverWorkarounds(const std::string& userFolder, std::string& enable, 
     if (bits & (1u << i)) {
       append(enable, kDriverWorkarounds[i].enable);
       append(disable, kDriverWorkarounds[i].disable);
+      if (const char* var = kDriverWorkarounds[i].env; var != nullptr && port::EnvString(var) == nullptr) {
+#ifdef _WIN32
+        _putenv_s(var, "1");
+#else
+        setenv(var, "1", 1);
+#endif
+        PortLog::Write("port: driver workaround %s sets %s=1\n", kDriverWorkarounds[i].key, var);
+      }
     }
   }
   // A run on MP_DRIVER_WORKAROUNDS says nothing about the ticked boxes: it leaves the marker alone.
@@ -986,7 +997,7 @@ void SetMouseAim(bool enabled) {
 }
 
 bool TouchDirectAim() {
-#if defined(__ANDROID__)
+#if defined(PORT_TOUCH_CONTROLS)
   return !sInput.touchClassic && sTouchActive.load(std::memory_order_acquire) && !Visible();
 #else
   return false;
@@ -994,7 +1005,7 @@ bool TouchDirectAim() {
 }
 
 bool TouchActive() {
-#if defined(__ANDROID__)
+#if defined(PORT_TOUCH_CONTROLS)
   return sTouchActive.load(std::memory_order_acquire) && !Visible();
 #else
   return false;
@@ -1015,7 +1026,7 @@ bool TwinStick() {
   if (PortVr::VrPadOwnsPort0()) {
     return false;
   }
-#if defined(__ANDROID__)
+#if defined(PORT_TOUCH_CONTROLS)
   // Touch has its own twin stick (the right stick aims), apart from the pad preset.
   if (TouchActive()) {
     return sInput.touchTwinStick;
@@ -1052,6 +1063,13 @@ bool SwapScanXray() {
 }
 
 void SetSwapScanXray(bool enabled) { StoreSetting(sInput.swapScanXray, enabled); }
+
+bool RadialMenus() {
+  EnsureInitialized();
+  return sInput.radialMenus && !sOriginalExperience;
+}
+
+void SetRadialMenus(bool enabled) { StoreSetting(sInput.radialMenus, enabled); }
 
 int TurboBinding(int slot) {
   EnsureInitialized();
@@ -1272,9 +1290,13 @@ void AddStickAim(float x, float y, float dt) {
   if (gpGameState != nullptr && gpGameState->GameOptions().GetInvertYAxis()) {
     y = -y;
   }
-  // x right / y up; the aim state expects SDL-style right/down positive.
-  const float travelX = x * sInput.stickAimRate * dt;
-  const float travelY = -y * (sInput.stickAimSplit ? sInput.stickAimRateY : sInput.stickAimRate) * dt;
+  // x right / y up; the aim state expects SDL-style right/down positive. The travel
+  // turns (and moves the pointer) by the mouse sensitivity, so divide that out: a stick
+  // pixel turns kAimPixelRadians whatever the mouse is set to (issue #209).
+  const float sensitivity = MouseSensitivity();
+  const float travelX = PortMouse::AimPixelsAsCounts(x * sInput.stickAimRate * dt, sensitivity);
+  const float travelY = PortMouse::AimPixelsAsCounts(
+      -y * (sInput.stickAimSplit ? sInput.stickAimRateY : sInput.stickAimRate) * dt, sensitivity);
   sMouseFrameX += travelX;
   sMouseFrameY += travelY;
   sStickFrameX += travelX;

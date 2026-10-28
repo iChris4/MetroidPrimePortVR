@@ -30,13 +30,30 @@ void GXSetSDF(u8 edge);
 // Port extension: how the following draws sample a converted Remastered HUD picture (see
 // GX_AURORA_SET_HUD_SAMPLE). Mode 0 turns it off.
 void GXSetHudSample(u8 mode, f32 dyinX, f32 dyinY);
+// Port extension: a user clip plane for the following triangle draws (see GX_AURORA_SET_CLIP_PLANE);
+// plane is (a, b, c, d) in GX view space, kept where a x + b y + c z + d >= 0. Off ignores plane.
+void GXSetClipPlane(GXBool enable, const f32 plane[4]);
 // Port extension: a depth pre-pass for surfaces that alpha-test. Pass 1 writes only depth,
 // and its pixel shader keeps nothing but what the alpha compare needs; pass 2 draws the same
 // surfaces again where the depth is equal, without writing it, so each pixel is shaded once
 // and the GPU can still test depth before shading (a discard stops that only while depth is
 // written). The result is what one depth-tested pass gives. Draws that don't write depth
-// are left alone in pass 2 and draw nothing in pass 1. 0 turns it off.
+// are left alone in pass 2 and draw nothing in pass 1. 0 turns it off. Pass 3 is pass 1 that also
+// marks its pixels in an EFB without alpha (alpha -1, which nothing there reads), so that
+// GX_PORT_PERF_GUN_FIRST's exposure measure can leave out the area the gun hides.
 void GXPortSetDepthPrepass(u8 pass);
+// Port extension: shortcuts that trade exactness for speed (the Remastered mod's performance
+// option), as GX_PORT_PERF_* bits; 0, the default, draws everything exactly. Read when each part
+// is drawn, from any thread.
+enum {
+  GX_PORT_PERF_GLASS_HALF_RATE = 1u << 0, // glass refracts a screen copy taken every second frame
+  GX_PORT_PERF_SMALL_MEASURE = 1u << 1,   // the exposure measure starts at a quarter of the scene
+  GX_PORT_PERF_BLEND_FOG = 1u << 2,       // volumetric fog blended onto the scene, not copied and rewritten
+  GX_PORT_PERF_GUN_FIRST = 1u << 3,       // the gun's depth is laid before the world, hiding it there
+  GX_PORT_PERF_ALL = (1u << 4) - 1,
+};
+void GXPortSetPerformance(u32 flags);
+u32 GXPortGetPerformance(void);
 // Aurora extension: names the following draws in Aurora's warnings about them (the
 // model's asset id, its index when it has no id, and the material); draws nothing
 // differently. Asset 0 with model 0xFFFFFFFF is no name (the initial state).
@@ -238,6 +255,12 @@ void GXSetPBRLightScale(f32 diffuse, f32 f0, f32 alpha, GXBool alphaReplaces);
 // Null `diffuse` is (1, 1, 1, 1), null `incan` is (0, 0, 0, 1), each independently; 1 is the
 // neutral coverage.
 void GXSetPBRModelModulation(const f32 diffuse[4], const f32 incan[4], f32 coverage);
+// Aurora extension: Remastered's Model_ThermalOverride, the thermal visor's hot pass, in place of the
+// shading of the following PBR draws into the HDR scene (GXPortSceneHdr; elsewhere and on layered
+// materials it does nothing): grey g = (clamp(luma(base), 0, 1) * 3.75 + 0.25) * |N.V| * x + y. The
+// alpha is 1, or base.a^2 * vertex alpha where `blended` (a material drawn with a blend, not alpha
+// tested). Stays in effect until turned off; off is neutral.
+void GXSetPBRThermal(GXBool on, f32 x, f32 y, GXBool blended);
 
 // Port extension: Remastered's bloom and colour grade at the end of the HDR scene (GXPortSceneHdr;
 // see lib/gfx/bloom.cpp). Light above `threshold` (exposed luminance) blooms, tints 0 to 3 weight
@@ -324,6 +347,8 @@ GXBool GXPortThermalPass(const f32 tone[3][4], const f32 v[4], const f32 r[4]);
 // the 8-bit EFB. False (nothing written) if the device has no RGBA16F target or draw-id mode is
 // on; the switch itself is also refused, logged, outside an EFB pass.
 GXBool GXPortSceneHdr(GXBool on);
+// Resume the UI's HDR content target, preserving colour and clearing only depth.
+GXBool GXPortPauseSceneHdr(void);
 // Port extension: GXCopyTex for a copy of the scene that a PBR shader reads as linear light.
 // While the EFB pass draws to the RGBA16F HDR scene the copy is that linear RGBA16F scene, not
 // the display-encoded copy every other GXCopyTex makes; otherwise it is exactly GXCopyTex.
@@ -369,12 +394,24 @@ void GXPortActorShadowCasters(u32 layer, const f32 clip[16]);
 void GXPortActorShadowDecal(u32 layer, const f32 params[64]);
 void GXPortActorShadowEnd(void);
 GXBool GXPortActorShadowRender(void);
+// Remastered's silhouette shell (shader Model_SilhouetteShell; build/mpr/kb
+// topic/model-black-silhouette.md). Between GXPortShell(1 or 2, params) and GXPortShell(0, NULL)
+// triangle draws are the model's shell, pushed out along its normals and pulled back in depth:
+// mode 1 writes only its depth, mode 2 its colour (depth test, no depth write) from the textures
+// GX_TEXMAP0 (strength colour lookup) and GX_TEXMAP1 (indirect) held when mode 1 was set (the
+// model's materials may load others meanwhile) and the frame's scene copy (see
+// aurora::gfx::vfx::capture_scene). `params` is 6 vec4: CCH0..CCH4, then (time in seconds, the
+// depth bias in view units, 1 when GX_TEXMAP0 is sRGB-encoded, the view depth of the model's
+// bounds centre): every depth moves as far as the centre's does when pushed `bias` farther.
+void GXPortShell(u32 mode, const f32* params);
 // The room's Remastered point and spot lights for the rest of the frame, added on every PBR draw
 // (lit, lightmapped or not) as the sun is. Each record is 16 f32: view-space position, A; colour
 // (linear, scaled), B; view-space axis toward the light, cone scale; cone bias, falloff (0 none,
 // 1 linear, 2 squared, 3 smooth), spot (0 point, 1 spot, 2 directional: only the colour and the axis count), 0. The distance falloff runs on
 // t = clamp(dist * A + B, 0, 1), the cone on clamp(dot(L, axis) * scale + bias, 0, 1).
 void GXPortSetRoomLights(const f32* records, u32 count);
+// Game-thread snapshot, at most 64 records, for scoped UI lighting overrides.
+u32 GXPortGetRoomLights(f32 records[64 * 16]);
 
 void GXColor4f32(float r, float g, float b, float a);
 

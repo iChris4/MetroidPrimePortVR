@@ -12,6 +12,9 @@
 #include "Kyoto/TAverage.hpp"
 
 #include "MetroidPrime/Player/CPlayerState.hpp"
+#ifdef TARGET_PC
+#include "port_queen_barrier.h"
+#endif
 
 class CScriptSpecialFunction : public CActor {
   friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
@@ -117,6 +120,10 @@ private:
   bool x1e5_25_playerInArea : 1;
   bool x1e5_26_displayBillboard : 1;
   rstl::optional_object< CToken > x1e8_;
+#ifdef TARGET_PC
+  PortQueenBarrier::State xPortBarrier;
+  void PortUpdateBarrier(float dt, CStateManager& mgr);
+#endif
 
 public:
   CScriptSpecialFunction(TUniqueId, const rstl::string&, const CEntityInfo&, const CTransform4f&,
@@ -133,6 +140,16 @@ public:
   rstl::optional_object< CAABox > GetTouchBounds() const override { return x1c8_touchBounds; }
 #ifdef TARGET_PC
   ESpecialFunction PortFunction() const { return xe8_function; }
+  void PortConfigureBarrier(const PortRoomEffects::BarrierGroup& group, uint32_t mrea) {
+    if (xe8_function == kSF_IntroBossRingController) xPortBarrier.Configure(group, mrea);
+  }
+  bool PortBarrierVisible(const CStateManager& mgr) const { return xPortBarrier.Visible(mgr); }
+  // Room-state saves omit add-on effects and their particle/controller progress. Never
+  // keep a future/past replacement group alive across restore: use retail until reload.
+  void PortInvalidateBarrierForRestore(CStateManager& mgr) { xPortBarrier.Stop(mgr); }
+  bool PortBarrierCovers(TUniqueId platform, const CStateManager& mgr) const {
+    return xPortBarrier.Covers(platform.value, mgr);
+  }
   const rstl::string& PortLocatorName() const { return xec_locatorName; }
   float PortFloat(int i) const {
     return i == 0 ? xfc_float1 : i == 1 ? x100_float2 : i == 2 ? x104_float3 : x108_float4;

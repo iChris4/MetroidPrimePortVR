@@ -80,7 +80,7 @@ Dread's bodies do not fit Prime's skeletons: pinning and stretching Dread's
 mesh onto Prime's bone lengths stretches the skin between the hips, chest and
 shoulders. So Dread keeps its own proportions. For each body the import writes
 a skeleton with Prime's CINF joint layout but Dread's bind offsets (its own ids,
-`D7EAD001`-`D7EAD008`, one per suit and per Prime skeleton), binds Dread's mesh
+`D7EAD001`-`D7EAD00C`, one per suit and per Prime skeleton), binds Dread's mesh
 to it with Dread's own weights, and writes the CMDL/CSKR/TXTR under the retail
 body ids so the game's characters draw them with no code change of their own.
 At run time Prime's animations are retargeted onto it rotation-only
@@ -94,6 +94,42 @@ suit materials are Dread's own (albedo, normal, metal/rough/AO, emissive) on the
 Remastered import's PBR shader path.
 
 ## After an update
+
+Version 11 sets the shoulder pads as Dread's idle animations hold them
+(the left arm hanging, the right holding the cannon forward) instead of in its
+T-pose bind, where they rode high and flared out. Prime has no pad joint, so
+they stay fixed to the chest in that pose; they do not lift with the arms as in
+Dread.
+
+Version 10 pushes the first-person cannon's glowing core (Dread's lights sit
+on the barrel axis and show only through its slits) out onto the inside of the
+shell, so seen through the open back the lights line its edge rather than
+sitting deep in the middle. Separately from the import, the Plasma Beam no
+longer pushes the cannon forward: its animations extend LBEAM past the bind
+pose for Prime's longer Plasma gun, and that extension is taken back out of
+the cannon and its muzzle (recoil is kept).
+
+Version 9 moves the first-person cannon's muzzle onto the gun's live LBEAM
+locator, so shots and muzzle effects start at its tip and it follows the
+recoil; the beam lights are brighter (peak 4) and keep their colour (the grey
+is taken out of each beam tint); a beam change or the X-ray visor shows the
+Dread cannon instead of Prime's hologram gun; and the Phazon Suit uses the
+Gravity Suit's cannon, as the Metroid Suit's own reads as part of the shell.
+
+Version 8 also replaces the first-person arm cannon with each suit's Dread
+cannon, cut from the body (with the forearm skin that closes its elbow end) and
+fitted along Prime's barrel. Its lights take the beam's colour: one copy of the
+light material per beam, from Prime's beam tints. The cannon is rolled 30
+degrees so its side light faces the camera; seen straight from behind, its
+wide back end hides it. The left hand stays
+retail. Mods > Metroid Dread's "Dread arm cannon in first person"
+(`dread_first_person_cannon`, on by default; console `dreadcannon 0|1`) turns
+it off for Prime's own arm cannon, at once, keeping the Dread bodies.
+
+Version 7 also dresses the pause screen's Samus (`ANCS_ItemScreenSamus`, CINF
+`F76E70A6`): each suit's first part is the Dread body, and the doll then leaves
+out that suit's other parts, its boots, beam and visor models, which the Dread
+body carries itself. The grapple beam still shows once it is collected.
 
 Version 6 also imports Power/Varia/Gravity/Hyper Morph Balls (Hyper for Phazon),
 including normal, Spider-equipped and low-poly paths. Low-poly paths reuse the
@@ -131,8 +167,9 @@ replaces the old mod.
   is refused. Compressed images (`.nsz`/`.xcz`) are refused ("compressed images
   (.nsz/.xcz) are not supported; decompress it first"), and an `.xci` needs the
   key file's `key_area_key_application_XX` keys.
-- In first-person play the body is hidden, as in retail, so the mod shows in
-  cutscenes and in the Morph Ball transition unless the third-person camera
+- In first-person play the body is hidden, as in retail (only the arm cannon is
+  Dread's), so the rest of the mod shows in
+  cutscenes, on the pause screen and in the Morph Ball transition unless the third-person camera
   (Video > Display, `third_person`, off by default; see `docs/SETTINGS.md`) is
   on. That camera is experimental.
 - Only the Power, Varia, Gravity and Phazon bodies and balls: Fusion keeps its models,

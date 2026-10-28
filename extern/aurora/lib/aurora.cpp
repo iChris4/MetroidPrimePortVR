@@ -5,6 +5,7 @@
 #ifdef AURORA_ENABLE_GX
 #include "gfx/resources.hpp"
 #include "gfx/depth_peek.hpp"
+#include "gfx/overdraw.hpp"
 #include "gfx/frame.hpp"
 #include "gfx/pipeline_cache.hpp"
 #include "gfx/recording.hpp"
@@ -210,9 +211,11 @@ constexpr std::array PreferredBackendOrder{
 #ifdef DAWN_ENABLE_BACKEND_D3D11
     BACKEND_D3D11,
 #endif
-// #ifdef DAWN_ENABLE_BACKEND_DESKTOP_GL
-//     BACKEND_OPENGL,
-// #endif
+// Desktop GL last among the GPU backends: for GPUs whose D3D and Vulkan drivers all fail (OpenGL 3.3
+// hardware), before the software adapters of the second pass.
+#ifdef DAWN_ENABLE_BACKEND_DESKTOP_GL
+    BACKEND_OPENGL,
+#endif
 #ifdef DAWN_ENABLE_BACKEND_OPENGLES
     BACKEND_OPENGLES,
 #endif
@@ -650,6 +653,7 @@ void end_frame(uint64_t contentTag) noexcept {
     // The headset's eyes, whether or not the window could be presented.
     const auto stereoSink = stereo_host::encode(encoder, stereoState, logicalFrame, contentTag);
     webgpu::gpu_prof::frame_end(encoder);
+    gfx::overdraw::frame_end(encoder);
     const wgpu::CommandBufferDescriptor cmdBufDescriptor{.label = "Redraw command buffer"};
     const auto buffer = encoder.Finish(&cmdBufDescriptor);
     {
@@ -663,6 +667,7 @@ void end_frame(uint64_t contentTag) noexcept {
     webgpu::gpu_prof::after_submit();
     // The bridge's native follow-up on the same queue, then its completion callback.
     stereo_host::submitted(stereoSink);
+    gfx::overdraw::after_submit();
     if (canPresent && g_surface) {
       ZoneScopedN("Present");
       wgpu::ConvertibleStatus status = wgpu::Status::Error;

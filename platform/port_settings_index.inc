@@ -37,6 +37,7 @@
 {"Controls", "Options", "Buttons", "Sticky Charge", "charge beam hold fire"},
 {"Controls", "Options", "Buttons", "Remastered charge (rapid fire)", "rapid fire autofire charge remastered"},
 {"Controls", "Options", "Buttons", "Swap the Scan and X-Ray visor buttons", "visor scan xray swap buttons"},
+{"Controls", "Options", "Buttons", "Radial beam and visor menus (Trilogy)", "radial wheel ring beam visor menu select wii trilogy hold"},
 {"Controls", "Options", "Aiming", "Auto-aim", "aim assist lock automatic"},
 {"Controls", "Options", "Aiming", "Pointer aim (Trilogy style)", "pointer cursor wii trilogy prime 3 corruption free aim edge turn mouse stick gyro touch"},
 {"Controls", "Options", "Aiming", "Dead box", "pointer aim dead zone box turn edge"},
@@ -195,6 +196,7 @@
 {"Mods", "", "Mods", "Open mods folder", "mods folder open directory"},
 #endif
 {"Mods", "", "Built-in mods > Prime Remastered", "Use the Remastered models", "remastered mod enable disable toggle on off retail models"},
+{"Mods", "", "Built-in mods > Prime Remastered", "Performance mode", "performance fast faster speed fps glass fog exposure gun cannon remastered"},
 // The one key file row, above both built-in sections: both imports read it, so it has one row.
 #if defined(__ANDROID__)
 {"Mods", "", "Built-in mods", "Pick the keys...", "keys prod.keys remastered dread pick decryption both imports shared"},
@@ -215,6 +217,7 @@
 {"Mods", "", "Built-in mods > Prime Remastered > Import > What to import", "Movies", "remastered import parts movies fmv skip ffmpeg"},
 {"Mods", "", "Built-in mods > Prime Remastered > Import > What to import", "Gallery", "remastered import parts gallery extras skip"},
 {"Mods", "", "Built-in mods > Metroid Dread", "Use the Dread Suit models", "dread samus metroid suit models mod enable disable toggle on off"},
+{"Mods", "", "Built-in mods > Metroid Dread", "Dread arm cannon in first person", "dread samus arm cannon gun first person viewmodel weapon show hide toggle"},
 {"Mods", "", "Built-in mods > Metroid Dread > Import", "Import##dread", "dread start import run samus suit models nsp xci"},
 #if !defined(__ANDROID__)
 {"Mods", "", "Importers", "Argument", "importer argument parameter file"},
@@ -348,6 +351,7 @@
 {"Debug", "", "Remastered room models", "Draw merged copies", "remastered merged copies rooms draw"},
 {"Debug", "", "Remastered room models", "Draw nearest first", "remastered nearest first order draw"},
 {"Debug", "", "Remastered room models", "Depth pre-pass for cut-outs", "remastered depth cutout pre pass"},
+{"Debug", "", "Remastered room models", "Depth pre-pass for all room models", "remastered depth opaque pre pass"},
 {"Debug", "", "Remastered room models", "GPU pass times", "remastered gpu timing performance"},
 {"Debug", "", "Remastered room models", "Shading cost test", "remastered shading cost test performance"},
 {"Debug", "", "Remastered room models", "Pick the model ahead", "remastered model debug pick"},

@@ -579,6 +579,51 @@ std::map<int, std::vector<SceneryScripts::Driver>> FindMaterialDrivers(const Roo
   return result;
 }
 
+// Supported subset is explicit: no guessed modes, splines, RGB tint or extra flags.
+// Loader 0xd60e1c, defaults 0xd60d00/0xd1e3dc, Create 0xd61bb0.
+static bool ReadAlphaModulate(const Room& room, const Component& c, PortRoomGeo::ScriptNode& node) {
+  const auto f = room.Flat(c);
+  if (f.count(kPropModulateBlend) || f.count(0x2e456002) || f.count(0xb031a3b8)) {
+    return false;
+  }
+  auto scalar = [&](uint32_t key, float def) {
+    const auto p = f.find(key);
+    return p != f.end() && p->second.size == 4 ? ReadLEFloat(room.Bytes(p->second)) : def;
+  };
+  auto boolean = [&](uint32_t key, bool def) {
+    const auto p = f.find(key);
+    return p != f.end() && p->second.size == 1 ? room.Bytes(p->second)[0] != 0 : def;
+  };
+  if (scalar(0x5b75f4b0, 1.f) != 1.f || scalar(0xf936079e, 1.f) != 1.f ||
+      boolean(0xf7d4111c, false) || boolean(0xeecd6985, false) ||
+      boolean(0xbc6c51a1, false)) {
+    return false;
+  }
+  for (int color = 0; color < 2; ++color) {
+    float rgba[4] = {1, 1, 1, 1};
+    for (int channel = 0; channel < 4; ++channel) {
+      Span p;
+      if (room.Nested(c, {color == 0 ? 0x0e9d55ffu : kPropModulateColorB, kPropColorRGBA[channel]}, p) && p.size == 4) {
+        rgba[channel] = ReadLEFloat(room.Bytes(p));
+      }
+    }
+    if (rgba[0] != 1.f || rgba[1] != 1.f || rgba[2] != 1.f || !std::isfinite(rgba[3])) {
+      return false;
+    }
+    node.centre[color] = rgba[3];
+  }
+  node.half[0] = scalar(0x23fc9f0d, 1.f);
+  node.half[1] = scalar(0xd8f7b602, 1.f);
+  if (!std::isfinite(node.half[0]) || !std::isfinite(node.half[1])) {
+    return false;
+  }
+  node.max = (boolean(0x976a1cfc, false) ? 1u : 0u) | (boolean(0xa51953a4, false) ? 2u : 0u) |
+             (boolean(0xee2b08a7, true) ? 4u : 0u) | (boolean(0x48c52c78, true) ? 8u : 0u) |
+             (boolean(0x22ec5b19, false) ? 16u : 0u) | (boolean(0x3fff0f45, false) ? 512u : 0u) |
+             (boolean(0xf41e2ca0, false) ? 0x1000u : 0u);
+  return true;
+}
+
 SceneryScripts MatchScripts(const Room& room, const Area& area) {
   SceneryScripts result;
   const std::vector<Component>& comps = room.Components();
@@ -699,22 +744,32 @@ SceneryScripts MatchScripts(const Room& room, const Area& area) {
     const auto it = entIndex.find(comps[size_t(comp)].entity);
     return it == entIndex.end() ? -1 : int(it->second);
   };
-  std::vector<std::vector<uint32_t>> out(ents.size());
-  for (const Connection& c : conns) {
-    const int s = entityOf(int(c.sender)), t = entityOf(room.ByGuid(c.target));
-    if (s >= 0 && t >= 0 && match[size_t(t)] >= 0) {
-      out[size_t(s)].push_back(objects[size_t(match[size_t(t)])].id);
-    }
-  }
-  for (auto& o : out) {
-    std::sort(o.begin(), o.end());
-    o.erase(std::unique(o.begin(), o.end()), o.end());
-  }
   std::set<uint32_t> ids;
   for (const ScriptObject& o : objects) {
     ids.insert(o.id);
   }
-  for (int round = 0; round < 3; ++round) {
+  // A round takes exact target sets first; when none is left, an entity whose matched targets
+  // are a subset of one unused retail object's targets alone (a cycle, as the Watery Hall gate's
+  // keyframe and the relay that re-arms it, leaves each with an unmatched target).
+  std::map<uint32_t, size_t> objIndex;
+  for (size_t j = 0; j < objects.size(); ++j) {
+    objIndex.emplace(objects[j].id, j);
+  }
+  for (int round = 0, subset = 0; round < 32; ++round) {
+    std::vector<std::vector<uint32_t>> out(ents.size());
+    std::vector<std::multiset<int>> open(ents.size());  // types of each entity's unmatched targets
+    for (const Connection& c : conns) {
+      const int s = entityOf(int(c.sender)), t = entityOf(room.ByGuid(c.target));
+      if (s >= 0 && t >= 0 && match[size_t(t)] >= 0) {
+        out[size_t(s)].push_back(objects[size_t(match[size_t(t)])].id);
+      } else if (s >= 0 && t >= 0) {
+        open[size_t(s)].insert(ents[size_t(t)].type);
+      }
+    }
+    for (auto& o : out) {
+      std::sort(o.begin(), o.end());
+      o.erase(std::unique(o.begin(), o.end()), o.end());
+    }
     std::map<std::pair<int, std::vector<uint32_t>>, std::vector<size_t>> sig;
     for (size_t j = 0; j < objects.size(); ++j) {
       if (used[j]) {
@@ -733,17 +788,62 @@ SceneryScripts MatchScripts(const Room& room, const Area& area) {
       }
     }
     int found = 0;
+    std::vector<int> pick(ents.size(), -1), claims(objects.size(), 0);
     for (size_t k = 0; k < ents.size(); ++k) {
       if (match[k] >= 0 || out[k].empty() || ents[k].type < 0) {
         continue;
       }
-      const auto it = sig.find({ents[k].type, out[k]});
-      if (it != sig.end() && it->second.size() == 1 && !used[it->second[0]]) {
-        take(k, it->second[0]);
+      if (subset == 0) {
+        const auto it = sig.find({ents[k].type, out[k]});
+        if (it != sig.end() && it->second.size() == 1 && !used[it->second[0]]) {
+          take(k, it->second[0]);
+          ++found;
+        }
+        continue;
+      }
+      // Each retail target the entity lacks must be an unused object of a type the entity
+      // still sends to an unmatched entity of.
+      auto accounted = [&](const std::vector<uint32_t>& retail) {
+        std::multiset<int> left = open[k];
+        for (uint32_t t : retail) {
+          if (std::binary_search(out[k].begin(), out[k].end(), t)) {
+            continue;
+          }
+          const size_t j = objIndex.at(t);
+          const auto it = left.find(objects[j].type);
+          if (used[j] || it == left.end()) {
+            return false;
+          }
+          left.erase(it);
+        }
+        return true;
+      };
+      int only = -1, count = 0;
+      for (const auto& [key, js] : sig) {
+        if (key.first == ents[k].type &&
+            std::includes(key.second.begin(), key.second.end(), out[k].begin(), out[k].end()) &&
+            accounted(key.second)) {
+          count += int(js.size());
+          only = int(js[0]);
+        }
+      }
+      if (count == 1 && !used[size_t(only)]) {
+        pick[k] = only;
+        ++claims[size_t(only)];
+      }
+    }
+    // Only a retail object one entity alone can take.
+    for (size_t k = 0; subset != 0 && k < ents.size(); ++k) {
+      if (pick[k] >= 0 && claims[size_t(pick[k])] == 1) {
+        take(k, size_t(pick[k]));
         ++found;
       }
     }
-    if (found == 0) {
+    if (found != 0) {
+      subset = 0;
+    } else if (subset == 0) {
+      subset = 1;
+    } else {
       break;
     }
   }
@@ -800,18 +900,71 @@ SceneryScripts MatchScripts(const Room& room, const Area& area) {
       kind = PortRoomGeo::kCounter;
     } else if (c.type == kRelay) {
       kind = PortRoomGeo::kRelay;
+    } else if (c.type == kColorModulateMP1) {
+      PortRoomGeo::ScriptNode config;
+      if (ReadAlphaModulate(room, c, config)) {
+        kind = PortRoomGeo::kAlphaModulate;
+      }
     }
     if (kind != 0) {
       scriptObject[c.entity] = {kind, i};
     }
   }
   auto isScriptObject = [&](size_t comp) { return comps[comp].entity >= 0 && scriptObject.count(comps[comp].entity) != 0; };
+  // CPlatformMP1GOC::Create0xecaca4 gives each model the entity transform.
+  // ActorRotateMP1::Think0xf549cc applies the same rotation to each target.
+  // Reuse a matched platform only for an identical co-driven platform: same
+  // initial transform, movement properties and full incoming/outgoing graph.
+  // This replaces the old room/model-id table with a data-derived relation.
+  const auto platformSignature = [&](const Component& c) {
+    std::vector<std::tuple<int, uint32_t, uint32_t, int>> sig;
+    for (const auto& link : conns) {
+      const int target = targetEntity(link);
+      if (target == c.entity) sig.emplace_back(int(link.sender), link.event, link.action, -1);
+      if (comps[link.sender].entity == c.entity) sig.emplace_back(-1, link.event, link.action, target);
+    }
+    std::sort(sig.begin(), sig.end());
+    return sig;
+  };
+  const auto movementProperties = [&](const Component& c) {
+    std::map<uint32_t, std::vector<uint8_t>> out;
+    for (const auto& [key, span] : room.Flat(c)) {
+      // Model and ActorInformation affect rendering, not the platform's motion.
+      if (key == kPropPlatformModel || key == 0x11d0467f) continue;
+      out[key] = std::vector<uint8_t>(room.Bytes(span), room.Bytes(span) + span.size);
+    }
+    return out;
+  };
+  const auto platforms = room.Of(kPlatformComponent);
+  for (const Component* c : platforms) {
+    const auto own = result.retail.find(c->entity);
+    if (own != result.retail.end() && objects[own->second].type == kRetailPlatform) {
+      result.platformTransform[c->entity] = &objects[own->second];
+      continue;
+    }
+    Vec3 pos, rot, scale;
+    if (!room.Xform(*c, pos, rot, scale)) continue;
+    const auto signature = platformSignature(*c);
+    if (signature.empty()) continue; // proximity alone is not a movement binding
+    const ScriptObject* carrier = nullptr;
+    bool ambiguous = false;
+    for (const Component* other : platforms) {
+      const auto matched = result.retail.find(other->entity);
+      Vec3 p, r, s;
+      if (matched == result.retail.end() || objects[matched->second].type != kRetailPlatform ||
+          !room.Xform(*other, p, r, s) || p != pos || r != rot || s != scale ||
+          platformSignature(*other) != signature || movementProperties(*other) != movementProperties(*c)) continue;
+      if (carrier && carrier != &objects[matched->second]) ambiguous = true;
+      carrier = &objects[matched->second];
+    }
+    if (carrier && !ambiguous) result.platformTransform[c->entity] = carrier;
+  }
   // A grade hint's senders that are no retail object: the sender (PortRoomEnv's
   // kSenderPlayerFluid/kSenderCameraWater) and state (0: in, 1: out), or sender 0.
   std::set<int> hintEntities;
   for (const Component& c : comps) {
     if ((c.type == kColorGradeHint || c.type == kBacklight || c.type == kVolumetricFogHint ||
-         c.type == kVolumetricFogRegion) &&
+         c.type == kVolumetricFogRegion || c.type == kAutoExposureHint) &&
         c.entity >= 0) {
       hintEntities.insert(c.entity);
     }
@@ -995,7 +1148,7 @@ SceneryScripts MatchScripts(const Room& room, const Area& area) {
         }
         // Remastered's own objects, and keyframes, are followed by the script (below).
         if (sender.type == kTemplateManager || sender.type == kDebugOptions || isScriptObject(c->sender) ||
-            (sender.type == kActorKeyframeMP1 && c->action == kActionPlayAnim) ||
+            (sender.type == kActorKeyframeMP1 && IsKeyframePlay(c->action)) ||
             (depth > 0 && !PassFires(via, c->action))) {
           continue;
         }
@@ -1057,8 +1210,20 @@ SceneryScripts MatchScripts(const Room& room, const Area& area) {
   // camera is on, the counters they count with and the relays in between.
   // The same objects switch the suns (the hangar's intro shots and its escape's camera).
   std::set<int> geometry;  // entities with a ModCon, an added actor or a sun, point or spot light
+  // CacheTargetFlags visits Play/Activate actor targets, regardless of room.
+  // Refused modulators are absent from scriptObject and retain existing paths.
+  std::set<int> alphaTargets;
+  for (const Connection& link : conns) {
+    const auto from = scriptObject.find(comps[link.sender].entity);
+    if (from != scriptObject.end() && from->second.first == PortRoomGeo::kAlphaModulate &&
+        link.event == 0x4ee99d94 && link.action == kActionActivate) {
+      const int target = targetEntity(link);
+      if (target >= 0) alphaTargets.insert(target);
+    }
+  }
   for (const Component& c : comps) {
-    if (c.entity >= 0 && (c.type == kModCon || (c.type == kActorMP1 && room.Flat(c).count(kPropActorAdded) != 0))) {
+    if (c.entity >= 0 && (c.type == kModCon || c.type == kPlatformComponent || (c.type == kActorMP1 &&
+        (room.Flat(c).count(kPropActorAdded) != 0 || alphaTargets.count(c.entity) != 0)))) {
       geometry.insert(c.entity);
     } else if (c.entity >= 0 && c.type == kLightDynamic) {
       const auto f = room.Flat(c);
@@ -1084,6 +1249,9 @@ SceneryScripts MatchScripts(const Room& room, const Area& area) {
     PortRoomGeo::ScriptNode node;
     node.kind = kind;
     node.active = room.Active(c);
+    if (kind == PortRoomGeo::kAlphaModulate) {
+      ReadAlphaModulate(room, c, node);
+    }
     if (kind == PortRoomGeo::kCounter) {
       const auto f = room.Flat(c);
       const auto max = f.find(kPropCounterMax);
@@ -1113,6 +1281,8 @@ SceneryScripts MatchScripts(const Room& room, const Area& area) {
       return event == kEventEntered ? 0 : event == kEventExited ? 1 : -1;
     case PortRoomGeo::kCounter:
       return event == kEventCounterNonZero ? 0 : event == kEventCounterZero ? 1 : event == kEventCounterMax ? 2 : -1;
+    case PortRoomGeo::kAlphaModulate:
+      return event == 0x4ee99d94 ? 3 : RetailState(kColorModulateMP1, event) == kStateMaxReached ? 2 : -1;
     default:
       return event == kEventRelayFired ? 0 : -1;
     }
@@ -1138,8 +1308,38 @@ SceneryScripts MatchScripts(const Room& room, const Area& area) {
              : action == kActionCounterDecrement ? PortRoomGeo::kDecrement
                                                  : 0;
     }
+    if (kind == PortRoomGeo::kAlphaModulate) {
+      return action == 0x8ed2a8c7 ? PortRoomGeo::kIncrement :
+             action == 0x144d0f29 ? PortRoomGeo::kDecrement : 0;
+    }
     return kind == PortRoomGeo::kRelay && action == kActionRelayFire ? PortRoomGeo::kFire : 0;
   };
+  // The retail objects (id, state) a connection from outside the script comes from: its sender,
+  // or what fires an unmatched Relay or MemoryRelay on the way (the relays the hangar's intro
+  // shots count up and down the hull's counter with). Not through a Timer: an edge has no wait.
+  std::function<void(const Connection&, int, std::vector<std::pair<uint32_t, int>>&)> fromRetail =
+      [&](const Connection& c, int depth, std::vector<std::pair<uint32_t, int>>& out) {
+        const Component& sender = comps[c.sender];
+        const int s = entityOf(int(c.sender));
+        const int state = RetailState(sender.type, c.event);
+        if (s < 0 || state < 0 || state >= 256) {
+          return;
+        }
+        if (match[size_t(s)] >= 0) {
+          out.emplace_back(objects[size_t(match[size_t(s)])].id, state);
+          return;
+        }
+        const int type = RetailType(sender.type);
+        const auto in = sender.entity >= 0 ? incoming.find(sender.entity) : incoming.end();
+        if (type == kRetailTimer || !IsPass(type) || depth >= 6 || in == incoming.end()) {
+          return;
+        }
+        for (const Connection* fire : in->second) {
+          if (PassFires(type, fire->action) && !isScriptObject(fire->sender)) {
+            fromRetail(*fire, depth + 1, out);
+          }
+        }
+      };
   // The edges into a geometry entity (group: from the script objects only, the walk above
   // has the rest) or a node (from anything).
   auto inputs = [&](int target, bool group, uint8_t kind) {
@@ -1151,27 +1351,35 @@ SceneryScripts MatchScripts(const Room& room, const Area& area) {
       const Component& sender = comps[c->sender];
       const bool fromScript = isScriptObject(c->sender);
       // A matched ActorKeyframe's Play moves an animated actor on to its next clip.
-      const bool keyframe = group && sender.type == kActorKeyframeMP1 && c->action == kActionPlayAnim;
+      const bool keyframe = group && sender.type == kActorKeyframeMP1 && IsKeyframePlay(c->action);
       if (sender.type == kTemplateManager || sender.type == kDebugOptions || (group && !fromScript && !keyframe)) {
         continue;
       }
-      const uint8_t action =
+      const bool modulate = group && fromScript && scriptObject.at(sender.entity).first == PortRoomGeo::kAlphaModulate &&
+                            c->event == 0x4ee99d94 && c->action == kActionActivate;
+      const uint8_t action = modulate ? static_cast<uint8_t>(PortRoomGeo::kGroupModulate) :
           keyframe ? static_cast<uint8_t>(PortRoomGeo::kGroupNextClip) : scriptAction(kind, c->action);
-      int event = -1;
+      std::vector<std::pair<uint32_t, int>> senders;  // (from, event)
       if (fromScript) {
-        event = nodeEvent(scriptObject.at(sender.entity).first, c->event);
-      } else {
+        const int event = nodeEvent(scriptObject.at(sender.entity).first, c->event);
+        if (event >= 0) {
+          senders.emplace_back(0, event);
+        }
+      } else if (keyframe) {
         const int s = entityOf(int(c->sender));
         const int state = RetailState(sender.type, c->event);
-        event = s >= 0 && match[size_t(s)] >= 0 && state < 256 ? state : -1;
+        if (s >= 0 && match[size_t(s)] >= 0 && state >= 0 && state < 256) {
+          senders.emplace_back(objects[size_t(match[size_t(s)])].id, state);
+        }
+      } else {
+        fromRetail(*c, 0, senders);
       }
-      if (action == 0 || event < 0) {
+      if (action == 0 || senders.empty()) {
         ++result.scriptUnresolved;
         continue;
       }
       PortRoomGeo::ScriptEdge edge;
       edge.retail = !fromScript;
-      edge.event = uint8_t(event);
       edge.action = action;
       if (group) {
         const uint32_t next = uint32_t(result.group.size());
@@ -1184,8 +1392,11 @@ SceneryScripts MatchScripts(const Room& room, const Area& area) {
       } else {
         edge.to = nodeOf.at(target);
       }
-      edge.from = fromScript ? nodeFor(sender.entity) : objects[size_t(match[size_t(entityOf(int(c->sender)))])].id;
-      script.edges.push_back(edge);
+      for (const auto& [from, event] : senders) {
+        edge.from = fromScript ? nodeFor(sender.entity) : from;
+        edge.event = uint8_t(event);
+        script.edges.push_back(edge);
+      }
     }
   };
   for (int entity : geometry) {

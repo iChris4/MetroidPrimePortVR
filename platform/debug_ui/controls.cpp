@@ -18,7 +18,7 @@
 #include <imgui_internal.h>
 #include <SDL3/SDL_gamepad.h>
 
-#if defined(__ANDROID__)
+#if defined(PORT_TOUCH_CONTROLS)
 #include "touch_pad.h"
 #endif
 
@@ -65,7 +65,13 @@ void DrawControlsOptions() {
     SetSwapScanXray(swapScanXray);
   }
   ImGui::SetItemTooltip("Swaps the two buttons' D-pad directions, as in Remastered's Dual Sticks "
-                        "layout.\nThe controller presets set it.");
+                        "layout.\nThe controller presets (Remap > Presets...) set it.");
+  bool radialMenus = sInput.radialMenus;
+  if (ImGui::Checkbox("Radial beam and visor menus (Trilogy)", &radialMenus)) {
+    SetRadialMenus(radialMenus);
+  }
+  ItemHelp("With a Metroid Prime Trilogy disc: hold Beam menu or Visor menu (Remap) to open the "
+           "Wii's radial menu, point with the mouse, stick or C-stick, and let go to pick.");
 
   ImGui::SeparatorText("Aiming");
   if (ImGui::Checkbox("Auto-aim", &sAutoAim)) {
@@ -163,8 +169,8 @@ void DrawControlsKeyboardMouse() {
   ImGui::TextDisabled("Also switches on Twin stick, so a controller's right stick aims too.");
   // Shown on the Quake/Source/Apex scale (0.022 degrees a count per unit), stored in radians.
   float sourceSensitivity = PortMouse::SourceFromRadians(sInput.mouseSensitivity);
-  if (ImGui::SliderFloat("Sensitivity", &sourceSensitivity, 0.05f, 30.f, "%.3f",
-                         ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_NoRoundToFormat)) {
+  if (ImGui::SliderFloat("Sensitivity", &sourceSensitivity, 0.3f, 30.f, "%.3f",
+                         ImGuiSliderFlags_NoRoundToFormat)) {
     SetMouseSensitivity(PortMouse::RadiansFromSource(sourceSensitivity));
     MarkDirty();
   }
@@ -177,8 +183,8 @@ void DrawControlsKeyboardMouse() {
   ItemHelp("Own sensitivity for looking up and down; Sensitivity then sets left and right only.");
   if (sInput.mouseSensitivitySplit) {
     float sourceSensitivityY = PortMouse::SourceFromRadians(sInput.mouseSensitivityY);
-    if (ImGui::SliderFloat("Vertical sensitivity", &sourceSensitivityY, 0.05f, 30.f, "%.3f",
-                           ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_NoRoundToFormat)) {
+    if (ImGui::SliderFloat("Vertical sensitivity", &sourceSensitivityY, 0.3f, 30.f, "%.3f",
+                           ImGuiSliderFlags_NoRoundToFormat)) {
       SetMouseSensitivityY(PortMouse::RadiansFromSource(sourceSensitivityY));
       MarkDirty();
     }
@@ -240,8 +246,7 @@ void DrawControlsController() {
   // Shown only with twin stick on, as the pause menu's Stick Aim Speed row.
   if (sInput.twinStick) {
     float stickRate = sInput.stickAimRate;
-    if (ImGui::SliderFloat("Stick aim speed", &stickRate, 100.f, 8100.f, "%.0f px/s",
-                           ImGuiSliderFlags_Logarithmic)) {
+    if (ImGui::SliderFloat("Stick aim speed", &stickRate, 100.f, 8100.f, "%.0f px/s")) {
       SetStickAimRate(stickRate);
     }
     ItemHelp(sInput.stickAimSplit ? "How fast the right stick turns left and right at full tilt."
@@ -256,8 +261,7 @@ void DrawControlsController() {
     ItemHelp("Own speed for looking up and down; Stick aim speed then sets left and right only.");
     if (sInput.stickAimSplit) {
       float stickRateY = sInput.stickAimRateY;
-      if (ImGui::SliderFloat("Vertical stick aim speed", &stickRateY, 100.f, 8100.f, "%.0f px/s",
-                             ImGuiSliderFlags_Logarithmic) &&
+      if (ImGui::SliderFloat("Vertical stick aim speed", &stickRateY, 100.f, 8100.f, "%.0f px/s") &&
           std::isfinite(stickRateY) && stickRateY >= 50.f && stickRateY <= 10000.f) {
         sInput.stickAimRateY = stickRateY;
         MarkDirty();
@@ -288,11 +292,11 @@ void DrawControlsController() {
 }
 
 void DrawControlsTouchGyro() {
-#if defined(__ANDROID__)
+#if defined(PORT_TOUCH_CONTROLS)
   ImGui::SeparatorText("Touch controls");
   // First on the page: the layout is what touch players come here to change.
   if (ImGui::Button("Edit layout")) {
-    // The touch view takes the request and opens its editor over the game.
+    // The touch overlay takes the request and opens its editor once this closes.
     sTouchEditRequested.store(true, std::memory_order_release);
     RequestToggle();
   }
@@ -336,6 +340,7 @@ void DrawControlsTouchGyro() {
   }
   ItemHelp("The left stick appears wherever your thumb lands on the left half of the screen. "
            "The map keeps the fixed stick.");
+#if defined(PORT_TOUCH_CONTROLS) // both views draw the classic and twin-stick layouts
   int touchLayout = sInput.touchClassic ? 1 : sInput.touchTwinStick ? 2 : 0;
   static const char* const kTouchLayouts[] = {"Default", "Classic GameCube", "Twin stick (Remastered)"};
   if (ImGui::Combo("Layout", &touchLayout, kTouchLayouts, 3)) {
@@ -350,6 +355,7 @@ void DrawControlsTouchGyro() {
            "Classic GameCube: adds the C-stick and D-pad.\n"
            "Twin stick (Remastered): a right stick aims; Jump, Fire, Morph, Missile, LT Lock; "
            "D-pad for visors, Y + D-pad for beams.");
+#endif
   ImGui::BeginDisabled(!sInput.touchClassic);
   bool touchAim = sInput.touchAim;
   if (ImGui::Checkbox("Touch aim", &touchAim)) {
@@ -380,8 +386,7 @@ void DrawControlsTouchGyro() {
   ImGui::EndDisabled();
   ImGui::BeginDisabled(!(!sInput.touchClassic || sInput.touchAim));
   float touchAimSpeed = sInput.touchAimSpeed;
-  if (ImGui::SliderFloat("Touch aim speed", &touchAimSpeed, 0.5f, 6.f, "%.2f px/dp",
-                         ImGuiSliderFlags_Logarithmic)) {
+  if (ImGui::SliderFloat("Touch aim speed", &touchAimSpeed, 0.5f, 10.f, "%.2f px/dp")) {
     SetTouchAimSpeed(touchAimSpeed);
   }
   if (ImGui::Checkbox("Separate vertical speed##touch", &sInput.touchAimSplit)) {
@@ -390,8 +395,7 @@ void DrawControlsTouchGyro() {
   }
   if (sInput.touchAimSplit) {
     float touchAimSpeedY = sInput.touchAimSpeedY;
-    if (ImGui::SliderFloat("Vertical touch aim speed", &touchAimSpeedY, 0.5f, 6.f, "%.2f px/dp",
-                           ImGuiSliderFlags_Logarithmic)) {
+    if (ImGui::SliderFloat("Vertical touch aim speed", &touchAimSpeedY, 0.5f, 10.f, "%.2f px/dp")) {
       SetTouchAimSpeedY(touchAimSpeedY);
     }
   }
@@ -449,8 +453,9 @@ void DrawControlsTouchGyro() {
   ImGui::BeginDisabled(sInput.gyroMode == 0);
   // With pointer aim the gyro moves the pointer at its own speed; the camera
   // sensitivity then only matters if the gyro also turns the camera.
+  // Lock-on free aim's pointer moves at Pointer speed too, with or without pointer aim.
   const bool gyroPointer = PointerAim();
-  if (gyroPointer) {
+  if (gyroPointer || LockOnFreeAim()) {
     float cursorAngle = sInput.gyroCursorAngle;
     if (ImGui::SliderFloat("Pointer speed##gyro", &cursorAngle, PortInput::kGyroCursorAngleMin,
                            PortInput::kGyroCursorAngleMax, "%.0f deg across the screen")) {
@@ -459,6 +464,9 @@ void DrawControlsTouchGyro() {
       MarkDirty();
     }
     ItemHelp("How far the pad turns to sweep the pointer across the screen. Smaller is faster.");
+  }
+  // A lock owns the view, so this only matters under pointer aim.
+  if (gyroPointer) {
     bool cursorCamera = sInput.gyroCursorCamera;
     if (ImGui::Checkbox("Gyro also turns the camera", &cursorCamera)) {
       sInput.gyroCursorCamera = cursorCamera;
@@ -471,7 +479,7 @@ void DrawControlsTouchGyro() {
   float gyroSensitivity = sInput.gyroSensitivity;
   // The ## suffix keeps its ImGui id apart from the mouse Sensitivity slider.
   if (ImGui::SliderFloat("Sensitivity##gyro", &gyroSensitivity, PortInput::kGyroSensitivityMin,
-                         PortInput::kGyroSensitivityMax, "%.2fx", ImGuiSliderFlags_Logarithmic)) {
+                         PortInput::kGyroSensitivityMax, "%.2fx")) {
     SetGyroSensitivity(gyroSensitivity);
   }
   ItemHelp("How far the camera turns per turn of the pad: at 1.00x a 90 degree turn gives 90. With "
@@ -485,7 +493,7 @@ void DrawControlsTouchGyro() {
   if (sInput.gyroSplit) {
     float gyroSensitivityY = sInput.gyroSensitivityY;
     if (ImGui::SliderFloat("Vertical sensitivity##gyro", &gyroSensitivityY, PortInput::kGyroSensitivityMin,
-                           PortInput::kGyroSensitivityMax, "%.2fx", ImGuiSliderFlags_Logarithmic)) {
+                           PortInput::kGyroSensitivityMax, "%.2fx")) {
       SetGyroSensitivityY(gyroSensitivityY);
     }
   }

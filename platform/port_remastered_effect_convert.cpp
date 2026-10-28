@@ -14,6 +14,7 @@
 #include <string>
 #include <tuple>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace PortRemastered {
 namespace {
@@ -172,6 +173,8 @@ const Signatures& ElementsOf(Type type) {
       {F("DFCS"), "rr"},  {F("DFCP"), "rr"},
       // Port-only: a converted KEWS, its KEYP read at the swoosh node key.
       {F("KEWS"), "r"},
+      // Port-only: a converted KESP, its KEYP read at the ELC2 node key (time slot 2).
+      {F("KESP"), "r"},
       // Port-only (CParticleDataFactory under TARGET_PC).
       {F("DIVD"), "rr"},
       // Port-only CREPortTicksToSeconds: Remastered's T2S_, an int element (ticks) as seconds.
@@ -512,10 +515,11 @@ bool FlipbookTransform(const EffectValue& value, bool& flip) {
 constexpr uint32_t kColorTex = 1, kOpacityTex = 2, kErosion = 4, kRamp = 8, kIndirect = 16, kDepthSoften = 32,
                    kThresholding = 64, kDualMod = 128, kOpacityFresnel = 256, kColorIndexing = 512, kAddColor = 1024,
                    kOpacityFade = 2048, kColorRgbOnly = 4096, kPyro = 8192, kDisintegration = 16384,
-                   kSceneWarp = 32768, kVisorSplat = 65536, kIceChargeBeam = 1u << 20,
+                   kSceneWarp = 32768, kVisorSplat = 65536, kFrameBufferColorErosion = 1u << 18,
+                   kVisorSteam = 1u << 19, kIceChargeBeam = 1u << 20,
                    kIceChargeCollision = 1u << 21, kUnfogged = 1u << 22, kVisorRunOff = 1u << 23,
                    kVisorRunOffLit = 1u << 24, kIceChargeCollisionLit = 1u << 25, kParticleLit = 1u << 26,
-                   kVisorRain = 1u << 28;
+                   kVisorRain = 1u << 28, kBarrierShield = 1u << 29, kBarrierGlow = 1u << 30;
 // aurora::gfx::vfx::Blend::Multiply, the port's stand-in for the FrameBuffer_* shaders without a SceneWarp recipe.
 constexpr uint32_t kBlendMultiply = 4;
 constexpr uint32_t kBlendAdditiveOne = 5;  // aurora::gfx::vfx::Blend::AdditiveOne (RGB One/One)
@@ -547,6 +551,9 @@ uint32_t MatiBlend(uint32_t mode) {
 }
 // aurora::gfx::vfx::AlreadyExposed: an exposure policy carried in the features word, not a shader feature.
 constexpr uint32_t kAlreadyExposed = 1u << 31;
+constexpr uint32_t kModelBackCull = 1u << 17; // aurora::gfx::vfx::ModelBackCull; VMAT layout unchanged
+constexpr EffectGuid kIceWedgeMati = {0xc6, 0xb1, 0x08, 0xdf, 0x38, 0xe8, 0x7f, 0x4c,
+                                     0xbc, 0x9b, 0xfb, 0x67, 0x54, 0x8b, 0xc1, 0xba};
 
 // The VFX_*_Lit sprite shaders whose lit perms (080_0..091_0) are the unlit perm's colour x the light x
 // BLCM x PCMD / pi (aurora's ParticleLit). Checked perm by perm against 000_0 (re.sh fold); 7a29ff64,
@@ -627,6 +634,14 @@ struct Recipe {
   // Always drawn unfogged, and no DFOG 1 needed: the visor composite shaders never see the room's fog,
   // and their effect data carries no DFOG to read.
   bool alwaysUnfogged = false;
+  // Only the MATI whose header flag list carries MFC0 (USE_FRAME_BUFFER_DISTORTION) and not MFC1
+  // (IS_SHIELD_EXTERIOR) is this shader's refraction perm (the f197ec38 row); every other material of
+  // the shader is a different perm's maths and is refused rather than drawn with this one's.
+  bool mfc0Refraction = false;
+  // Neither MFC0 (USE_FRAME_BUFFER_DISTORTION) nor MFC1 (IS_SHIELD_EXTERIOR) may be set: the b1eb2b67
+  // row is a shader's non-refraction perm (000). A material carrying either flag is a different perm's
+  // maths (and, for MFC1, another shader), so it is refused rather than drawn with perm 000's.
+  bool noRefractionFlags = false;
 };
 
 // RECIPES.md "(b) Per shader" and RECIPES-all.md. Derived from each shader's
@@ -686,6 +701,41 @@ const Recipe* RecipeOf(uint32_t shader) {
       // (0.75 .. 1) x vc.rgb, alpha vc.a; elsewhere discarded. The visor composite pass has no fog, so Unfogged
       // whatever the DFOG.
       {0x0ec41df0, kVisorRain, {{"TCH0", Role::Color, -1, -1}}, {}, -1, false, false, 1, false, true},
+      // VFX_VisorSteam (53eceaa4, the SteamMP1 HUD billboard's model particle, MATI f4970293; FS perm 000_0,
+      // VS 000_1; vfx/53eceaa4.md): TCH0 Repeat_Texture (wrap repeat) read at uv x CCH0.x, offset by TCH1
+      // Macro_Texture (the second raw sample slot, the Indirect role: no CCH warp) and scrolled by the VS's
+      // o2.yz, which depends on CCH0/2/3/4 only (the shader computes it). CCH0..4 in VPRM, SMTR-animated by the
+      // Ship1 particle variables. No scene copy; the visor composite pass has no fog, so Unfogged.
+      {0x53eceaa4, kVisorSteam, {{"TCH0", Role::Color, -1, -1}, {"TCH1", Role::Indirect, -1, -1}}, {}, -1, false,
+       false, 5, false, true},
+      // VFX_FrameBuffer_Color_Erosion_Unlit (d8ece62c, the frozen-player HUD effect GENP c23f13f7, MATI
+      // eaef3c6e; FS perm 000_0, fog perm 001_0, 002/004 identical to 000 and 003/005 to 001): BCLR's
+      // x and y offset the scene copy at the fragment by near / HUD depth x CCH0.xy, read at lod
+      // max(0, CCH0.z - 1); rgb = (BCLR.rgb + scene) x vc.rgb x PCMD, alpha max(0, BCLR.a - PMTR row
+      // 0's x) x vc.a (the VS's o2 is PMTR row 0). CCH0 in VPRM, animated by SMTR.
+      {0xd8ece62c, kFrameBufferColorErosion | kErosion, {{"BCLR", Role::Color, -1, -1}}, {{kSrcErosion, 0, 0}},
+       -1, false, false, 1, true},
+      // VFX_BarrierShield (f197ec38, the Parasite Queen barrier's MATI 6429c234; its refraction perm 002,
+      // the material flag MFC0 USE_FRAME_BUFFER_DISTORTION with shield-exterior MFC1 off; build/
+      // s-queenbarrier-20261024/SHADER-IMPLEMENTATION.md): TCH0 read at (-2u, 2v) is the pattern (its .b
+      // scrolls four fract() noise reads of TCH1, .a widens the breakup mask, .rg drive the sawtooth motion),
+      // the scene copy at the fragment is the base colour, and the rim/fresnel/mesh-colour glow adds over it.
+      // TCH1 is the second raw sample slot (the Indirect role: this recipe's own reads, no CCH warp); the
+      // mesh's vertex colour needs VMSH v2 (PortVfxBarrierReady). CCH0 whole in VPRM v1, animated by SMTR.
+      // The 003 fog sibling and the perm-000 displacement variant are not ported: without DFOG 1 or without
+      // MFC0 the material is refused (no VMAT), never drawn with another perm's maths.
+      {0xf197ec38, kBarrierShield,
+       {{"TCH0", Role::Color, -1, -1}, {"TCH1", Role::Indirect, -1, -1}},
+       {}, -1, false, false, 1, false, false, true},
+      // VFX_BarrierGlow (b1eb2b67, the same Parasite Queen barrier's one-variable MATI ba0acbd6; FS perm
+      // 000, the non-refraction perm: the material carries neither MFC0 nor MFC1; build/
+      // s-queenbarrier-20261024/GLOW-IMPLEMENTATION.md): TCH0 read three times at (-u, v): its .r scrolls
+      // the second read's v, its .b the breakup of the third read's .a, which also drives k and the fade.
+      // No scene copy (the glow adds over the frame, so no scene gate). The VS's displacement is in the
+      // CPU feed (AddBarrierGlow); the mesh's vertex colour needs VMSH v2 (PortVfxBarrierGlowReady).
+      // CCH0 whole in VPRM v1, animated by SMTR. TCH1 is in the MATI but this perm never reads it.
+      {0xb1eb2b67, kBarrierGlow, {{"TCH0", Role::Color, -1, -1}}, {}, -1, false, false, 1, false, false,
+       false, true},
       {0x84e0fe6c, kOpacityTex,
        {{"TCH0", Role::Opacity, -1, -1}},
        {}},
@@ -1018,7 +1068,16 @@ struct Mati {
   uint32_t headerBlend = kNoHeaderBlend;  // the header's EBlendMode, the LE u32 at 0x61
   std::map<std::string, MatiTexture> textures;
   std::map<std::string, std::array<float, 4>> vectors;
+  // The header's material-flag list, after the parameters: a u32 count then that many four-byte tags
+  // (the tags the material enables, e.g. MFC0), then the next chunk (RFRM). Every shipped barrier MATI
+  // carries 0 or 1 (6429c234 has MFC0, the exterior b46bb66d MFC1). Empty when absent or unparsed.
+  std::vector<std::string> flags;
 };
+
+// Whether the MATI's header flag list carries `tag` (a material flag such as MFC0).
+bool HasMatiFlag(const Mati& mati, const char* tag) {
+  return std::find(mati.flags.begin(), mati.flags.end(), tag) != mati.flags.end();
+}
 
 using port::ReadLEFloat;
 
@@ -1035,7 +1094,12 @@ bool ParseMati(const std::vector<uint8_t>& d, Mati& out) {
   out.headerBlend = ReadLE32(d.data() + 0x61);
   const uint32_t count = ReadLE32(d.data() + 0x69);
   size_t at = 0x6d;
-  for (uint32_t i = 0; i < count && at + 5 <= d.size(); ++i) {
+  uint32_t parsed = 0;
+  bool parametersDone = false;
+  for (; parsed < count; ++parsed) {
+    if (at + 5 > d.size()) {
+      break;
+    }
     const uint8_t type = d[at];
     const std::string tag(reinterpret_cast<const char*>(d.data() + at + 1), 4);
     at += 5;
@@ -1059,6 +1123,19 @@ bool ParseMati(const std::vector<uint8_t>& d, Mati& out) {
       out.vectors[tag] = value;
     }
     at += size;
+    parametersDone = parsed + 1 == count;
+  }
+  // The material-flag list: a LE u32 count then that many four-byte tags. Data with no room for it (a
+  // synthetic MATI) or a parameter list that did not parse to its end carries no flags, which fails a
+  // recipe that requires one. A count past the blob's end is not a flag list: stop, leaving them empty.
+  if (parametersDone && at + 4 <= d.size()) {
+    const uint32_t flagCount = ReadLE32(d.data() + at);
+    at += 4;
+    if (flagCount <= (d.size() - at) / 4) {
+      for (uint32_t i = 0; i < flagCount; ++i, at += 4) {
+        out.flags.emplace_back(reinterpret_cast<const char*>(d.data() + at), 4);
+      }
+    }
   }
   return true;
 }
@@ -1938,14 +2015,27 @@ public:
       }
       return Element(value.args[1], Type::Real, out, why);
     }
-    // KESP is KEYP on time slot 2, which is always zero (CREKeyframeEmitterSpecific), so it
-    // is its first key: CNST(keys[0]).
+    // KESP is KEYP on time slot 2 (CREKeyframeParticle 0x296430, time type 3): the port-only
+    // KESP around a percent KEYP of its keys, read at the slot-2 key. Only an ELC2's UpdateBolt
+    // 0xb77638 sets that slot (node over node count - 1); elsewhere it is 0, the first key.
     if (value.fourcc == F("KESP") && type == Type::Real && value.args.size() == 1 &&
         value.args[0].kind == EffectValue::Kind::Keys && value.args[0].size >= 26 &&
         ReadLE32(m_data + value.args[0].offset + 18) >= 1 &&
         value.args[0].size - 22 == size_t(ReadLE32(m_data + value.args[0].offset + 18)) * 4) {
-      AppendBE32(out, F("CNST"));
-      AppendBE32(out, ReadLE32(m_data + value.args[0].offset + 22));
+      const uint8_t* p = m_data + value.args[0].offset;
+      const uint32_t count = ReadLE32(p + 18);
+      AppendBE32(out, F("KESP"));
+      AppendBE32(out, F("KEYP"));
+      AppendBE32(out, 1); // percent: the lifetime-key path
+      AppendBE32(out, ReadLE32(p + 4));
+      out.push_back(p[8]);
+      out.push_back(p[9]);
+      AppendBE32(out, ReadLE32(p + 10));
+      AppendBE32(out, ReadLE32(p + 14));
+      AppendBE32(out, count);
+      for (uint32_t i = 0; i < count; ++i) {
+        AppendBE32(out, ReadLE32(p + 22 + size_t(i) * 4));
+      }
       return true;
     }
     if (value.fourcc == F("GRAD") && type == Type::Color) {
@@ -3461,6 +3551,7 @@ public:
       m_approximated.push_back(std::string("VMAT: shader ") + shaderText + " has no recipe");
       return false;
     }
+    m_vmatShader = mati.shader;
 
     // The node's properties by fourcc.
     // Also takes the found property's lifetime context for the ILPTs written from it.
@@ -3488,6 +3579,21 @@ public:
     const auto cch0 = mati.vectors.count("CCH0") ? mati.vectors.at("CCH0") : std::array<float, 4>{};
     if (recipe->unitCch0 && (cch0[2] != 1.0f || cch0[3] != 0.0f)) {
       m_approximated.push_back(std::string("VMAT: shader ") + shaderText + " has a fade gain/bias the renderer lacks");
+      return false;
+    }
+    // A recipe read against one material permutation: only the MATI whose header flags select it is
+    // converted. f197ec38's refraction is the MFC0 (USE_FRAME_BUFFER_DISTORTION) perm 002; a material
+    // without MFC0 draws perm 000's displacement and one with MFC1 (IS_SHIELD_EXTERIOR, its own shader
+    // b46bb66d) another perm still, so both are refused rather than drawn with perm 002's maths.
+    if (recipe->mfc0Refraction && (!HasMatiFlag(mati, "MFC0") || HasMatiFlag(mati, "MFC1"))) {
+      m_approximated.push_back(std::string("VMAT: shader ") + shaderText + " is not its MFC0 refraction perm");
+      return false;
+    }
+    // And the other way round: b1eb2b67's row is the non-refraction perm 000, which a material carrying
+    // either shield flag leaves for the refraction (MFC0) or the exterior (MFC1) variant.
+    if (recipe->noRefractionFlags && (HasMatiFlag(mati, "MFC0") || HasMatiFlag(mati, "MFC1"))) {
+      m_approximated.push_back(std::string("VMAT: shader ") + shaderText +
+                               " carries a shield flag, so it is not its non-refraction perm");
       return false;
     }
 
@@ -3579,6 +3685,11 @@ public:
     // net exposure 1. Validated for this MATI only; every other effect keeps the room's exposure.
     // Its own test, not read off the blend: a later blend change must not move the policy.
     uint32_t features = recipe->features | fogPin;
+    // Exact shipped custom model: MATI cull=-1 resolves to back at 0x2bd7f4..0x2bd810;
+    // the sorted model draw binds it at 0x2bda84. No inference for other materials/sprites.
+    if (model && guid->guid == kIceWedgeMati && mati.shader == 0x84e0fe6c && mati.headerBlend == 2) {
+      features |= kModelBackCull;
+    }
     if (!swoosh && find(F("PMDL")) != nullptr && guid->guid == kWaveOrbMati && mati.shader == 0x642dd72b &&
         mati.headerBlend == 1) {
       features |= kAlreadyExposed;
@@ -4066,6 +4177,13 @@ public:
     AppendBE32(out, HeaderOf(type));
     const auto& retail = PropertiesOf(type);
     const bool part = type == F("PART");
+    if (part) {
+      // The loader must know IRND is particle-initial before folding any expressions.
+      AppendBE32(out, F("PIRN"));
+      AppendBE32(out, F("CNST"));
+      AppendBE32(out, 1);
+    }
+    bool inverseExposed = false;
     const bool swoosh = type == F("SWHC");
     // An ELC2 (CParticleElectric2) is written as an ELSC stream that starts with the port-only PEL2
     // marker and carries the ELC2 fields; it draws through its VMAT like a swoosh.
@@ -4301,42 +4419,29 @@ public:
     const EffectProperty* mover = nullptr;
     std::vector<uint32_t> portOnly;  // material data, written only with a VMAT
     const bool textured = retail.count(F("TEXR")) != 0;
-    // Remastered draws nothing for a generator with no texture, material or
-    // model (it only carries spawns and lights); retail would draw its
-    // particles as untextured quads (0.1 wide and white without SIZE/COLR).
-    // Such a generator is written with a size of 0, and so is one that draws only
-    // models (retail drew a white quad round each of the Ice charge's shards).
     const auto has = [&](uint32_t fourcc) {
       return std::any_of(node.properties.begin(), node.properties.end(),
                          [&](const EffectProperty& property) { return property.fourcc == fourcc; });
     };
-    // A material whose colour texture (BCLR) is nil binds Remastered's black
-    // texture. These are placeholder MATIs on generators that carry spawns and
-    // lights (PlasmaCharge's root among them), so their quads are taken as
-    // drawing nothing too; model generators keep the black material.
-    const auto nilColour = [&](const EffectProperty& property) {
-      if (!m_io.materialData) {
-        return false;
-      }
-      for (const EffectValue& value : property.value) {
-        if (value.kind != EffectValue::Kind::Guid) {
-          continue;
-        }
-        static constexpr uint8_t kTag[4] = {'B', 'C', 'L', 'R'};
-        const std::vector<uint8_t> data = m_io.materialData(value.guid);
-        const auto tag = std::search(data.begin(), data.end(), std::begin(kTag), std::end(kTag));
-        return tag != data.end() && data.end() - tag >= 20 && std::all_of(tag + 4, tag + 20, [](uint8_t b) { return b == 0; });
-      }
-      return false;
-    };
-    const bool placeholder = part && !has(F("TEXR")) && !has(F("PMDL")) &&
-                             std::any_of(node.properties.begin(), node.properties.end(), [&](const EffectProperty& property) {
-                               return property.fourcc == F("MTIN") && nilColour(property);
-                             });
-    result.placeholder = placeholder;
-    const bool drawsNothing = part && !has(F("TEXR")) && (!has(F("MTIN")) || placeholder) && !has(F("PMDL"));
+    // SetupPrimitiveTypes 0x29069c and FixAndClean 0x2908a4 select geometry,
+    // independently of textures/materials. Primitive 2 is a transformed square:
+    // table 0x1d0b9b4 maps 1/2/3 to render kinds 1/2/0, and Render 0x2b23e8
+    // sends kinds 1 AND 2 to RenderSpriteEntries. Nil BCLR is opaque black.
+    const bool inactivePrimitive = part && (node.primitiveType == 0 || node.primitiveType == 4 ||
+                                           node.primitiveType == 5 ||
+                                           (node.primitiveType == 3 && !has(F("PMDL"))));
+    const bool customMaterial = std::any_of(node.properties.begin(), node.properties.end(), [](const auto& p) {
+      return p.fourcc == F("MTIN") && std::any_of(p.value.begin(), p.value.end(), [](const auto& v) {
+        return v.kind == EffectValue::Kind::Guid && v.guid != EffectGuid{};
+      });
+    });
+    // RenderSpriteEntries 0x2b13a8 requires node+0x140. The ctor 0x28bfc4
+    // loads either nonnil MTIN or the header MTRL; TEXR cannot supply it.
+    // This gates drawing only: active SIZE and child/light evaluation survive.
+    const bool nullMaterial = part && (node.primitiveType == 1 || node.primitiveType == 2) &&
+                              node.baseMaterial == EffectGuid{} && !customMaterial;
+    const bool drawsNothing = inactivePrimitive || nullMaterial;
     result.drawsNothing = drawsNothing;
-    const bool modelsOnly = part && !has(F("TEXR")) && !has(F("MTIN")) && has(F("PMDL"));
     for (const EffectProperty& property : node.properties) {
       uint32_t fourcc = property.fourcc;
       m_lifetimeOffset = LifetimeOffset(part, swoosh, electric, property);
@@ -4344,12 +4449,9 @@ public:
         result.dropped.push_back(EffectFourCCString(fourcc) + ": a swoosh has no per-particle variables");
         continue;
       }
-      if (placeholder && fourcc == F("MTIN")) {
-        result.dropped.push_back("MTIN: its colour texture is nil (the generator draws nothing)");
-        continue;
-      }
-      if ((drawsNothing || modelsOnly) && fourcc == F("SIZE")) {
-        result.dropped.push_back(drawsNothing ? "SIZE: the generator draws nothing" : "SIZE: the generator draws models only");
+      if (inactivePrimitive && fourcc == F("SIZE")) {
+        // Both sprite Fixup and transformed Fixup (0x28ec98) consume SIZE.
+        // Only inactive primitives clear it; do not substitute SIZE=0 to hide draws.
         continue;
       }
       // DFOG 1 sets the description's no-fog bit (CreateGPSM 0x25a560, CreateSWSH 0x2dce88: desc+0x6b
@@ -4942,6 +5044,19 @@ public:
         }
         continue;
       }
+      // VMPC is evaluated after the initial particle values, not an alias for a VEL source.
+      // CreateNewParticles 0x24abd0 calls ApplyVelocity (including its integration op).
+      if (part && fourcc == F("VMPC")) {
+        uint32_t value = 0;
+        if (!SmallInteger(property, value) || value > 1) {
+          result.dropped.push_back("VMPC: not a constant 0 or 1");
+        } else if (value == 1) {
+          AppendBE32(out, F("VMPC"));
+          AppendBE32(out, F("CNST"));
+          AppendBE32(out, 1);
+        }
+        continue;
+      }
       // BLIT (static-state word0 bit 14, 0x4000): CParticleSceneNode::AppendBakedLightingIfRequested
       // 0x2b12a8 appends the room's baked probe texture (BPTX) and BLCM to a lit sprite's draw only with
       // it set. 1 is the port-only PBLT 1; 0 (the default) writes nothing.
@@ -5015,6 +5130,35 @@ public:
         continue;  // consumed as PIR0/POR0/PLIX below
       }
       const auto found = retail.find(fourcc);
+      // VGD/VMD mutate the same coordinate selector only when true (CreateGPSM 0x256b7c).
+      if (part && ((fourcc >= F("VGD1") && fourcc <= F("VGD4")) ||
+                   (fourcc >= F("VMD1") && fourcc <= F("VMD4")))) {
+        uint32_t value = 0;
+        if (!SmallInteger(property, value) || value > 1) {
+          result.dropped.push_back(EffectFourCCString(fourcc) + ": invalid constant");
+          continue;
+        }
+        if (value == 0) continue;
+        if (fourcc >= F("VGD1") && fourcc <= F("VGD4")) {
+          AppendBE32(out, fourcc);
+          AppendBE32(out, F("CNST"));
+          AppendBE32(out, 1);
+          continue;
+        }
+      }
+      // CreateGPSM 0x25acc4 resets IEXP whenever DVVN is read. Preserve stream order.
+      if (part && (fourcc == F("DVVN") || fourcc == F("IEXP"))) {
+        uint32_t value = 0;
+        if (SmallInteger(property, value) && value <= (fourcc == F("DVVN") ? 255u : 1u)) {
+          inverseExposed = fourcc == F("DVVN") ? (value == 3 || value == 4) : value != 0;
+          AppendBE32(out, fourcc);
+          AppendBE32(out, F("CNST"));
+          AppendBE32(out, value);
+        } else {
+          result.dropped.push_back(EffectFourCCString(fourcc) + ": invalid constant");
+        }
+        continue;
+      }
       if (found == retail.end()) {
         result.dropped.push_back(EffectFourCCString(property.fourcc) + ": Remastered only");
         continue;
@@ -5106,11 +5250,12 @@ public:
         out.erase(out.begin() + v->begin, out.begin() + v->end);
       }
     }
-    if (drawsNothing || modelsOnly) {
-      AppendBE32(out, F("SIZE"));
+    if (part && node.primitiveType >= 0 && (node.primitiveType != 1 || nullMaterial)) {
+      AppendBE32(out, F("PPRM"));
       AppendBE32(out, F("CNST"));
-      AppendBE32(out, FloatBits(0.0f));
-    } else if (part && !has(F("SIZE"))) {
+      AppendBE32(out, drawsNothing ? 0u : uint32_t(node.primitiveType));
+    }
+    if (part && node.primitiveType == 1 && !has(F("SIZE"))) {
       // DVVN 1..4 makes a sprite's missing SIZE 1.0 (SSpritePrim::Fixup 0x28e640,
       // GetDefaultParticleSize 0x28e6c8), where retail's default is 0.1.
       uint32_t dvvn = 0;
@@ -5149,6 +5294,9 @@ public:
     const bool vmat = (part || swoosh || electric) && material != nullptr &&
                       Material(*material, node, result, swoosh || electric, electric);
     if (!vmat) {
+      if (part && inverseExposed) {
+        result.dropped.push_back("IEXP: no VMAT");
+      }
       for (const uint32_t fourcc : portOnly) {
         result.dropped.push_back(EffectFourCCString(fourcc) + ": no VMAT");
       }
@@ -5160,7 +5308,18 @@ public:
     }
     if (vmat && pmdl != 0 && !pmdlVariants && m_io.modelMesh) {
       // VMSH: the converted PMDL as one mesh, so the model particle draws through the VMAT.
-      const std::vector<uint8_t> mesh = m_io.modelMesh(pmdl);
+      std::vector<uint8_t> mesh = m_io.modelMesh(pmdl);
+      // VMSH v2 flags (BE word at 12): bit 1 every vertex has a colour; bit 2 the colour tints the draw,
+      // where the material's shader has the instanced-model perm with COLOR (016), as Remastered draws a
+      // coloured mesh: vcol = 2 x COLOR^2.2 x the particle colour, alpha COLOR.a x the particle's. The
+      // Plasma charge starburst's rays fade out by that alpha (0 on the tips).
+      static const std::unordered_set<uint32_t> kColorPerm = {
+          0x0cbeb3de, 0x0cc45d52, 0x0fb73e1b, 0x1a9ef0d8, 0x207abf3f, 0x33b751f2, 0x3db95827, 0x3fd46bb7,
+          0x440fbd96, 0x49a43a10, 0x4e386476, 0x5f2a0715, 0x71dc2465, 0x7d52bd6b, 0x80a47126, 0x90ce7873,
+          0x96e205db, 0x9ea86831, 0xa327502c, 0xb8eed42e, 0xc5cd782b, 0xe4d4c263, 0xfa49ff3c};
+      if (mesh.size() >= 16 && mesh[3] == 2 && (mesh[15] & 2) != 0 && kColorPerm.count(m_vmatShader) != 0) {
+        mesh[15] |= 4;
+      }
       if (!mesh.empty()) {
         AppendBE32(out, F("VMSH"));
         AppendBE32(out, F("CNST"));
@@ -5360,10 +5519,8 @@ public:
       AppendBE32(out, F("CNST"));
       AppendBE32(out, 0x1000000u);
     }
-    if (part || swoosh) {
-      // Port-only: nested IRND elements are evaluated once per particle and element, not at frame 0
-      // only (xPortIrnd). Marks every converted PART; retail's own PARTs do not have it.
-      // On a swoosh it marks Remastered's timing: a point's colour runs over the live points
+    if (swoosh) {
+      // Swoosh marker ordering/semantics stay unchanged: colour runs over the live points
       // (KEWS), not over LENG.
       AppendBE32(out, F("PIRN"));
       AppendBE32(out, F("CNST"));
@@ -5455,6 +5612,7 @@ private:
   mutable std::vector<SystemItem>* m_spawnSysItems = nullptr;  // set while a KSSM is written
   mutable uint32_t m_sysNextHiddenInt = 10;                   // the next hidden init-only int
   mutable std::vector<std::string> m_approximated;  // for the generator being written
+  mutable uint32_t m_vmatShader = 0;                // the shader of the last VMAT written
   mutable bool m_keeps = false;                     // a KPIN may be a per-particle PKPR
   mutable uint32_t m_keepNext = 0;                  // the next PKPR slot
   mutable uint32_t m_varReads = 0;                  // the particle variables Element() has read
@@ -6063,9 +6221,11 @@ bool SplitRetailEffect(uint32_t type, const uint8_t* data, size_t size, std::vec
     } else if (part && fourcc == F("PSHT")) {
       ok = reader.Element(Type::Int);
     } else if ((part && (fourcc == F("VORN") || fourcc == F("XFMD") ||
-                         fourcc == F("PSHP") || fourcc == F("PHDR") || fourcc == F("PHFO") || fourcc == F("PLIX") || fourcc == F("PGID") || fourcc == F("PBDM") ||
+                         fourcc == F("PPRM") || fourcc == F("PSHP") || fourcc == F("PHDR") || fourcc == F("PHFO") || fourcc == F("PLIX") || fourcc == F("PGID") || fourcc == F("PBDM") ||
                          fourcc == F("PDFG") || fourcc == F("PZTS") || fourcc == F("PIVS") ||
                          fourcc == F("PITP") || fourcc == F("PSHM") || fourcc == F("PISD") || fourcc == F("PBLT") ||
+                         fourcc == F("VMPC") || fourcc == F("DVVN") || fourcc == F("IEXP") ||
+                         (fourcc >= F("VGD1") && fourcc <= F("VGD4")) ||
                          fourcc == F("PMRF") || fourcc == F("PVSD") || fourcc == F("PVSN") ||
                          fourcc == F("PVSM") || fourcc == F("PVDT"))) ||
                (vfx && fourcc == F("PIRN"))) {

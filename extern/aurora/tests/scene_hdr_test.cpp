@@ -415,6 +415,19 @@ TEST_F(SceneHdrTest, SwitchSealsThePassAndRetargetsIt) {
   EXPECT_EQ(current_pass().target_layout().key, hdrLayout.key);
 }
 
+TEST_F(SceneHdrTest, PauseReusesColourAndClearsOnlyDepth) {
+  ASSERT_TRUE(set_scene_hdr(true));
+  const auto* texture = webgpu::g_sceneHdr.texture.Get();
+  ASSERT_TRUE(set_scene_hdr(false));
+  ASSERT_TRUE(set_scene_hdr(true, true));
+  EXPECT_EQ(webgpu::g_sceneHdr.texture.Get(), texture);
+  EXPECT_FALSE(current_pass().colorAttachments[SceneColorAttachmentIndex].clear);
+  EXPECT_EQ(current_pass().colorAttachments[SceneColorAttachmentIndex].loadOp, wgpu::LoadOp::Load);
+  EXPECT_TRUE(current_pass().clearDepth);
+  EXPECT_EQ(current_pass().depthLoadOp, wgpu::LoadOp::Clear);
+  EXPECT_EQ(current_pass().clearDepthValue, gx::UseReversedZ ? 0.f : 1.f);
+}
+
 TEST_F(SceneHdrTest, MsaaModesProduceDistinctKeys) {
   next_frame(4);
   const auto ldr4 = current_pass().target_layout();
@@ -541,7 +554,7 @@ TEST_F(SceneHdrTest, InvalidWgslIsCaught) {
 
 TEST_F(SceneHdrTest, GxWritersCompileInBothModes) {
   // TEV (pbr 0) and the PBR kinds the HDR branch rewrites.
-  const std::pair<int, int> kinds[] = {{0, 0}, {1, 0}, {1, 1}, {1, 34}, {1, 36}, {1, 37}};
+  const std::pair<int, int> kinds[] = {{0, 0}, {1, 0}, {1, 1}, {1, 34}, {1, 36}, {1, 37}, {1, 45}};
   for (const auto [pbr, kind] : kinds) {
     for (const bool hdr : {false, true}) {
       SCOPED_TRACE(testing::Message() << "pbr " << pbr << " kind " << kind << " hdr " << hdr);
@@ -551,6 +564,21 @@ TEST_F(SceneHdrTest, GxWritersCompileInBothModes) {
     }
   }
   EXPECT_TRUE(g_uncapturedErrors.empty());
+}
+
+TEST_F(SceneHdrTest, RouteHologramCompilesWithVertexColor) {
+  for (bool hdr : {false, true}) {
+    auto config = writer_config(1, 45, hdr);
+    config.attrs[GX_VA_CLR0].attrType = GX_DIRECT;
+    config.attrs[GX_VA_CLR0].cnt = 4;
+    config.attrs[GX_VA_CLR0].compType = GX_RGBA8;
+    config.attrs[GX_VA_CLR0].stride = 4;
+    const auto source = gx::build_shader_source(config);
+    EXPECT_EQ(module_error(source), "");
+    EXPECT_NE(source.find(".g >= 0.1"), std::string::npos);
+    EXPECT_NE(source.find("let pbr_yv = pbr_vraw.rg"), std::string::npos);
+    EXPECT_NE(source.find("let pbr_yfade = clamp(pbr_yc3.x * pbr_yd.a"), std::string::npos);
+  }
 }
 
 // The config features that add their own WGSL around the writers' output, each on TEV and PBR.
@@ -842,7 +870,8 @@ TEST_F(SceneHdrTest, ScreenKindsFogAsTheirFogPermsInHdr) {
     EXPECT_EQ(count(hdr, "pbr_vf = vec4f(0.0, 0.0, 0.0, 1.0);"), 1u);
     EXPECT_EQ(count(hdr, "prev = vec4f(pbr_lin + pbr_pass + pbr_keep, pbr_alpha);"), 1u);
     if (kind == 14) {
-      EXPECT_EQ(count(hdr, "pbr_vfon = false;"), 1u);
+      // Anchored on 14's own pass: the EnergyField branch (kind 44) also turns the fog off.
+      EXPECT_EQ(count(hdr, "pbr_pass = pbr_sfb * pbr_c4.x * pbr_vraw.rgb;\n          pbr_vfon = false;"), 1u);
     }
     if (kind == 23 || kind == 30) {
       EXPECT_EQ(count(hdr, "pbr_keep = pbr_xw * pbr_xscene;"), 1u);

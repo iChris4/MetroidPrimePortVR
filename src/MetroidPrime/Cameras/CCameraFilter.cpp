@@ -27,6 +27,7 @@
 #include "math.h"
 #include "stdlib.h"
 #include "string.h"
+#include <cstdio>
 
 const float CCameraBlurPass::skXRayViewportScaleX = 0.9f;
 const float CCameraBlurPass::skXRayViewportScaleY = 0.9f;
@@ -397,6 +398,14 @@ void CCameraFilterPass::Draw() const {
   }
 #endif
   DrawFilter(x0_curType, x8_shape, x18_curColor, tex, t);
+}
+
+void CCameraFilterPass::PortDescribe(char* out, unsigned int size) const {
+  std::snprintf(out, size,
+                "type %d -> %d shape %d rgba %.6g %.6g %.6g %.6g texture %08X resident %d fade %.6g/%.6g",
+                int(x0_curType), int(x4_nextType), int(x8_shape), x18_curColor.GetRed(),
+                x18_curColor.GetGreen(), x18_curColor.GetBlue(), x18_curColor.GetAlpha(),
+                unsigned(x20_nextTxtr), int(!x24_texObj.null()), x10_remTime, xc_duration);
 }
 
 #ifdef TARGET_PC
@@ -956,7 +965,16 @@ void CCameraBlurPass::GetFbCopy(GXTexFmt fmt, uchar* buf) const {
 
 void CCameraBlurPass::AllocatePersistentFbTexture() {
   GXGetTexBufferSize(320, 224, GX_TF_RGB565, GX_FALSE, 0);
+#ifdef TARGET_PC
+  // Its own address: copies resolve by address to the latest one there, and the
+  // Remastered glass copies the scene into the spare buffer each frame (helmet
+  // included), so the pause screen's held copy would load that one, at another
+  // size, and read black (#208).
+  static uchar sPersistentBuf[640 * 448] ATTRIBUTE_ALIGN(32);
+  x30_persistentBuf = sPersistentBuf;
+#else
   x30_persistentBuf = CGraphics::GetDolphinSpareBuffer();
+#endif
 }
 
 void CCameraBlurPass::FreePersistentFbTexture() { x2d_noPersistentCopy = false; }

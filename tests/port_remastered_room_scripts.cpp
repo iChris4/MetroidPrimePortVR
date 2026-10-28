@@ -6,10 +6,15 @@
 // with only the components and connections these read.
 
 #include "port_remastered_room_internal.h"
+#include "port_queen_barrier_assets.h"
 #include "port_room_effects.h"
 #include "port_test.h"
 
 #include <cstdio>
+#include <fstream>
+#include <iterator>
+#include <filesystem>
+#include <cstdlib>
 
 using namespace PortRemastered;
 using namespace PortRemastered::RoomDetail;
@@ -92,6 +97,7 @@ struct Fixture {
     bool active = true;
     float pos[3] = {0, 0, 0};
     float scale[3] = {1, 1, 1};
+    Bytes guid;  // the component's own, Guid(n) when empty: the barrier's graph is keyed by them
   };
   std::vector<Comp> comps;
 
@@ -100,6 +106,10 @@ struct Fixture {
 
   Bytes Build() const {
     const size_t n = comps.size();
+    std::vector<Bytes> guidOf;
+    for (size_t i = 0; i < n; ++i) {
+      guidOf.push_back(comps[i].guid.empty() ? Guid(i) : comps[i].guid);
+    }
     Bytes sden, idta, records;
     for (size_t i = 0; i < 2 * n; ++i) {
       const bool entity = i >= n;
@@ -120,18 +130,19 @@ struct Fixture {
       // The id data: the guid, 8 bytes (not 0xffffffff first), the connection count and the
       // connections (event, action, target guid, 2 bytes, two empty optional strings, 19 bytes);
       // an entity names its component instead: 'PMOC' and its guid.
-      Bytes id = Guid(i);
+      const Bytes& gid = guidOf[entity ? i - n : i];
+      Bytes id = entity ? Guid(i) : gid;  // an entity's own guid stays the fixture's
       PutLE(id, 0, 8);
       if (entity) {
         PutLE(id, 0, 2);
         id.insert(id.end(), {'P', 'M', 'O', 'C'});
-        Append(id, Guid(i - n));
+        Append(id, gid);
       } else {
         PutLE(id, c.links.size(), 2);
         for (const Link& l : c.links) {
           PutLE(id, l.event, 4);
           PutLE(id, l.action, 4);
-          Append(id, Guid(l.target));
+          Append(id, guidOf[l.target]);  // the target's own guid, custom or the fixture's
           id.resize(id.size() + 2);
           PutLE(id, 0, 4);
           PutLE(id, 0, 4);
@@ -472,8 +483,21 @@ void TestRoomEffects() {
   REQUIRE_MSG(file.overrides.size() == 1, "one override");
   const PortRoomEffects::Override& over = file.overrides[0];
   CHECK(over.id == 0x041A0015 && over.part == (0xFE000000u | SwapUuid(Guid(103).data())[0]));
+  CHECK(over.hasPlacement && over.pos[0] == 10.f && over.pos[1] == 20.f && over.pos[2] == 30.f);
   REQUIRE(over.vars.size() == 1);
   CHECK(over.vars[0].real == 0.65f && std::equal(over.vars[0].guid.begin(), over.vars[0].guid.end(), Guid(200).begin()));
+
+  // A carried retail fallback above kept its placement. Once io.matched proves
+  // the PART was converted from this GENP, import placement even without variables.
+  io.matched = [](const std::array<uint8_t, 16>& genp) -> std::vector<uint32_t> {
+    return genp == SwapUuid(Guid(101).data()) ? std::vector<uint32_t>{kOwnRetailPart} : std::vector<uint32_t>{};
+  };
+  WriteRoomEffects("room", p.room, area.mrea, area, scripts, io);
+  REQUIRE_MSG(PortRoomEffects::Parse(written.begin()->second, file, error), error.c_str());
+  REQUIRE(file.overrides.size() == 2);
+  CHECK(file.overrides[0].id == 0x041A0014 && file.overrides[0].vars.empty());
+  CHECK(file.overrides[0].hasPlacement && file.overrides[0].pos[0] == 10.f &&
+        file.overrides[0].pos[1] == 20.f && file.overrides[0].pos[2] == 30.f);
 
   // A retail object already in the add-on range: nothing written.
   written.clear();
@@ -516,6 +540,766 @@ void TestRoomEffects() {
   // Without an effect lookup the stage writes nothing and says nothing.
   io.effect = nullptr;
   CHECK(WriteRoomEffects("room", p.room, area.mrea, area, scripts, io).empty() && written.empty());
+}
+
+
+// ---------------------------------------------------------------------------
+// The Parasite Queen barrier (port_remastered_room_effects.cpp): its Remastered graph, its
+// retail rings, and the .roomfx group the import writes only when both are the room's own.
+// ---------------------------------------------------------------------------
+
+// The links the shipped ROOM makes (port_remastered_script_tables.inc has the events).
+constexpr uint32_t kBarrierPlay = 0x6b565a4c;       // SpecialFunctionMP1 Play
+constexpr uint32_t kBarrierToPlatform = 0x2302215c;
+constexpr uint32_t kBarrierToEffect = 0xdbe5cb30;
+constexpr uint32_t kBarrierFollow = 0x7dcfa087;
+constexpr uint32_t kPlatformActive = 0x28e11b3f;
+constexpr uint32_t kPlatformPlay = 0xdb8148e3;
+constexpr uint32_t kPlatformWaypoint = 0x5d191757;
+constexpr uint32_t kPlatformMP1 = 0xa12967fb;
+constexpr uint32_t kWaypointMP1 = 0x8e4c86ec;
+constexpr uint32_t kPropModel = 0xf8b4c8da;
+constexpr uint32_t kPropCollision = 0x02d5ab29;
+constexpr uint32_t kPropDuration = 0xc9b0ad29;
+constexpr uint32_t kPropFunctionType = 0x0d86d1bf;
+constexpr uint32_t kPropGenp = 0x88fc08e6;
+constexpr uint32_t kModelDummy = 0x1C0B0BEF;    // 10000000-0000-f000-f000-00001c0b0bef's id
+constexpr uint32_t kCollisionDummy = 0xD4C81052;
+constexpr uint32_t kRetailModel = 0x6556EEC5;
+// The waypoints' heights, as the shipped ROOM has them.
+constexpr float kWaypointY[5] = {-28.226179f, -23.060255f, -17.894337f, -12.728418f, -7.5625f};
+
+int HexNibble(char c) {
+  return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
+}
+
+// A guid's 16 bytes in the order a ROOM property stores them (which is Variable::guid's too),
+// from the printed form the asset table holds.
+Bytes Stored(const char* text) {
+  Bytes canonical(16, 0);
+  size_t at = 0;
+  int high = -1;
+  for (const char* p = text; *p != '\0'; ++p) {
+    const int nibble = HexNibble(*p);
+    if (nibble < 0) {
+      continue;
+    }
+    if (high < 0) {
+      high = nibble;
+      continue;
+    }
+    canonical[at++] = uint8_t(high << 4 | nibble);
+    high = -1;
+  }
+  static const int kOrder[16] = {3, 2, 1, 0, 5, 4, 7, 6, 8, 9, 10, 11, 12, 13, 14, 15};
+  Bytes out(16);
+  for (int i = 0; i < 16; ++i) {
+    out[size_t(i)] = canonical[size_t(kOrder[i])];
+  }
+  return out;
+}
+
+// The retail id a carried-over model is written with: 10000000-0000-f000-f000-0000XXXXXXXX.
+Bytes CarriedModel(uint32_t id) {
+  Bytes b = {0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0xf0, 0xf0, 0x00, 0x00, 0x00};
+  b.push_back(uint8_t(id >> 24));  // big endian, as a retail property holds it
+  b.push_back(uint8_t(id >> 16));
+  b.push_back(uint8_t(id >> 8));
+  b.push_back(uint8_t(id));
+  return b;
+}
+
+void PutBE32(Bytes& b, uint32_t v) {
+  for (int shift = 24; shift >= 0; shift -= 8) {
+    b.push_back(uint8_t(v >> shift));
+  }
+}
+
+// The retail ring controller: a SpecialFunction (ScriptLoader's 58) whose function sits where
+// its head leaves it (position and orientation, 24 bytes), with `functionAt` for the negative
+// test that puts it elsewhere.
+ScriptObject RetailBarrierController(size_t functionAt, uint32_t function, std::vector<ScriptObject::Link> links) {
+  ScriptObject o;
+  o.id = PortQueenBarrier::kController;
+  o.type = 0x3A;
+  o.layer = 0;
+  o.propCount = 15;
+  o.hasPos = true;
+  o.pos = Vec3{0, 0, 0};
+  o.props.assign(functionAt, 0);
+  PutBE32(o.props, function);
+  o.links = std::move(links);
+  for (const ScriptObject::Link& l : o.links) {
+    o.targets.push_back(l.target);
+  }
+  return o;
+}
+
+// A retail ring platform: type 8, with SScaledActorHead (position, orientation, scale: 36
+// bytes), its extent and centroid (12 each) and then its model, where ScriptLoader reads it.
+ScriptObject RetailRingPlatform(uint32_t eid, uint32_t modelAt60, std::vector<ScriptObject::Link> links) {
+  ScriptObject o;
+  o.id = eid;
+  o.type = 0x08;
+  o.layer = 0;
+  o.propCount = 19;
+  o.hasPos = true;
+  o.pos = Vec3{0, 5.875, 0};
+  o.props.assign(24, 0);  // position and orientation
+  for (int i = 0; i < 3; ++i) {
+    PutBE32(o.props, 0x3F800000u);  // a scale of one
+  }
+  o.props.resize(60, 0);  // extent and centroid
+  PutBE32(o.props, modelAt60);
+  o.links = std::move(links);
+  for (const ScriptObject::Link& l : o.links) {
+    o.targets.push_back(l.target);
+  }
+  return o;
+}
+
+ScriptObject RetailWaypointObject(uint32_t eid, Vec3 pos) {
+  ScriptObject o;
+  o.id = eid;
+  o.type = 0x02;
+  o.layer = 0;
+  o.propCount = 13;
+  o.hasPos = true;
+  o.pos = pos;
+  o.props.assign(24, 0);
+  return o;
+}
+
+// A SpecialFunctionMP1 of the given function, with the controller's duration when it is the
+// main one.
+Fixture::Comp SpecialFunction(uint32_t function, float duration, std::vector<Fixture::Link> links) {
+  Fixture::Comp c = Plain(kSpecialFunction, std::move(links));
+  Props props;
+  props.AddU32(kPropFunctionType, function);
+  if (function == 8) {
+    Bytes v;
+    PutFloat(v, duration);
+    props.Add(kPropDuration, v);
+  }
+  c.props = props.b;
+  return c;
+}
+
+// A PlatformMP1 with the dummy model and collision the five rings carry.
+Fixture::Comp RingPlatform(uint32_t model, uint32_t collision, std::vector<Fixture::Link> links) {
+  Fixture::Comp c = Plain(kPlatformMP1, std::move(links));
+  Props props;
+  props.Add(kPropModel, CarriedModel(model));
+  props.Add(kPropCollision, CarriedModel(collision));
+  c.props = props.b;
+  return c;
+}
+
+// An EffectMP1 whose GENP is the table's guid.
+Fixture::Comp RingEffect(const char* genp) {
+  Fixture::Comp c = Plain(kEffectMP1);
+  c.props = Props().Add(kPropGenp, Stored(genp)).b;
+  return c;
+}
+
+// The room's barrier graph and its retail rings, ready to be mutated before it is parsed.
+struct BarrierFixture {
+  Fixture room;
+  Area area;
+  SceneryScripts scripts;
+  std::map<std::string, Bytes> written;
+  size_t writtenCount = 0;
+  // Component indices.
+  size_t controller = 0;
+  size_t platform[5]{}, refraction[5]{}, glow[5]{}, waypoint[5]{}, follower[5][2]{};
+  size_t idleFollower = 0, otherEffect = 0, relay = 0;
+  size_t retailController = 0;
+  size_t retailPlatform[5]{}, retailWaypoint[5]{};
+  // What a conversion is asked for.
+  struct Call {
+    uint32_t part, feature;
+    std::vector<std::array<uint8_t, 16>> vars;
+  };
+  std::vector<Call> calls;
+  bool barrierEffectAnswers = true;   // the callback's answer
+  bool barrierEffectAbsent = false;   // no callback at all
+  bool noPart = false;                // one of the ten has no PART
+};
+
+// The whole valid fixture: one controller, five platforms and their ten effects, five
+// waypoints, ten followers, an idle type 19 one, and an unrelated connected effect.
+BarrierFixture MakeBarrier() {
+  BarrierFixture b;
+  std::vector<Fixture::Comp>& comps = b.room.comps;
+  const size_t n = PortQueenBarrier::kRings.size();
+  comps.push_back(SpecialFunction(8, 1.0f, {}));
+  comps.back().guid = Stored(PortQueenBarrier::kControllerGuid);
+  b.controller = 0;
+  for (size_t r = 0; r < n; ++r) {
+    b.platform[r] = comps.size();
+    comps.push_back(RingPlatform(kModelDummy, kCollisionDummy, {}));
+    comps.back().guid = Stored(PortQueenBarrier::kRings[r].component);
+  }
+  for (size_t r = 0; r < n; ++r) {
+    b.refraction[r] = comps.size();
+    comps.push_back(RingEffect(PortQueenBarrier::kRings[r].refraction));
+    b.glow[r] = comps.size();
+    comps.push_back(RingEffect(PortQueenBarrier::kRings[r].glow));
+  }
+  for (size_t r = 0; r < n; ++r) {
+    for (size_t f = 0; f < 2; ++f) {
+      b.follower[r][f] = comps.size();
+      comps.push_back(SpecialFunction(19, 0.f, {}));
+    }
+  }
+  for (size_t r = 0; r < n; ++r) {
+    b.waypoint[r] = comps.size();
+    comps.push_back(Plain(kWaypointMP1));
+    comps.back().pos[1] = kWaypointY[r];
+  }
+  b.idleFollower = comps.size();
+  comps.push_back(SpecialFunction(19, 0.f, {}));
+  b.otherEffect = comps.size();
+  comps.push_back(EffectActor(0));
+  b.relay = comps.size();
+  comps.push_back(Plain(kRelay, {}));
+  const auto pair = [](size_t to, uint32_t event, uint32_t action) {
+    return Fixture::Link{to, event, action};
+  };
+  // The controller plays its five platforms and its ten effects.
+  for (size_t r = 0; r < n; ++r) {
+    comps[b.controller].links.push_back(pair(b.platform[r], kBarrierPlay, kBarrierToPlatform));
+    comps[b.controller].links.push_back(pair(b.refraction[r], kBarrierPlay, kBarrierToEffect));
+    comps[b.controller].links.push_back(pair(b.glow[r], kBarrierPlay, kBarrierToEffect));
+  }
+  // Each platform is activated by the controller, links its two effects and plays its waypoint
+  // (and, as the room's do, the shared dummy actor).
+  for (size_t r = 0; r < n; ++r) {
+    comps[b.platform[r]].links = {pair(b.refraction[r], kPlatformActive, kBarrierToEffect),
+                                  pair(b.glow[r], kPlatformActive, kBarrierToEffect),
+                                  pair(b.waypoint[r], kPlatformPlay, kPlatformWaypoint),
+                                  pair(b.idleFollower, 0x28ade3c2, 0xa34e100f)};
+  }
+  // Each follower copies its platform's transform to its effect.
+  for (size_t r = 0; r < n; ++r) {
+    for (size_t f = 0; f < 2; ++f) {
+      comps[b.follower[r][f]].links = {pair(b.platform[r], kBarrierPlay, kBarrierToPlatform),
+                                       pair(f == 0 ? b.refraction[r] : b.glow[r], kBarrierPlay, kBarrierFollow)};
+    }
+  }
+  // The unrelated connected actor: a Relay reaches it, so the generic pass leaves it out.
+  comps[b.relay].links = {pair(b.otherEffect, kEventRelayFired, kActionAction)};
+  // The retail room: the ring controller, its five platforms and their waypoints, all on layer
+  // 0, with the waypoints where the Remastered ones are.
+  b.area.mrea = PortQueenBarrier::kMrea;
+  // The controller plays its five platforms (Play/Activate, as the disc's links do).
+  std::vector<ScriptObject::Link> plays;
+  for (size_t r = 0; r < n; ++r) {
+    plays.push_back({18, 1, PortQueenBarrier::kRings[r].platform});  // kSS_Play, kSM_Activate
+  }
+  b.retailController = b.area.objects.size();
+  b.area.objects.push_back(RetailBarrierController(24, 8, plays));
+  for (size_t r = 0; r < n; ++r) {
+    b.retailPlatform[r] = b.area.objects.size();
+    // Each platform follows its waypoint (Play/Follow) and, as the disc's do, also activates
+    // the shared dummy actor (Default/Activate).
+    b.area.objects.push_back(RetailRingPlatform(
+        PortQueenBarrier::kRings[r].platform, kRetailModel,
+        {{18, 6, PortQueenBarrier::kRings[r].waypoint}, {30, 1, 0x0019006C}}));
+    b.retailWaypoint[r] = b.area.objects.size();
+    b.area.objects.push_back(RetailWaypointObject(PortQueenBarrier::kRings[r].waypoint,
+                                                  Apply(b.area.xf, MulR2G(Vec3{0, kWaypointY[r], 0}))));
+  }
+  return b;
+}
+
+RoomIO BarrierIO(BarrierFixture& b) {
+  RoomIO io;
+  io.write = [&b](const std::string& name, const Bytes& data) {
+    b.written[name] = data;
+    ++b.writtenCount;
+    return true;
+  };
+  io.effect = [&b](const std::array<uint8_t, 16>& genp) -> uint32_t {
+    if (b.noPart && genp == SwapUuid(Stored(PortQueenBarrier::kRings[4].glow).data())) {
+      return 0;
+    }
+    return 0xFE000000u | genp[0] | uint32_t(genp[1]) << 8;
+  };
+  if (!b.barrierEffectAbsent) {
+    io.barrierEffect = [&b](uint32_t part, uint32_t feature, const std::vector<std::array<uint8_t, 16>>& vars) {
+      b.calls.push_back({part, feature, vars});
+      return b.barrierEffectAnswers;
+    };
+  }
+  return io;
+}
+
+std::string WriteBarrier(BarrierFixture& b) {
+  const Parsed p(b.room);
+  RoomIO io = BarrierIO(b);
+  return WriteRoomEffects("07_Intro_Reactor", p.room, b.area.mrea, b.area, b.scripts, io);
+}
+
+std::vector<std::array<uint8_t, 16>> BarrierGenps(const BarrierFixture& b) {
+  const Parsed p(b.room);
+  return RoomEffectGenpsOf(p.room);
+}
+
+// The group in the .roomfx the fixture wrote, or null when it wrote none.
+bool WrittenBarrier(BarrierFixture& b, PortRoomEffects::File& file) {
+  const auto it = b.written.find("87452DC1.roomfx");
+  if (it == b.written.end()) {
+    return false;
+  }
+  std::string error;
+  return PortRoomEffects::Parse(it->second, file, error);
+}
+
+// The script matcher pairing the barrier's actor `member` with a retail Effect object, as it may
+// for any actor of the room.
+size_t MapMemberToRetail(BarrierFixture& b, size_t member) {
+  const size_t at = b.area.objects.size();
+  b.area.objects.push_back(RetailObject(0x0019A001, 7, Vec3{0, 5.875, 0}, {}, 0x12345678));
+  b.scripts.retail[int(b.room.Entity(member))] = at;
+  return at;
+}
+
+// A mutated fixture writes no group and no half of one: no effect is added, none is skipped and
+// none becomes an override. With the Remastered graph itself broken, its ten GENPs are not
+// admitted for conversion either (the retail side and the conversions come later).
+void Refuses(BarrierFixture& b, const char* what, bool graphValid = false, const char* reason = nullptr) {
+  b.written.clear();
+  b.calls.clear();
+  const std::string line = WriteBarrier(b);
+  const std::string said = std::string(what) + " - " + line;
+  PortRoomEffects::File file;
+  CHECK_MSG((line.find("no barrier group") != std::string::npos), said);
+  CHECK_MSG(!WrittenBarrier(b, file) || (file.barriers.empty() && file.layers.empty() && file.skips.empty() &&
+                                         file.overrides.empty()),
+            said);
+  CHECK_MSG(graphValid || BarrierGenps(b).empty(), said);
+  if (reason != nullptr) {
+    CHECK_MSG(line.find(reason) != std::string::npos, said);
+  }
+}
+
+void TestBarrierGroup() {
+  // The valid graph: ten inactive effects on the controller's layer, the group with the table's
+  // platforms, the two effect ids per ring and the three guids, and the callback asked for each
+  // effect with its own feature and variables.
+  {
+    BarrierFixture b = MakeBarrier();
+    const std::string line = WriteBarrier(b);
+    CHECK_MSG(line.find("the barrier's 10 effects at 1 s") != std::string::npos, line.c_str());
+    CHECK_MSG(b.calls.size() == 10, "the conversion is asked about all ten");
+    PortRoomEffects::File file;
+    REQUIRE_MSG(WrittenBarrier(b, file), "one .roomfx");
+    REQUIRE_MSG(file.barriers.size() == 1, "one barrier group");
+    const PortRoomEffects::BarrierGroup& group = file.barriers[0];
+    CHECK(group.controller == PortQueenBarrier::kController && group.duration == 1.0f);
+    CHECK_MSG(file.skips.empty() && file.overrides.empty() && file.connected == 1,
+              "nothing skipped, no override, one other connected effect");
+    REQUIRE_MSG(file.layers.size() == 1 && file.layers[0].layer == 0 && file.layers[0].count == 10,
+                "ten effects on the controller's layer");
+    for (size_t r = 0; r < group.rings.size(); ++r) {
+      const PortRoomEffects::BarrierRing& ring = group.rings[r];
+      const auto& row = PortQueenBarrier::kRings[r];
+      CHECK(ring.platform == row.platform);
+      CHECK(ring.refraction == PortRoomEffects::AddOnId(0, 0x19, uint32_t(2 * r)));
+      CHECK(ring.glow == PortRoomEffects::AddOnId(0, 0x19, uint32_t(2 * r + 1)));
+      const Bytes refractionGuid = Stored(row.breakupRefraction);
+      const Bytes motionGuid = Stored(row.motion);
+      const Bytes glowGuid = Stored(row.breakupGlow);
+      CHECK(std::equal(ring.breakupRefraction.begin(), ring.breakupRefraction.end(), refractionGuid.begin()));
+      CHECK(std::equal(ring.motion.begin(), ring.motion.end(), motionGuid.begin()));
+      CHECK(std::equal(ring.breakupGlow.begin(), ring.breakupGlow.end(), glowGuid.begin()));
+      // The callback: the refraction effect first, then the glow one.
+      const auto& refraction = b.calls[2 * r];
+      const auto& glow = b.calls[2 * r + 1];
+      CHECK(refraction.feature == PortQueenBarrier::kRefractionFeature && refraction.vars.size() == 2);
+      CHECK(refraction.vars.size() == 2 && std::equal(refraction.vars[0].begin(), refraction.vars[0].end(), refractionGuid.begin()) &&
+            std::equal(refraction.vars[1].begin(), refraction.vars[1].end(), motionGuid.begin()));
+      CHECK(glow.feature == PortQueenBarrier::kGlowFeature && glow.vars.size() == 1);
+      CHECK(glow.vars.size() == 1 && std::equal(glow.vars[0].begin(), glow.vars[0].end(), glowGuid.begin()));
+      CHECK(refraction.part != 0 && refraction.part != 0xFFFFFFFF);
+    }
+    // The effects themselves: inactive, with the ROOM's transform, and the retail PART.
+    size_t at = 0;
+    for (uint32_t i = 0; i < 10; ++i) {
+      PortRoomEffects::Effect e;
+      size_t used = 0;
+      REQUIRE(PortRoomEffects::ReadEffect(file.layers[0].objects.data() + at, file.layers[0].objects.size() - at, e, used));
+      CHECK(!e.active);
+      CHECK(e.id == PortRoomEffects::AddOnId(0, 0x19, i));
+      CHECK((e.part >> 24) == 0xFE);
+      at += used;
+    }
+    CHECK(at == file.layers[0].objects.size());
+    // Only the ten effects of a whole graph are admitted for conversion, in the table's order.
+    const std::vector<std::array<uint8_t, 16>> genps = BarrierGenps(b);
+    REQUIRE_MSG(genps.size() == 10, "ten GENPs admitted");
+    for (size_t r = 0; r < 5; ++r) {
+      CHECK(genps[2 * r] == SwapUuid(Stored(PortQueenBarrier::kRings[r].refraction).data()));
+      CHECK(genps[2 * r + 1] == SwapUuid(Stored(PortQueenBarrier::kRings[r].glow).data()));
+    }
+  }
+  // An ordinary add-on in the same layer first: the group's ids follow it, and none is used
+  // twice.
+  {
+    BarrierFixture b = MakeBarrier();
+    b.room.comps.push_back(EffectActor(1));
+    b.room.comps.back().pos[0] = 100.f;
+    b.scripts.layer[int(b.room.Entity(b.room.comps.size() - 1))] = 0;
+    const std::string line = WriteBarrier(b);
+    CHECK_MSG(line.find("1 effect actor(s) added") != std::string::npos &&
+                  line.find("the barrier's 10 effects") != std::string::npos,
+              line.c_str());
+    PortRoomEffects::File file;
+    REQUIRE_MSG(WrittenBarrier(b, file), "one .roomfx");
+    REQUIRE(file.barriers.size() == 1);
+    REQUIRE(file.layers.size() == 1 && file.layers[0].count == 11);
+    CHECK(file.barriers[0].rings[0].refraction == PortRoomEffects::AddOnId(0, 0x19, 1));
+    CHECK(file.barriers[0].rings[4].glow == PortRoomEffects::AddOnId(0, 0x19, 10));
+    // The first object is the ordinary one, at its own id.
+    PortRoomEffects::Effect first;
+    size_t used = 0;
+    REQUIRE(PortRoomEffects::ReadEffect(file.layers[0].objects.data(), file.layers[0].objects.size(), first, used));
+    CHECK(first.id == PortRoomEffects::AddOnId(0, 0x19, 0));
+  }
+  // Absent, failing or partial conversion: nothing of the group is written.
+  {
+    BarrierFixture b = MakeBarrier();
+    b.barrierEffectAbsent = true;
+    Refuses(b, "no conversion callback", true, "no conversion for it");
+  }
+  {
+    BarrierFixture b = MakeBarrier();
+    b.barrierEffectAnswers = false;
+    Refuses(b, "the conversion refuses an effect", true, "conversion is not the barrier's");
+  }
+  {
+    BarrierFixture b = MakeBarrier();
+    b.noPart = true;
+    Refuses(b, "an effect has no PART", true, "an effect has no PART");
+  }
+  // The graph itself: a mutated controller, its links, a platform, a follower, a model, a
+  // waypoint.
+  {
+    BarrierFixture b = MakeBarrier();
+    b.room.comps[b.controller] = SpecialFunction(9, 1.0f, b.room.comps[b.controller].links);
+    Refuses(b, "another function than the ring controller's", "its Remastered graph is not the one the table names");
+  }
+  {
+    BarrierFixture b = MakeBarrier();
+    b.room.comps[b.controller] = SpecialFunction(8, 0.f, b.room.comps[b.controller].links);
+    Refuses(b, "a duration of zero", "its Remastered graph is not the one the table names");
+  }
+  {
+    BarrierFixture b = MakeBarrier();
+    b.room.comps[b.controller] = SpecialFunction(8, 61.f, b.room.comps[b.controller].links);
+    Refuses(b, "a duration past a minute", "its Remastered graph is not the one the table names");
+  }
+  {
+    BarrierFixture b = MakeBarrier();
+    b.room.comps[b.controller].links.pop_back();
+    Refuses(b, "the controller with fourteen links", "its Remastered graph is not the one the table names");
+  }
+  {
+    BarrierFixture b = MakeBarrier();
+    b.room.comps[b.controller].links.push_back({b.waypoint[0], kBarrierPlay, kBarrierToPlatform});
+    Refuses(b, "the controller with sixteen links", "its Remastered graph is not the one the table names");
+  }
+  {
+    BarrierFixture b = MakeBarrier();
+    b.room.comps[b.platform[1]].links.erase(b.room.comps[b.platform[1]].links.begin());
+    Refuses(b, "a platform with one effect", "its Remastered graph is not the one the table names");
+  }
+  {
+    BarrierFixture b = MakeBarrier();
+    b.room.comps[b.platform[2]].links[0].target = b.refraction[3];  // another ring's effect
+    Refuses(b, "a platform linked to another ring's effect", "its Remastered graph is not the one the table names");
+  }
+  {
+    BarrierFixture b = MakeBarrier();
+    b.room.comps[b.platform[4]].links.erase(b.room.comps[b.platform[4]].links.begin() + 2);
+    Refuses(b, "a platform with no waypoint", "its Remastered graph is not the one the table names");
+  }
+  {
+    BarrierFixture b = MakeBarrier();
+    b.room.comps[b.platform[0]] = RingPlatform(0x12345678, kCollisionDummy, b.room.comps[b.platform[0]].links);
+    Refuses(b, "another model than the dummy one", "its Remastered graph is not the one the table names");
+  }
+  {
+    BarrierFixture b = MakeBarrier();
+    b.room.comps[b.platform[0]] = RingPlatform(kModelDummy, 0x12345678, b.room.comps[b.platform[0]].links);
+    Refuses(b, "another collision than the dummy one", "its Remastered graph is not the one the table names");
+  }
+  {
+    BarrierFixture b = MakeBarrier();
+    b.room.comps[b.platform[0]].guid = Stored(PortQueenBarrier::kRings[1].component);  // not this room's platform
+    Refuses(b, "a platform whose component is not the table's", "its Remastered graph is not the one the table names");
+  }
+  {
+    BarrierFixture b = MakeBarrier();
+    b.room.comps[b.follower[2][1]].links.clear();
+    Refuses(b, "a pair without its follower", "its Remastered graph is not the one the table names");
+  }
+  {
+    BarrierFixture b = MakeBarrier();
+    b.room.comps[b.follower[2][1]].links = b.room.comps[b.follower[2][0]].links;  // two for one pair
+    Refuses(b, "a pair with two followers", "its Remastered graph is not the one the table names");
+  }
+  {
+    BarrierFixture b = MakeBarrier();
+    b.room.comps[b.follower[0][0]].links[1].target = b.glow[0];  // the pair's other effect
+    Refuses(b, "a follower on the wrong effect", "its Remastered graph is not the one the table names");
+  }
+  {
+    BarrierFixture b = MakeBarrier();
+    b.room.comps[b.follower[0][0]].links[0].target = b.platform[1];  // another ring's platform
+    Refuses(b, "a follower on another ring's platform", "its Remastered graph is not the one the table names");
+  }
+  {
+    BarrierFixture b = MakeBarrier();
+    b.room.comps[b.follower[3][0]].links.push_back({b.platform[3], kBarrierPlay, kBarrierToPlatform});
+    Refuses(b, "a follower with three links", "its Remastered graph is not the one the table names");
+  }
+  {
+    BarrierFixture b = MakeBarrier();
+    b.room.comps[b.refraction[1]] = RingEffect(PortQueenBarrier::kRings[0].refraction);  // a swapped GENP
+    Refuses(b, "a ring with the wrong effect family", "its Remastered graph is not the one the table names");
+  }
+  // The retail side: the controller's function, a platform's model, a waypoint, the layer.
+  {
+    BarrierFixture b = MakeBarrier();
+    std::vector<ScriptObject::Link> plays;
+    for (size_t r = 0; r < 5; ++r) {
+      plays.push_back({18, 1, PortQueenBarrier::kRings[r].platform});
+    }
+    b.area.objects[b.retailController] = RetailBarrierController(24, 7, plays);  // another function
+    Refuses(b, "a retail controller of another function", true, "not a SpecialFunction (58)");
+  }
+  {
+    BarrierFixture b = MakeBarrier();
+    std::vector<ScriptObject::Link> plays;
+    for (size_t r = 0; r < 5; ++r) {
+      plays.push_back({18, 1, PortQueenBarrier::kRings[r].platform});
+    }
+    b.area.objects[b.retailController] = RetailBarrierController(36, 8, plays);  // the wrong offset
+    Refuses(b, "a retail controller whose function is not at 24", true, "not a SpecialFunction (58)");
+  }
+  {
+    BarrierFixture b = MakeBarrier();
+    std::vector<ScriptObject::Link> plays;
+    for (size_t r = 0; r < 5; ++r) {
+      plays.push_back({18, 1, PortQueenBarrier::kRings[r].platform});
+    }
+    ScriptObject c = RetailBarrierController(24, 8, plays);
+    c.propCount = 14;
+    b.area.objects[b.retailController] = c;
+    Refuses(b, "a retail controller with fourteen properties", true, "not a SpecialFunction (58)");
+  }
+  {
+    BarrierFixture b = MakeBarrier();
+    std::vector<ScriptObject::Link> plays;
+    for (size_t r = 0; r < 5; ++r) {
+      plays.push_back({18, 1, PortQueenBarrier::kRings[r].platform});
+    }
+    ScriptObject c = RetailBarrierController(24, 8, plays);
+    c.type = 0x15;
+    b.area.objects[b.retailController] = c;
+    Refuses(b, "a retail controller of another type", true, "not a SpecialFunction (58)");
+  }
+  // The controller's own links: a wrong message, a wrong state, or one platform unplayed.
+  {
+    BarrierFixture b = MakeBarrier();
+    std::vector<ScriptObject::Link> plays;
+    for (size_t r = 0; r < 5; ++r) {
+      plays.push_back({18, 1, PortQueenBarrier::kRings[r].platform});
+    }
+    plays[2].message = 20;  // kSM_Play, not kSM_Activate
+    b.area.objects[b.retailController] = RetailBarrierController(24, 8, plays);
+    Refuses(b, "a controller link with the wrong message", true, "not the Play/Activate one");
+  }
+  {
+    BarrierFixture b = MakeBarrier();
+    std::vector<ScriptObject::Link> plays;
+    for (size_t r = 0; r < 5; ++r) {
+      plays.push_back({18, 1, PortQueenBarrier::kRings[r].platform});
+    }
+    plays[0].state = 30;  // kSS_Default, not kSS_Play
+    b.area.objects[b.retailController] = RetailBarrierController(24, 8, plays);
+    Refuses(b, "a controller link with the wrong state", true, "not the Play/Activate one");
+  }
+  {
+    BarrierFixture b = MakeBarrier();
+    std::vector<ScriptObject::Link> plays;
+    for (size_t r = 0; r < 4; ++r) {
+      plays.push_back({18, 1, PortQueenBarrier::kRings[r].platform});
+    }
+    b.area.objects[b.retailController] = RetailBarrierController(24, 8, plays);
+    Refuses(b, "a platform the controller does not play", true, "exactly five links");
+  }
+  {
+    BarrierFixture b = MakeBarrier();
+    b.area.objects[b.retailPlatform[0]] =
+        RetailRingPlatform(PortQueenBarrier::kRings[0].platform, 0x12345678,
+                           {{18, 6, PortQueenBarrier::kRings[0].waypoint}});
+    Refuses(b, "a retail platform of another model", true, "model at 60");
+  }
+  // The right bytes, but in the wrong place: the model is read at 60, never searched for.
+  {
+    BarrierFixture b = MakeBarrier();
+    ScriptObject p = RetailRingPlatform(PortQueenBarrier::kRings[0].platform, 0x12345678,
+                                        {{18, 6, PortQueenBarrier::kRings[0].waypoint}});
+    p.props[24] = 0x65;  // the model's bytes, where the scale is
+    p.props[25] = 0x56;
+    p.props[26] = 0xEE;
+    p.props[27] = 0xC5;
+    b.area.objects[b.retailPlatform[0]] = p;
+    Refuses(b, "a model planted away from its offset", true, "model at 60");
+  }
+  {
+    BarrierFixture b = MakeBarrier();
+    ScriptObject p = RetailRingPlatform(PortQueenBarrier::kRings[0].platform, kRetailModel,
+                                        {{18, 6, PortQueenBarrier::kRings[0].waypoint}});
+    p.propCount = 18;
+    b.area.objects[b.retailPlatform[0]] = p;
+    Refuses(b, "a retail platform with eighteen properties", true, "19 properties");
+  }
+  {
+    BarrierFixture b = MakeBarrier();
+    b.area.objects[b.retailPlatform[0]] =
+        RetailRingPlatform(PortQueenBarrier::kRings[0].platform, kRetailModel, {});
+    Refuses(b, "a retail platform with no waypoint link", true, "does not link exactly one waypoint");
+  }
+  {
+    BarrierFixture b = MakeBarrier();
+    b.area.objects[b.retailPlatform[0]] =
+        RetailRingPlatform(PortQueenBarrier::kRings[0].platform, kRetailModel,
+                           {{18, 8, PortQueenBarrier::kRings[0].waypoint}});  // kSM_Next, not kSM_Follow
+    Refuses(b, "the waypoint reached with the wrong message", true, "not the Play/Follow one");
+  }
+  {
+    BarrierFixture b = MakeBarrier();
+    b.area.objects[b.retailPlatform[0]] =
+        RetailRingPlatform(PortQueenBarrier::kRings[0].platform, kRetailModel,
+                           {{30, 6, PortQueenBarrier::kRings[0].waypoint}});  // the wrong state
+    Refuses(b, "the waypoint reached in the wrong state", true, "not the Play/Follow one");
+  }
+  {
+    BarrierFixture b = MakeBarrier();
+    b.area.objects[b.retailPlatform[0]] =
+        RetailRingPlatform(PortQueenBarrier::kRings[0].platform, kRetailModel,
+                           {{18, 6, PortQueenBarrier::kRings[1].waypoint}});  // another ring's waypoint
+    Refuses(b, "the wrong ring's waypoint", true, "does not link exactly one waypoint");
+  }
+  {
+    BarrierFixture b = MakeBarrier();
+    b.area.objects[b.retailWaypoint[0]].pos[1] += 0.5;  // the waypoint moved
+    Refuses(b, "a retail waypoint off the Remastered one", true, "not where the Remastered one is");
+  }
+  {
+    BarrierFixture b = MakeBarrier();
+    b.area.objects[b.retailPlatform[0]].layer = 3;  // a platform on another layer than its controller
+    Refuses(b, "a retail platform on another layer", true, "the controller's layer");
+  }
+  {
+    BarrierFixture b = MakeBarrier();
+    b.area.objects.erase(b.area.objects.begin() + std::ptrdiff_t(b.retailWaypoint[1]));
+    Refuses(b, "a retail waypoint gone", true, "waypoint object is missing");
+  }
+  // A barrier whose conversion fails while the script matcher paired one of its actors with a
+  // retail Effect: the actor is the barrier's, so it is neither an override nor an add-on, and
+  // none of the group is written.
+  {
+    BarrierFixture b = MakeBarrier();
+    MapMemberToRetail(b, b.refraction[0]);
+    b.barrierEffectAnswers = false;
+    Refuses(b, "a failed group with a matched actor", true, "conversion is not the barrier's");
+    CHECK_MSG(b.written.empty(), "a failed group writes nothing at all");
+  }
+  // The same with a graph that does not validate: the table's GENP is known before any of it.
+  {
+    BarrierFixture b = MakeBarrier();
+    MapMemberToRetail(b, b.glow[2]);
+    b.room.comps[b.controller] = SpecialFunction(9, 1.0f, b.room.comps[b.controller].links);
+    Refuses(b, "a malformed graph with a matched actor", false,
+            "its Remastered graph is not the one the table names");
+    CHECK_MSG(b.written.empty(), "a malformed graph writes nothing at all");
+  }
+  // The controller's links are exactly the five platforms: a sixth one, or one played twice,
+  // is refused.
+  {
+    BarrierFixture b = MakeBarrier();
+    ScriptObject c = b.area.objects[b.retailController];
+    c.links.push_back({18, 1, 0x0019006C});
+    b.area.objects[b.retailController] = c;
+    Refuses(b, "a controller with a sixth link", true, "exactly five links");
+  }
+  {
+    BarrierFixture b = MakeBarrier();
+    ScriptObject c = b.area.objects[b.retailController];
+    c.links[4].target = 0x0019006C;  // five links, one to something else
+    b.area.objects[b.retailController] = c;
+    Refuses(b, "a controller link to another object", true, "not to one of the five platforms");
+  }
+  {
+    BarrierFixture b = MakeBarrier();
+    ScriptObject c = b.area.objects[b.retailController];
+    c.links[2].target = PortQueenBarrier::kRings[0].platform;
+    b.area.objects[b.retailController] = c;
+    Refuses(b, "one platform played twice", true, "is not the Play/Activate one, or names it twice");
+  }
+  // No retail objects at all: the stage says so and writes nothing, without touching them.
+  {
+    BarrierFixture b = MakeBarrier();
+    b.area.objects.clear();
+    b.written.clear();
+    const Parsed p(b.room);
+    RoomIO io = BarrierIO(b);
+    const std::string line =
+        WriteRoomEffects("07_Intro_Reactor", p.room, PortQueenBarrier::kMrea, b.area, b.scripts, io);
+    CHECK_MSG(line.find("no retail objects") != std::string::npos, line.c_str());
+    CHECK_MSG(b.written.empty() && b.calls.empty(), "no retail objects, nothing written");
+  }
+}
+
+// The shipped ROOM's graph, when the extracted asset is on disk (it is not part of the
+// repository, so this is skipped without it): the controller, its duration, the five platforms
+// by the table's guids, and each ring's waypoint height.
+void TestRealBarrierRoom() {
+  const char* candidates[] = {"../mpr/rooms/07_Intro_Reactor/07_Intro_Reactor.ROOM",
+                              "../../mpr/rooms/07_Intro_Reactor/07_Intro_Reactor.ROOM",
+                              "../../../mpr/rooms/07_Intro_Reactor/07_Intro_Reactor.ROOM"};
+  Bytes data;
+  for (const char* path : candidates) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+      continue;
+    }
+    data.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    break;
+  }
+  if (data.empty()) {
+    std::printf("note: no extracted 07_Intro_Reactor.ROOM, the real graph is not checked\n");
+    return;
+  }
+  Room room;
+  std::string error;
+  REQUIRE_MSG(room.Parse(data, error), error.c_str());
+  BarrierGraph graph;
+  REQUIRE_MSG(BarrierGraphOf(room, graph), "the shipped ROOM's barrier graph");
+  CHECK(graph.duration == 1.0f);
+  for (size_t r = 0; r < graph.rings.size(); ++r) {
+    CHECK_MSG(UuidText(room.Components()[graph.rings[r].platform].guid.data()) ==
+                  PortQueenBarrier::kRings[r].component,
+              "the table's ring order");
+    Vec3 pos, rot, scale;
+    REQUIRE(room.Xform(room.Components()[graph.rings[r].waypoint], pos, rot, scale));
+    CHECK_MSG(std::fabs(pos[1] - kWaypointY[r]) < 0.001, "the ring's waypoint height");
+  }
 }
 
 Fixture::Comp Density(float intensity) {
@@ -576,14 +1360,183 @@ void TestEnvFxIntensity() {
   }
 }
 
+void TestDynamoModulateGraph() {
+  Fixture f;
+  f.comps = {Plain(kActorMP1),
+             Plain(kColorModulateMP1, {{0, 0x4ee99d94, kActionActivate}}),
+             Plain(kRelay, {{1, kEventRelayFired, 0x144d0f29},
+                            {1, kEventRelayFired, 0x8ed2a8c7}})};
+  Bytes zero, duration;
+  PutFloat(zero, 0.f);
+  PutFloat(duration, 1.2f);
+  f.comps[1].props = Props().Add(kPropModulateColorB, Props().Add(kPropColorRGBA[3], zero).b)
+                               .Add(0x23fc9f0d, duration).Add(0xd8f7b602, zero)
+                               .Add(0x3fff0f45, Bytes{1}).b;
+  Area area;
+  area.mrea = 0x12345678; // no room-specific permission to use the graph
+  const Parsed p(f);
+  const auto result = MatchScripts(p.room, area);
+  REQUIRE(result.group.count(int(f.Entity(0))) == 1);
+  REQUIRE(result.script.nodes.size() == 2);
+  const auto& node = result.script.nodes[0];
+  CHECK(node.kind == PortRoomGeo::kAlphaModulate);
+  const auto c = node.AlphaConfig();
+  CHECK(c.a == 1.f && c.b == 0.f && c.timeA2B == 1.2f && c.timeB2A == 0.f);
+  CHECK(c.flags == (12 | 512));
+  REQUIRE(result.script.edges.size() == 3);
+  CHECK(result.script.edges[0].action == PortRoomGeo::kGroupModulate);
+  CHECK(result.script.edges[1].action == PortRoomGeo::kDecrement);
+  CHECK(result.script.edges[2].action == PortRoomGeo::kIncrement);
+  // A sibling actor driven only by a relay is not a modulation target, even
+  // though a supported modulator lives in the same room.
+  f.comps.push_back(Plain(kActorMP1));
+  f.comps[2].links.push_back({3, kEventRelayFired, kActionActivate});
+  const Parsed unrelated(f);
+  CHECK(MatchScripts(unrelated.room, area).group.count(int(f.Entity(3))) == 0);
+  f.comps[1].props = Props().Add(0xf41e2ca0, Bytes{1}).b;
+  const Parsed autoStart(f);
+  const auto registered = MatchScripts(autoStart.room, area);
+  REQUIRE(registered.script.nodes.size() == 2);
+  CHECK(registered.script.nodes[0].AlphaConfig().flags == (12 | 0x1000));
+  // The importer must not reinterpret a non-alpha mode as this evaluator.
+  f.comps[1].props = Props().AddU32(kPropModulateBlend, kModulateIncandescence).b;
+  const Parsed unsupported(f);
+  CHECK(MatchScripts(unsupported.room, area).script.nodes.empty());
+  // Existing added scenery stays relay-driven when the incandescence
+  // modulator is refused; its glow is still owned by port_remastered_room.cpp.
+  f.comps[0].props = Props().Add(kPropActorAdded, Bytes{1}).b;
+  f.comps[2].links.push_back({0, kEventRelayFired, kActionActivate});
+  const Parsed glow(f);
+  const auto oldPath = MatchScripts(glow.room, area);
+  REQUIRE(oldPath.script.nodes.size() == 1);
+  CHECK(oldPath.script.nodes[0].kind == PortRoomGeo::kRelay);
+  REQUIRE(oldPath.script.edges.size() == 1);
+  CHECK(oldPath.script.edges[0].action == PortRoomGeo::kGroupShow);
+}
+
+void TestPlatformTransformBindings() {
+  Fixture f;
+  f.comps = {RingPlatform(0x11111111, 0x33333333, {}),
+             RingPlatform(0x22222222, 0x33333333, {}),
+             Plain(kRelay, {{0, 0xf51372f2, 0x511ddd00}, {1, 0xf51372f2, 0x511ddd00}})};
+  Area area;
+  area.xf[0][0] = area.xf[1][1] = area.xf[2][2] = 1.;
+  auto object = RetailRingPlatform(0x1234, 0x11111111, {});
+  object.pos = {0, 0, 0};
+  object.hasXf = true;
+  object.scale = {1, 1, 1};
+  area.objects.push_back(object);
+  {
+    const Parsed p(f);
+    const auto scripts = MatchScripts(p.room, area);
+    REQUIRE(scripts.platformTransform.size() == 2);
+    CHECK(scripts.platformTransform.at(int(f.Entity(0)))->id == 0x1234);
+    CHECK(scripts.platformTransform.at(int(f.Entity(1)))->id == 0x1234);
+  }
+  // Co-location alone, a different controller, collision or initial pose must
+  // never bind an independent platform to a neighbour's movement.
+  for (int mutation = 0; mutation < 4; ++mutation) {
+    Fixture changed = f;
+    if (mutation == 0) changed.comps[2].links.clear();
+    if (mutation == 1) changed.comps[2].links[1].action = kActionActivate;
+    if (mutation == 2) changed.comps[1] = RingPlatform(0x22222222, 0x44444444, {});
+    if (mutation == 3) changed.comps[1].scale[0] = 2.f;
+    const Parsed p(changed);
+    const auto scripts = MatchScripts(p.room, area);
+    CHECK(scripts.platformTransform.count(int(changed.Entity(1))) == 0);
+  }
+}
+
+// Optional read-only shipped-data audit; no import output or game execution.
+void AuditModulateRooms() {
+  const char* root = std::getenv("PORT_MODULATE_AUDIT_ROOT");
+  if (!root) return;
+  size_t rooms = 0, affected = 0, nodes = 0, all = 0, autoStart = 0;
+  for (const auto& entry : std::filesystem::recursive_directory_iterator(root)) {
+    if (entry.path().extension() != ".ROOM") continue;
+    std::ifstream in(entry.path(), std::ios::binary);
+    Bytes bytes((std::istreambuf_iterator<char>(in)), {});
+    Room room;
+    std::string error;
+    REQUIRE_MSG(room.Parse(bytes, error), entry.path().string().c_str());
+    ++rooms;
+    for (const auto& c : room.Components()) {
+      if (c.type != kColorModulateMP1) continue;
+      ++all;
+      const auto f = room.Flat(c);
+      const auto p = f.find(0xf41e2ca0);
+      if (p != f.end() && p->second.size == 1 && room.Bytes(p->second)[0]) ++autoStart;
+    }
+    const auto result = MatchScripts(room, Area{});
+    size_t count = 0;
+    for (const auto& node : result.script.nodes) count += node.kind == PortRoomGeo::kAlphaModulate;
+    if (count) {
+      ++affected;
+      nodes += count;
+      std::printf("alpha-audit %s %zu\n", entry.path().string().c_str(), count);
+    }
+  }
+  std::printf("alpha-audit totals rooms=%zu modulators=%zu bit1000=%zu new_rooms=%zu new_nodes=%zu\n",
+              rooms, all, autoStart, affected, nodes);
+}
+
+void AuditPlatformRoom() {
+  const char* roomPath = std::getenv("PORT_PLATFORM_AUDIT_ROOM");
+  const char* retailPath = std::getenv("PORT_PLATFORM_AUDIT_MREA");
+  if (!roomPath || !retailPath) return;
+  const auto read = [](const char* path) {
+    std::ifstream in(path, std::ios::binary);
+    return Bytes(std::istreambuf_iterator<char>(in), {});
+  };
+  auto bytes = read(roomPath);
+  Room room;
+  std::string error;
+  REQUIRE_MSG(room.Parse(bytes, error), error.c_str());
+  Area area;
+  area.xf[0][0] = area.xf[1][1] = area.xf[2][2] = 1.;
+  REQUIRE(ReadScly(read(retailPath), area.objects));
+  if (const char* mlvl = std::getenv("PORT_PLATFORM_AUDIT_MLVL")) {
+    const char* id = std::getenv("PORT_PLATFORM_AUDIT_MREA_ID");
+    REQUIRE(id != nullptr);
+    area.mrea = uint32_t(std::strtoul(id, nullptr, 16));
+    std::vector<std::pair<uint32_t, Mat34>> areas;
+    REQUIRE(ReadMlvl(read(mlvl), areas));
+    for (const auto& entry : areas) if (entry.first == area.mrea) area.xf = entry.second;
+  }
+  const auto scripts = MatchScripts(room, area);
+  size_t own = 0, siblings = 0;
+  for (const auto* c : room.Of(kPlatformComponent)) {
+    const auto binding = scripts.platformTransform.find(c->entity);
+    if (binding == scripts.platformTransform.end()) continue;
+    if (scripts.retail.count(c->entity)) ++own;
+    else {
+      ++siblings;
+      std::printf("platform-audit sibling entity=%d carrier=%08X\n", c->entity, binding->second->id);
+    }
+  }
+  std::printf("platform-audit matched=%zu co-driven=%zu\n", own, siblings);
+}
+
 }  // namespace
 
 int main() {
+  // Shipped enum table at 0x1d16b5c; priority 0x590d6843 is NOT this enum.
+  CHECK(kPropHintMode == 0xa9aef33e && kPropExposureHintPriority == 0x590d6843);
+  CHECK(ExposureHintMode(0x2e32a658) == 0);
+  CHECK(ExposureHintMode(0xe1fee72e) == 1);
+  CHECK(ExposureHintMode(0xabccc097) == 2);
+  CHECK(ExposureHintMode(6) == 0); // unknown enumerant -> default (0x89e9a0)
   TestFluidSenders();
   TestMasterTrigger();
   TestMasterCameraWater();
   TestRoomEffects();
+  TestBarrierGroup();
+  TestRealBarrierRoom();
   TestEnvFxIntensity();
+  TestDynamoModulateGraph();
+  TestPlatformTransformBindings();
+  AuditModulateRooms();
+  AuditPlatformRoom();
   if (port_test::Failures() == 0) {
     std::printf("port_remastered_room_scripts_tests: ok\n");
   }

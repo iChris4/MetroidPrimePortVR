@@ -129,7 +129,7 @@ public:
   // material's own reflection cube ('PBR7'; see PortRoomEnv::MaterialCube), 0 without one.
   // frameExposed: GlowScale does not scale this draw (see PortRoomEnv::GlowGain).
   float PortSetPBRMaterial(const int idx, const float fade, const bool fadeReplaces,
-                           const bool frameExposed, uint* cube = nullptr) const;
+                           const bool frameExposed, uint* cube = nullptr, const CModelFlags* drawFlags = nullptr) const;
   // The material's record (see the definition) with the neutral values where it has
   // none; returns how many floats the record holds, 0 without one. wrap, when given, gets
   // the maps' sampler modes: map i's S mode in bits 4i..4i+1, its T mode in 4i+2..4i+3
@@ -171,12 +171,18 @@ public:
   // The beam's charge, 0 to 1, which the Ice Beam cannon's frost shell (kind 12) dissolves
   // with: Remastered's DisintegrationAmount. At 0 the shell is not drawn.
   static void PortSetChargeShell(float amount);
+  // The frost shell's glow IINT, 3 to 10 (CIceBeamMP1::PreRenderGunFx); the record holds 10.
+  static void PortSetIceShellIint(float iint);
   // The visor whose mesh filter the world and actor draws apply (CPlayerState::EPlayerVisor
   // order; PortVisorMesh in platform/include/port_visor_mesh.h): set per frame by
   // CStateManager::DrawWorld from GetActiveVisor, i.e. combat when the camera isn't first-person.
   static void PortSetActiveVisor(int visor);
   // Surfaces the filter skipped since the last call (visor bits, shadow bit), for the log.
   static void PortTakeVisorSkipCounts(unsigned& visor, unsigned& shadow);
+  // The thermal visor's pass whose mesh filter applies too (PortVisorMesh::ThermalPass: none,
+  // cold, hot), and the surfaces it skipped since the last call.
+  static void PortSetThermalPass(int pass);
+  static void PortTakeThermalSkipCounts(unsigned& cold, unsigned& hotDropped);
   // The Remastered Phazon Beam's DisintegrationAmount, 0 to 1 (CPhazonBeamMP1::Update), which
   // the veins material (kind 35) eats its mask with. Reset to 0 when the beam unloads.
   static void PortSetDisintegration(float amount);
@@ -304,6 +310,34 @@ public:
   void DrawSurface(const CCubeSurface& surface, const CModelFlags& modelFlags) const;
   void DrawSurfaceWireframe(const CCubeSurface& surface) const;
   void DrawFlat(const float* positions, const float* normals, ESurfaceSelection which) const;
+#ifdef TARGET_PC
+  // Port: Remastered's Model_ThermalOverride (02c254b6; kb topic/thermal-model-render.md), the
+  // hot pass's shader for a converted model's surfaces: grey (clamp(luma(BCLR)) * 3.75 + 0.25) *
+  // |N.V| * x + y in the HDR scene, with the material's blend. The caller of a hot
+  // RenderThermal sets (a, b) for the next draws (x = 0.4a, y = 0.4b + 0.6) and clears them.
+  static void PortSetThermalOverride(float a, float b);
+  // The override's x and y as they are: the hot world's global (1.0, 0.2509804).
+  static void PortSetThermalOverrideConstants(float x, float y);
+  static void PortClearThermalOverride();
+  // The override as it is now, to put back after a nested one (PortRestoreThermalOverride).
+  static void PortGetThermalOverride(bool& on, float& x, float& y);
+  static void PortRestoreThermalOverride(bool on, float x, float y);
+  // Remastered's normal scene node for a model drawn as model 3 (CModelDataMP1::RenderUnsortedParts
+  // 0xfa71c4) as the hot pass draws it: its bit-19 surfaces in `which` through the override at
+  // the hot world's global (1.0, 0.2509804). The caller sets the model matrix.
+  void PortDrawThermalHotNode(const CModelFlags& flags, ESurfaceSelection which) const;
+  // Whether the hot draws take the override now: one is set, the visor is thermal and the
+  // scene is HDR (without HDR they stay retail).
+  static bool PortThermalOverrideActive();
+  // Whether `surface` takes it: a converted material outside the kinds and modes whose
+  // Remastered shader does not use it (kb topic/thermal-model-render.md).
+  bool PortThermalOverrideSurface(const CCubeSurface& surface) const;
+  // Draws the surfaces PortThermalOverrideSurface picks (DrawFlat then skips them while
+  // sPortThermalSplit is set), with `flags`' depth.
+  void PortDrawThermalOverride(const float* positions, const float* normals, const CModelFlags& flags,
+                               ESurfaceSelection which) const;
+  static bool sPortThermalSplit;
+#endif
   bool TryLockTextures() const;
   void Draw(const CModelFlags& flags) const;
   void Draw(const float* positions, const float* normals, const CModelFlags& flags) const;

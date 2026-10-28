@@ -58,7 +58,7 @@ struct LightSource {
   float nearD = 0.f;
   float farD = 0.f;
   bool spot = false;
-  float innerDeg = 0.f; // the cone's inner and outer half angles, degrees
+  float innerDeg = 0.f; // the authored full cone angles, degrees (halved by the loader)
   float outerDeg = 0.f;
   int falloff = 3; // ELightDistanceAttn: 0 none, 1 linear, 2 squared, 3 smooth
 };
@@ -67,7 +67,8 @@ struct LightSource {
 // A = 1/(far-near), B = -near*A. `far` comes back as the record's and node's far.
 void DistanceAttenuation(float nearD, float farD, float& a, float& b, float& far);
 // SLightAngleAttenuation::FromValues 0x173a50 (and CLight ctor's None for a point light):
-// the half angles in degrees, cos of each, scale = 1/(cosIn - cosOut), bias = -cosOut * scale.
+// Halve the authored degree angles, wrap to [0,2pi), widen outer<=inner by 0.001 rad,
+// then scale = 1/(cosIn - cosOut), bias = -cosOut * scale.
 void ConeAttenuation(bool spot, float innerDeg, float outerDeg, float& scale, float& bias);
 // The distance falloff cubic, stored a3, a2, a1, a0 (SLightDistanceAttenuation's table:
 // (0,0,0,1), (0,0,-1,1), (0,1,-2,1), (2,-3,0,1) for types 0 to 3).
@@ -93,22 +94,26 @@ Camera MakeCamera(const float worldToView[3][4], float left, float right, float 
                   float farZ);
 
 struct Grid {
-  uint32_t width = 0;  // the render target's pixels, as the viewport is
+  uint32_t width = 0;  // the render target's pixels
   uint32_t height = 0;
   int tilesX = 0;
   int tilesY = 0;
   int Clusters() const { return tilesX * tilesY * kSlices; }
 };
 // tilesX = min(ceil(width/48), 34), tilesY = min(ceil(height/48), 19). `width` and `height`
-// are the viewport the world is drawn with, in pixels (CGraphics::GetViewport's mWidth and
-// mHeight, which the port's screen-space code already uses; GXGetViewportv reports the same).
+// are the render target's pixels, the space the shader's fragment position is in (not the
+// 640x480 GX viewport). A tile is ceil(width/tilesX) x ceil(height/tilesY) pixels (48 until
+// the caps bind), tile row 0 at the top.
 Grid MakeGrid(uint32_t width, uint32_t height);
+// ceil(width/tilesX) and ceil(height/tilesY): CClusteredData+0xc and +0x10.
+uint32_t TilePixelsX(const Grid& grid);
+uint32_t TilePixelsY(const Grid& grid);
 // The shader's slice for a fragment at view z: trunc(clamp(-z - origin, 0, 500) * 32/500),
 // kept inside 0..31 (native's texture fetch clamps; here the last slice takes the rest).
 int SliceForViewZ(float viewZ, float depthOrigin = 0.f);
 // The same for a positive view distance.
 int SliceForDepth(float depth, float depthOrigin = 0.f);
-// c5[0..2], the header the shader reads: (1/48, 1/48, tilesX, tilesY), (1, 32/500,
+// c5[0..2], the header the shader reads: (1/TilePixelsX, 1/TilePixelsY, tilesX, tilesY), (1, 32/500,
 // depthOrigin, 500), then tilesX*tilesY and tilesX as int bits, the validity mask and the
 // mask source (0: a texture).
 void Header(const Grid& grid, float out[kHeaderFloats], uint32_t validity, float depthOrigin);

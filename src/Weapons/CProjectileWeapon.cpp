@@ -379,7 +379,13 @@ void CProjectileWeapon::UpdateChildParticleSystems(float dt) {
       if (xf4_curFrame > xe8_lifetime) {
         x120_swoosh3->SetParticleEmission(false);
       } else {
-        if (x124_30_AS13) {
+#ifdef TARGET_PC
+        // Remastered's UpdateChildTransforms (0xb7ba54) reads AS12 for swoosh 3 too.
+        const bool portGlobal = PortIsRemastered() ? x124_29_AS12 : x124_30_AS13;
+#else
+        const bool portGlobal = x124_30_AS13;
+#endif
+        if (portGlobal) {
           x120_swoosh3->SetGlobalTranslation(GetTranslation());
         } else {
           x120_swoosh3->SetTranslation(GetTranslation());
@@ -572,6 +578,17 @@ void CProjectileWeapon::SetGravity(const CVector3f& gravity) { xbc_gravity = gra
 const CVector3f& CProjectileWeapon::GetGravity() const { return xbc_gravity; }
 
 void CProjectileWeapon::SetGlobalSeed(const uint seed) { skGlobalSeed = seed; }
+
+#ifdef TARGET_PC
+bool CProjectileWeapon::PortIsRemastered() const {
+  return (xfc_APSMGen && xfc_APSMGen->PortIsRemastered()) ||
+         (x100_APS2Gen && x100_APS2Gen->PortIsRemastered()) ||
+         (x104_ && x104_->PortIsRemastered()) ||
+         (x118_swoosh1 && x118_swoosh1->PortIsRemastered()) ||
+         (x11c_swoosh2 && x11c_swoosh2->PortIsRemastered()) ||
+         (x120_swoosh3 && x120_swoosh3->PortIsRemastered());
+}
+#endif
 
 rstl::optional_object< CAABox > CProjectileWeapon::GetBounds() const {
   CAABox ret = CAABox::MakeMaxInvertedBox();

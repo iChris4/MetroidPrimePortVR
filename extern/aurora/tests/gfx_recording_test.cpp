@@ -368,3 +368,32 @@ TEST(StereoFogCopy, DepthReadsEachEyesDepthAttachment) {
   }
   EXPECT_NE(&eyes[0].copy_view(true), &eyes[1].copy_view(true));
 }
+
+TEST(StereoShaderLayout, UpstreamFlagsDoNotOverwriteEyeReplayFlags) {
+  aurora::gx::ShaderConfig config{};
+  config.currentPnMtx = 7;
+  config.multiview = aurora::gx::EyeClipImmediate;
+  config.mapBatch = 1;
+  config.mapCull = 2;
+  config.nativeVertices = 1;
+  config.perPixelLight = 1;
+  config.clipPlane = 1;
+  config.shell = 2;
+  config.pbrCut = 1;
+  config.pbrThermal = 1;
+  config.actorDecal = 1;
+  EXPECT_EQ(config.currentPnMtx, 7);
+  EXPECT_EQ(config.multiview, aurora::gx::EyeClipImmediate);
+  EXPECT_EQ(config.mapBatch, 1);
+  EXPECT_EQ(config.mapCull, 2);
+  EXPECT_EQ(config.nativeVertices, 1);
+  config.multiview = aurora::gx::MultiviewClip;
+  EXPECT_EQ(config.perPixelLight, 1);
+  EXPECT_EQ(config.clipPlane, 1);
+  EXPECT_EQ(config.shell, 2);
+  EXPECT_EQ(config.pbrCut, 1);
+  EXPECT_EQ(config.pbrThermal, 1);
+  EXPECT_EQ(config.actorDecal, 1);
+  // tools/primedgun_seed.py must agree with the serialized row layout.
+  EXPECT_EQ(sizeof(aurora::gx::PipelineConfig), 2788u);
+}

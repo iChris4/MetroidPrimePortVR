@@ -43,10 +43,19 @@ public final class MetroidPrimeActivity extends SDLActivity {
     private static final String TAG = "MetroidPrimePort";
     // Distinct from SDL's own dialog request codes, which count up from 0.
     private static final int REQUEST_TEXTURE_PACK = 0x7e57;
+    // Asks the system picker to list the phone's storage root, which it otherwise
+    // hides behind its shortcuts (Downloads, Recent, ...).
+    private static final String SHOW_ADVANCED = "android.content.extra.SHOW_ADVANCED";
     private static final int REQUEST_STORAGE = 0x7e58;
     // The Remastered import's .nsp/.xci (+0) and prod.keys (+1), a PAL disc for its
     // languages (+2) and a disc for the full Flaahgra theme (+3).
     private static final int REQUEST_REMASTERED = 0x7e59;
+    // A disc picked after Android destroyed the activity behind the picker
+    // reaches a new launch, which drops it: SDL's dialog state died with the old
+    // process. The picker's request code is kept here, and such a pick is left
+    // in PENDING_DISC_FILE for the native side's next start (platform/main.cpp).
+    private static final String DISC_PICK_PREFS = "disc_pick";
+    private static final String PENDING_DISC_FILE = "pending_disc_uri";
     private TouchControlsView touchControls;
     private final AtomicBoolean texturePackCopying = new AtomicBoolean();
     // The data folder the texture pack being picked is copied into.
@@ -370,7 +379,9 @@ public final class MetroidPrimeActivity extends SDLActivity {
             }
             texturePackFolder = folder;
             try {
-                startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), REQUEST_TEXTURE_PACK);
+                startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
+                                           .putExtra(SHOW_ADVANCED, true),
+                                       REQUEST_TEXTURE_PACK);
             } catch (android.content.ActivityNotFoundException e) {
                 nativeTexturePackStatus("This device has no folder picker.");
             }
@@ -385,7 +396,8 @@ public final class MetroidPrimeActivity extends SDLActivity {
         runOnUiThread(() -> {
             Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT)
                 .addCategory(Intent.CATEGORY_OPENABLE)
-                .setType("*/*");
+                .setType("*/*")
+                .putExtra(SHOW_ADVANCED, true);
             try {
                 startActivityForResult(intent, REQUEST_REMASTERED + which);
             } catch (android.content.ActivityNotFoundException e) {
@@ -490,6 +502,21 @@ public final class MetroidPrimeActivity extends SDLActivity {
             }
             return;
         }
+        android.content.SharedPreferences discPick = getSharedPreferences(DISC_PICK_PREFS, MODE_PRIVATE);
+        if (discPick.getInt("request", Integer.MIN_VALUE) == requestCode) {
+            discPick.edit().remove("request").commit();
+            Uri disc = data != null && resultCode == RESULT_OK ? data.getData() : null;
+            if (disc != null && !isFileDialogPending(requestCode)) {
+                persistUri(disc);
+                try (OutputStream out = new FileOutputStream(new File(getFilesDir(), PENDING_DISC_FILE))) {
+                    out.write(disc.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                    Log.i(TAG, "Kept a disc picked before the activity was recreated: " + disc);
+                } catch (IOException e) {
+                    Log.w(TAG, "Could not keep the disc picked before the activity was recreated", e);
+                }
+                return;
+            }
+        }
         if (data != null) {
             persistUri(data.getData());
             ClipData clips = data.getClipData();
@@ -500,6 +527,26 @@ public final class MetroidPrimeActivity extends SDLActivity {
             }
         }
         super.onActivityResult(requestCode, resultCode, data);
+    }
+
+    // Remembers which dialog is the disc picker (opening, filtered to disc
+    // images) in storage that outlives the process. commit, not apply: the
+    // process can be gone before an apply is written.
+    @Override
+    protected void onFileDialogShown(String[] filters, boolean forWrite, int requestCode) {
+        boolean disc = false;
+        if (!forWrite && filters != null) {
+            for (String filter : filters) {
+                disc |= filter != null && filter.contains("rvz");
+            }
+        }
+        android.content.SharedPreferences.Editor edit = getSharedPreferences(DISC_PICK_PREFS, MODE_PRIVATE).edit();
+        if (disc) {
+            edit.putInt("request", requestCode);
+        } else {
+            edit.remove("request");
+        }
+        edit.commit();
     }
 
     private void persistUri(Uri uri) {

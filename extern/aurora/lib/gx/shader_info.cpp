@@ -372,6 +372,10 @@ ShaderInfo build_shader_info(const ShaderConfig& config) noexcept {
     // linear light colours, then 3 HDR rows per light, then shield 8, the lightmap 4, the room lights and the model
     // modulation (diffuse, incandescence, coverage)
     info.uniformSize += sizeof(Mat3x4<float>) + sizeof(Vec4<float>) * (27 + GX::MaxLights * 4 + 8 + 4 + 1 + 3);
+    if (config.pbrThermal) {
+      info.usesPbrThermal = true;
+      info.uniformSize += sizeof(Vec4<float>);
+    }
   } else if (config.sceneHdr) {
     // The TEV inverse tone curve and actual-blend compatibility flag (PBR reads pbr_tone).
     info.usesHdrTone = true;
@@ -380,6 +384,22 @@ ShaderInfo build_shader_info(const ShaderConfig& config) noexcept {
   if (config.hudSample >= 2) {
     info.usesHudDyin = true;
     info.uniformSize += sizeof(Vec4<float>);
+  }
+  if (config.clipPlane) {
+    info.usesClipPlane = true;
+    info.uniformSize += sizeof(Vec4<float>);
+  }
+  if (config.shell != 0) {
+    // CCH0..CCH4, (time, depth shift, TCH0 sRGB, 0), (1 / target size), then the tone curve
+    // (pbrTone); the colour pass samples TCH0
+    // and TCH1 on maps 0 and 1 and the scene copy on map 2 (bound by build_bind_groups).
+    info.usesShell = true;
+    info.uniformSize += sizeof(g_gxState.shellUniform) + sizeof(g_gxState.pbrTone);
+    if (config.shell == 2) {
+      info.shellScene = true;
+      info.sampledTextures.set(GX_TEXMAP0);
+      info.sampledTextures.set(GX_TEXMAP1);
+    }
   }
   if (info.usesPTTexMtx.any()) {
     info.uniformSize += sizeof(Mat3x4<float>) * MaxPTTexMtx;
@@ -550,6 +570,9 @@ static void fill_uniform(ByteBuffer& buf, const ShaderInfo& info) noexcept {
     buf.append(g_gxState.pbrModelDiffuse);
     buf.append(g_gxState.pbrModelIncan);
     buf.append(g_gxState.pbrModelCoverage);
+    if (info.usesPbrThermal) {
+      buf.append(g_gxState.pbrThermal);
+    }
   }
   if (info.usesHdrTone) {
     for (const auto& v : g_gxState.pbrTone) {
@@ -576,6 +599,18 @@ static void fill_uniform(ByteBuffer& buf, const ShaderInfo& info) noexcept {
   }
   if (info.usesHudDyin) {
     buf.append(g_gxState.hudDyin);
+  }
+  if (info.usesClipPlane) {
+    buf.append(g_gxState.clipPlaneEq);
+  }
+  if (info.usesShell) {
+    for (const auto& v : g_gxState.shellUniform) {
+      buf.append(v);
+    }
+    // shell_tone: the curve the LDR colour pass decodes the scene copy with (shader.cpp).
+    for (const auto& v : g_gxState.pbrTone) {
+      buf.append(v);
+    }
   }
   if (info.usesPTTexMtx.any()) {
     for (int i = 0; i < info.usesPTTexMtx.size(); ++i) {

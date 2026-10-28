@@ -69,6 +69,8 @@ struct TouchScroll {
 };
 TouchScroll sTouchScroll;
 
+bool TouchScrolling() { return sTouchScroll.dragging; }
+
 void UpdateTouchScroll() {
   ImGuiContext& g = *ImGui::GetCurrentContext();
   const ImGuiIO& io = g.IO;
@@ -464,8 +466,12 @@ void DrawUI() {
   DrawDiscReadFailedAlert();
   DrawShaderCompilationToast();
   DrawUpdateToast();
+  DrawNoteToast();
   DrawPhotoUI();
   DrawResumePrompt();
+#if defined(PORT_TOUCH_OVERLAY)
+  DrawTouchOverlay();
+#endif
   if (sTouchLayoutSavePending.exchange(false, std::memory_order_acq_rel)) {
     MarkDirty();
     SaveSettings();

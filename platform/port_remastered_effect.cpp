@@ -1283,7 +1283,10 @@ public:
     node.form = FourCCAt(at);
     node.id = id;
     if (node.form == kGpsm) {
+      std::memcpy(node.baseMaterial.data(), m_data + at + 5, node.baseMaterial.size());
       node.root = ReadLE32(m_data + at + 21) != 0;
+      const uint32_t primitive = ReadLE32(m_data + at + 21);
+      node.primitiveType = primitive >= 1 && primitive <= 6 ? int(primitive - 1) : -1;
       at += 25;
     } else if (Properties(at + 4, false)) {
       at += 4;

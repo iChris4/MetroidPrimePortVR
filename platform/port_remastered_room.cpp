@@ -9,6 +9,7 @@
 // port_remastered_room_scripts.cpp, shared through port_remastered_room_internal.h.
 
 #include "port_remastered_room_internal.h"
+#include "port_gunship_scenery.h"
 
 namespace PortRemastered {
 namespace RoomDetail {
@@ -102,8 +103,24 @@ struct FogTransitionData {
   std::vector<PortRoomGeo::Link> links;
 };
 
+// A LightDynamic's links and timeline (see PortRoomEnv::LightTimeline): show/hide and the timeline's
+// actions (LightAct); the timeline flags, its falloff, whether its end deactivates it (its finished
+// event -> ICMP/ICTV on itself), the entity's scale x and y (for near and far), the static colour and
+// intensity (for a timeline that lacks a spline) and the splines' bytes (PortRoomEnv::kLightSplines;
+// empty: absent).
+struct LightTimelineData {
+  std::vector<PortRoomGeo::Link> links;
+  bool animated = false, playing = false, loop = false, offAtStart = false;
+  uint8_t animFalloff = 3;
+  float length = 0.f;
+  float scale[2] = {1.f, 1.f};
+  float intensity = 0.f;
+  float rgb[3] = {};
+  std::vector<uint8_t> splines[PortRoomEnv::kLightSplines];
+};
+
 // A directional LightDynamic (see PortRoomEnv::Sun).
-struct SunData {
+struct SunData : LightTimelineData {
   int32_t layer = -1;
   bool on = false;
   float toSun[3] = {}; // retail world, unit length
@@ -114,7 +131,7 @@ struct SunData {
 
 // A point or spot LightDynamic (see PortRoomEnv::RoomLights), as SLdrLightDynamic::Load and
 // NLightLoaders::build_light read it (kb func/light-dynamic.md).
-struct PointLightData {
+struct PointLightData : LightTimelineData {
   int32_t layer = -1;
   bool on = false;
   bool spot = false;
@@ -125,17 +142,6 @@ struct PointLightData {
   float nearFar[2] = {0.25f, 1.f};  // times the entity's scale x and y
   float cone[2] = {0.f, 45.f}; // inner, outer full angles in degrees
   uint32_t group = PortRoomGeo::kNoGroup;
-  std::vector<PortRoomGeo::Link> links;  // show/hide and the timeline's actions (LightAct)
-  // The animated path: timeline flags, its falloff, whether its end deactivates it (its
-  // finished event -> ICMP/ICTV on itself), the entity's scale x and y (for near and far),
-  // and the splines' bytes (PortRoomEnv::kLightSplines; empty: absent).
-  bool animated = false, playing = false, loop = false, offAtStart = false;
-  uint8_t animFalloff = 3;
-  float length = 0.f;
-  float scale[2] = {1.f, 1.f};
-  float intensity = 0.f; // the static colour and intensity, for a timeline that lacks a spline
-  float rgb[3] = {};
-  std::vector<uint8_t> splines[PortRoomEnv::kLightSplines];
 };
 
 struct Placement {
@@ -216,7 +222,8 @@ private:
   };
   bool MatchRoom(const RoomData& r, const std::map<std::string, Placement>& placed, Match& out) const;
   void Tonemap(const RoomData& r, float out[5]) const;
-  void Exposure(const RoomData& r, float out[5], std::vector<PortRoomEnv::FluidHint>* fluid = nullptr) const;
+  void Exposure(const RoomData& r, const Area* area, float out[5],
+                std::vector<PortRoomEnv::FluidHint>* fluid = nullptr) const;
   void ReadBloom(const RoomData& r, BloomData& out) const;
   // The room's global ColorGrades in component order; `area` gives their retail layers.
   void ReadGrades(const RoomData& r, const Area* area, std::vector<GradeData>& out,
@@ -239,10 +246,18 @@ private:
   // keeps the entities that placed one in m_retailEntities, for WriteGeometry to leave out.
   void PairRetailModels(const RoomData& r, const Area& area);
   std::set<int> m_retailEntities;
+  // Entities carrying a model under a retail-style id (10000000-...-XXXXXXXX) that no retail
+  // object of the area names: Remastered's own models standing in for retail objects (Central
+  // Dynamo's floor grates). WriteGeometry draws them, though they lack kPropActorAdded.
+  std::set<int> m_syntheticEntities;
+  // The retail ids the room's entities carry (models it keeps), and where its entities stand
+  // (GC world space): what WriteGeometry checks before hiding a retail object.
+  std::set<uint32_t> m_roomRetailIds;
+  std::vector<Vec3> m_entityPositions;
   // The room's static geometry (its ModCon components), as "<MREA id>.roomgeo".
   void WriteGeometry(const RoomData& r, uint32_t mrea, const Area& area);
   // The room's liquid surfaces (its water and lava render volumes), as "<MREA id>.roomliquid".
-  void WriteLiquids(const RoomData& r, uint32_t mrea);
+  void WriteLiquids(const RoomData& r, uint32_t mrea, const Area& area);
   std::string WriteRoom(const RoomData& r, const std::map<std::string, Placement>& placed, const Vec3& shift,
                         const float tonemap[5], const BloomData& bloom, const std::vector<GradeData>& worldGrades,
                         const std::vector<BacklightData>& worldBacklights, const std::vector<FogData>& worldFogs,
@@ -452,23 +467,26 @@ void Writer::Tonemap(const RoomData& r, float out[5]) const {
   }
 }
 
-// The range of exposure values the room's auto exposure is held to, the bias it adds, the
-// sigma it eases by and where in the range the static exposure sits, or 0, 0, 0, 32, 0.5
-// for a room without auto exposure. A room can have several hints: the plain
-// one for the whole room is wanted, not those with a mode (they are for a state of the
-// room, such as a cutscene) or a volume of their own. Hints with mode 1 or 2 (active while
-// the camera is inside a fluid / once it has left one) go to `fluid` with their mode. A value the hint leaves out is
-// SLdrAutoExposureHint's default.
+// Version 27 stores all exposure hints in the registration list, including plain
+// mode 0 hints. The legacy header is left at the no-hint default. Priority and
+// fluid visibility are independent fields (SLdrAutoExposureHint::Load 0x538b54).
+// No transform/volume ranking occurs in UpdateTonemapping 0xaffb18.
 //
 // The two hints a CAutoExposureHintMP1 swaps between (role 1 for the one its 0x9ea1739d link
 // reaches, 2 for its 0x4ff221ac link; which is the normal view and which the thermal one is
 // inferred from the data (unverified)) go to `fluid` whatever their mode, with the
 // instance's number in `pair`, and out of the plain-hint pick.
-void Writer::Exposure(const RoomData& r, float out[5], std::vector<PortRoomEnv::FluidHint>* fluid) const {
+void Writer::Exposure(const RoomData& r, const Area* area, float out[5],
+                      std::vector<PortRoomEnv::FluidHint>* fluid) const {
   out[0] = out[1] = out[2] = 0.f;
   out[3] = 32.f;
   out[4] = 0.5f;
-  int best = 0;
+  // The hints' entities are (de)activated by the area's scripts (the hangar's intro camera,
+  // say), which registers and unregisters them.
+  SceneryScripts scripts;
+  if (fluid != nullptr && area != nullptr && !r.room.Of(kAutoExposureHint).empty()) {
+    scripts = MatchScripts(r.room, *area);
+  }
   std::map<const Component*, std::pair<uint8_t, uint8_t>> paired;  // hint -> role, pair
   {
     const auto& comps = r.room.Components();
@@ -496,7 +514,7 @@ void Writer::Exposure(const RoomData& r, float out[5], std::vector<PortRoomEnv::
           const auto hf = r.room.Flat(*hint);
           const auto mi = hf.find(kPropHintMode);
           modes += " " + std::to_string(mi != hf.end() && mi->second.size >= 4
-                                            ? int(ReadLE32(r.room.Bytes(mi->second)))
+                                            ? int(ExposureHintMode(ReadLE32(r.room.Bytes(mi->second))))
                                             : 0);
         }
       }
@@ -521,38 +539,59 @@ void Writer::Exposure(const RoomData& r, float out[5], std::vector<PortRoomEnv::
     if (!std::isfinite(range[0]) || !std::isfinite(range[1]) || range[1] < range[0]) {
       continue;
     }
-    Vec3 pos, rot, scale;
-    const bool whole = !r.room.Xform(*c, pos, rot, scale) ||
-                       (std::fabs(scale[0] - 1.0) < 1e-3 && std::fabs(scale[1] - 1.0) < 1e-3 &&
-                        std::fabs(scale[2] - 1.0) < 1e-3);
     const auto modeIt = f.find(kPropHintMode);
-    const int mode = modeIt != f.end() && modeIt->second.size >= 4 ? int(ReadLE32(r.room.Bytes(modeIt->second))) : 0;
+    const uint8_t mode = modeIt != f.end() && modeIt->second.size >= 4
+                             ? ExposureHintMode(ReadLE32(r.room.Bytes(modeIt->second)))
+                             : 0;
     const auto pairIt = paired.find(c);
-    if (mode == 1 || mode == 2 || pairIt != paired.end()) {
-      if (fluid != nullptr) {
-        PortRoomEnv::FluidHint h;
-        h.mode = uint8_t(std::clamp(mode, 0, 255));
-        if (pairIt != paired.end()) {
-          h.role = pairIt->second.first;
-          h.pair = pairIt->second.second;
-        }
-        h.exposure[0] = range[0];
-        h.exposure[1] = range[1];
-        h.bias = std::isfinite(bias) ? bias : 0.f;
-        h.sigma = sigma >= 0.f && sigma < 10000.f ? sigma : 32.f;
-        h.staticLerp = lerp >= 0.f && lerp <= 1.f ? lerp : 0.5f;
-        fluid->push_back(h);
+    // All hints participate in the same priority-ordered registration list. The
+    // old importer mistook priority (0x590d6843) for a fluid mode and picked one
+    // plain hint by transform scale, neither of which the shipped loader does.
+    if (fluid != nullptr) {
+      PortRoomEnv::FluidHint h;
+      h.mode = mode;
+      h.on = r.room.Active(*c);
+      const auto priority = f.find(kPropExposureHintPriority);
+      if (priority != f.end() && priority->second.size >= 4) {
+        h.priority = int32_t(ReadLE32(r.room.Bytes(priority->second)));
       }
-      continue;
-    }
-    const int rank = modeIt != f.end() ? 1 : whole ? 3 : 2;
-    if (rank > best) {
-      best = rank;
-      out[0] = range[0];
-      out[1] = range[1];
-      out[2] = std::isfinite(bias) ? bias : 0.f;
-      out[3] = sigma >= 0.f && sigma < 10000.f ? sigma : 32.f;
-      out[4] = lerp >= 0.f && lerp <= 1.f ? lerp : 0.5f;
+      if (pairIt != paired.end()) {
+        h.role = pairIt->second.first;
+        h.pair = pairIt->second.second;
+      }
+      h.exposure[0] = range[0];
+      h.exposure[1] = range[1];
+      h.bias = std::isfinite(bias) ? bias : 0.f;
+      h.sigma = sigma >= 0.f && sigma < 10000.f ? sigma : 32.f;
+      h.staticLerp = lerp >= 0.f && lerp <= 1.f ? lerp : 0.5f;
+      if (const auto linked = scripts.links.find(c->entity); c->entity >= 0 && linked != scripts.links.end()) {
+        for (PortRoomGeo::Link link : linked->second) {
+          if (link.action != PortRoomGeo::kShow && link.action != PortRoomGeo::kHide &&
+              link.action != PortRoomGeo::kToggle) {
+            continue;
+          }
+          if (!PortRoomEnv::PseudoSender(link.sender)) {
+            link.sender &= 0x3ffffff;  // as CEntity sends it: no layer bits
+          }
+          h.links.push_back({link.sender, link.state, link.action});
+        }
+      }
+      if (const auto unresolved = scripts.unresolved.find(c->entity); unresolved != scripts.unresolved.end()) {
+        Log("  " + r.name + ": exposure hint with " + std::to_string(unresolved->second) +
+            " connection(s) not followed (sender type/event/action:" +
+            (scripts.unresolvedHow.count(c->entity) != 0 ? scripts.unresolvedHow.at(c->entity) : std::string()) +
+            "), " + std::to_string(h.links.size()) + " followed");
+      } else if (!h.links.empty()) {
+        std::string how;
+        for (const auto& l : h.links) {
+          char buf[48];
+          std::snprintf(buf, sizeof(buf), " %08X/%d/%d", l.sender, l.state, l.action);
+          how += buf;
+        }
+        Log("  " + r.name + ": exposure hint (priority " + std::to_string(h.priority) + (h.on ? ", on" : ", off") +
+            ") driven by" + how);
+      }
+      fluid->push_back(h);
     }
   }
 }
@@ -910,8 +949,110 @@ void Writer::ReadFogs(const RoomData& r, const Area* area, std::vector<FogData>&
   }
 }
 
+// Version 19's links, animation block and splines (port_room_env.h).
+static void AppendLightTimeline(std::vector<uint8_t>& out, const LightTimelineData& l) {
+  AppendLE32(out, uint32_t(l.links.size()));
+  for (const PortRoomGeo::Link& link : l.links) {
+    AppendLE32(out, link.sender);
+    out.push_back(link.state);
+    out.push_back(link.action);
+    out.insert(out.end(), 2, 0);
+  }
+  out.push_back(l.animated ? 1 : 0);
+  out.push_back(l.playing ? 1 : 0);
+  out.push_back(l.loop ? 1 : 0);
+  out.push_back(l.offAtStart ? 1 : 0);
+  out.push_back(l.animFalloff);
+  out.insert(out.end(), 3, 0);
+  AppendLEFloat(out, l.length);
+  AppendLEFloat(out, l.scale[0]);
+  AppendLEFloat(out, l.scale[1]);
+  AppendLEFloat(out, l.intensity);
+  for (const float c : l.rgb) {
+    AppendLEFloat(out, c);
+  }
+  for (const std::vector<uint8_t>& spline : l.splines) {
+    AppendLE32(out, uint32_t(spline.size()));
+    out.insert(out.end(), spline.begin(), spline.end());
+    out.insert(out.end(), (4 - spline.size() % 4) % 4, 0);
+  }
+}
+
+// A LightDynamic's links and timeline (SLdrLightDynamic's Attributes and splines; kb
+// func/light-dynamic.md), whatever its kind. `l.scale`, `l.intensity` and `l.rgb` are the caller's.
+static void ReadLightTimeline(const RoomData& r, const Component& c, const std::vector<Connection>& conns,
+                              const SceneryScripts& scripts, LightTimelineData& l) {
+  Span sp;
+  const auto byte = [&](uint32_t a, uint32_t b) {
+    return r.room.Nested(c, {a, b}, sp) && sp.size >= 1 && r.room.Bytes(sp)[0] != 0;
+  };
+  l.animated = byte(kPropLightAttributes, kPropLightAnimated);
+  if (l.animated) {
+    l.playing = byte(kPropLightAttributes, kPropLightPlaying);
+    l.loop = byte(kPropLightAttributes, kPropLightLoop);
+    if (r.room.Nested(c, {kPropLightAttributes, kPropLightLength}, sp) && sp.size >= 4) {
+      const float length = ReadLEFloat(r.room.Bytes(sp));
+      l.length = std::isfinite(length) ? std::clamp(length, 0.f, 3600.f) : 0.f;
+    }
+    if (r.room.Nested(c, {kPropLightDistanceDynamic, kPropLightDistanceDynamicKind}, sp) && sp.size >= 4) {
+      const uint32_t falloff = ReadLE32(r.room.Bytes(sp));
+      l.animFalloff = falloff == kLightFalloffSquared ? 2 : falloff == kLightFalloffLinear ? 1 : 3;
+    }
+    // One spline, checked; the gradient's four follow one another.
+    const auto take = [&](uint32_t a, uint32_t b, std::vector<uint8_t>& to) {
+      PortMayaSpline check;
+      if (r.room.Nested(c, {a, b}, sp) && check.Load(r.room.Bytes(sp), sp.size)) {
+        to.assign(r.room.Bytes(sp), r.room.Bytes(sp) + sp.size);
+      }
+    };
+    take(kPropLightIntensitySpline[0], kPropLightIntensitySpline[1], l.splines[PortRoomEnv::kLightSplineIntensity]);
+    take(kPropLightDistanceDynamic, kPropLightDistanceDynamicNear, l.splines[PortRoomEnv::kLightSplineNear]);
+    take(kPropLightDistanceDynamic, kPropLightDistanceDynamicFar, l.splines[PortRoomEnv::kLightSplineFar]);
+    take(kPropLightConeDynamic, kPropLightConeDynamicInner, l.splines[PortRoomEnv::kLightSplineInner]);
+    take(kPropLightConeDynamic, kPropLightConeDynamicOuter, l.splines[PortRoomEnv::kLightSplineOuter]);
+    take(kPropLightColorDynamic, kPropLightColorDynamicSpline, l.splines[PortRoomEnv::kLightSplineColor]);
+    if (r.room.Nested(c, {kPropLightColorDynamic, kPropLightColorDynamicGradient}, sp) && sp.size >= 4 &&
+        ReadLE32(r.room.Bytes(sp)) == 4) {
+      const uint8_t* d = r.room.Bytes(sp) + 4;
+      size_t left = sp.size - 4;
+      for (int i = 0; i < 4; ++i) {
+        PortMayaSpline check;
+        size_t used = 0;
+        if (!check.Load(d, left, &used)) {
+          break;
+        }
+        l.splines[PortRoomEnv::kLightSplineGradient + i].assign(d, d + used);
+        d += used;
+        left -= used;
+      }
+    }
+    for (const Connection& conn : conns) {
+      const int target = r.room.ByGuid(conn.target);
+      if (r.room.Components()[conn.sender].entity == c.entity && target >= 0 &&
+          r.room.Components()[size_t(target)].entity == c.entity && conn.event == kEventLightReachedStart &&
+          (conn.action == kActionComponentDeactivate || conn.action == kActionEntityDeactivate)) {
+        l.offAtStart = true;
+      }
+    }
+  }
+  if (const auto linked = scripts.links.find(c.entity); linked != scripts.links.end()) {
+    for (PortRoomGeo::Link link : linked->second) {
+      if (link.action != PortRoomGeo::kShow && link.action != PortRoomGeo::kHide &&
+          link.action != PortRoomGeo::kToggle &&
+          (link.action < PortRoomEnv::kLightStart || link.action > PortRoomEnv::kLightReverse)) {
+        continue;
+      }
+      if (!PortRoomEnv::PseudoSender(link.sender)) {
+        link.sender &= 0x3ffffff;
+      }
+      l.links.push_back(link);
+    }
+  }
+}
+
 void Writer::ReadSuns(const RoomData& r, const SceneryScripts& scripts, const Mat34& xf,
                       std::vector<SunData>& out) const {
+  const std::vector<Connection> conns = ReadConnections(r.room);
   for (const Component* c : r.room.Of(kLightDynamic)) {
     const auto f = r.room.Flat(*c);
     const auto type = f.find(kPropLightType);
@@ -952,7 +1093,12 @@ void Writer::ReadSuns(const RoomData& r, const SceneryScripts& scripts, const Ma
     for (int i = 0; i < 3; ++i) {
       s.toSun[i] = float(-d[size_t(i)] / len);
       s.color[i] = std::isfinite(color[i] * intensity) ? std::max(0.f, color[i] * intensity) : 0.f;
+      s.rgb[i] = std::isfinite(color[i]) ? std::max(0.f, color[i]) : 0.f;
     }
+    s.intensity = std::isfinite(intensity) ? intensity : 0.f;
+    s.scale[0] = float(std::max(scale[0], 0.0));
+    s.scale[1] = float(std::max(scale[1], 0.0));
+    ReadLightTimeline(r, *c, conns, scripts, s);
     // LightFlags (35b27754) byte 0, a103d675: RebuildLightProxy gates the shadow map on it
     // (build_directional_shadow_map_data 0x89da60); absent (the struct's count 0) is 0.
     if (r.room.Nested(*c, {kPropLightFlags[0], kPropLightFlags[1]}, sp) && sp.size >= 1) {
@@ -968,11 +1114,13 @@ void Writer::ReadSuns(const RoomData& r, const SceneryScripts& scripts, const Ma
     if (group != scripts.group.end()) {
       s.group = group->second;
     }
-    char line[200];
-    std::snprintf(line, sizeof line, "  %s: sun (%.3f, %.3f, %.3f) colour (%.2f, %.2f, %.2f) layer %d%s%s",
+    char line[240];
+    std::snprintf(line, sizeof line, "  %s: sun (%.3f, %.3f, %.3f) colour (%.2f, %.2f, %.2f) layer %d%s%s%s, %zu link(s)",
                   r.name.c_str(), s.toSun[0], s.toSun[1], s.toSun[2], s.color[0], s.color[1], s.color[2],
                   int(s.layer), s.on ? "" : " (off)",
-                  s.group != PortRoomGeo::kNoGroup ? (" group " + std::to_string(s.group)).c_str() : "");
+                  s.group != PortRoomGeo::kNoGroup ? (" group " + std::to_string(s.group)).c_str() : "",
+                  s.animated ? (" animated " + std::to_string(s.length) + " s" + (s.playing ? " playing" : "")).c_str() : "",
+                  s.links.size());
     Log(line);
     out.push_back(s);
   }
@@ -1056,71 +1204,7 @@ void Writer::ReadPointLights(const RoomData& r, const SceneryScripts& scripts, c
     }
     l.scale[0] = float(std::max(scale[0], 0.0));
     l.scale[1] = float(std::max(scale[1], 0.0));
-    const auto byte = [&](uint32_t a, uint32_t b) {
-      return r.room.Nested(*c, {a, b}, sp) && sp.size >= 1 && r.room.Bytes(sp)[0] != 0;
-    };
-    l.animated = byte(kPropLightAttributes, kPropLightAnimated);
-    if (l.animated) {
-      l.playing = byte(kPropLightAttributes, kPropLightPlaying);
-      l.loop = byte(kPropLightAttributes, kPropLightLoop);
-      if (r.room.Nested(*c, {kPropLightAttributes, kPropLightLength}, sp) && sp.size >= 4) {
-        const float length = ReadLEFloat(r.room.Bytes(sp));
-        l.length = std::isfinite(length) ? std::clamp(length, 0.f, 3600.f) : 0.f;
-      }
-      if (r.room.Nested(*c, {kPropLightDistanceDynamic, kPropLightDistanceDynamicKind}, sp) && sp.size >= 4) {
-        const uint32_t falloff = ReadLE32(r.room.Bytes(sp));
-        l.animFalloff = falloff == kLightFalloffSquared ? 2 : falloff == kLightFalloffLinear ? 1 : 3;
-      }
-      // One spline, checked; the gradient's four follow one another.
-      const auto take = [&](uint32_t a, uint32_t b, std::vector<uint8_t>& to) {
-        PortMayaSpline check;
-        if (r.room.Nested(*c, {a, b}, sp) && check.Load(r.room.Bytes(sp), sp.size)) {
-          to.assign(r.room.Bytes(sp), r.room.Bytes(sp) + sp.size);
-        }
-      };
-      take(kPropLightIntensitySpline[0], kPropLightIntensitySpline[1], l.splines[PortRoomEnv::kLightSplineIntensity]);
-      take(kPropLightDistanceDynamic, kPropLightDistanceDynamicNear, l.splines[PortRoomEnv::kLightSplineNear]);
-      take(kPropLightDistanceDynamic, kPropLightDistanceDynamicFar, l.splines[PortRoomEnv::kLightSplineFar]);
-      take(kPropLightConeDynamic, kPropLightConeDynamicInner, l.splines[PortRoomEnv::kLightSplineInner]);
-      take(kPropLightConeDynamic, kPropLightConeDynamicOuter, l.splines[PortRoomEnv::kLightSplineOuter]);
-      take(kPropLightColorDynamic, kPropLightColorDynamicSpline, l.splines[PortRoomEnv::kLightSplineColor]);
-      if (r.room.Nested(*c, {kPropLightColorDynamic, kPropLightColorDynamicGradient}, sp) && sp.size >= 4 &&
-          ReadLE32(r.room.Bytes(sp)) == 4) {
-        const uint8_t* d = r.room.Bytes(sp) + 4;
-        size_t left = sp.size - 4;
-        for (int i = 0; i < 4; ++i) {
-          PortMayaSpline check;
-          size_t used = 0;
-          if (!check.Load(d, left, &used)) {
-            break;
-          }
-          l.splines[PortRoomEnv::kLightSplineGradient + i].assign(d, d + used);
-          d += used;
-          left -= used;
-        }
-      }
-      for (const Connection& conn : conns) {
-        const int target = r.room.ByGuid(conn.target);
-        if (r.room.Components()[conn.sender].entity == c->entity && target >= 0 &&
-            r.room.Components()[size_t(target)].entity == c->entity && conn.event == kEventLightReachedStart &&
-            (conn.action == kActionComponentDeactivate || conn.action == kActionEntityDeactivate)) {
-          l.offAtStart = true;
-        }
-      }
-    }
-    if (const auto linked = scripts.links.find(c->entity); linked != scripts.links.end()) {
-      for (PortRoomGeo::Link link : linked->second) {
-        if (link.action != PortRoomGeo::kShow && link.action != PortRoomGeo::kHide &&
-            link.action != PortRoomGeo::kToggle &&
-            (link.action < PortRoomEnv::kLightStart || link.action > PortRoomEnv::kLightReverse)) {
-          continue;
-        }
-        if (!PortRoomEnv::PseudoSender(link.sender)) {
-          link.sender &= 0x3ffffff;
-        }
-        l.links.push_back(link);
-      }
-    }
+    ReadLightTimeline(r, *c, conns, scripts, l);
     const auto shown = f.find(kPropLightShown);
     l.on = r.room.Active(*c) && (shown == f.end() || shown->second.size < 1 || r.room.Bytes(shown->second)[0] != 0);
     const auto layer = scripts.layer.find(c->entity);
@@ -1728,6 +1812,8 @@ bool ReadMcon(const std::vector<uint8_t>& d, Mcon& out) {
   return false;
 }
 
+static void EditorBasis(const Vec3& rot, const Vec3& scale, double out[3][3]);
+
 void Writer::WriteGeometry(const RoomData& r, uint32_t mrea, const Area& area) {
   if (!m_io.model || (m_io.wantsGeometry && !m_io.wantsGeometry(r.name))) {
     return;
@@ -2285,8 +2371,8 @@ void Writer::WriteGeometry(const RoomData& r, uint32_t mrea, const Area& area) {
         " retail objects hidden");
     return made != 0;
   };
-  // Whether a static model's bounds hold its origin, give or take half a metre.
-  auto aroundOrigin = [&](const uint8_t* id) {
+  // A static model's bounds in its own (Remastered) axes; false when it does not read.
+  auto modelBounds = [&](const uint8_t* id, Vec3& lo, Vec3& hi) {
     std::vector<uint8_t> data;
     PortRemastered::Model cmdl;
     std::string error;
@@ -2294,7 +2380,8 @@ void Writer::WriteGeometry(const RoomData& r, uint32_t mrea, const Area& area) {
         !PortRemastered::ParseModel(data.data(), data.size(), cmdl, error)) {
       return false;
     }
-    Vec3 lo{HUGE_VAL, HUGE_VAL, HUGE_VAL}, hi{-HUGE_VAL, -HUGE_VAL, -HUGE_VAL};
+    lo = Vec3{HUGE_VAL, HUGE_VAL, HUGE_VAL};
+    hi = Vec3{-HUGE_VAL, -HUGE_VAL, -HUGE_VAL};
     for (const PortRemastered::ModelVertexBuffer& vb : cmdl.vertexBuffers) {
       for (size_t v = 0; v + 2 < vb.positions.size(); v += 3) {
         for (size_t k = 0; k < 3; ++k) {
@@ -2302,6 +2389,14 @@ void Writer::WriteGeometry(const RoomData& r, uint32_t mrea, const Area& area) {
           hi[k] = std::max(hi[k], double(vb.positions[v + k]));
         }
       }
+    }
+    return lo[0] <= hi[0];
+  };
+  // Whether a static model's bounds hold its origin, give or take half a metre.
+  auto aroundOrigin = [&](const uint8_t* id) {
+    Vec3 lo, hi;
+    if (!modelBounds(id, lo, hi)) {
+      return false;
     }
     for (size_t k = 0; k < 3; ++k) {
       if (!(lo[k] <= 0.5 && hi[k] >= -0.5)) {
@@ -2345,16 +2440,30 @@ void Writer::WriteGeometry(const RoomData& r, uint32_t mrea, const Area& area) {
     return true;
   };
   size_t posed = 0, drivenActors = 0;
-  for (const Component* c : r.room.Of(kActorMP1)) {
+  // The synthetic-model actors written (m_syntheticEntities): their instance and the world
+  // box (GC axes) their model covers, for the retail objects they stand in for.
+  struct Standin {
+    uint32_t instance;
+    Vec3 pos, lo, hi;
+  };
+  std::vector<Standin> standins;
+  std::vector<const Component*> renderActors = r.room.Of(kActorMP1);
+  const auto renderPlatforms = r.room.Of(kPlatformComponent);
+  renderActors.insert(renderActors.end(), renderPlatforms.begin(), renderPlatforms.end());
+  for (const Component* c : renderActors) {
+    const bool isPlatform = c->type == kPlatformComponent;
     const auto f = r.room.Flat(*c);
-    const auto prop = f.find(kPropActorModel);
+    const auto prop = f.find(isPlatform ? kPropPlatformModel : kPropActorModel);
     const bool hasModel = prop != f.end() && prop->second.size == 16;
     Span chprProp, nameProp;
-    const bool hasAnim = !hasModel && r.room.Nested(*c, {kPropActorAnim, kPropAnimCharacter}, chprProp) &&
-                         chprProp.size == 16 && r.room.Nested(*c, {kPropActorAnim, kPropAnimName}, nameProp) &&
+    const uint32_t animProperty = isPlatform ? kPropPlatformAnim : kPropActorAnim;
+    const bool hasAnim = !hasModel && r.room.Nested(*c, {animProperty, kPropAnimCharacter}, chprProp) &&
+                         chprProp.size == 16 && r.room.Nested(*c, {animProperty, kPropAnimName}, nameProp) &&
                          nameProp.size == 8;
     Vec3 pos, rot, scale;
-    if (f.find(kPropActorAdded) == f.end() || (!hasModel && !hasAnim) || !r.room.Xform(*c, pos, rot, scale)) {
+    const bool synthetic = hasModel && m_syntheticEntities.count(c->entity) != 0;
+    if ((!isPlatform && f.find(kPropActorAdded) == f.end() && !synthetic) || (!hasModel && !hasAnim) ||
+        !r.room.Xform(*c, pos, rot, scale)) {
       continue;
     }
     const bool active = r.room.Active(*c);
@@ -2372,6 +2481,25 @@ void Writer::WriteGeometry(const RoomData& r, uint32_t mrea, const Area& area) {
     Id16 model{};
     if (hasModel) {
       model = SwapUuid(r.room.Bytes(prop->second));
+      if (!isPlatform && !synthetic && f.find(kPropActorAdded) != f.end() &&
+          PortGunshipScenery::ExcludeSource(mrea, model)) {
+        // Retail already draws the animated ship; these unposed cinematic hulls would
+        // add a second static copy. Keep supported bindings eligible, including a model
+        // carrying an animation property (hasAnim above ignores it when hasModel is true).
+        const auto bindings = scripts.links.find(c->entity);
+        Span characterBinding;
+        const bool bound = driven ||
+            r.room.Nested(*c, {animProperty, kPropAnimCharacter}, characterBinding) ||
+            scripts.platform.count(c->entity) != 0 || scripts.platformTransform.count(c->entity) != 0 ||
+            (bindings != scripts.links.end() &&
+             std::any_of(bindings->second.begin(), bindings->second.end(), [](const PortRoomGeo::Link& link) {
+               return link.action == PortRoomGeo::kFollow || link.action == PortRoomGeo::kActorTransform;
+             }));
+        if (PortGunshipScenery::ExcludeSource(mrea, model, bound)) {
+          ++posed;
+          continue;
+        }
+      }
     } else {
       const Id16 key = SwapUuid(r.room.Bytes(chprProp));
       auto ch = characters.find(key);
@@ -2421,7 +2549,7 @@ void Writer::WriteGeometry(const RoomData& r, uint32_t mrea, const Area& area) {
     // Frigate hangar's landing cutscene, shown by retail's links, would stand whole on the
     // dock. One whose model lies off its origin is room geometry placed at the origin (the
     // Frigate reactor's fallen pieces), and stays.
-    if (hasModel && !active && MaxAbs(pos, Vec3{}) < 0.01 && aroundOrigin(r.room.Bytes(prop->second))) {
+    if (!isPlatform && hasModel && !active && MaxAbs(pos, Vec3{}) < 0.01 && aroundOrigin(r.room.Bytes(prop->second))) {
       ++posed;
       continue;
     }
@@ -2433,7 +2561,7 @@ void Writer::WriteGeometry(const RoomData& r, uint32_t mrea, const Area& area) {
         id != nullptr && std::memcmp(id, kRetailIdPrefix, 12) == 0) {
       const Vec3 w = Apply(area.xf, MulR2G(pos));
       const bool standing = std::any_of(area.objects.begin(), area.objects.end(), [&](const ScriptObject& o) {
-        return o.type == kRetailActor && o.hasPos && MaxAbs(o.pos, w) < kRetailActorNear &&
+        return o.type == (isPlatform ? kRetailPlatform : kRetailActor) && o.hasPos && MaxAbs(o.pos, w) < kRetailActorNear &&
                std::search(o.props.begin(), o.props.end(), id + 12, id + 16) != o.props.end();
       });
       if (standing || m_retailEntities.count(c->entity) != 0) {
@@ -2456,6 +2584,26 @@ void Writer::WriteGeometry(const RoomData& r, uint32_t mrea, const Area& area) {
     PortRoomGeo::Instance& inst = instances.emplace_back();
     inst.model = known->second;
     place(inst, pos, rot, scale);
+    if (Vec3 lo, hi; synthetic && modelBounds(r.room.Bytes(prop->second), lo, hi)) {
+      Standin& s = standins.emplace_back();
+      s.instance = uint32_t(instances.size() - 1);
+      s.pos = Apply(area.xf, MulR2G(pos));
+      s.lo = Vec3{HUGE_VAL, HUGE_VAL, HUGE_VAL};
+      s.hi = Vec3{-HUGE_VAL, -HUGE_VAL, -HUGE_VAL};
+      for (int corner = 0; corner < 8; ++corner) {
+        const Vec3 v = MulR2G(Vec3{(corner & 1) ? hi[0] : lo[0], (corner & 2) ? hi[1] : lo[1], (corner & 4) ? hi[2] : lo[2]});
+        Vec3 local;
+        for (size_t row = 0; row < 3; ++row) {
+          local[row] = inst.transform[4 * row] * v[0] + inst.transform[4 * row + 1] * v[1] +
+                       inst.transform[4 * row + 2] * v[2] + inst.transform[4 * row + 3];
+        }
+        const Vec3 w = Apply(area.xf, local);
+        for (size_t k = 0; k < 3; ++k) {
+          s.lo[k] = std::min(s.lo[k], w[k]);
+          s.hi[k] = std::max(s.hi[k], w[k]);
+        }
+      }
+    }
     if (anim != nullptr) {
       // The bone's pose in GC axes: the axis change is a rotation, so a quaternion's
       // vector part and a translation change the same way a position does.
@@ -2474,6 +2622,37 @@ void Writer::WriteGeometry(const RoomData& r, uint32_t mrea, const Area& area) {
       ++animated;
     }
     script(inst, c->entity, active);
+    if (isPlatform) {
+      const auto bound = scripts.platformTransform.find(c->entity);
+      if (bound != scripts.platformTransform.end() && bound->second->hasXf) {
+        const ScriptObject& carrier = *bound->second;
+        // Model scale is separate from the retail actor's rigid transform.
+        // local = inverse(retail initial rigid) * area * placed model.
+        double rotation[3][3];
+        EditorBasis(carrier.rot, Vec3{1, 1, 1}, rotation);
+        float local[12]{};
+        for (int row = 0; row < 3; ++row) {
+          for (int col = 0; col < 4; ++col) {
+            double v = 0;
+            for (int k = 0; k < 3; ++k) {
+              double world = col == 3 ? area.xf[k][3] - carrier.pos[k] : 0.;
+              for (int j = 0; j < 3; ++j) world += area.xf[k][j] * inst.transform[j * 4 + col];
+              v += rotation[k][row] * world;
+            }
+            local[row * 4 + col] = float(v);
+          }
+        }
+        std::copy(local, local + 12, inst.transform);
+        inst.links.push_back({carrier.id, 0, PortRoomGeo::kActorTransform});
+        // A directly matched model replaces the retail platform's visual;
+        // a co-driven sibling supplements it and must not hide the carrier.
+        const auto own = scripts.retail.find(c->entity);
+        if (own != scripts.retail.end() && &area.objects[own->second] == &carrier) {
+          scripts.script.hidden.push_back({carrier.id & 0x3ffffffu, uint32_t(instances.size() - 1)});
+        }
+        ++riding;
+      }
+    }
     if (driven) {
       inst.drivers.push_back(driver);
       ++drivenActors;
@@ -2499,6 +2678,49 @@ void Writer::WriteGeometry(const RoomData& r, uint32_t mrea, const Area& area) {
       ++riding;
     }
     ++actors;
+  }
+  // The retail Actors the synthetic-model actors stand in for, hidden while those are drawn:
+  // one standing where such an actor does, and one Remastered dropped whose origin its model
+  // covers (Central Dynamo's three grates under the wider centre one). Neither may draw a model
+  // the room keeps under its retail id, nor (the dropped one) stand where any entity does.
+  size_t standinHidden = 0;
+  if (!standins.empty()) {
+    for (const ScriptObject& o : area.objects) {
+      if (o.type != kRetailActor || !o.hasPos ||
+          std::any_of(m_roomRetailIds.begin(), m_roomRetailIds.end(), [&](uint32_t id) {
+            const uint8_t be[4] = {uint8_t(id >> 24), uint8_t(id >> 16), uint8_t(id >> 8), uint8_t(id)};
+            return std::search(o.props.begin(), o.props.end(), be, be + 4) != o.props.end();
+          })) {
+        continue;
+      }
+      const Standin* by = nullptr;
+      for (const Standin& s : standins) {
+        if (MaxAbs(s.pos, o.pos) < kRetailActorNear) {
+          by = &s;
+          break;
+        }
+      }
+      if (by == nullptr && std::none_of(m_entityPositions.begin(), m_entityPositions.end(), [&](const Vec3& p) {
+            return MaxAbs(p, o.pos) < kRetailActorNear;
+          })) {
+        for (const Standin& s : standins) {
+          if (o.pos[0] >= s.lo[0] - kStandinMargin && o.pos[0] <= s.hi[0] + kStandinMargin &&
+              o.pos[1] >= s.lo[1] - kStandinMargin && o.pos[1] <= s.hi[1] + kStandinMargin &&
+              o.pos[2] >= s.lo[2] - kStandinMargin && o.pos[2] <= s.hi[2] + kStandinMargin) {
+            by = &s;
+            break;
+          }
+        }
+      }
+      if (by != nullptr) {
+        scripts.script.hidden.push_back({o.id & 0x3FFFFFFu, by->instance});
+        ++standinHidden;
+      }
+    }
+  }
+  if (!m_syntheticEntities.empty()) {
+    Log("  " + r.name + ": " + std::to_string(standins.size()) + " of " + std::to_string(m_syntheticEntities.size()) +
+        " Remastered stand-in actors drawn, " + std::to_string(standinHidden) + " retail actors hidden");
   }
   // The room's skies, drawn in place of the world's: retail has one per world, Remastered
   // one per room, each turned and scaled to suit it (and two in the Frigate's hangar, one
@@ -2595,12 +2817,55 @@ void Writer::WriteGeometry(const RoomData& r, uint32_t mrea, const Area& area) {
   Log(line);
 }
 
-void Writer::WriteLiquids(const RoomData& r, uint32_t mrea) {
+void Writer::WriteLiquids(const RoomData& r, uint32_t mrea, const Area& area) {
   // Liquids are room geometry: they come with it, so a models-only import keeps the
   // retail planes (and the small arena its mod starts with).
   if (!m_io.liquid || (m_io.wantsGeometry && !m_io.wantsGeometry(r.name))) {
     return;
   }
+  // The retail Water (0x20) each render volume's entity matched: the object that draws it.
+  const SceneryScripts scripts = MatchScripts(r.room, area);
+  // A water entity Remastered moved beyond the match's reach: when it is the room's only
+  // unmatched one and the area has one Water no entity matched, that Water is its own (as an
+  // unplaced relay is the area's only relay).
+  int soleEntity = -1;
+  size_t soleWater = area.objects.size();
+  {
+    std::set<size_t> claimed;
+    for (const auto& [entity, index] : scripts.retail) {
+      claimed.insert(index);
+    }
+    std::set<int> unmatched;
+    for (const Component* c : r.room.Of(kWaterMP1)) {
+      if (c->entity >= 0 && scripts.retail.count(c->entity) == 0) {
+        unmatched.insert(c->entity);
+      }
+    }
+    size_t free = 0;
+    for (size_t j = 0; j < area.objects.size(); ++j) {
+      if (area.objects[j].type == 0x20 && claimed.count(j) == 0) {
+        soleWater = j;
+        ++free;
+      }
+    }
+    if (unmatched.size() == 1 && free == 1) {
+      soleEntity = *unmatched.begin();
+    } else {
+      soleWater = area.objects.size();
+    }
+  }
+  auto owner = [&](int entity) -> uint32_t {
+    if (entity >= 0 && entity == soleEntity) {
+      return area.objects[soleWater].id & 0x3FFFFFFu;
+    }
+    const auto matched = entity >= 0 ? scripts.retail.find(entity) : scripts.retail.end();
+    if (matched == scripts.retail.end() || matched->second >= area.objects.size() ||
+        area.objects[matched->second].type != 0x20) {
+      return 0;
+    }
+    return area.objects[matched->second].id & 0x3FFFFFFu;  // as TEditorId::Value, without the layer
+  };
+  size_t owned = 0;
   static const int kAxis[3] = {0, 2, 1};
   static const double kSign[3] = {-1, 1, 1};
   // What each entity's retail water object is filled with, and every water object's camera
@@ -2728,6 +2993,9 @@ void Writer::WriteLiquids(const RoomData& r, uint32_t mrea) {
       };
       AppendLE32(body, uint32_t(liquid.type));
       AppendLE32(body, id);
+      const uint32_t own = owner(c->entity);
+      owned += own != 0;
+      AppendLE32(body, own);
       for (int row = 0; row < 3; ++row) {
         // A lava pool is converted into the area's axes. A water mesh is not: it stays in
         // Remastered's model space and the transform takes it there, (x, y, z) -> (-x, z, y).
@@ -2799,7 +3067,7 @@ void Writer::WriteLiquids(const RoomData& r, uint32_t mrea) {
   }
   std::vector<uint8_t> out;
   AppendLE32(out, 0x4C52504D);  // 'MPRL'
-  AppendLE32(out, 4);
+  AppendLE32(out, 5);
   AppendLE32(out, count);
   out.insert(out.end(), body.begin(), body.end());
   AppendLE32(out, filterCount);
@@ -2811,8 +3079,8 @@ void Writer::WriteLiquids(const RoomData& r, uint32_t mrea) {
     return;
   }
   char line[160];
-  std::snprintf(line, sizeof line, "  %s: %u liquid surfaces, %zu dropped, %u water filters", r.name.c_str(),
-                count, dropped, filterCount);
+  std::snprintf(line, sizeof line, "  %s: %u liquid surfaces (%zu with a matched Water), %zu dropped, %u water filters",
+                r.name.c_str(), count, owned, dropped, filterCount);
   Log(line);
 }
 
@@ -2844,6 +3112,9 @@ static void EditorBasis(const Vec3& rot, const Vec3& scale, double out[3][3]) {
 // inverse transform times the entity's (orient) and applied to the entity's position (offset).
 void Writer::PairRetailModels(const RoomData& r, const Area& area) {
   m_retailEntities.clear();
+  m_syntheticEntities.clear();
+  m_roomRetailIds.clear();
+  m_entityPositions.clear();
   if (!m_io.retailModel) {
     return;
   }
@@ -2856,10 +3127,15 @@ void Writer::PairRetailModels(const RoomData& r, const Area& area) {
     Vec3 pos;            // in GC world space
   };
   std::map<uint32_t, std::pair<Id16, std::vector<Placed>>> byRetail;
+  std::vector<int> seenEntities;
   for (const Component& c : r.room.Components()) {
     Vec3 pos, rot, scale;
     if (c.entity < 0 || c.raw.size < 16 || !r.room.Xform(c, pos, rot, scale)) {
       continue;
+    }
+    if (std::find(seenEntities.begin(), seenEntities.end(), c.entity) == seenEntities.end()) {
+      seenEntities.push_back(c.entity);
+      m_entityPositions.push_back(Apply(area.xf, MulR2G(pos)));
     }
     const uint8_t* b = r.room.Bytes(c.raw);
     for (size_t at = 0; at + 16 <= c.raw.size; ++at) {
@@ -2900,6 +3176,13 @@ void Writer::PairRetailModels(const RoomData& r, const Area& area) {
         named.push_back(&o);
       }
     }
+    if (named.empty()) {
+      for (const Placed& p : placed) {
+        m_syntheticEntities.insert(p.entity);
+      }
+      continue;
+    }
+    m_roomRetailIds.insert(retail);
     for (size_t n = 0; n < named.size(); ++n) {
       const ScriptObject& o = *named[n];
       RetailPlacement out;
@@ -2908,6 +3191,13 @@ void Writer::PairRetailModels(const RoomData& r, const Area& area) {
       out.mrea = area.mrea;
       out.object = o.id;
       out.room = r.name;
+      if (o.type == 0x00 || o.type == 0x08) {
+        const auto at = std::search(o.props.begin(), o.props.end(), be, be + 4);
+        if (o.props.end() - at >= 8) {
+          const uint32_t ancs = ReadBE32(&*(at + 4));
+          out.animated = ancs != 0 && ancs != 0xffffffffu;
+        }
+      }
       double basis[3][3], inverse[3][3];
       EditorBasis(o.rot, o.scale, basis);
       if (named.size() == placed.size() && Invert3(basis, inverse)) {
@@ -2939,7 +3229,7 @@ std::string Writer::WriteRoom(const RoomData& r, const std::map<std::string, Pla
   char head[96];
   PairRetailModels(r, *m.area);
   WriteGeometry(r, m.mrea, *m.area);
-  WriteLiquids(r, m.mrea);
+  WriteLiquids(r, m.mrea, *m.area);
   const std::vector<Vec3>& gdoors = m.area->doors;
   double rot[3][3], trans[3];
   for (int i = 0; i < 3; ++i) {
@@ -3095,7 +3385,7 @@ std::string Writer::WriteRoom(const RoomData& r, const std::map<std::string, Pla
   }
 
   std::vector<uint8_t> out = {'M', 'P', 'E', 'V'};
-  AppendLE32(out, 26);
+  AppendLE32(out, 29);
   float tone[5];
   std::copy(tonemap, tonemap + 5, tone);
   Tonemap(r, tone);
@@ -3112,7 +3402,7 @@ std::string Writer::WriteRoom(const RoomData& r, const std::map<std::string, Pla
   out.insert(out.end(), grid.begin(), grid.end());
   float exposure[5];
   std::vector<PortRoomEnv::FluidHint> fluidHints;
-  Exposure(r, exposure, &fluidHints);
+  Exposure(r, m.area, exposure, &fluidHints);
   AppendLEFloat(out, exposure[0]);
   AppendLEFloat(out, exposure[1]);
   AppendLEFloat(out, exposure[2]);
@@ -3306,6 +3596,7 @@ std::string Writer::WriteRoom(const RoomData& r, const std::map<std::string, Pla
     AppendLE32(out, s.group);
     out.push_back(s.casts ? 1 : 0);
     out.insert(out.end(), 3, 0);
+    AppendLightTimeline(out, s);
   }
   // The lightmap the room geometry's lookups index, or a width of 0.
   if (withLightmap) {
@@ -3350,43 +3641,27 @@ std::string Writer::WriteRoom(const RoomData& r, const std::map<std::string, Pla
       AppendLEFloat(out, v);
     }
     AppendLE32(out, l.group);
-    AppendLE32(out, uint32_t(l.links.size()));
-    for (const PortRoomGeo::Link& link : l.links) {
-      AppendLE32(out, link.sender);
-      out.push_back(link.state);
-      out.push_back(link.action);
-      out.insert(out.end(), 2, 0);
-    }
-    out.push_back(l.animated ? 1 : 0);
-    out.push_back(l.playing ? 1 : 0);
-    out.push_back(l.loop ? 1 : 0);
-    out.push_back(l.offAtStart ? 1 : 0);
-    out.push_back(l.animFalloff);
-    out.insert(out.end(), 3, 0);
-    AppendLEFloat(out, l.length);
-    AppendLEFloat(out, l.scale[0]);
-    AppendLEFloat(out, l.scale[1]);
-    AppendLEFloat(out, l.intensity);
-    for (const float c : l.rgb) {
-      AppendLEFloat(out, c);
-    }
-    for (const std::vector<uint8_t>& spline : l.splines) {
-      AppendLE32(out, uint32_t(spline.size()));
-      out.insert(out.end(), spline.begin(), spline.end());
-      out.insert(out.end(), (4 - spline.size() % 4) % 4, 0);
-    }
+    AppendLightTimeline(out, l);
   }
   AppendLE32(out, uint32_t(fluidHints.size()));
   for (const PortRoomEnv::FluidHint& h : fluidHints) {
     out.push_back(h.mode);
     out.push_back(h.role);
     out.push_back(h.pair);
-    out.push_back(0);
+    out.push_back(h.on ? 1 : 0);
     AppendLEFloat(out, h.exposure[0]);
     AppendLEFloat(out, h.exposure[1]);
     AppendLEFloat(out, h.bias);
     AppendLEFloat(out, h.sigma);
     AppendLEFloat(out, h.staticLerp);
+    AppendLE32(out, uint32_t(h.priority));
+    AppendLE32(out, uint32_t(h.links.size()));
+    for (const PortRoomEnv::GradeLink& link : h.links) {
+      AppendLE32(out, link.sender);
+      out.push_back(link.state);
+      out.push_back(link.action);
+      out.insert(out.end(), 2, 0);
+    }
   }
   AppendLE32(out, uint32_t(worldVolumes.size()));
   for (const PortRoomEnv::WorldVolume& v : worldVolumes) {

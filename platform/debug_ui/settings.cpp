@@ -17,6 +17,9 @@
 #include "port_gci.h"
 #include "port_discord.h"
 #include "port_suit_colours.h"
+#include "port_dread_samus_mod.h"
+
+#include <dolphin/gx/GXExtra.h>
 
 #include <algorithm>
 #include <atomic>
@@ -193,10 +196,14 @@ const SettingKey kSettingKeys[] = {
          sCrosshairStyle = PortDebug::kCrosshairStyle_Classic;
        } else if (value == "remastered") {
          sCrosshairStyle = PortDebug::kCrosshairStyle_Remastered;
+       } else if (value == "gamecube") {
+         sCrosshairStyle = PortDebug::kCrosshairStyle_GameCube;
        }
      },
      [](std::ostream& out) {
-       out << (sCrosshairStyle == PortDebug::kCrosshairStyle_Remastered ? "remastered" : "classic");
+       out << (sCrosshairStyle == PortDebug::kCrosshairStyle_Remastered ? "remastered"
+               : sCrosshairStyle == PortDebug::kCrosshairStyle_GameCube ? "gamecube"
+                                                                         : "classic");
      },
      false, "remastered", "classic"},
     {"hud_opacity_xray", [](const std::string& value) { ReadHudOpacity(PortDebug::kHudOpacityXRay, value); },
@@ -405,6 +412,9 @@ const SettingKey kSettingKeys[] = {
     BoolKey< &sOriginalExperience >("original_experience"),
     {"mods_disabled", [](const std::string& value) { sModsDisabled = value; },
      [](std::ostream& out) { out << sModsDisabled; }, false, "a,b", ""},
+    {"dread_first_person_cannon",
+     [](const std::string& value) { PortDreadSamus::SetFirstPersonCannonShown(ParseBool(value)); },
+     [](std::ostream& out) { WriteBool(out, PortDreadSamus::FirstPersonCannonShown()); }, false, "0", "1"},
     BoolKey< &sVsyncEnabled >("vsync"),
     BoolKey< &sFullscreen >("fullscreen"),
     BoolKey< &sOverlayWindowed >("overlay_windowed"),
@@ -527,6 +537,9 @@ const SettingKey kSettingKeys[] = {
      [](std::ostream& out) { out << sRemasteredKeysPath; }, true, "/keys/prod.keys", "/k/p.keys"},
     {"remastered_skip", [](const std::string& value) { sRemasteredSkip = value; },
      [](std::ostream& out) { out << sRemasteredSkip; }, true, "geometry,movies", "hud"},
+    {"remastered_performance",
+     [](const std::string& value) { GXPortSetPerformance(ParseBool(value) ? GX_PORT_PERF_ALL : 0); },
+     [](std::ostream& out) { out << (GXPortGetPerformance() != 0 ? 1 : 0); }, true, "1", "0"},
 };
 
 // False for a key nothing reads.

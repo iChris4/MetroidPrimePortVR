@@ -64,12 +64,12 @@ TYPE_NAMES = {**ps.TYPE_NAMES, 3: "vfx", 4: "water"}  # gfx::ShaderType
 # gx::PipelineConfig (extern/aurora/lib/gx/pipeline.hpp), little-endian and without padding:
 # u32 version, u32 msaaSamples, gx::ShaderConfig (gx.hpp) from byte 8, ..., u32 shadowPass,
 # then four bools. The ShaderConfig offsets are gx.hpp's static_asserts.
-GX_CONFIG_SIZE = 2784
+GX_CONFIG_SIZE = 2788
 MSAA = 4
 SC = 8
 HUD_SAMPLE = SC + 9
-PORT_BITS = SC + 11  # from bit 0: multiview:2, mapBatch:1, mapCull:2, nativeVertices:1, spare:2
-ATTRS = SC + 12  # AttrConfig[GX_VA_MAX_ATTR], 8 bytes each, attrType first
+PORT_BITS = SC + 13  # from bit 0: multiview:2, mapBatch:1, mapCull:2, nativeVertices:1, spare:2
+ATTRS = SC + 16  # AttrConfig[GX_VA_MAX_ATTR], 8 bytes each, attrType first
 ATTR_SIZE = 8
 VTX_ATTRS = 21  # GX_VA_PNMTXIDX..GX_VA_TEX7, the ones populate_pipeline_config fills
 SHADOW_PASS = GX_CONFIG_SIZE - 4 - 4
@@ -174,7 +174,7 @@ def drop_reason(row, version, merged=None):
     if u32(config, 0) != ver:
         return "blob version differs from its row"
     if config[PORT_BITS] >> 6:
-        return "spare bits of ShaderConfig byte 11 set (unknown layout)"
+        return "spare bits of ShaderConfig byte 13 set (unknown layout)"
     if ps.remastered_reason(config):
         return f"Remastered-only ({ps.remastered_reason(config)})"
     if u32(config, SHADOW_PASS):

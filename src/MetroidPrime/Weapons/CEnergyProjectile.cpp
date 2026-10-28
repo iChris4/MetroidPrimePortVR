@@ -21,6 +21,12 @@
 #include "Weapons/CCollisionResponseData.hpp"
 #include "Weapons/CWeaponDescription.hpp"
 
+#ifdef TARGET_PC
+#define PORT_REMASTERED_PROJECTILE(p) ((p).PortIsRemastered())
+#else
+#define PORT_REMASTERED_PROJECTILE(p) false
+#endif
+
 #define MATERIAL_FLAG(x) (1 << x)
 
 const CMaterialList CEnergyProjectile::kCheckMaterial(
@@ -55,9 +61,15 @@ CEnergyProjectile::CEnergyProjectile(
 }
 
 void CEnergyProjectile::StopProjectile(CStateManager& mgr) {
-  DeleteProjectileLight(mgr);
 #ifdef TARGET_PC
-  xPortNestedLights.Delete(mgr, GetUniqueId());
+  // Remastered's StopProjectile (0x1011d78) leaves the light alone: it is the APSM generator's
+  // CParticleLight, which keeps lighting (emission off or not) until the generator is deleted.
+  if (!PORT_REMASTERED_PROJECTILE(Projectile())) {
+    DeleteProjectileLight(mgr);
+    xPortNestedLights.Delete(mgr, GetUniqueId());
+  }
+#else
+  DeleteProjectileLight(mgr);
 #endif
   mgr.RemoveWeaponId(GetOwnerId(), GetType());
   x2e4_24_active = false;
@@ -79,7 +91,15 @@ const bool CEnergyProjectile::Explode(const CVector3f& pos, const CVector3f& nor
   CVector3f targetPos = CVector3f::Zero();
   const EVulnerability vulnerability =
       dVuln.GetVulnerability(GetCurrentDamageInfo().GetWeaponMode(), CDamageVulnerability::kRD_No);
-  if (vulnerability == kVN_Deflect) {
+#ifdef TARGET_PC
+  // Remastered's Explode (0x1011e6c) stops a projectile with no ricochets left before any
+  // deflection test.
+  const bool portRemastered = PORT_REMASTERED_PROJECTILE(Projectile());
+  const bool portRicochetsSpent = portRemastered && xPortRicochets < 1;
+#else
+  const bool portRicochetsSpent = false;
+#endif
+  if (vulnerability == kVN_Deflect && !portRicochetsSpent) {
     const EDeflectionType deflection =
         dVuln.GetDeflectionType(GetCurrentDamageInfo().GetWeaponMode());
     deflect = true;
@@ -115,15 +135,28 @@ const bool CEnergyProjectile::Explode(const CVector3f& pos, const CVector3f& nor
       ChangeProjectileOwner(hitActor, mgr);
     }
   }
-  if (vulnerability != kVN_Immune && !deflect) {
+  if (vulnerability != kVN_Immune && !deflect && !portRicochetsSpent) {
     deflect = type == kWCR_Unknown15 || type == kWCR_EnemyShielded ||
               (type >= kWCR_Unknown69 && type <= kWCR_AtomicAlphaReflect);
   }
   SetTranslation(offsetPos);
+  EWeaponCollisionResponseTypes soundType = type;
   if (deflect) {
     done = false;
     SetHomingTargetId(kInvalidUniqueId);
     x3d0_25_ = false;
+#ifdef TARGET_PC
+    if (portRemastered) {
+      // A bounce spends a ricochet and plays the deflect sound of a plain hit (sound only;
+      // the collision particle and decal keep the real type).
+      --xPortRicochets;
+      if (type == kWCR_Unknown14) {
+        soundType = kWCR_Unknown15;
+      } else if (type == kWCR_EnemyNormal) {
+        soundType = kWCR_EnemyShielded;
+      }
+    }
+#endif
   } else {
     StopProjectile(mgr);
     if (x3d0_27_camShakeDirty) {
@@ -131,7 +164,7 @@ const bool CEnergyProjectile::Explode(const CVector3f& pos, const CVector3f& nor
       mgr.CameraManager()->AddCameraShaker(x2fc_camShake, false);
     }
   }
-  PlayImpactSound(pos, type);
+  PlayImpactSound(pos, soundType);
   mgr.InformListeners(pos, kLNT_ProjectileExplode);
   CProjectileWeapon& projectile = Projectile();
   const rstl::optional_object< TLockedToken< CGenDescription > > particle =
@@ -162,7 +195,9 @@ const bool CEnergyProjectile::Explode(const CVector3f& pos, const CVector3f& nor
         }
         cameraClose = distance < 4.f;
       }
-      if (!cameraClose && gpMain->GetAverageTickTime() + gpMain->GetAverageDrawTime() > 0.8f) {
+      // Remastered's Explode (0x1011e6c) has no slow-frame test.
+      if (!cameraClose && !PORT_REMASTERED_PROJECTILE(projectile) &&
+          gpMain->GetAverageTickTime() + gpMain->GetAverageDrawTime() > 0.8f) {
         cameraClose = true;
       }
       uint flags = 8;
@@ -172,6 +207,12 @@ const bool CEnergyProjectile::Explode(const CVector3f& pos, const CVector3f& nor
       if (cameraClose) {
         flags |= 2;
       }
+#ifdef TARGET_PC
+      // Remastered ORs in the WPSM FC60 flag (desc +0xe1 bit 17) as explosion flag 0x10.
+      if (portRemastered && projectile.GetWeaponDescription()->xPortFC60) {
+        flags |= 0x10;
+      }
+#endif
       CEntity* explosion =
           rs_new CExplosion(*particle, mgr.AllocateUniqueId(), true,
                             CEntityInfo(GetCurrentAreaId(), CEntity::NullConnectionList),
@@ -245,6 +286,15 @@ void CEnergyProjectile::Render(const CStateManager& mgr) const {
 #endif
     }
   }
+#ifdef TARGET_PC
+  // Remastered: X-ray draws the particles with normal blending and area fog, then falls
+  // through to the base render (CEnergyProjectileMP1::Render 0x1012a1c).
+  if (visor == CPlayerState::kPV_XRay && GetProjectile().PortIsRemastered()) {
+    GetProjectile().RenderParticles();
+    CGameProjectile::Render(mgr);
+    return;
+  }
+#endif
   if (visor == CPlayerState::kPV_XRay) {
     CElementGen::SetSubtractBlend(!HasAttrib(kPA_Ice));
     CGraphics::SetFog(kRFM_PerspLin, 0.f, 75.f, CColor::Black());
@@ -284,6 +334,14 @@ void CEnergyProjectile::Think(float dt, CStateManager& mgr) {
     Explode(GetTranslation(), CVector3f::Up(), kWCR_Default, mgr,
             CDamageVulnerability::NormalVulnerability(), kInvalidUniqueId);
   }
+#ifdef TARGET_PC
+  // Remastered: a stopped projectile's light dies with the APSM generator (retail already
+  // deleted it in StopProjectile).
+  const bool portRemastered = PORT_REMASTERED_PROJECTILE(projectile);
+  if (!x2e4_24_active && !projectile.GetAttachedPS1()) {
+    DeleteProjectileLight(mgr);
+  }
+#endif
   if (GetProjectileLightId() != kInvalidUniqueId) {
     if (CGameLight* light = TCastToPtr< CGameLight >(mgr.ObjectById(GetProjectileLightId()))) {
       light->SetTransform(GetTransform());
@@ -294,7 +352,8 @@ void CEnergyProjectile::Think(float dt, CStateManager& mgr) {
     }
   }
 #ifdef TARGET_PC
-  xPortNestedLights.Update(mgr, projectile.GetAttachedPS1(), GetActive() && x2e4_24_active,
+  xPortNestedLights.Update(mgr, projectile.GetAttachedPS1(),
+                           GetActive() && (x2e4_24_active || portRemastered),
                            GetUniqueId(), GetCurrentAreaId(),
                            rstl::string_l("ProjectilePHDR_GameProjectile"), x2cc_wpscId, 0);
 #endif
@@ -306,6 +365,14 @@ void CEnergyProjectile::Think(float dt, CStateManager& mgr) {
   x3d4_curTime += dt;
   if (x3d4_curTime > 45.f) {
     mgr.DeleteObjectRequest(GetUniqueId());
+#ifdef TARGET_PC
+  } else if (projectile.PortIsRemastered() &&
+             mgr.GetPlayerState()->GetActiveVisor(mgr) == CPlayerState::kPV_Combat &&
+             (HasAttrib(kPA_Charged) || HasAttrib(kPA_ComboShot)) &&
+             1.f - CCast::ToReal32(projectile.GameTime()) > 0.f) {
+    // Remastered keeps a charged/combo shot alive while its space warp runs
+    // (CEnergyProjectileMP1::Think 0x1012b68).
+#endif
   } else if (projectile.IsSystemDeletable() || x3d0_24_dead) {
     mgr.DeleteObjectRequest(GetUniqueId());
   }

@@ -166,11 +166,14 @@ void StepTransitions(Area& area, float dt) {
   }
 }
 
-// The lights `sender` drives on `state` (AcceptScriptMsg).
-void DriveLights(uint32_t mrea, Area& area, uint32_t sender, int state) {
-  for (size_t i = 0; i < area.lights.size() && i < area.file.lights.size(); ++i) {
-    Area::Light& l = area.lights[i];
-    for (const GradeLink& link : area.file.lights[i].links) {
+namespace {
+// The lights of one kind `sender` drives on `state` (AcceptScriptMsg).
+template <typename L>
+void DriveLightList(uint32_t mrea, const char* kind, std::vector<Area::Light>& lights, const std::vector<L>& file,
+                    uint32_t sender, int state) {
+  for (size_t i = 0; i < lights.size() && i < file.size(); ++i) {
+    Area::Light& l = lights[i];
+    for (const GradeLink& link : file[i].links) {
       if (link.sender != sender || link.state != state) {
         continue;
       }
@@ -207,7 +210,7 @@ void DriveLights(uint32_t mrea, Area& area, uint32_t sender, int state) {
       default:
         continue;
       }
-      PortLog::Write("room env: %08X light %zu action %d by %08X state %d\n", mrea, i, int(link.action), sender,
+      PortLog::Write("room env: %08X %s %zu action %d by %08X state %d\n", mrea, kind, i, int(link.action), sender,
                      state);
     }
   }
@@ -216,10 +219,11 @@ void DriveLights(uint32_t mrea, Area& area, uint32_t sender, int state) {
 // Think: the script groups' word on each light, then one frame of every playing timeline
 // (CTimePlaybackManager::Update). One that ends without a loop stops there, and switches its
 // light off when its finished event is linked to do so.
-void StepLights(uint32_t mrea, Area& area, float dt) {
-  for (size_t i = 0; i < area.lights.size() && i < area.file.lights.size(); ++i) {
-    Area::Light& l = area.lights[i];
-    const PointLight& file = area.file.lights[i];
+template <typename L>
+void StepLightList(uint32_t mrea, Area& area, std::vector<Area::Light>& lights, const std::vector<L>& files, float dt) {
+  for (size_t i = 0; i < lights.size() && i < files.size(); ++i) {
+    Area::Light& l = lights[i];
+    const L& file = files[i];
     if (file.group != PortRoomGeo::kNoGroup) {
       const int shown = PortRoomGeo::GroupShown(mrea, file.group);
       if (shown >= 0 && shown != l.group) {
@@ -267,6 +271,17 @@ void StepLights(uint32_t mrea, Area& area, float dt) {
     }
   }
 }
+} // namespace
+
+void DriveLights(uint32_t mrea, Area& area, uint32_t sender, int state) {
+  DriveLightList(mrea, "light", area.lights, area.file.lights, sender, state);
+  DriveLightList(mrea, "sun", area.suns, area.file.suns, sender, state);
+}
+
+void StepLights(uint32_t mrea, Area& area, float dt) {
+  StepLightList(mrea, area, area.lights, area.file.lights, dt);
+  StepLightList(mrea, area, area.suns, area.file.suns, dt);
+}
 
 // The grades and backlights `sender` drives on `state`.
 void DriveGrades(uint32_t mrea, Area& area, uint32_t sender, int state) {
@@ -276,6 +291,10 @@ void DriveGrades(uint32_t mrea, Area& area, uint32_t sender, int state) {
   DriveHints(mrea, "fog region", area.file.regions, area.regions, sRegionOrder, sender, state);
   DriveTransitions(mrea, area, sender, state);
   DriveLights(mrea, area, sender, state);
+  if (area.hints.Drive(area.file.fluidHints, sender, state)) {
+    PortLog::Write("room env: %08X exposure hints driven by %08X state %d, pick %d\n", mrea, sender, state,
+                   area.hints.Pick(area.file.fluidHints.size()));
+  }
 }
 
 void DriveCameraWaterItems(uint32_t mrea, Area& area, uint64_t items) {
@@ -286,6 +305,18 @@ void DriveCameraWaterItems(uint32_t mrea, Area& area, uint64_t items) {
 
 // Every grade and backlight as it starts, then the fluids the player and camera are in already.
 void StartGrades(uint32_t mrea, Area& area, bool playerFluid, bool cameraWater) {
+  // The exposure hints' entities as they load (their registrations follow).
+  if (area.hints.on.size() == area.file.fluidHints.size()) {
+    bool changed = false;
+    for (size_t i = 0; i < area.hints.on.size(); ++i) {
+      const uint8_t on = area.file.fluidHints[i].on ? 1 : 0;
+      changed |= area.hints.on[i] != on;
+      area.hints.on[i] = on;
+    }
+    if (changed) {
+      area.hints.Update(area.file.fluidHints, false);
+    }
+  }
   area.grades.assign(area.file.grades.size(), {});
   for (size_t i = 0; i < area.grades.size(); ++i) {
     area.grades[i].on = area.file.grades[i].on;
@@ -311,6 +342,11 @@ void StartGrades(uint32_t mrea, Area& area, bool playerFluid, bool cameraWater) 
   for (size_t i = 0; i < area.lights.size(); ++i) {
     area.lights[i].active = area.file.lights[i].on;
     area.lights[i].playing = area.file.lights[i].playing;
+  }
+  area.suns.assign(area.file.suns.size(), {});
+  for (size_t i = 0; i < area.suns.size(); ++i) {
+    area.suns[i].active = area.file.suns[i].on;
+    area.suns[i].playing = area.file.suns[i].playing;
   }
   area.transitions.assign(area.file.transitions.size(), {});
   for (size_t i = 0; i < area.transitions.size(); ++i) {

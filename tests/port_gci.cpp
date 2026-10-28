@@ -224,6 +224,43 @@ int main() {
           "the unfinished claim's save is in the card");
   }
 
+  // A Trilogy disc's card holds its own saves (R3ME/R3MP: PAL's container, the
+  // Trilogy's relay order) beside the GameCube disc's files. Its own go in and
+  // out as they are; a GameCube PAL save is not native (its relays are in PAL's
+  // order), so it is never copied in raw.
+  {
+    PortGci::SetGameCode("R3ME");
+    const fs::path tri = root / "tri";
+    fs::create_directories(tri);
+    const auto gc = MakeGci("GM8E", "MetroidPrime A", 2, 0x12);
+    Write(tri / "01-GM8E-MetroidPrime A.gci", gc);
+    const auto own = MakeGci("R3ME", "MetroidPrime", 3, 0x34);
+    Write(root / "tri.gci", own);
+    auto report = PortGci::ImportFile(root / "tri.gci", tri, root / "scratch");
+    CHECK_MSG(report.copied == 1 && report.replaced == 0 && report.skipped == 0, "Trilogy save into a Trilogy card");
+    CHECK_MSG(Read(tri / "01-R3ME-MetroidPrime.gci") == own, "stored as it is");
+    CHECK_MSG(Read(tri / "01-GM8E-MetroidPrime A.gci") == gc, "the GameCube disc's save untouched");
+    CHECK_MSG(PortGci::GameFiles(tri).size() == 1, "one Trilogy file");
+
+    const fs::path out = root / "tri-out";
+    report = PortGci::ExportFolder(tri, out);
+    CHECK_MSG(report.copied == 1 && Read(out / "01-R3ME-MetroidPrime.gci") == own, "exported as R3ME");
+
+    Write(root / "pal.gci", MakeGci("GM8P", "MetroidPrime", 3, 0x56));
+    report = PortGci::ImportFile(root / "pal.gci", tri, root / "scratch");
+    CHECK_MSG(report.copied == 0 && Read(tri / "01-R3ME-MetroidPrime.gci") == own,
+              "an unreadable PAL save is not copied in raw");
+
+    const fs::path emu = root / "tri-emu";
+    fs::create_directories(emu);
+    Write(emu / "01-R3ME-MetroidPrime.gci", MakeGci("R3ME", "MetroidPrime", 3, 0x56));
+    CHECK_MSG(PortGci::ImportableFiles(emu).size() == 1, "a folder's Trilogy files are importable");
+    report = PortGci::ImportFolder(emu, tri);
+    CHECK_MSG(report.copied == 1 && report.replaced == 1 && Read(tri / "01-R3ME-MetroidPrime.gci")[0x40] == 0x56,
+              "folder import replaces the Trilogy save");
+    PortGci::SetGameCode("GM8E");
+  }
+
   // Emulator folder normalisation and the shared card base.
   {
     const fs::path emu = root / "emu";
@@ -246,6 +283,11 @@ int main() {
     CHECK_MSG(PortGci::SharedCardBase() == emu / "GC", "sharing on: <emu>/GC");
     CHECK_MSG(PortGci::CardTargetDirectory("") == PortGci::PathString(emu / "GC"), "shared card is the target");
     CHECK_MSG(PortGci::CardTargetDirectory("/ap") == "/ap", "Archipelago card wins");
+    PortGci::SetGameCode("R3ME");
+    CHECK_MSG(PortGci::SharedCardBase(&why).empty() && why.find("Trilogy") != std::string::npos,
+              "Trilogy disc: no shared card");
+    CHECK_MSG(PortGci::CardTargetDirectory("").empty(), "Trilogy disc: own card");
+    PortGci::SetGameCode("GM8E");
     fs::remove_all(card, ec);
     CHECK_MSG(PortGci::SharedCardBase(&why).empty() && why.find("GCI Folder") != std::string::npos,
               "no Card A: reason names the GCI folder");

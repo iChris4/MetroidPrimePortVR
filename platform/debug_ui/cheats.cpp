@@ -5,6 +5,7 @@
 
 #include "port_collision_view.h"
 #include "port_debug.h"
+#include "port_discord.h"
 #include "port_freecam.h"
 #include "port_pointer.h"
 #include "port_room_geo.h"
@@ -62,6 +63,42 @@ bool CheatGrantEverything() {
   ps->HealthInfo()->SetHP(ps->CalculateHealth());
   return true;
 }
+
+namespace {
+
+// A slider takes the value under the finger the moment it is pressed, before
+// UpdateTouchScroll can tell a scroll from a drag, so scrolling the page past
+// these sliders filled Samus's missiles and tanks. The value is held back
+// until release and dropped when the drag became a scroll.
+bool CheatSlider(const char* label, int& value, int max) {
+  static ImGuiID sEditing = 0;
+  static int sPending = 0;
+  const ImGuiID id = ImGui::GetID(label);
+  int shown = sEditing == id ? sPending : value;
+  ImGui::SliderInt(label, &shown, 0, max);
+  if (ImGui::IsItemActive()) {
+    sEditing = id;
+    sPending = shown;
+    return false;
+  }
+  if (sEditing != id) {
+    return false;
+  }
+  sEditing = 0;
+  if (TouchScrolling() || sPending == value) {
+    return false;
+  }
+  value = sPending;
+  return true;
+}
+
+// Raises the capacity to the amount, never lowers it, so setting a count does
+// not hand out the full expansion.
+void SetAmount(CPlayerState& ps, CPlayerState::EItemType type, int amount) {
+  GrantItem(ps, type, amount, std::max(amount, ps.GetItemCapacity(type)));
+}
+
+} // namespace
 
 void DrawCheats() {
   CStateManager* mgr = sStateManager;
@@ -150,16 +187,16 @@ void DrawCheats() {
   }
 
   int missiles = ps->GetItemAmount(CPlayerState::kIT_Missiles);
-  if (ImGui::SliderInt("Missiles", &missiles, 0, 250)) {
-    GrantItem(*ps, CPlayerState::kIT_Missiles, missiles, 250);
+  if (CheatSlider("Missiles", missiles, 250)) {
+    SetAmount(*ps, CPlayerState::kIT_Missiles, missiles);
   }
   int powerBombs = ps->GetItemAmount(CPlayerState::kIT_PowerBombs);
-  if (ImGui::SliderInt("Power Bombs", &powerBombs, 0, 8)) {
-    GrantItem(*ps, CPlayerState::kIT_PowerBombs, powerBombs, 8);
+  if (CheatSlider("Power Bombs", powerBombs, 8)) {
+    SetAmount(*ps, CPlayerState::kIT_PowerBombs, powerBombs);
   }
   int tanks = ps->GetItemAmount(CPlayerState::kIT_EnergyTanks);
-  if (ImGui::SliderInt("Energy Tanks", &tanks, 0, 14)) {
-    GrantItem(*ps, CPlayerState::kIT_EnergyTanks, tanks, 14);
+  if (CheatSlider("Energy Tanks", tanks, 14)) {
+    GrantItem(*ps, CPlayerState::kIT_EnergyTanks, tanks, tanks); // tanks have no ammo: count is capacity
     ps->HealthInfo()->SetHP(ps->CalculateHealth());
   }
 
@@ -244,13 +281,7 @@ void DrawCheats() {
     const rstl::vector< CMemoryCard::MemoryWorld >& worlds = gpMemoryCard->GetMemoryWorlds();
     for (int i = 0; i < worlds.size(); ++i) {
       const uint32_t id = static_cast< uint32_t >(worlds[i].first);
-      std::string name;
-      const wchar_t* wide = worlds[i].second.GetFrontEndName();
-      if (wide != nullptr) {
-        for (const wchar_t* p = wide; *p != 0; ++p) {
-          name.push_back(static_cast< char >(*p));
-        }
-      }
+      std::string name = PortDiscord::GameTextToUtf8(worlds[i].second.GetFrontEndName());
       if (name.empty()) {
         char buf[32];
         std::snprintf(buf, sizeof(buf), "MLVL %08X", static_cast< unsigned >(id));
@@ -307,7 +338,7 @@ void DrawFreeCam() {
     PortFreeCam::SetShowPlayer(showPlayer);
   }
   float speed = PortFreeCam::Speed();
-  if (ImGui::SliderFloat("Speed", &speed, 1.f, 100.f, "%.0f m/s", ImGuiSliderFlags_Logarithmic)) {
+  if (ImGui::SliderFloat("Speed", &speed, 1.f, 100.f, "%.0f m/s")) {
     PortFreeCam::SetSpeed(speed);
   }
   PortFreeCam::Pose pose = PortFreeCam::GetPose();

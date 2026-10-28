@@ -20,6 +20,12 @@
 #include <Kyoto/Particles/CElementGen.hpp>
 #include <Kyoto/Particles/CGenDescription.hpp>
 
+#ifdef TARGET_PC
+#include "Kyoto/CResFactory.hpp"
+#include "Kyoto/Particles/CElectricDescription.hpp"
+#include "port_room_effects.h"
+#endif
+
 const uint CScriptGunTurret::skStateToLocoTypeLookup[] = {
     5, 7, 9, 0, 1, 0, 1, 2, 3, 1, 1, 1, 1,
 };
@@ -215,6 +221,23 @@ CScriptGunTurret::CScriptGunTurret(TUniqueId uid, const rstl::string& name, ETur
     ModelData()->EnableLooping(true);
   }
   x37c_projectileInfo.Token().Lock();
+#ifdef TARGET_PC
+  // Remastered's visor effect (SLdrGunTurretMP1 +0xc0, de43a94b) is an ELC2 on most turrets and
+  // a GENP on one: an electric (+0x774) leaves the turret no visor particle (+0x758), a GENP's
+  // PART replaces the retail one.
+  if (const PortRoomEffects::ActorSlotEffect* const fx = PortRoomEffects::FindActorSlotEffect(
+          info.GetEditorId().value, PortRoomEffects::kActorSlotGunTurretVisorEffect)) {
+    const FourCC type = gpResourceFactory->GetResourceTypeById(CAssetId(fx->part));
+    if (type == 'ELSC') {
+      xPortVisorElectric = TLockedToken< CElectricDescription >(
+          gpSimplePool->GetObj(SObjectTag('ELSC', CAssetId(fx->part))));
+      x458_visorEffectDesc = rstl::optional_object_null();
+    } else if (type == 'PART') {
+      x458_visorEffectDesc = TLockedToken< CGenDescription >(
+          gpSimplePool->GetObj(SObjectTag('PART', CAssetId(fx->part))));
+    }
+  }
+#endif
 }
 
 CScriptGunTurret::~CScriptGunTurret() {}
@@ -278,6 +301,13 @@ void CScriptGunTurret::AcceptScriptMsg(EScriptObjectMessage msg, TUniqueId uid,
                                       GetTransform(), GetUniqueId(),
                                       x478_targettingLight->GetLight(), 0, 1, 0.f));
       SetupCollisionManager(mgr);
+#ifdef TARGET_PC
+    } else if (x258_type == kTC_Gun) {
+      // Remastered's targetting effect has no light (CScriptGunTurretMP1 makes no particle
+      // light at all), and CScriptGunTurretMP1::AcceptScriptMsg sets up every gun's collision
+      // regardless; without it Think's UpdateGunCollisionManager dereferences a null manager.
+      SetupCollisionManager(mgr);
+#endif
     } else if (x258_type == kTC_Base) {
       if (x2d4_data.GetExtensionModelResId() != kInvalidAssetId) {
         x4a4_extensionModel =
@@ -1079,6 +1109,12 @@ void CScriptGunTurret::LaunchProjectile(CStateManager& mgr) {
         kInvalidUniqueId, 0, false, CVector3f(1.f, 1.f, 1.f), x458_visorEffectDesc,
         x2d4_data.GetVisorSoundId(), false);
     if (projectile) {
+#ifdef TARGET_PC
+      // CScriptGunTurretMP1::LaunchProjectile (0x00ee4bbc) gives the projectile the electric.
+      if (xPortVisorElectric) {
+        projectile->PortSetVisorElectric(*xPortVisorElectric);
+      }
+#endif
       mgr.AddObject(projectile);
       const CPASAnimParmData parms(pas::kAS_ProjectileAttack, CPASAnimParm::FromEnum(1),
                                    CPASAnimParm::FromReal32(90.f),
@@ -1200,6 +1236,11 @@ void CScriptGunTurret::UpdateGunParticles(float dt, CStateManager& mgr) {
       x478_targettingLight->SetGlobalTranslation(lightPos);
       x478_targettingLight->SetGlobalScale(GetModelScale());
       x478_targettingLight->Update(dt);
+#ifdef TARGET_PC
+      // Retail always has the light (kSM_Registered makes it from this PART); a Remastered
+      // targetting effect has none, so there is no light to update.
+      if (light != nullptr)
+#endif
       if (x478_targettingLight->SystemHasLight()) {
         light->SetLight(x478_targettingLight->GetLight());
       } else {

@@ -1,3 +1,39 @@
+## VR: upstream 0.35 local testing merge (2026-10-28)
+
+Merged Odrannnn/MetroidPrimePort `port` at `011c131db` (298 incoming commits)
+onto PrimedGun `5b60fce16`, on a local testing branch. Main and releases are
+unchanged until the testing branch is explicitly approved for pushing.
+
+Upstream now uses the old spare ShaderConfig bytes for clip planes, silhouette
+shells and thermal flags. VR replay flags move to four explicit extra bytes,
+with cache layout epoch 3. Old user GX cache rows are invalidated. The 3,173-row retail VR seed is
+converted explicitly: old byte 10 moves to currentPnMtx at byte 12, old byte
+11 bits 0-5 move to byte 13, and its lighting/decal bits move to upstream
+bytes 10/11; the four-byte extension shifts attributes by four. Config version
+16 and seed epoch 3 are validated. Shader compilation on the first test launch
+can still be slower. Do not overlap these flags to preserve an old cache layout. Regression:
+`StereoShaderLayout.UpstreamFlagsDoNotOverwriteEyeReplayFlags`.
+
+Keep per-eye depth copies and full-eye retail fog bounds. Immersive VR retains
+the existing pause/menu routing and skips the new mono inventory HDR/silhouette
+composites; desktop pause lighting remains available. The new cannon depth
+prepass is skipped in VR because it uses the desktop gun and exposure camera.
+Remastered cannon hologram transitions use the tracked model transform. Native
+vertex shadow entries are retained and rewritten to the correct eye uniform
+binding; their regression checks all three stereo shader modes. Keep
+the previous EnvFX and third-person guards, HMD minimap/billboards, roomscale,
+left-hand model mirroring, cannon targeting and camera comfort behavior.
+
+Windows testing uses upstream's new Dawn package rather than the old cached
+SDK. This merge does not establish headset rendering correctness: compare
+fog, beam switching, visors, pause inventory, HUD, morph transitions and
+cinema direction in the headset before promoting it.
+
+Windows build passed with Dawn v20261027.212404. Full CTest: 719 passed,
+one skipped (entity schema generation requires the Linux clang-19 tool).
+The per-eye fog, native-vertex stereo shadow, shader-layout separation and
+VR menu/controller regression tests pass. Headset confirmation remains required.
+
 ## VR: upstream rendering merge checks (2026-10-25)
 
 Upstream targets a desktop camera. A clean merge and passing desktop tests do

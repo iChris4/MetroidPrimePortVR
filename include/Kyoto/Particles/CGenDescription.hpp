@@ -206,6 +206,8 @@ public:
   std::unique_ptr< CPortSys > xPortSys;
   // port-only PSHP: Remastered SSHP sprite mesh (0 quad; 3 triangle, 4 pentagon, 5 hexagon, 6 octagon)
   u8 xPortSpriteShape = 0;
+  // GPSM primitive, independent of TEXR/MTIN/PMDL; 255 denotes a retail PART.
+  u8 xPortPrimitive = 255;
   // port-only PBDM: Remastered's blend row where the alpha blend stands in for it
   // (CElementGen::PortBlendSrc/Dst). 0 = retail alpha, 1 premultiplied, 3 opaque; 2 is AAPH.
   u8 xPortBlend = 0;
@@ -219,6 +221,15 @@ public:
   // port-only PIVS: Remastered's IVSE 0 (desc+0x2fa bit 2 clear, CreateNewParticles 0x24a9fc): the
   // emitter's velocity is not turned by the system orientation (retail always turns it).
   bool xPortNoIvse = false;
+  // VMPC: run the complete velocity program once at birth (CreateNewParticles 0x24abd0).
+  bool xPortVelocityAtCreation = false;
+  // VGD1..4 select world-space modifiers; VMD true switches the same slot back to emitter space.
+  bool xPortVelocityGlobal[4] = {};
+  // DVVN: defaults version for the missing-EMTR velocity; zero preserves retail behavior.
+  u8 xPortDefaultValuesVersion = 0;
+  // DVVN and IEXP update this in stream order. The marker supersedes legacy VMAT exposure pins.
+  bool xPortExposurePolicy = false;
+  bool xPortInverseExposure = false;
   // port-only PISV: Remastered's ISVF, the factor of the system's per-tick translation change
   // (PEMV's delta, no time step) added to a new particle's velocity. Owned here; null = none.
   CRealElement* xPortInheritVel = nullptr;

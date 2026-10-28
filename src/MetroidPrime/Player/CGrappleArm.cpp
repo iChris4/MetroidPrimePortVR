@@ -7,6 +7,7 @@
 #include "port_debug.h"
 #include "port_room_env.h"
 #include "vr/vr_model_mirror.h"
+#include "port_third_person_body.h"
 #endif
 #include "Kyoto/Animation/CVertexMorphEffect.hpp"
 #include "Kyoto/Audio/CSfxManager.hpp"
@@ -232,9 +233,11 @@ void CGrappleArm::RenderGrappleBeam(const CStateManager& mgr, const CVector3f& p
       const CTransform4f viewMatrix = CGraphics::GetViewMatrix();
 #ifdef TARGET_PC
       const PortVr::ModelMirrorScope mirrorScope;
-      // Port: the muzzle sits on the drawn nozzle, so it takes the gun's view.
-      CGraphics::SetViewPointMatrix(xf.GetInverse() *
-                                    mgr.GetPlayer()->GetPlayerGun()->PortGunView(mgr, viewMatrix));
+      // Port: the muzzle sits on the drawn nozzle, so it takes the gun's view; on the
+      // third-person hand it is already in the world.
+      CGraphics::SetViewPointMatrix(
+          xPortHandBeam ? viewMatrix
+                        : xf.GetInverse() * mgr.GetPlayer()->GetPlayerGun()->PortGunView(mgr, viewMatrix));
 #else
       CGraphics::SetViewPointMatrix(xf.GetInverse() * viewMatrix);
 #endif
@@ -300,7 +303,11 @@ void CGrappleArm::UpdateSwingAction(float swingT, float dt, CStateManager& mgr) 
     }
   }
   if (x3b2_25_beamActive) {
+#ifdef TARGET_PC
+    x39c_grappleMuzzleGen->SetTranslation(xPortHandBeam ? xPortBeamGunPos : beamLoc.GetTranslation());
+#else
     x39c_grappleMuzzleGen->SetTranslation(beamLoc.GetTranslation());
+#endif
     x39c_grappleMuzzleGen->Update(dt);
     if (x3b2_26_grappleHit) {
       x3b2_26_grappleHit = !x398_grappleHitGen->IsSystemDeletable();
@@ -368,7 +375,8 @@ const bool CGrappleArm::UpdateGrappleBeam(float dt, const CTransform4f& beamLoc,
   const CActor* actor = TCastToConstPtr< CActor >(mgr.GetObjectById(targetId));
   x310_grapplePointPos = actor ? actor->GetTranslation() : x220_xf.GetTranslation();
 #ifdef TARGET_PC
-  const CVector3f beamGunPos = (PortVr::VrWeaponModelTransform(x220_xf) * beamLoc).GetTranslation();
+  CVector3f beamGunPos = (PortVr::VrWeaponModelTransform(x220_xf) * beamLoc).GetTranslation();
+  xPortHandBeam = PortThirdPersonBody::GrappleHand(*mgr.GetPlayer(), beamGunPos);
 #else
   const CVector3f beamGunPos = (x220_xf * beamLoc).GetTranslation();
 #endif

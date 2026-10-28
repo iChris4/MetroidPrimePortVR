@@ -166,6 +166,7 @@ struct DriverWorkaround {
   const char* tooltip;
   const char* enable;  // Dawn toggles it turns on, comma-separated, or nullptr
   const char* disable; // and the ones it turns off
+  const char* env = nullptr; // an aurora variable it sets to 1 (unless already set), or nullptr
 };
 inline constexpr DriverWorkaround kDriverWorkarounds[] = {
     {"keep_depth", "Keep depth buffers (Direct3D 11)",
@@ -184,6 +185,10 @@ inline constexpr DriverWorkaround kDriverWorkarounds[] = {
      "Turns the graphics library's own checks back on for one start, so a command the driver\n"
      "rejects is named in the log. Costs performance, so it turns itself off after that start.",
      nullptr, "skip_validation,disable_robustness"},
+    {"no_bc", "Decode compressed textures on the CPU",
+     "Hands the GPU plain textures instead of compressed ones (more video memory).\n"
+     "Try it if textures show as green and magenta blocks.",
+     nullptr, nullptr, "AURORA_NO_BC"},
 };
 inline constexpr size_t kDriverWorkaroundCount = std::size(kDriverWorkarounds);
 // `validation` is for one start only: BeginDriverWorkarounds applies it and unticks it.
@@ -351,6 +356,9 @@ bool Searching();
 void DrawSearchResults();
 ImGuiWindow* ScrollableWindowAt(ImGuiWindow* window);
 
+// window.cpp
+bool TouchScrolling(); // a finger drag is scrolling a page, taken from the widget it began on
+
 // ui_common.cpp
 bool PageLayout();
 SDL_Window* MainWindow();
@@ -412,6 +420,9 @@ void OpenRemasteredDialog(int which);
 std::string OpenRemasteredPick(int which, const std::string& uri);
 std::string RemasteredPickName(const std::string& uri);
 void DrawModReloadMessage();
+// Asks for a mod reload, again every two seconds until one runs (a reload is
+// refused where the game can't save).
+void ReloadUntilDone();
 extern bool sImportUnloadedMods;
 void FinishRemasteredImport();
 
@@ -431,6 +442,12 @@ void BeginTopToastStack();
 void DrawPhotoUI();
 void DrawResumePrompt();
 void DrawUpdateToast();
+void DrawNoteToast();
+#if defined(PORT_TOUCH_OVERLAY)
+// touch_overlay.cpp: the SDL event filter that feeds it, and its draw
+void InstallTouchOverlay();
+void DrawTouchOverlay();
+#endif
 void HoldBackgroundShadersOnFrontEnd();
 void DrawShaderCompilationToast();
 std::string HotkeyHint();

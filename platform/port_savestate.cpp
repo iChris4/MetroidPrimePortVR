@@ -12,6 +12,7 @@
 #include "port_mods.h"
 #include "port_remastered_import.h"
 #include "port_tracker.h"
+#include "port_world_holders.h"
 
 #include "Kyoto/CResFactory.hpp"
 #include "Kyoto/Streams/CMemoryInStream.hpp"
@@ -846,7 +847,11 @@ bool Tick(CStateManager& mgr) {
 
 void ReloadModsNow() {
   sReloadMods = false;
-  gpResourceFactory->PortReopenPaks(ReloadModFiles);
+  // In game the world that held them is already gone (CStateManager's destructor); a reload made
+  // in the front end has no world, so this is the only place its holders can go. Their tokens
+  // would otherwise pin the outgoing mods' models in gpSimplePool.
+  PortWorldHolders::ReloadMods(&PortWorldHolders::Release,
+                               [] { gpResourceFactory->PortReopenPaks(ReloadModFiles); });
   const PortMods::Status& status = PortMods::CurrentStatus();
   SetMessage("Mods reloaded: " + std::to_string(status.overlays) + " disc file(s), " +
              std::to_string(PortMods::NativeTextureCount()) + " native texture(s)");
@@ -960,15 +965,21 @@ ResumeMeta CurrentMeta() {
 // Builds the snapshot from the live game (caller checked SafeNow).
 bool TakeSnapshot(CStateManager& mgr) {
   const auto start = Clock::now();
-  Header header;
-  std::vector< uint8_t > blob;
-  Capture(mgr, header, blob);
   ResumeSnapshot snap;
   snap.meta = CurrentMeta();
   if (snap.meta.fileIdx > 2) {
     ResumeNote("blocked: no card file selected (file " + std::to_string(snap.meta.fileIdx) + ")");
     return false;
   }
+  // No card serial: a save state loaded from the title, or "continue without
+  // saving". No card file can take such a state at the title, so it isn't kept.
+  if (snap.meta.cardSerial == 0) {
+    ResumeNote("blocked: the game has no memory card");
+    return false;
+  }
+  Header header;
+  std::vector< uint8_t > blob;
+  Capture(mgr, header, blob);
   snap.path = ResumePath();
   if (snap.path.empty()) {
     ResumeNote("blocked: no resume path (no user folder)");

@@ -25,7 +25,7 @@
 #include <SDL3/SDL_misc.h>
 #include <SDL3/SDL_mouse.h>
 
-#if defined(__ANDROID__)
+#if defined(PORT_TOUCH_CONTROLS)
 #include "touch_pad.h"
 #endif
 
@@ -348,7 +348,7 @@ void DrawPhotoUI() {
       PortPhoto::SetShowSamus(samus);
     }
     float speed = PortPhoto::Speed();
-    if (ImGui::SliderFloat("Speed", &speed, 1.f, 100.f, "%.0f m/s", ImGuiSliderFlags_Logarithmic)) {
+    if (ImGui::SliderFloat("Speed", &speed, 1.f, 100.f, "%.0f m/s")) {
       PortPhoto::SetSpeed(speed);
       MarkDirty();
     }
@@ -462,6 +462,47 @@ void DrawResumePrompt() {
   }
   ImGui::End();
   ImGui::PopStyleVar();
+}
+
+namespace {
+// ShowNote's text, set from the input poll and timed from the first frame that draws it.
+std::mutex sNoteMutex;
+std::string sNote;
+bool sNoteNew = false;
+} // namespace
+
+void ShowNote(const std::string& text) {
+  std::lock_guard<std::mutex> lock(sNoteMutex);
+  sNote = text;
+  sNoteNew = true;
+}
+
+void DrawNoteToast() {
+  static std::string sText;
+  static double sShownAt = -1.0;
+  const double now = ImGui::GetTime();
+  {
+    std::lock_guard<std::mutex> lock(sNoteMutex);
+    if (sNoteNew) {
+      sText = sNote;
+      sNoteNew = false;
+      sShownAt = now;
+    }
+  }
+  if (sText.empty() || now - sShownAt > 2.5) {
+    return;
+  }
+  const ImGuiViewport* viewport = ImGui::GetMainViewport();
+  PlaceTopToast(viewport);
+  ImGui::SetNextWindowBgAlpha(0.8f);
+  if (ImGui::Begin("##note-toast", nullptr,
+                   ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoNav |
+                       ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoSavedSettings |
+                       ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_AlwaysAutoResize)) {
+    ImGui::TextUnformatted(sText.c_str());
+    TopToastPlaced(viewport);
+  }
+  ImGui::End();
 }
 
 void DrawUpdateToast() {
@@ -617,7 +658,7 @@ void DrawMenuHintToast() {
                        ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoSavedSettings |
                        ImGuiWindowFlags_AlwaysAutoResize)) {
     const std::string keys = PortInputRemap::BindingsText(PortInput::Action::PortMenu);
-#if defined(__ANDROID__)
+#if defined(PORT_TOUCH_CONTROLS)
     if (keys.empty()) {
       ImGui::TextUnformatted("Tap the cog button for settings");
     } else {
