@@ -34,6 +34,14 @@
             android:layout_marginTop="8dp"
             android:text="@string/primedgun_setup_notes" />
 
+        <Button
+            android:id="@+id/setup_updates"
+            style="@style/PrimedGunButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="@string/primedgun_check_updates" />
+
         <View
             android:layout_width="match_parent"
             android:layout_height="1dp"

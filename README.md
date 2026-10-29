@@ -106,6 +106,40 @@ When updating on PC, keep the existing **`user` folder**. On Quest, install a
 compatible APK over the existing app to keep its saves and settings; do not
 uninstall it first. Keeping a separate backup is recommended.
 
+## Launcher updates
+
+Open **Setup > Check for updates** in the Windows or Quest launcher. The check
+uses the public releases on `iChris4/MetroidPrimePortVR`; no GitHub login is
+needed. **Include alpha, beta and release candidate versions** is enabled by
+default for preview builds. Stable builds default to stable releases only.
+The launcher checks when you press the button, shows the release notes and
+selects the newest published version with a package for your platform.
+
+Choose **Download update** to download and verify its SHA-256 checksum. Nothing
+is installed automatically. A release must provide a GitHub SHA-256 asset digest
+or a matching entry in `SHA256SUMS.txt`; unverified packages are not installed.
+
+- **Windows:** Close the game and Port Options, then choose **Install and restart
+  launcher**. The updater saves launcher settings, waits for the programs to exit,
+  replaces the program files and opens the launcher again. It never replaces the
+  `user` folder. Previous program files and an `update.log` are kept in the
+  temporary `PrimedGun-update-*` folder; failed copies attempt to restore those
+  files. Use a writable installation folder. System `curl` and Windows PowerShell
+  are used; they are included in supported Windows versions.
+- **Quest:** Close the game, then choose **Install update**. If asked, allow the
+  launcher to install apps and return to approve Quest's system installation
+  prompt. The APK must have the same application ID and signing identity as your
+  installed build, and a higher Android version code. Compatible updates preserve
+  saves and settings. The launcher rejects mismatched keys; it never uninstalls
+  your app. If your Horizon OS version does not offer the permission or installer
+  panel, use the release page to sideload the same APK through your usual tool.
+
+This update button first appears in beta.6; older versions need one manual update.
+Release publishers must keep the Quest signing key and package name unchanged,
+increase `versionCode` for each APK, and upload the normal Windows x64 ZIP and
+Quest APK with SHA-256 digests/checksums. Downloaded data and backups may be removed
+from the temporary/cache folders once an update has been checked successfully.
+
 ## Installing HD texture packs
 
 Use a Metroid Prime replacement texture pack containing `.png` or `.dds` files

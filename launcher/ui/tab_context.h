@@ -64,6 +64,7 @@ public:
   // one key at once (the cannon slot, whose files are already applied).
   std::function<void()> onEdited;
   std::function<void()> openPortOptions;
+  std::function<bool()> prepareUpdate;
   std::function<void(std::string_view)> saveKeyNow;
 
   void AddRefresher(std::function<void()> refresh) { m_refreshers.push_back(std::move(refresh)); }

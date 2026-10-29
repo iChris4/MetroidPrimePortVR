@@ -53,6 +53,12 @@ struct LauncherSettingsSyncTest {
     window.m_ctx.RefreshAll();
     Check(!roomScale->isChecked(), "initial desktop toggle matches saved value");
 
+    QPushButton* updateButton = nullptr;
+    for (auto* button : window.findChildren<QPushButton*>()) {
+      if (button->text() == QStringLiteral("Check for updates...")) updateButton = button;
+    }
+    Check(updateButton && updateButton->isEnabled(), "updates available without a selected disc");
+    Check(QFile::exists(QStringLiteral(":/update-windows.ps1")), "self-update helper is embedded in launcher");
     QPushButton* portOptions = nullptr;
     for (auto* button : window.findChildren<QPushButton*>()) {
       if (button->text() == QStringLiteral("Open Full Port Options (F1)...")) portOptions = button;

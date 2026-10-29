@@ -374,6 +374,16 @@ class LauncherActivity : AppCompatActivity() {
         binding.mainSaveSettings.isEnabled = !gameRunning
     }
 
+    fun prepareUpdate(): Boolean {
+        val optionsOpen = (getSystemService(android.app.ActivityManager::class.java).runningAppProcesses ?: emptyList())
+            .any { it.processName == "$packageName:options" }
+        if (optionsOpen || gameRunning || launching || DiscCopy.isRunning || PrimedGunTransfer.isStaging) {
+            Toast.makeText(this, "Close the game and Port Options, and finish any file transfers before installing an update.", Toast.LENGTH_LONG).show()
+            return false
+        }
+        return saveSettings(showResult = false)
+    }
+
     /** Writes the changed keys; false (after saying why) when the file could not be written. */
     private fun saveSettings(showResult: Boolean): Boolean {
         if (gameRunning) return false

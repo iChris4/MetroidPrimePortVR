@@ -34,6 +34,8 @@ import org.primedgun.v2.databinding.FragmentPrimedgunSetupBinding
  */
 class PrimedGunSetupFragment : Fragment(), PrimedGunRefreshable {
 
+    private val updates = QuestUpdateController(this)
+
     private var binding: FragmentPrimedgunSetupBinding? = null
     private var discCheckJob: Job? = null
     // The selected disc's name when its check last found a PAL disc, so a refresh keeps
@@ -75,6 +77,7 @@ class PrimedGunSetupFragment : Fragment(), PrimedGunRefreshable {
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
         val b = binding ?: return
+        b.setupUpdates.setOnClickListener { updates.show() }
         b.setupNotes.setOnClickListener { showSetupNotes() }
         b.setupSelectGame.setOnClickListener { requestGameFile.launch(arrayOf("*/*")) }
         b.setupPlay.setOnClickListener { launcher?.play() }
@@ -107,6 +110,7 @@ class PrimedGunSetupFragment : Fragment(), PrimedGunRefreshable {
 
     override fun onDestroyView() {
         super.onDestroyView()
+        updates.close()
         binding = null
     }
 

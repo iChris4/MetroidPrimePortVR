@@ -3,6 +3,7 @@
 // Derived from PrimedGun's DolphinQt/MainWindow.cpp (GPL-2.0-or-later).
 
 #include "launcher_window.h"
+#include "update_dialog.h"
 
 #include "cannon_textures.h"
 #include "disc_probe.h"
@@ -102,6 +103,16 @@ LauncherWindow::LauncherWindow()
 
   m_ctx.onEdited = [this] { OnEdited(); };
   m_ctx.openPortOptions = [this] { OpenPortOptions(); };
+  m_ctx.prepareUpdate = [this] {
+    if (m_game && m_game->state() != QProcess::NotRunning) {
+      QMessageBox::information(this, tr("Close the game"), tr("Close the game and Port Options before installing the update."));
+      return false;
+    }
+    if (!SaveSettings()) return false;
+    m_ini.setValue(QStringLiteral("geometry"), saveGeometry());
+    m_ini.sync();
+    return true;
+  };
   m_ctx.saveKeyNow = [this](std::string_view key) { SaveKeyNow(key); };
 
   m_tabs = new QTabWidget(page);
@@ -166,6 +177,10 @@ void LauncherWindow::BuildSetupTab(QTabWidget* tabs) {
   auto* notesButton = new QPushButton(tr("Setup Notes"));
   StyleGameButton(notesButton);
   layout->addWidget(notesButton);
+  auto* updates = new QPushButton(tr("Check for updates..."));
+  StyleGameButton(updates);
+  layout->addWidget(updates);
+  connect(updates, &QPushButton::clicked, this, [this] { CheckForUpdates(m_ctx); });
   m_ctx.Separator(layout);
 
   m_selectedGame = new QLabel;

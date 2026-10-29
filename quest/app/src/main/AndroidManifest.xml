@@ -9,6 +9,7 @@
     <uses-permission android:name="android.permission.VIBRATE" />
     <!-- The Archipelago client's WebSocket (ws:// only in this build). -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- Select Game copies the disc image in a foreground service that keeps the CPU awake. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
@@ -89,6 +90,15 @@
             <layout android:defaultWidth="1024dp" android:defaultHeight="720dp"
                 android:minWidth="760dp" android:minHeight="520dp" />
         </activity>
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.updates"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/update_paths" />
+        </provider>
 
         <!-- Copies the picked disc image into the user folder (launcher process). -->
         <service
