@@ -9,7 +9,7 @@ pass draws both eyes), cannot create its Vulkan device through OpenXR, which dir
 uses (the eyes are copied straight into the runtime's swapchain images), and has no fragment density
 maps, which foveated rendering attaches to the eye passes. This script downloads the
 Dawn source aurora pins
-(extern/aurora/cmake/AuroraDependencyVersions.cmake, AURORA_DAWN_REF on encounter/dawn), applies
+(extern/aurora/cmake/AuroraDependencyVersions.cmake, AURORA_DAWN_REF on Odrannnn/dawn), applies
 quest/dawn/apply.py, and builds it for Android arm64 with the NDK the way encounter/dawn's own
 release workflow does (.github/workflows/release.yml + dawn-ci.cmake). The result is a package in
 the stock layout (build/qd/dawn-android-aarch64-primedgun.tar.gz) that Build-Quest.ps1 hands to the
@@ -47,10 +47,11 @@ $WorkDirectory = [IO.Path]::GetFullPath($WorkDirectory)
 
 # The source revision is aurora's; its archive hash is pinned here, so a Dawn bump in aurora fails
 # loudly until this script (and the patches) are checked against the new revision.
-$revision = '1155e0ed531126f33a1279afa029349651ca1c93'
-$archiveHash = 'd0d291936d02a56b3b7e92e84e8b8c71db04a9c9e2b3a41cc6d7540cf13b4167'
+$revision = 'bfa890082bf20bc10e0a3bfe122cf0bfa7f4da61'
+$archiveHash = 'e0cb2aabea2bde5957ab6bd5e7919c5ed61dd73dd8237027bd5755a9c91bf237'
 $versions = [IO.File]::ReadAllText((Join-Path $repo 'extern\aurora\cmake\AuroraDependencyVersions.cmake'))
-if ($versions -notmatch [regex]::Escape($revision)) {
+$pinnedRevision = [regex]::Match($versions, '_aurora_dependency_version\(AURORA_DAWN_REF\s+"([a-f0-9]+)"').Groups[1].Value
+if ($pinnedRevision -ne $revision) {
     throw "aurora pins another Dawn revision than $revision; update `$revision, `$archiveHash and quest\dawn\apply.py"
 }
 
@@ -75,7 +76,15 @@ $llvmBin = Join-Path $ndk 'toolchains\llvm\prebuilt\windows-x86_64\bin'
 $ninja = Get-ChildItem -Path (Join-Path $sdkRoot 'cmake') -Directory -ErrorAction SilentlyContinue |
     Sort-Object Name -Descending | ForEach-Object { Join-Path $_.FullName 'bin\ninja.exe' } |
     Where-Object { Test-Path $_ } | Select-Object -First 1
-if (-not $ninja) { throw "No Ninja under $sdkRoot\cmake; install the SDK's CMake 3.22.1" }
+# Modern Dawn uses C++ module targets; older SDK Ninja cannot generate them.
+$hostNinja = Get-Command ninja.exe -ErrorAction SilentlyContinue
+if ($hostNinja) {
+    $hostNinjaVersion = (& $hostNinja.Source --version).Trim()
+    if ([version]$hostNinjaVersion -ge [version]'1.11') { $ninja = $hostNinja.Source }
+}
+if (-not $ninja -or [version]((& $ninja --version).Trim()) -lt [version]'1.11') {
+    throw 'Dawn requires Ninja 1.11 or newer; put a current ninja.exe on PATH.'
+}
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) { throw 'git is not on PATH (Dawn fetches its dependencies with it)' }
 $pythonPath = (Get-Command $Python -ErrorAction Stop).Source
 
@@ -112,48 +121,52 @@ if (-not $Force -and (Test-Path $manifestPath)) {
     }
 }
 
-$archive = Join-Path $WorkDirectory 'dawn-src.tar.gz'
+$archive = Join-Path $WorkDirectory "dawn-$($revision.Substring(0, 12)).tar.gz"
 if (-not (Test-Path -LiteralPath $archive)) {
     Write-Host "Downloading Dawn $revision"
-    Invoke-WebRequest "https://github.com/encounter/dawn/archive/$revision.tar.gz" -OutFile $archive -UseBasicParsing
+    Invoke-WebRequest "https://github.com/Odrannnn/dawn/archive/$revision.tar.gz" -OutFile $archive -UseBasicParsing
 }
 if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $archiveHash) {
     throw 'The Dawn source archive does not match the pinned SHA-256.'
 }
 
-# The patches go onto pristine sources: src/ is extracted again whenever they changed, while
-# third_party/ (which DAWN_FETCH_DEPENDENCIES fills) is kept.
+# Restore every file in the pinned source archive, preserving identical files and
+# fetched dependencies. A revision bump can change build files outside src/ too.
 $source = Join-Path $WorkDirectory 's'
 $patchMarker = Join-Path $source 'primedgun-patches.sha256'
-$patched = (Test-Path -LiteralPath $patchMarker) -and ([IO.File]::ReadAllText($patchMarker).Trim() -eq $patchHash)
+$sourceKey = "$revision|$patchHash"
+$patched = (Test-Path -LiteralPath $patchMarker) -and ([IO.File]::ReadAllText($patchMarker).Trim() -eq $sourceKey)
 if (-not $patched) {
     $extract = @'
-import os, shutil, sys, tarfile
-archive, work, source, only_src = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4] == "1"
+from pathlib import Path
+import sys, tarfile
+archive, work, source, only_src = sys.argv[1:]
+source = Path(source).resolve()
+work = Path(work).resolve()
+assert source.is_relative_to(work), "Dawn source must stay inside its build work directory"
 with tarfile.open(archive) as tar:
-    members = tar.getmembers()
-    top = members[0].name.split("/")[0]
-    if only_src:
-        members = [m for m in members if m.name.split("/", 2)[1:2] == ["src"]]
-    tar.extractall(work, members=members, filter="data")
-extracted = os.path.join(work, top)
-if only_src:
-    shutil.rmtree(os.path.join(source, "src"), ignore_errors=True)
-    shutil.move(os.path.join(extracted, "src"), os.path.join(source, "src"))
-    shutil.rmtree(extracted, ignore_errors=True)
-else:
-    shutil.rmtree(source, ignore_errors=True)
-    os.rename(extracted, source)
+    for member in tar:
+        if not member.isfile():
+            continue
+        parts = Path(member.name).parts[1:]
+        if not parts:
+            continue
+        target = source.joinpath(*parts)
+        assert target.resolve().is_relative_to(source), "Archive path escapes Dawn source"
+        data = tar.extractfile(member).read()
+        if not target.exists() or target.read_bytes() != data:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
 '@
     $extractScript = Join-Path $WorkDirectory 'extract.py'
     [IO.File]::WriteAllText($extractScript, $extract)
     $onlySource = Test-Path -LiteralPath (Join-Path $source 'CMakeLists.txt')
-    Write-Host ("Extracting Dawn " + $(if ($onlySource) { 'src/' } else { 'sources' }))
+    Write-Host "Restoring pinned Dawn source files"
     & $pythonPath $extractScript $archive $WorkDirectory $source $(if ($onlySource) { '1' } else { '0' })
     if ($LASTEXITCODE -ne 0) { throw 'Dawn source extraction failed.' }
     & $pythonPath $patchScript $source
     if ($LASTEXITCODE -ne 0) { throw 'Applying the PrimedGun Dawn patches failed.' }
-    [IO.File]::WriteAllText($patchMarker, $patchHash)
+    [IO.File]::WriteAllText($patchMarker, $sourceKey)
 }
 
 $build = Join-Path $WorkDirectory 'b'
@@ -166,7 +179,14 @@ $ciCache = Join-Path $source '.github\workflows\dawn-ci.cmake'
 if ($LASTEXITCODE -ne 0) { throw 'Dawn configuration failed.' }
 & cmake --build $build --parallel $Jobs
 if ($LASTEXITCODE -ne 0) { throw 'Dawn build failed.' }
-if (Test-Path -LiteralPath $install) { Remove-Item -LiteralPath $install -Recurse -Force }
+if (Test-Path -LiteralPath $install) {
+    $resolvedInstall = (Resolve-Path -LiteralPath $install).Path
+    $workPrefix = $WorkDirectory.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
+    if (-not $resolvedInstall.StartsWith($workPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Dawn install path escapes its build directory: $resolvedInstall"
+    }
+    Remove-Item -LiteralPath $resolvedInstall -Recurse -Force
+}
 & cmake --install $build
 if ($LASTEXITCODE -ne 0) { throw 'Dawn installation failed.' }
 $library = Join-Path $install 'lib\libwebgpu_dawn.a'
