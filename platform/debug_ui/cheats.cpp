@@ -11,11 +11,14 @@
 #include "port_room_geo.h"
 #include "port_paths.h"
 #include "port_tracker.h"
+#include "port_ap_metroidprime.h"
 
 #include "MetroidPrime/Cameras/CCameraManager.hpp"
 #include "Kyoto/Graphics/CCubeMaterial.hpp"
 #include "MetroidPrime/CHealthInfo.hpp"
 #include "MetroidPrime/CMemoryCard.hpp"
+#include "MetroidPrime/CScriptLayerManager.hpp"
+#include "MetroidPrime/CStateManager.hpp"
 #include "MetroidPrime/CWorld.hpp"
 #include "MetroidPrime/Player/CGameState.hpp"
 
@@ -49,6 +52,8 @@ bool CheatFullHealth() {
   return true;
 }
 
+void SyncTempleTotems(CStateManager& mgr, const CPlayerState& ps);
+
 bool CheatGrantEverything() {
   CPlayerState* ps = CheatPlayerState();
   if (ps == nullptr) {
@@ -61,6 +66,7 @@ bool CheatGrantEverything() {
   GrantItem(*ps, CPlayerState::kIT_PowerBombs, 8, 8);
   GrantItem(*ps, CPlayerState::kIT_EnergyTanks, 14, 14);
   ps->HealthInfo()->SetHP(ps->CalculateHealth());
+  SyncTempleTotems(*sStateManager, *ps);
   return true;
 }
 
@@ -99,6 +105,43 @@ void SetAmount(CPlayerState& ps, CPlayerState::EItemType type, int amount) {
 }
 
 } // namespace
+
+// Picking up an artifact lights its Artifact Temple totem through the pickup's
+// script: Strength to Newborn turn on the temple's "Got Artifact 2".."12"
+// layers, which take effect the next time the temple loads. Truth sits in the
+// temple and lights its totem in the room ("Relay Show Progress 1").
+void SyncTempleTotems(CStateManager& mgr, const CPlayerState& ps) {
+  namespace Prime = PortAp::MetroidPrime;
+  if (gpGameState == nullptr) {
+    return;
+  }
+  CScriptLayerManager* layers = gpGameState->StateForWorld(Prime::kTallonWorld).GetLayerState().GetPtr();
+  TAreaId temple = Prime::kArtifactTempleIndex;
+  const CWorld* world = mgr.GetWorld();
+  const bool inTallon = world != nullptr && world->IGetWorldAssetId() == Prime::kTallonWorld;
+  if (inTallon) {
+    temple = world->IGetAreaId(Prime::kArtifactTempleArea);
+  }
+  if (layers == nullptr || temple.Value() < 0 ||
+      temple.Value() >= int(layers->GetAreaLayers().size())) {
+    return;
+  }
+  for (int id = CPlayerState::kIT_Strength; id <= CPlayerState::kIT_Newborn; ++id) {
+    const bool held = ps.HasPowerUp(static_cast< CPlayerState::EItemType >(id));
+    const TLayerId layer(id - CPlayerState::kIT_Truth + 1);
+    if (layers->IsLayerActive(temple, layer) != held) {
+      layers->SetLayerActive(temple, layer, held);
+    }
+  }
+  if (inTallon && world->GetCurrentAreaId() == temple && ps.HasPowerUp(CPlayerState::kIT_Truth)) {
+    const CStateManager::TIdListResult found = mgr.GetIdListForScript(TEditorId(0x00100125));
+    if (found.first != found.second) {
+      if (CEntity* relay = mgr.ObjectById(found.first->second)) {
+        mgr.DeliverScriptMsg(relay, kInvalidUniqueId, kSM_SetToZero);
+      }
+    }
+  }
+}
 
 void DrawCheats() {
   CStateManager* mgr = sStateManager;
@@ -163,6 +206,14 @@ void DrawCheats() {
       {"Varia Suit", CPlayerState::kIT_VariaSuit},
       {"Phazon Suit", CPlayerState::kIT_PhazonSuit},
   };
+  static const SItemToggle kArtifacts[] = {
+      {"Truth", CPlayerState::kIT_Truth},         {"Strength", CPlayerState::kIT_Strength},
+      {"Elder", CPlayerState::kIT_Elder},         {"Wild", CPlayerState::kIT_Wild},
+      {"Lifegiver", CPlayerState::kIT_Lifegiver}, {"Warrior", CPlayerState::kIT_Warrior},
+      {"Chozo", CPlayerState::kIT_Chozo},         {"Nature", CPlayerState::kIT_Nature},
+      {"Sun", CPlayerState::kIT_Sun},             {"World", CPlayerState::kIT_World},
+      {"Spirit", CPlayerState::kIT_Spirit},       {"Newborn", CPlayerState::kIT_Newborn},
+  };
   // As many columns as the widest name allows.
   float nameWidth = 0.f;
   for (const SItemToggle& item : kItems) {
@@ -170,8 +221,13 @@ void DrawCheats() {
   }
   nameWidth += ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x + ImGui::GetStyle().ItemSpacing.x * 2.f;
   const int columns = std::clamp(int(ImGui::GetContentRegionAvail().x / nameWidth), 1, 4);
-  if (ImGui::BeginTable("##abilities", columns)) {
-    for (const SItemToggle& item : kItems) {
+  const auto itemTable = [&](const char* id, const SItemToggle* items, size_t count) {
+    if (!ImGui::BeginTable(id, columns)) {
+      return false;
+    }
+    bool changed = false;
+    for (size_t i = 0; i < count; ++i) {
+      const SItemToggle& item = items[i];
       ImGui::TableNextColumn();
       bool owned = ps->HasPowerUp(item.type);
       if (ImGui::Checkbox(item.name, &owned)) {
@@ -181,24 +237,46 @@ void DrawCheats() {
           ps->SetPowerUp(item.type, 0);
           ps->SetPickup(item.type, 0);
         }
+        changed = true;
       }
     }
     ImGui::EndTable();
-  }
+    return changed;
+  };
+  itemTable("##abilities", kItems, std::size(kItems));
 
+  const auto infiniteBox = [](const char* id, unsigned kind) {
+    ImGui::SameLine();
+    ImGui::PushID(id);
+    unsigned bits = InfiniteAmmoSet();
+    if (ImGui::CheckboxFlags("Infinite", &bits, kind)) {
+      SetInfiniteAmmo(kind, (bits & kind) != 0);
+    }
+    ImGui::SetItemTooltip("Firing does not use this ammo up, even at zero, and the HUD shows infinity. "
+                          "The real count is kept and pickups still add to it. Not saved.");
+    ImGui::PopID();
+  };
   int missiles = ps->GetItemAmount(CPlayerState::kIT_Missiles);
   if (CheatSlider("Missiles", missiles, 250)) {
     SetAmount(*ps, CPlayerState::kIT_Missiles, missiles);
   }
+  infiniteBox("infMissiles", kInfAmmoMissile);
   int powerBombs = ps->GetItemAmount(CPlayerState::kIT_PowerBombs);
   if (CheatSlider("Power Bombs", powerBombs, 8)) {
     SetAmount(*ps, CPlayerState::kIT_PowerBombs, powerBombs);
   }
+  infiniteBox("infPowerBombs", kInfAmmoPowerBomb);
   int tanks = ps->GetItemAmount(CPlayerState::kIT_EnergyTanks);
   if (CheatSlider("Energy Tanks", tanks, 14)) {
     GrantItem(*ps, CPlayerState::kIT_EnergyTanks, tanks, tanks); // tanks have no ammo: count is capacity
     ps->HealthInfo()->SetHP(ps->CalculateHealth());
   }
+
+  ImGui::SeparatorText("Artifacts");
+  if (itemTable("##artifacts", kArtifacts, std::size(kArtifacts))) {
+    SyncTempleTotems(*mgr, *ps);
+  }
+  ImGui::SetItemTooltip("Lights the Artifact Temple totems too; they show the next time the temple loads.");
 
   ImGui::SeparatorText("Teleport");
   CWorld* world = mgr->World();

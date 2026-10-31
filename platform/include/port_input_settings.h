@@ -61,6 +61,7 @@ struct Settings {
   bool radialMenus = false;  // Trilogy discs: the Wii's radial beam and visor menus
   bool fastMorph = false;
   bool lockOnToggle = false;
+  bool aimLockOn = false;
   bool stickyCharge = false;
   bool rapidCharge = false;
   bool remasteredMovement = true;
@@ -127,6 +128,8 @@ struct Settings {
   std::atomic< bool > touchControls{true};
   bool mouseInvertX = false;
   bool mouseInvertY = false;
+  bool mapInvertX = false; // map rotate left/right
+  bool mapInvertY = false; // map rotate up/down
   bool mouseButtons = true;
   bool mouseCrosshair = true;
   int crosshairSize = kCrosshairSizeDefault;

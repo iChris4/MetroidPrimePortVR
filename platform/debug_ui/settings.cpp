@@ -18,6 +18,7 @@
 #include "port_discord.h"
 #include "port_suit_colours.h"
 #include "port_dread_samus_mod.h"
+#include "port_textures.h"
 
 #include <dolphin/gx/GXExtra.h>
 
@@ -121,6 +122,7 @@ const SettingKey kSettingKeys[] = {
      false, "16:9", "window"},
     BoolKey< &sHudWide >("hud_wide"),
     BoolKey< &sCinemaBars >("cinema_bars"),
+    BoolKey< &sPhazonShell >("phazon_shell"),
     BoolKey< &sSharpScanWindow >("sharp_scan_window"),
     BoolKey< &sGeneratedBallLooks >("power_spider_ball"),
     {"suit_colour_power", &ReadSuitColours< 0 >, &WriteSuitColours< 0 >, true, "FF4000,-", "-,2050FF"},
@@ -244,10 +246,18 @@ const SettingKey kSettingKeys[] = {
      [](const std::string& value) { PortThirdPerson::SetDistance(std::strtof(value.c_str(), nullptr)); },
      [](std::ostream& out) { out << PortThirdPerson::GetParams().distance; }, false, "2.5", "4"},
     {"third_person_shoulder",
-     [](const std::string& value) { PortThirdPerson::SetShoulder(std::strtof(value.c_str(), nullptr)); },
-     [](std::ostream& out) { out << PortThirdPerson::GetParams().shoulder; }, false, "0.5", "-0.5"},
+     // Every save writes every key, so files written before 69b52d4a3 hold the old defaults
+     // (shoulder 0.5, height 0.1), which put the crosshair on her pad: those move to the new ones.
+     [](const std::string& value) {
+       const float shoulder = std::strtof(value.c_str(), nullptr);
+       PortThirdPerson::SetShoulder(shoulder == 0.5f ? PortThirdPerson::Params{}.shoulder : shoulder);
+     },
+     [](std::ostream& out) { out << PortThirdPerson::GetParams().shoulder; }, false, "0.6", "-0.5"},
     {"third_person_height",
-     [](const std::string& value) { PortThirdPerson::SetHeight(std::strtof(value.c_str(), nullptr)); },
+     [](const std::string& value) {
+       const float height = std::strtof(value.c_str(), nullptr);
+       PortThirdPerson::SetHeight(height == 0.1f ? PortThirdPerson::Params{}.height : height);
+     },
      [](std::ostream& out) { out << PortThirdPerson::GetParams().height; }, false, "0.5", "0"},
     BoolKey< &sHideVisorEffects >("hide_visor_effects"),
     BoolKey< &sHideMinimap >("hide_minimap"),
@@ -291,6 +301,8 @@ const SettingKey kSettingKeys[] = {
      [](std::ostream& out) { out << PortGci::EmulatorFolder(); }, false, nullptr, nullptr},
     {"share_emulator_card", [](const std::string& value) { PortGci::SetShareEmulatorCard(ParseBool(value)); },
      [](std::ostream& out) { WriteBool(out, PortGci::ShareEmulatorCard()); }, false, "1", "0"},
+    {"texture_pack", [](const std::string& value) { PortTextures::SetUserPackEnabled(ParseBool(value)); },
+     [](std::ostream& out) { WriteBool(out, PortTextures::UserPackEnabled()); }, false, "0", "1"},
     {"text_language", [](const std::string& value) { sTextLanguage = value; },
      [](std::ostream& out) { out << sTextLanguage; }, false, "fr", "de"},
     {"elevator_ride",
@@ -537,6 +549,8 @@ const SettingKey kSettingKeys[] = {
      [](std::ostream& out) { out << sRemasteredKeysPath; }, true, "/keys/prod.keys", "/k/p.keys"},
     {"remastered_skip", [](const std::string& value) { sRemasteredSkip = value; },
      [](std::ostream& out) { out << sRemasteredSkip; }, true, "geometry,movies", "hud"},
+    {"remastered_hide", [](const std::string& value) { sRemasteredHide = value; },
+     [](std::ostream& out) { out << sRemasteredHide; }, true, "geometry,lighting", "hud"},
     {"remastered_performance",
      [](const std::string& value) { GXPortSetPerformance(ParseBool(value) ? GX_PORT_PERF_ALL : 0); },
      [](std::ostream& out) { out << (GXPortGetPerformance() != 0 ? 1 : 0); }, true, "1", "0"},

@@ -29,23 +29,34 @@ void PortVfxSetLaunchDir(CElementGen::CParticle& particle);
 float PortVfxExposureGain(const CGenDescription& desc, bool model = false);
 // Explicit inverse-exposed transparent models snapshot the matching forward frame exposure.
 std::optional<float> PortVfxModelExposureOverride(const CGenDescription& desc);
+// The frame's exposure (sFrame.exposure, 1 in pause lighting) while rooms are exposed, for a draw
+// whose CPU colour carries Remastered's inverse exposure; nullopt otherwise.
+std::optional<float> PortVfxFrameExposureOverride();
+// An explicit-policy sprite's, lit or unlit: Remastered writes particles as pre-exposure radiance that
+// the tonemap multiplies by the frame exposure, which the HDR tail applies only through this. IEXP's
+// CPU inverse (blended or opaque) comes before it on unlit sprites; a bare sprite nets E. Inherited,
+// the GX tone's w is the last CCubeModel's correction (1 sorted, GlowScale opaque), not an exposure.
+// Lit sprites are bare: 20e149b2's lit VS passes COLR through without the ITEN x inverse scalar.
+std::optional<float> PortVfxSpriteExposureOverride(const CGenDescription& desc);
 
 // Model particles with a VMSH mesh: RenderModels adds each live particle's CPU-transformed
-// triangles (world space) and PortRenderMeshesVfx draws them all in one aurora draw with the
-// PART's VMAT. A PART with PMDV variants keeps the retail model path (VMSH holds one model).
+// vertices (world space) and triangles and PortRenderMeshesVfx draws them all in one indexed
+// aurora draw with the PART's VMAT. A PART with PMDV variants keeps the retail model path (VMSH
+// holds one model).
 struct CPortVfxMeshBatch {
   std::vector< aurora::gfx::vfx::Vertex > verts;
+  std::vector< uint32_t > indices; // into verts
+
   // Where the batch's clustered lighting looks: the Lit material (IceChargeCollisionLit) samples the
   // room's baked probe at the first particle's model origin, as the stand-in for Remastered's per-instance
   // BLPD record. The cluster grid and its light list need nothing per batch (they are per camera).
   float probePos[3] = {};
   bool probePosSet = false;
 
-  // True when adding `vfx`'s mesh would take the batch past one aurora draw (the size
-  // draw_triangles splits at); the caller draws and clears it first, so it stays bounded.
+  // True when adding `vfx`'s mesh would take the batch past one indexed aurora draw; the caller
+  // draws and clears it first, so it stays bounded.
   bool WouldOverflow(const CPortVfxData& vfx) const {
-    return !verts.empty() &&
-           verts.size() + size_t(vfx.meshTris) * 3 > size_t(aurora::gfx::vfx::MaxTrianglesPerDraw) * 3;
+    return !verts.empty() && verts.size() + vfx.meshVerts > aurora::gfx::vfx::MaxIndexedVertices;
   }
 
   // `model` is the particle's full model matrix; the particle's UV context must be set.

@@ -14,6 +14,7 @@
 
 class CStateManager;
 class CGuiModel;
+class CPlayerState;
 
 namespace PortDebug {
 
@@ -203,6 +204,9 @@ void SetHudWide(bool enabled);
 // below 16:9 the cinematic camera already renders the full shot, so it fills the
 // screen instead.
 bool CinemaBars();
+// Remastered's Phazon Suit aura (PortShell, the silhouette shell). On by default; off: the
+// Phazon Suit draws retail's distortion effect, as without the Remastered room environment.
+bool PhazonShell();
 // The scan visor's magnifier draws the world a second time through a camera zoomed by the
 // window's magnification (CMFGame::Draw), instead of stretching a copy of the screen. Off by
 // default and under Original experience.
@@ -514,6 +518,9 @@ void SetUnlockFusionSuit(bool enabled);
 // Puts the Fusion Suit on or off in game, as the Fusion Bonus menu's choice
 // would: the suit, arm and ball load again as after a suit pickup.
 void WearFusionSuit(CStateManager& mgr, bool wearing);
+// Lights or darkens the Artifact Temple totems to match the artifacts held, as
+// the artifact pickups' scripts would, for artifacts given by a cheat.
+void SyncTempleTotems(CStateManager& mgr, const CPlayerState& ps);
 bool UnlockGalleries();
 void SetUnlockGalleries(bool enabled);
 
@@ -522,6 +529,8 @@ void SetUnlockGalleries(bool enabled);
 // Motion/buttons are accepted only while SDL owns relative capture.
 bool MouseAim();
 void SetMouseAim(bool enabled);
+// Marks settings.cfg for saving; for code that changes settings through the setters that do not.
+void MarkSettingsDirty();
 // Twin-stick: the right stick aims the first-person camera directly (through the
 // same aim state as the mouse) and is consumed, so it no longer drives the
 // game's free-look. Works with or without mouse aim.
@@ -530,6 +539,11 @@ void SetMouseAim(bool enabled);
 bool TwinStick();
 // The stored pad Twin Stick setting, whatever the touch layout: what the pause option edits.
 bool PadTwinStick();
+// The stored pad settings, whatever the touch layout (ShiftBinding(2), SwapScanXray and
+// PadAltButton read as unset while touch is in use): what a saved controller preset keeps.
+int PadShiftBinding();
+bool PadSwapScanXray();
+int StoredPadAltButton(int bit);
 // Android: touch was the last input and the F1 menu is closed. False on desktop.
 bool TouchActive();
 // True on Android when the modern (non-classic) touch layout is the active device: drag aims like a mouse.
@@ -607,9 +621,15 @@ bool OriginalExperience();
 void SetOriginalExperience(bool enabled);
 std::string ModsDisabled();
 void SetModsDisabled(const std::string& list);
+// The parts of the Remastered import the mods load without (remastered_hide, comma separated,
+// PortMods::kImportParts); MP_REMASTERED_HIDE overrides the saved list for this run.
+std::string RemasteredHidden();
+void SetRemasteredHidden(const std::string& list);
 // The Remastered import on or off (mods_disabled, saved as on the Mods page), then the mods
 // reload; a note at the top of the screen says which.
 void ToggleRemastered();
+// The user's texture pack on or off (texture_pack, saved now); a note says which.
+void ToggleTexturePack();
 // A note at the top of the screen for a few seconds. Thread-safe.
 void ShowNote(const std::string& text);
 // Starts a Remastered import (port_remastered_import.h) with the mods unloaded
@@ -643,6 +663,16 @@ bool CheatGrantEverything();
 // Cheat: the Phazon Beam takes the Power Beam's place, anywhere (F1 > Debug > Cheats).
 bool PhazonBeamCheat();
 void SetPhazonBeamCheat(bool enabled);
+// Cheat: firing does not use up missiles or power bombs, even at zero, and the HUD shows
+// infinity (F1 > Debug > Cheats, MP_INFINITE_AMMO, console `infammo`). One bit per counter;
+// the real counts are kept and pickups still add to them. Not saved.
+enum : unsigned { kInfAmmoMissile = 1, kInfAmmoPowerBomb = 2, kInfAmmoAll = 3 };
+// The bits as set, whether or not they apply.
+unsigned InfiniteAmmoSet();
+// Whether every counter in `kinds` is infinite now: never in the Original experience or with
+// Archipelago connected, like every cheat.
+bool InfiniteAmmo(unsigned kinds);
+void SetInfiniteAmmo(unsigned kinds, bool enabled);
 // Write the log to <user folder>/metroid_prime_port.log (port_log_file.h). MP_LOG_FILE=1
 // turns it on for one run without changing the setting.
 bool LogFile();
@@ -658,6 +688,10 @@ void SetFastMorph(bool enabled);
 // apply only unmorphed, in gameplay (port_hold_toggle.h).
 bool LockOnToggle();
 void SetLockOnToggle(bool enabled);
+// Aim Lock-On: lock onto the target nearest the crosshair instead of retail's
+// pick, which prefers a nearer target (CPlayer::FindBestOrbitableObject).
+bool AimLockOn();
+void SetAimLockOn(bool enabled);
 bool StickyCharge();
 void SetStickyCharge(bool enabled);
 // Remastered charge: holding fire shoots a few quick shots after the press shot
@@ -728,6 +762,9 @@ bool MouseGameplayActive();
 void SetMouseGameplayActive(bool active);
 bool MouseInvertX();
 bool MouseInvertY();
+// Map rotate direction flips (Controls > Options > Map).
+bool MapInvertX();
+bool MapInvertY();
 bool MouseButtons();
 bool MouseCrosshair();
 // The free-aim crosshair under direct aim: the setting, or always with pointer aim.
@@ -852,10 +889,21 @@ bool BeamRequested(int beam);
 // save-state hotkeys (1 save, 2 load; F5/F9 send the same).
 void RequestSpringBall();
 bool SpringBallRequested();
+// Issue #236: the Dodge action, a sideways dash without a lock-on target. The
+// request lasts a short window; CPlayer takes it once (false under Original
+// experience).
+void RequestDodge();
+bool TakeDodgeRequest();
 void RequestSaveStateHotkey(int which);
 bool TouchMapTap();
 void SetTouchMapTap(bool on);
+// Game thread, once per HUD draw: BeginMinimapFrame clears the frame's rect,
+// SetMinimapRect sets it, EndMinimapFrame publishes it. Readers (the overlay's UI
+// thread) only see whole frames; a read between the clear and the set hid the
+// map button while looking around.
+void BeginMinimapFrame();
 void SetMinimapRect(bool valid, bool drawn, float x0, float y0, float x1, float y1);
+void EndMinimapFrame();
 bool MinimapRect(float* out4, bool* drawn = nullptr);
 void RequestMapTap();
 // Pad poll hook: true for the one poll where a requested tap reads Z held.

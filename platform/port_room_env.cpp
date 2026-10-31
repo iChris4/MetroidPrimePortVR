@@ -88,6 +88,8 @@ uint8_t sExposureSwap = 1;
 uint64_t sItems = 0;
 std::vector<WorldVolume> sWorldVolumes;
 WorldVolumeState sWorldVolumeState;
+std::vector<EnvVarLive> sEnvVars;
+std::vector<EnvOp> sWorldEnvOps;
 float sCameraPoint[3] = {};
 // LUTs handed to Aurora already; they are kept there for the run.
 std::unordered_set<uint32_t> sGradeLuts;
@@ -829,6 +831,13 @@ float SkyGain() {
   return std::isfinite(gain) && gain > 0.f ? gain : 0.f;
 }
 
+// The gain both GlowGain and UnlitGain apply: the frame's exposure, or the sky's where one is set.
+float ExposedGain(bool frameExposed, float fallback) {
+  const float sky = SkyGain();
+  const float gain = frameExposed || sky <= 0.f ? sFrame.exposure : sky;
+  return std::isfinite(gain) && gain > 0.f ? gain : fallback;
+}
+
 float GlowGain(bool frameExposed) {
   if (PortPauseLighting::active) return 1.f;
   // Without tone data Remastered draws through STonemapParams::BuildLinear(3.0) (0x211ab0):
@@ -840,8 +849,7 @@ float GlowGain(bool frameExposed) {
   }
   // The shader multiplies the glow by GlowScale, 2^(static EV - EV), where the static
   // exposure is in use; this is the rest of Remastered's 2^(3 - EV).
-  const float gain = frameExposed || SkyGain() <= 0.f ? sFrame.exposure : SkyGain();
-  return std::isfinite(gain) && gain > 0.f ? gain : kFallback;
+  return ExposedGain(frameExposed, kFallback);
 }
 
 float ParticleLightGain(bool inverseExposed) {
@@ -862,9 +870,7 @@ float UnlitGain(bool frameExposed) {
   if (!sFrame.hasTone || !Enabled()) {
     return 1.f;
   }
-  const float sky = SkyGain();
-  const float gain = frameExposed || sky <= 0.f ? sFrame.exposure : sky;
-  return std::isfinite(gain) && gain > 0.f ? gain : 1.f;
+  return ExposedGain(frameExposed, 1.f);
 }
 
 void SetStaticExposure(bool on) { sStatic = on ? 1 : 0; }
@@ -920,6 +926,11 @@ bool Bloom(float& threshold, float tints[5][3]) {
   }
   threshold = view->second.file.bloomThreshold;
   return true;
+}
+
+const std::vector<IceDarkener>* IceDarkeners(uint32_t mrea) {
+  const auto it = sAreas.find(mrea);
+  return it == sAreas.end() ? nullptr : &it->second.file.iceDarkeners;
 }
 
 float EnvFxIntensity() {
@@ -1804,6 +1815,35 @@ std::string FogInfo() {
                   v.half[2], (unsigned long long)entered);
     out += line;
   }
+  for (const EnvVarLive& v : sEnvVars) {
+    std::snprintf(line, sizeof(line), "env var %s = %d (default %d, flags %u, min %d, max %d)\n", v.var.name.c_str(),
+                  int(v.value), int(v.var.value), unsigned(v.var.flags), int(v.var.min), int(v.var.max));
+    out += line;
+  }
+  if (!sWorldEnvOps.empty()) {
+    std::snprintf(line, sizeof(line), "env world ops: %zu\n", sWorldEnvOps.size());
+    out += line;
+  }
+  if (const auto view = sAreas.find(sViewArea); view != sAreas.end()) {
+    const Area& area = view->second;
+    if (!area.file.envOps.empty() || !area.file.envBranches.empty()) {
+      std::snprintf(line, sizeof(line), "%08X env ops %zu, branches %zu\n", sViewArea, area.file.envOps.size(),
+                    area.file.envBranches.size());
+      out += line;
+    }
+    for (size_t i = 0; i < area.file.roomVolumes.size(); ++i) {
+      const RoomVolume& v = area.file.roomVolumes[i];
+      const bool inside = i < area.roomInside.size() && area.roomInside[i] != 0;
+      const bool active = i < area.roomActive.size() ? area.roomActive[i] != 0 : v.on;
+      std::snprintf(line, sizeof(line),
+                    "%08X room volume %zu: %s%s%s detect %s%s centre %.1f %.1f %.1f half %.1f %.1f %.1f\n",
+                    sViewArea, i, active ? "on " : "off ", inside ? "inside " : "outside",
+                    v.links.empty() ? "" : " (script-switched)", (v.detect & kRoomVolumePlayer) != 0 ? "player" : "",
+                    (v.detect & kRoomVolumeCamera) != 0 ? "+camera" : "", v.centre[0], v.centre[1], v.centre[2],
+                    v.half[0], v.half[1], v.half[2]);
+      out += line;
+    }
+  }
   return out;
 }
 
@@ -1869,14 +1909,18 @@ void SetExposureState(bool unmorphed, bool thermal, bool cinematic) {
   }
 }
 
-void SetCameraPoint(const float pos[3]) {
+void SetCameraPoint(const float pos[3], const float playerMin[3], const float playerMax[3], bool hasPlayer) {
   if (!std::isfinite(pos[0]) || !std::isfinite(pos[1]) || !std::isfinite(pos[2])) {
     return;
+  }
+  bool playerOk = hasPlayer;
+  for (int i = 0; i < 3 && playerOk; ++i) {
+    playerOk = std::isfinite(playerMin[i]) && std::isfinite(playerMax[i]);
   }
   std::memcpy(sCameraPoint, pos, sizeof(sCameraPoint));
   static std::vector<WorldVolumeState::Event> events;
   events.clear();
-  sWorldVolumeState.Update(sWorldVolumes, pos, events);
+  sWorldVolumeState.Update(sWorldVolumes, pos, playerMin, playerMax, playerOk, events);
   for (const WorldVolumeState::Event& e : events) {
     PortLog::Write("room env: camera %s world volume %u at %.1f %.1f %.1f\n", e.state == 0 ? "entered" : "left",
                    e.volume, pos[0], pos[1], pos[2]);
@@ -1886,6 +1930,52 @@ void SetCameraPoint(const float pos[3]) {
         DriveGrades(mrea, area, kSenderWorldVolume + e.volume, e.state);
       }
     }
+    // Live only: a replay (ReplayWorldVolumes) changes no variable again.
+    RunEnvOps(sWorldEnvOps, kSenderWorldVolume + e.volume, e.state);
+  }
+}
+
+void SetAreaPoints(uint32_t mrea, const float camera[3], const float playerMin[3], const float playerMax[3],
+                   bool hasPlayer) {
+  const auto found = sAreas.find(mrea);
+  if (found == sAreas.end()) {
+    return;
+  }
+  Area& area = found->second;
+  if (area.pending.valid() || !area.hasFile || area.file.roomVolumes.empty()) {
+    return;
+  }
+  bool cameraOk = true, playerOk = hasPlayer;
+  for (int i = 0; i < 3; ++i) {
+    cameraOk = cameraOk && std::isfinite(camera[i]);
+    playerOk = playerOk && std::isfinite(playerMin[i]) && std::isfinite(playerMax[i]);
+  }
+  if (area.roomInside.size() != area.file.roomVolumes.size()) {
+    area.roomInside.assign(area.file.roomVolumes.size(), 0);
+  }
+  if (area.roomActive.size() != area.file.roomVolumes.size()) {
+    area.roomActive.assign(area.file.roomVolumes.size(), 0);
+    for (size_t k = 0; k < area.roomActive.size(); ++k) {
+      area.roomActive[k] = area.file.roomVolumes[k].on ? 1 : 0;
+    }
+  }
+  for (size_t k = 0; k < area.file.roomVolumes.size(); ++k) {
+    // A trigger that is off tests nothing, and keeps no side of its box (DriveRoomVolumes).
+    if (area.roomActive[k] == 0) {
+      continue;
+    }
+    const uint8_t inside = InsideRoomVolume(area.file.roomVolumes[k], cameraOk ? camera : nullptr, playerMin,
+                                            playerMax, playerOk)
+                               ? 1
+                               : 0;
+    if (inside == area.roomInside[k]) {
+      continue;
+    }
+    area.roomInside[k] = inside;
+    PortLog::Write("room env: %08X room volume %zu %s at camera %.1f %.1f %.1f\n", mrea, k,
+                   inside != 0 ? "entered" : "left", camera[0], camera[1], camera[2]);
+    DriveGrades(mrea, area, kSenderRoomVolume + uint32_t(k), inside != 0 ? 0 : 1);
+    RunEnvOps(area.file.envOps, kSenderRoomVolume + uint32_t(k), inside != 0 ? 0 : 1);
   }
 }
 
@@ -1893,6 +1983,7 @@ void ResetGrades() {
   sPlayerFluid = false;
   sCameraWater = false;
   sWorldVolumeState.Clear();
+  sEnvVars.clear();
   sGradeIndex = -1;
   sBacklight = {};
   sFog = {};
@@ -1900,6 +1991,7 @@ void ResetGrades() {
     // A load still waiting for its file starts its grades when it finishes.
     if (!area.pending.valid()) {
       StartGrades(mrea, area, false, false);
+      LoadEnvVars(mrea, area);
     } else {
       area.pendingFluid = area.pendingWater = false;
       area.queued.clear();
@@ -2225,6 +2317,8 @@ void Reset() {
   sFog = {};
   sWorldVolumes.clear();
   sWorldVolumeState.Clear();
+  sEnvVars.clear();
+  sWorldEnvOps.clear();
 }
 
 void SetLoadedAreas(const uint32_t* mreas, size_t count) {

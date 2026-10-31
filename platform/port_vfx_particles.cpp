@@ -75,8 +75,9 @@ Tm EvalTrss(CRealElement* const* r, int frame) {
   t.c = EvalReal(r[2], frame, 1.f);
   t.d = EvalReal(r[3], frame, 1.f);
   const float e = PortVfxTrssAngle(EvalReal(r[4], frame, 0.f));
-  t.cosE = std::cos(e);
-  t.sinE = std::sin(e);
+  // cos(0) = 1 and sin(0) = 0 exactly.
+  t.cosE = e == 0.f ? 1.f : std::cos(e);
+  t.sinE = e == 0.f ? 0.f : std::sin(e);
   t.f = EvalReal(r[5], frame, 0.f);
   return t;
 }
@@ -352,7 +353,24 @@ float PortVfxExposureGain(const CGenDescription& desc, bool model) {
 
 std::optional<float> PortVfxModelExposureOverride(const CGenDescription& desc) {
   if (!desc.xPortExposurePolicy || !desc.xPortInverseExposure || !desc.xPortVfx ||
-      desc.xPortVfx->mat.blend == uint32_t(aurora::gfx::vfx::Blend::Opaque) || !PortRoomEnv::Enabled()) {
+      desc.xPortVfx->mat.blend == uint32_t(aurora::gfx::vfx::Blend::Opaque)) {
+    return std::nullopt;
+  }
+  return PortVfxFrameExposureOverride();
+}
+
+// Lit sprites too: 20e149b2's lit perms (084_0/088_0) apply no exposure, and their VS (084_1/088_1) passes
+// COLR through without the writers' ITEN x inverse-exposure scalar (FUN_002b4634/002b44c0, component 0xe),
+// so the sprite is bare and nets E from the tonemap (kb topic/lit-sprite-exposure.md).
+std::optional<float> PortVfxSpriteExposureOverride(const CGenDescription& desc) {
+  if (!desc.xPortExposurePolicy || !desc.xPortVfx) {
+    return std::nullopt;
+  }
+  return PortVfxFrameExposureOverride();
+}
+
+std::optional<float> PortVfxFrameExposureOverride() {
+  if (!PortRoomEnv::Enabled()) {
     return std::nullopt;
   }
   float tone[3][4];
@@ -440,6 +458,7 @@ void CElementGen::PortRenderPlanarVfx(const CParticle& particle, int frame) {
   if (!PortVfxBuildDesc(vfx, xPortVsmt, xPortVsmtMask, desc)) return;
   PortVfxEvalParams(vfx, x74_curFrame, desc.params);
   if (x28_loadedGenDesc->xPortExposurePolicy) desc.alreadyExposed = false;
+  desc.exposureOverride = PortVfxSpriteExposureOverride(*x28_loadedGenDesc);
   const bool lit = (desc.features & aurora::gfx::vfx::ParticleLit) != 0;
   const CTransform4f& model = CGraphics::GetModelMatrix();
   if (lit) {
@@ -522,6 +541,7 @@ void CElementGen::PortRenderParticlesVfx() {
     desc.alreadyExposed = false;
   }
   const float inverseExposure = PortVfxExposureGain(*x28_loadedGenDesc);
+  desc.exposureOverride = PortVfxSpriteExposureOverride(*x28_loadedGenDesc);
   // VisorRunOff is a PMDL model particle (the mesh path below), but a sprite generator sharing its
   // material still reads CCH0..4: evaluate them rather than draw from zeroed uniforms. VisorRain is a
   // sprite whose CCH0 is the drop mask's scale (SMTR-animated), so it needs the same rows, as does
@@ -577,7 +597,8 @@ void CElementGen::PortRenderParticlesVfx() {
   const float* pivot = kPivot[std::min< u32 >(mat.spriteCenter, 8)];
 
   // Retail's SORT: farthest first (view y descending).
-  std::vector< CParticleListItem > order;
+  static thread_local std::vector< CParticleListItem > order;
+  order.clear();
   order.reserve(particleCount);
   for (int i = 0; i < particleCount; ++i) {
     const CParticle& p = x30_particles[i];
@@ -596,7 +617,8 @@ void CElementGen::PortRenderParticlesVfx() {
   CParticleGlobals::SetEmitterTime(x74_curFrame);
   CParticle* savedParticle = CParticleGlobals::mCurrentParticle;
 
-  std::vector< aurora::gfx::vfx::Vertex > verts;
+  static thread_local std::vector< aurora::gfx::vfx::Vertex > verts;
+  verts.clear();
   verts.reserve(static_cast< size_t >(std::min< uint >(particleCount, kMaxQuadsPerDraw)) * 4);
   auto flush = [&]() {
     if (!verts.empty()) {
@@ -716,6 +738,23 @@ void CElementGen::PortRenderParticlesVfx() {
     const u8 shapeId = x28_loadedGenDesc->xPortSpriteShape;
     const PortSpriteShape* const shape = shapeId >= 3 && shapeId <= 6 ? &kShapes[shapeId - 3] : nullptr;
     const int polyQuads = shape != nullptr ? shape->triangles : 1;
+    // Everything but pos and uv (and the VisorSplat world position) is the particle's.
+    aurora::gfx::vfx::Vertex tmpl{};
+    for (int i = 0; i < 4; ++i) {
+      tmpl.color[i] = color[i];
+      for (int j = 0; j < 4; ++j) {
+        tmpl.extra[i][j] = p.xPortVpmt[i][j];
+      }
+    }
+    const bool visorSplat = (desc.features & aurora::gfx::vfx::VisorSplat) != 0;
+    if (visorSplat) {
+      for (int j = 0; j < 4; ++j) {
+        tmpl.extra[3][j] = splatInv[j];
+      }
+    }
+    tmpl.vec[0] = vec[0];
+    tmpl.vec[1] = vec[1];
+    tmpl.vec[2] = vec[2];
     for (int pq = 0; pq < polyQuads * 4; ++pq) {
       float qx, qy;
       if (shape != nullptr) {
@@ -735,7 +774,7 @@ void CElementGen::PortRenderParticlesVfx() {
       const float w = ox * sinT + oy * cosT;
       const CVector3f pos = center + axisU * u + axisW * w;
 
-      aurora::gfx::vfx::Vertex v{};
+      aurora::gfx::vfx::Vertex v = tmpl;
       v.pos[0] = pos.GetX();
       v.pos[1] = pos.GetY();
       v.pos[2] = pos.GetZ();
@@ -747,26 +786,14 @@ void CElementGen::PortRenderParticlesVfx() {
         v.uv[s][1] = t.b + 0.5f - t.sinE * dx + t.cosE * dy;
         v.uv[s][2] = t.f;
       }
-      for (int i = 0; i < 4; ++i) {
-        v.color[i] = color[i];
-        for (int j = 0; j < 4; ++j) {
-          v.extra[i][j] = p.xPortVpmt[i][j];
-        }
-      }
-      if ((desc.features & aurora::gfx::vfx::VisorSplat) != 0) {
+      if (visorSplat) {
         // The shader reads PMTR rows 0 and 1 only; rows 2 and 3 carry the world position and the axes.
         const CVector3f world = systemModelMatrix * pos;
         v.extra[2][0] = world.GetX();
         v.extra[2][1] = world.GetY();
         v.extra[2][2] = world.GetZ();
         v.extra[2][3] = 0.f;
-        for (int j = 0; j < 4; ++j) {
-          v.extra[3][j] = splatInv[j];
-        }
       }
-      v.vec[0] = vec[0];
-      v.vec[1] = vec[1];
-      v.vec[2] = vec[2];
       verts.push_back(v);
     }
     if (verts.size() >= static_cast< size_t >(kMaxQuadsPerDraw - 8) * 4) {
@@ -1083,9 +1110,11 @@ void CPortVfxMeshBatch::Add(const CPortVfxData& vfx, const CTransform4f& model,
     v.vec[1] = nv3.GetZ();
     v.vec[2] = nv3.GetY();
   }
+  const uint32_t base = static_cast< uint32_t >(verts.size());
+  verts.insert(verts.end(), world.begin(), world.end());
   const size_t count = size_t(vfx.meshTris) * 3;
   for (size_t k = 0; k < count; ++k) {
-    verts.push_back(world[wide ? vfx.meshIdx32[k] : vfx.meshIdx16[k]]);
+    indices.push_back(base + (wide ? vfx.meshIdx32[k] : vfx.meshIdx16[k]));
   }
 }
 
@@ -1182,6 +1211,7 @@ void CElementGen::PortRenderMeshesVfx(CPortVfxMeshBatch& batch) {
   aurora::gfx::vfx::DrawDesc desc;
   if (!PortVfxBuildDesc(*x28_loadedGenDesc->xPortVfx, xPortVsmt, xPortVsmtMask, desc)) {
     batch.verts.clear();
+    batch.indices.clear();
     return;
   }
   const CPortVfxData& vfx = *x28_loadedGenDesc->xPortVfx;
@@ -1220,11 +1250,23 @@ void CElementGen::PortRenderMeshesVfx(CPortVfxMeshBatch& batch) {
   const aurora::gfx::vfx::DepthSelection depth =
       aurora::gfx::vfx::select_model_depth(desc.blend, x26c_28_zTest, x26c_26_AAPH, x26c_27_ZBUF);
   CGraphics::SetDepthWriteMode(depth.compare, kE_LEqual, depth.write);
-  PortFx::gTriangles += static_cast< uint32_t >(batch.verts.size() / 3);
+  PortFx::gTriangles += static_cast< uint32_t >(batch.indices.size() / 3);
   ++PortFx::gDraws;
   // Model-only: Aurora copies this submission's value into its queued uniform payload.
   desc.exposureOverride = PortVfxModelExposureOverride(*x28_loadedGenDesc);
-  aurora::gfx::vfx::draw_triangles(desc, batch.verts.data(), static_cast< uint32_t >(batch.verts.size() / 3));
+  if (batch.verts.size() <= aurora::gfx::vfx::MaxIndexedVertices) {
+    aurora::gfx::vfx::draw_indexed_triangles(desc, batch.verts.data(), static_cast< uint32_t >(batch.verts.size()),
+                                             batch.indices.data(), static_cast< uint32_t >(batch.indices.size()));
+  } else {
+    // One particle whose mesh alone is past an indexed draw: its triangles, unshared, in split draws.
+    static std::vector< aurora::gfx::vfx::Vertex > tris;
+    tris.clear();
+    for (const uint32_t i : batch.indices) {
+      tris.push_back(batch.verts[i]);
+    }
+    aurora::gfx::vfx::draw_triangles(desc, tris.data(), static_cast< uint32_t >(tris.size() / 3));
+  }
   batch.verts.clear();
+  batch.indices.clear();
   batch.probePosSet = false;
 }

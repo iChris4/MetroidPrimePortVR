@@ -5,6 +5,7 @@
 
 #include "port_env.h"
 #include "port_debug.h"
+#include "port_apclient.h"
 #include "port_graphics_backend.h"
 #include "port_gyro_motion.h"
 #include "port_dynamic_res.h"
@@ -459,6 +460,11 @@ void SetHudWide(bool enabled) { StoreSetting(sHudWide, enabled); }
 bool CinemaBars() {
   EnsureInitialized();
   return sCinemaBars || sOriginalExperience;
+}
+
+bool PhazonShell() {
+  EnsureInitialized();
+  return sPhazonShell;
 }
 
 bool SharpScanWindow() {
@@ -1037,6 +1043,15 @@ bool TwinStick() {
 
 bool PadTwinStick() { return Loaded(sInput.twinStick); }
 
+int PadShiftBinding() { return Loaded(sInput.shiftBindings[2]); }
+
+bool PadSwapScanXray() { return Loaded(sInput.swapScanXray); }
+
+int StoredPadAltButton(int bit) {
+  EnsureInitialized();
+  return bit >= 0 && bit < kPadAltCount ? sInput.padAltButtons[bit] : -1;
+}
+
 void SetTwinStick(bool enabled) { StoreSetting(sInput.twinStick, enabled); }
 
 float TwinStickRightY() { return sTwinStickRightY; }
@@ -1189,6 +1204,11 @@ void SetOriginalExperience(bool enabled) {
 
 std::string ModsDisabled() { return Loaded(sModsDisabled); }
 void SetModsDisabled(const std::string& list) { StoreSetting(sModsDisabled, list); }
+std::string RemasteredHidden() {
+  const char* env = std::getenv("MP_REMASTERED_HIDE");
+  return env != nullptr ? std::string(env) : Loaded(sRemasteredHide);
+}
+void SetRemasteredHidden(const std::string& list) { StoreSetting(sRemasteredHide, list); }
 
 bool Invulnerable() {
   EnsureInitialized();
@@ -1204,6 +1224,20 @@ void SetInvulnerable(bool enabled) {
 
 bool PhazonBeamCheat() { return Loaded(sPhazonBeamCheat); }
 void SetPhazonBeamCheat(bool enabled) { StoreSetting(sPhazonBeamCheat, enabled); }
+
+unsigned InfiniteAmmoSet() {
+  EnsureInitialized();
+  return sInfiniteAmmo;
+}
+
+bool InfiniteAmmo(unsigned kinds) {
+  return kinds != 0 && (InfiniteAmmoSet() & kinds) == kinds && !OriginalExperience() && !PortAp::Connected();
+}
+
+void SetInfiniteAmmo(unsigned kinds, bool enabled) {
+  EnsureInitialized();
+  sInfiniteAmmo = enabled ? (sInfiniteAmmo | kinds) : (sInfiniteAmmo & ~kinds);
+}
 
 bool LogFile() { return Loaded(sLogFile); }
 void SetLogFile(bool enabled) { StoreSetting(sLogFile, enabled); }
@@ -1221,6 +1255,13 @@ bool LockOnToggle() {
 }
 
 void SetLockOnToggle(bool enabled) { StoreSetting(sInput.lockOnToggle, enabled); }
+
+bool AimLockOn() {
+  EnsureInitialized();
+  return sInput.aimLockOn && !sOriginalExperience;
+}
+
+void SetAimLockOn(bool enabled) { StoreSetting(sInput.aimLockOn, enabled); }
 
 bool StickyCharge() {
   EnsureInitialized();

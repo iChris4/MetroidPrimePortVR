@@ -332,7 +332,7 @@ public:
   static void LoadScreenProjectionTexMtx(GXTexMtx id);
   // Advances the animation clock by simulation ticks (not rendered frames), so
   // animations stay real-time when the frame rate is uncapped.
-  static void TickRenderTimings(uint ticks = 1);
+  static void TickRenderTimings(uint ticks = 1, float tickSeconds = 1.f / 60.f);
   // Port: Remastered's scene simulation clock (CScene::GetModularSimulationTime). It advances with
   // the game's updates only (it stands still on the pause screen) and wraps at 15120 s.
   static void TickSimTime(float dt);
@@ -424,6 +424,9 @@ public:
   static void SetBlendMode(ERglBlendMode mode, ERglBlendFactor src, ERglBlendFactor dst,
                            ERglLogicOp op);
   static void SetCullMode(ERglCullMode cullMode);
+#ifdef TARGET_PC
+  static ERglCullMode GetCullMode() { return mCullMode; }
+#endif
   static void SetTevStates(uchar);
 
   static void SetUseVideoFilter(const bool b);

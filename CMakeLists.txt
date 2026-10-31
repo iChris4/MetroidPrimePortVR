@@ -305,12 +305,15 @@ set(MP_PORT_SOURCES
     platform/sdk_stubs.cpp
     platform/port_embedded.cpp
     platform/port_textures.cpp
+    platform/port_zip.cpp
     platform/port_prompts.cpp
     platform/port_controls.cpp
     platform/input/port_input_devices.cpp
     platform/input/port_input_engine.cpp
     platform/input/port_input_bindings.cpp
     platform/input/port_input_remap_ui.cpp
+    platform/input/port_input_user_presets.cpp
+    platform/input/port_input_user_presets_store.cpp
     platform/input/port_custom_actions.cpp
     platform/port_randomizer.cpp
     platform/port_ap_metroidprime.cpp
@@ -405,6 +408,8 @@ set(MP_PORT_SOURCES
     platform/port_shell.cpp
     platform/port_shell_assets.cpp
     platform/port_shell_file.cpp
+    platform/port_icy_assets.cpp
+    platform/port_icy_file.cpp
     platform/port_room_geo.cpp
     platform/port_room_geo_file.cpp
     platform/port_room_liquid.cpp
@@ -714,12 +719,15 @@ if(MP_EMBED_RESOURCES)
     target_sources(metroid_prime_port PRIVATE "${MP_EMBED_SOURCE}")
     target_compile_definitions(metroid_prime_port PRIVATE MP_EMBED_RESOURCES)
 else()
-    # Keep the HD texture replacements next to the executable, which is where the
-    # port looks for them by default, so a built binary picks them up without a
-    # manual copy. Regenerate them with tools/make_prompt_glyphs.py. The generated
-    # sets are cleared first: copy_directory only adds, and an icon the generator
-    # no longer writes would otherwise keep replacing a texture it no longer claims
-    # (two retired legend hashes kept drawing L/R over the map's [M] and [S] icons).
+    # Keep the prompt icons next to the executable, which is where the port looks
+    # for them by default, so a built binary picks them up without a manual copy.
+    # Regenerate them with tools/make_prompt_glyphs.py. The folders are cleared
+    # first: copy_directory only adds, and a file an older build or generator left
+    # would otherwise keep replacing a texture it no longer claims (two retired
+    # legend hashes kept drawing L/R over the map's [M] and [S] icons). The old
+    # per-device sets (keyboard, playstation, switch, xbox) are in the list for the
+    # same reason: a stale copy beside the executable would still register by
+    # filename and replace the prompts the port now serves itself.
     set(PORT_TEXTURE_SETS bindings keyboard playstation switch xbox)
     list(TRANSFORM PORT_TEXTURE_SETS PREPEND "$<TARGET_FILE_DIR:metroid_prime_port>/textures/")
     add_custom_command(TARGET metroid_prime_port POST_BUILD
@@ -943,7 +951,7 @@ if(MP_BUILD_TESTS)
         platform/port_remastered_anuv.cpp
         platform/port_remastered_image.cpp
         platform/port_remastered_pak.cpp)
-    target_include_directories(mp_test_remastered_convert PUBLIC platform/include)
+    target_include_directories(mp_test_remastered_convert PUBLIC platform/include extern/aurora/include)
     target_link_libraries(mp_test_remastered_convert PUBLIC astcenc)
     mp_port_test(port_buffer_tests
         SOURCES tests/port_buffers.cpp tests/port_forward_owner.cpp
@@ -1026,7 +1034,13 @@ if(MP_BUILD_TESTS)
         SOURCES tests/port_disc_verify.cpp platform/port_disc_verify_core.cpp
         INCLUDES platform/include platform
         LIBRARIES ZLIB::ZLIB)
+    mp_port_test(port_zip_tests
+        SOURCES tests/port_zip.cpp platform/port_zip.cpp
+        INCLUDES platform/include
+        LIBRARIES ZLIB::ZLIB)
     mp_port_test(port_mouse_tests SOURCES tests/port_mouse.cpp INCLUDES platform/include)
+    # Header-only (port_input_gate.h): pad 0's neutral-while-F1-is-open gate.
+    mp_port_test(port_input_gate_tests SOURCES tests/port_input_gate.cpp INCLUDES platform/include)
     # Drives a real SDL virtual gamepad through the touch overlay's own code.
     # That code was Android-only and untested, so a wrong button mapping could
     # not fail anywhere except on a phone.
@@ -1365,6 +1379,9 @@ if(MP_BUILD_TESTS)
     mp_port_test(port_shell_file_tests
         SOURCES tests/port_shell_file.cpp platform/port_shell_file.cpp
         INCLUDES platform/include)
+    mp_port_test(port_icy_file_tests
+        SOURCES tests/port_icy_file.cpp platform/port_icy_file.cpp
+        INCLUDES platform/include)
     mp_port_test(port_hud_bars_tests
         SOURCES tests/port_hud_bars.cpp platform/port_hud_bars_file.cpp
         INCLUDES platform/include)
@@ -1554,6 +1571,11 @@ if(MP_BUILD_TESTS)
         INCLUDES platform/include)
     mp_port_test(port_input_bindings_tests
         SOURCES tests/port_input_bindings.cpp
+            platform/input/port_input_bindings.cpp platform/input/port_input_engine.cpp
+        INCLUDES platform/include)
+    mp_port_test(port_input_user_presets_tests
+        SOURCES tests/port_input_user_presets.cpp
+            platform/input/port_input_user_presets.cpp
             platform/input/port_input_bindings.cpp platform/input/port_input_engine.cpp
         INCLUDES platform/include)
     mp_port_test(port_tick_pair_tests SOURCES tests/port_tick_pair.cpp INCLUDES platform/include)

@@ -10,6 +10,7 @@
 #include <cstring>
 #include <ctime>
 #include <filesystem>
+#include <string>
 #include <system_error>
 
 #if defined(_WIN32)
@@ -17,7 +18,6 @@
 #include <condition_variable>
 #include <io.h>
 #include <mutex>
-#include <string>
 #include <thread>
 
 #ifndef WIN32_LEAN_AND_MEAN
@@ -31,6 +31,7 @@
 #if !defined(_WIN32)
 #include <cerrno>
 #include <fcntl.h>
+#include <sys/file.h>
 #include <unistd.h>
 #endif
 #if defined(__ANDROID__)
@@ -53,6 +54,34 @@
 namespace PortLogFile {
 namespace {
 bool sActive = false;
+// Whether this process holds the log's instance lock (TakeInstanceLock).
+bool sInstanceLock = false;
+
+// Holds an advisory lock on "<log>.lock" for the life of the process; false when
+// another live instance already holds it (two instances on one user folder). A
+// lock that cannot be made at all counts as free, so a read-only folder keeps
+// the old behaviour.
+bool TakeInstanceLock(const std::filesystem::path& file) {
+  std::filesystem::path lock = file;
+  lock += ".lock";
+#if defined(_WIN32)
+  // Share mode 0: a second open fails with a sharing violation while the first
+  // is alive.
+  const HANDLE handle = CreateFileW(lock.c_str(), GENERIC_WRITE, 0, nullptr, OPEN_ALWAYS,
+                                    FILE_ATTRIBUTE_NORMAL, nullptr);
+  return handle != INVALID_HANDLE_VALUE || GetLastError() != ERROR_SHARING_VIOLATION;
+#else
+  const int fd = open(lock.c_str(), O_WRONLY | O_CREAT | O_CLOEXEC, 0644);
+  if (fd < 0) {
+    return true;
+  }
+  if (flock(fd, LOCK_EX | LOCK_NB) != 0 && errno == EWOULDBLOCK) {
+    close(fd);
+    return false;
+  }
+  return true; // fd stays open: the lock lasts until the process exits
+#endif
+}
 
 #if !defined(__ANDROID__)
 // What the file copy takes out of the log (port_log_redact.h). Android's paths
@@ -308,13 +337,18 @@ int OpenShared(const std::string& path, std::string& opened) {
   std::error_code ec;
   const std::filesystem::path file(path);
   std::filesystem::create_directories(file.parent_path(), ec);
-  if (std::filesystem::exists(file, ec)) {
-    std::filesystem::path old = file;
-    old.replace_extension(".old.log");
-    std::filesystem::rename(file, old, ec);
+  // Only the instance that owns the main log rotates this copy and truncates it;
+  // a second instance takes one of the numbered names below instead.
+  int fd = -1;
+  if (sInstanceLock) {
+    if (std::filesystem::exists(file, ec)) {
+      std::filesystem::path old = file;
+      old.replace_extension(".old.log");
+      std::filesystem::rename(file, old, ec);
+    }
+    fd = open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_APPEND | O_CLOEXEC, 0644);
+    opened = path;
   }
-  int fd = open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_APPEND | O_CLOEXEC, 0644);
-  opened = path;
   for (int n = 2; fd < 0 && n <= 5; ++n) {
     std::filesystem::path other = file;
     other.replace_filename(file.stem().string() + " (" + std::to_string(n) + ").log");
@@ -444,9 +478,8 @@ void AttachParentConsole() {
   SetStdHandle(STD_ERROR_HANDLE, reinterpret_cast< HANDLE >(_get_osfhandle(_fileno(stderr))));
 }
 
-int RunCopy(const char* pipe, const char* file, const char* terminal) {
-  const HANDLE in = ParseHandle(pipe);
-  const HANDLE out = ParseHandle(file);
+namespace {
+void CopyPipe(HANDLE in, HANDLE out, HANDLE terminal) {
   static PortLogRedact::Rules rules;
   rules = MakeRules();
   static RedactedLines lines;
@@ -454,7 +487,7 @@ int RunCopy(const char* pipe, const char* file, const char* terminal) {
   lines.sink = ToHandle;
   lines.context = out;
   static Terminal console;
-  console.handle = terminal != nullptr ? ParseHandle(terminal) : nullptr;
+  console.handle = terminal;
   std::thread consoleThread;
   if (console.handle != nullptr && console.handle != INVALID_HANDLE_VALUE) {
     consoleThread = std::thread([] { console.Run(); });
@@ -478,6 +511,15 @@ int RunCopy(const char* pipe, const char* file, const char* terminal) {
     console.ready.notify_one();
     consoleThread.join();
   }
+}
+} // namespace
+
+int RunCopy(const char* pipe, const char* file, const char* terminal, const char* ready) {
+  if (const HANDLE event = ParseHandle(ready); event != nullptr) {
+    SetEvent(event);
+    CloseHandle(event);
+  }
+  CopyPipe(ParseHandle(pipe), ParseHandle(file), ParseHandle(terminal));
   return 0;
 }
 #endif
@@ -534,16 +576,32 @@ bool Start() {
   if (sActive) {
     return true;
   }
-  const std::string path = Path();
+  std::string path = Path();
   if (path.empty()) {
     return false;
   }
   std::error_code ec;
   // UTF-8, as Path() is: a narrow path is the ANSI code page on Windows.
-  const std::filesystem::path file(std::u8string(path.begin(), path.end()));
+  std::filesystem::path file(std::u8string(path.begin(), path.end()));
   // On a first start the user folder may not exist yet, and that run is the one
   // most likely to need a log.
   std::filesystem::create_directories(file.parent_path(), ec);
+  sInstanceLock = TakeInstanceLock(file);
+  if (!sInstanceLock) {
+    // A second live instance on the same user folder must not rotate the first
+    // one's log away: it writes to a log named after its pid instead.
+    std::filesystem::path other = file;
+    other.replace_extension("." + std::to_string(
+#if defined(_WIN32)
+                                           GetCurrentProcessId()
+#else
+                                           getpid()
+#endif
+                                               ) + ".log");
+    file = other;
+    const std::u8string text = other.u8string();
+    path.assign(text.begin(), text.end());
+  }
   if (std::filesystem::exists(file, ec)) {
     std::filesystem::path old = file;
     old.replace_extension(".old.log");
@@ -586,29 +644,52 @@ bool Start() {
                        DUPLICATE_SAME_ACCESS)) {
     terminal = nullptr;
   }
+  // The copier signals this once it runs. It can fail to start where the game
+  // itself starts: Windows 7 with VxKex set not to extend child processes stops it
+  // at load (issue #135), and the log stayed at its first line.
+  const HANDLE ready = CreateEventW(&inherit, TRUE, FALSE, nullptr);
   wchar_t exe[4096];
   const DWORD exeSize = GetModuleFileNameW(nullptr, exe, 4096);
   std::wstring command = L"\"" + std::wstring(exe, exeSize) + L"\" --log-copy " +
                          std::to_wstring(reinterpret_cast< uintptr_t >(readEnd)) + L" " +
                          std::to_wstring(reinterpret_cast< uintptr_t >(out)) + L" " +
-                         std::to_wstring(reinterpret_cast< uintptr_t >(terminal));
+                         std::to_wstring(reinterpret_cast< uintptr_t >(terminal)) + L" " +
+                         std::to_wstring(reinterpret_cast< uintptr_t >(ready));
   STARTUPINFOW startup{};
   startup.cb = sizeof(startup);
   PROCESS_INFORMATION process{};
-  const bool launched = exeSize > 0 && exeSize < 4096 &&
-                       CreateProcessW(nullptr, command.data(), nullptr, nullptr, TRUE,
-                                      DETACHED_PROCESS, nullptr, nullptr, &startup, &process);
-  CloseHandle(readEnd);
-  CloseHandle(out);
-  if (terminal != nullptr) {
-    CloseHandle(terminal);
+  bool launched = ready != nullptr && exeSize > 0 && exeSize < 4096 &&
+                  CreateProcessW(nullptr, command.data(), nullptr, nullptr, TRUE, DETACHED_PROCESS, nullptr,
+                                 nullptr, &startup, &process);
+  if (launched) {
+    const HANDLE waits[] = {ready, process.hProcess};
+    if (WaitForMultipleObjects(2, waits, FALSE, 5000) != WAIT_OBJECT_0) {
+      // Dead, or held up by a loader error box: copy on a thread of this process
+      // instead, which keeps everything but the last lines before a crash.
+      TerminateProcess(process.hProcess, 1);
+      launched = false;
+    }
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
   }
-  if (!launched) {
-    CloseHandle(writeEnd);
-    return false;
+  if (ready != nullptr) {
+    CloseHandle(ready);
   }
-  CloseHandle(process.hThread);
-  CloseHandle(process.hProcess);
+  if (launched) {
+    CloseHandle(readEnd);
+    CloseHandle(out);
+    if (terminal != nullptr) {
+      CloseHandle(terminal);
+    }
+  } else {
+    for (const HANDLE handle : {readEnd, out, terminal}) {
+      if (handle != nullptr) {
+        SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0);
+      }
+    }
+    std::thread([readEnd, out, terminal] { CopyPipe(readEnd, out, terminal); }).detach();
+  }
+  const bool copierInProcess = !launched;
   const int pipeFd = _open_osfhandle(reinterpret_cast< intptr_t >(writeEnd), _O_WRONLY | _O_BINARY);
   if (pipeFd < 0) {
     CloseHandle(writeEnd);
@@ -629,6 +710,9 @@ bool Start() {
   // Code that writes to the standard handles rather than the C streams.
   SetStdHandle(STD_OUTPUT_HANDLE, reinterpret_cast< HANDLE >(_get_osfhandle(_fileno(stdout))));
   SetStdHandle(STD_ERROR_HANDLE, reinterpret_cast< HANDLE >(_get_osfhandle(_fileno(stderr))));
+  if (copierInProcess) {
+    std::fprintf(stderr, "port: the log copier did not start; a crash may lose the last lines\n");
+  }
 #elif defined(__ANDROID__)
   const int out = open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_APPEND | O_CLOEXEC, 0644);
   if (out < 0) {

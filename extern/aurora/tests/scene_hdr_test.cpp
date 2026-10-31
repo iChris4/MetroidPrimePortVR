@@ -842,6 +842,29 @@ gx::ShaderConfig screen_config(int kind, bool hdr) {
   return config;
 }
 
+// The Chozo Lore sheet (9D53CF06): its vertices wave along the normal by the vertex alpha, its base
+// map (stage 0) bent by the TCH0 offset (stage 4), unfogged, with and without a colour stream.
+TEST_F(SceneHdrTest, ChozoLoreCompilesWithVertexColor) {
+  for (const bool colored : {false, true}) {
+    for (const bool hdr : {false, true}) {
+      SCOPED_TRACE(testing::Message() << "colored " << colored << " hdr " << hdr);
+      auto config = screen_config(46, hdr);
+      if (colored) {
+        config.attrs[GX_VA_CLR0].attrType = GX_DIRECT;
+        config.attrs[GX_VA_CLR0].cnt = 4;
+        config.attrs[GX_VA_CLR0].compType = GX_RGBA8;
+        config.attrs[GX_VA_CLR0].stride = 4;
+      }
+      const auto source = gx::build_shader_source(config);
+      ASSERT_FALSE(source.empty());
+      EXPECT_EQ(module_error(source), "");
+      EXPECT_NE(source.find("lore_pos"), std::string::npos);
+      EXPECT_NE(source.find("let lr1 = ubuf.pbr_shield[1];"), std::string::npos);
+    }
+  }
+  EXPECT_TRUE(g_uncapturedErrors.empty());
+}
+
 size_t count(std::string_view source, std::string_view what) {
   size_t n = 0;
   for (size_t at = source.find(what); at != std::string_view::npos; at = source.find(what, at + what.size())) {
@@ -882,15 +905,15 @@ TEST_F(SceneHdrTest, ScreenKindsFogAsTheirFogPermsInHdr) {
       // frame is kept by 1 - o1, never by o1, and DIFC scales the lit and bent terms.
       EXPECT_EQ(count(hdr, "pbr_pass = pbr_hg * ubuf.pbr_emissive.rgb * ubuf.pbr_param.w * pbr_df.rgb * pbr_df.a;"), 1u);
       EXPECT_EQ(count(hdr, "pbr_vfw = pbr_df.a * (vec3f(1.0) - ubuf.pbr_emissive.rgb * (1.0 - pbr_vraw.a));"), 1u);
-      // Kinds 11 and 29 share one source (branched on pbr_kind), each with its own keep line.
-      EXPECT_EQ(count(hdr, "pbr_keep = pbr_sdst * (vec3f(1.0) - pbr_vfw);"), 2u);
+      // Only kind 11's own keep line (kind 29's block is not emitted into this shader).
+      EXPECT_EQ(count(hdr, "pbr_keep = pbr_sdst * (vec3f(1.0) - pbr_vfw);"), 1u);
       EXPECT_EQ(count(ldr, "pbr_sdst * (vec3f(1.0) - pbr_df.a * (vec3f(1.0) - ubuf.pbr_emissive.rgb * (1.0 - pbr_vraw.a)));"),
                 1u);
       EXPECT_EQ(count(ldr, "pbr_sdst * (pbr_df.a *"), 0u);
     }
     if (kind == 29) {
-      // Kinds 11 and 29 share one source (branched on pbr_kind), each with its own keep line.
-      EXPECT_EQ(count(hdr, "pbr_keep = pbr_sdst * (vec3f(1.0) - pbr_vfw);"), 2u);
+      // Kind 11's block is no longer emitted into 29's shader, only 29's own keep line.
+      EXPECT_EQ(count(hdr, "pbr_keep = pbr_sdst * (vec3f(1.0) - pbr_vfw);"), 1u);
     }
     EXPECT_EQ(module_error(ldr), "");
     EXPECT_EQ(module_error(hdr), "");
@@ -909,7 +932,11 @@ TEST_F(SceneHdrTest, ScreenReadsAreRawOnlyInHdr) {
       screen += count(ldr, what);
       EXPECT_EQ(count(hdr, what), 0u) << what;
     }
-    EXPECT_GT(screen, 0u) << "the kind reads map 7";
+    // Kind 36 reads map 7 only on the unlayered inventory material; this 8-stage config is layered, so it has no
+    // screen read of its own (it only borrowed the other kinds' blocks before they were left out of the shader).
+    if (kind != 36) {
+      EXPECT_GT(screen, 0u) << "the kind reads map 7";
+    }
     // Every other decode stays (base and cube maps).
     EXPECT_EQ(count(hdr, "srgb_dec("), count(ldr, "srgb_dec(") - screen);
     // Kind 11 reads the frame its blend keeps (unbent, at the fragment) in both, as 29's dual does.

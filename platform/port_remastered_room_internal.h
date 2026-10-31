@@ -443,6 +443,7 @@ struct Blit {
   uint32_t flags = 0;  // 1 lightmap, 2 probe
   Id16 lightmap{};     // the TXTR's id in property byte order
   std::map<Id16, std::array<float, 4>> lookups;
+  Id16 grid{};  // the LTPB's id in property byte order, which may live in the world's master pak
   bool HasLightmap() const { return present && (flags & 1) != 0 && lightmap != Id16{}; }
 };
 
@@ -514,6 +515,8 @@ public:
   }
   // Where each resource id in the load units' lists (HEAD/LUNT/LRES) sits, in property byte order.
   const std::vector<size_t>& Listed() const { return m_listed; }
+  // The META chunk of the trailing form (FOOT) after the root one; size 0 when there is none.
+  const Span& Meta() const { return m_meta; }
   // Whether these 16 bytes occur anywhere in the room besides `at`.
   bool NamedElsewhere(size_t at) const {
     const uint8_t* id = m_d->data() + at;
@@ -539,6 +542,7 @@ private:
   std::vector<Component> m_comps;
   std::map<Id16, size_t> m_byGuid;
   Span m_strings;
+  Span m_meta;
   std::vector<size_t> m_listed;
   Blit m_blit;
 };
@@ -641,8 +645,24 @@ constexpr uint32_t kEnvFxDensityController = 0x3c832ec7;
 constexpr uint32_t kRelayAutoFire = 0x7f6d1cba;
 constexpr uint32_t kPropEnvFxIntensity = 0x19da7ec9;
 constexpr uint32_t kActionEnvFxApply = 0x582c90b4;
-constexpr uint32_t kActionTriggerActivate = 0x3067f115;
-constexpr uint32_t kActionTriggerDeactivate = 0xb5dd4543;
+// ActorIceDarkenerMP1: on kActionIceDarken (AcceptScriptMsg 0xf79090) ApplyIceDarkeningFactor
+// 0xf798e0 gives every physics actor present its float kPropIceDarkeningFactor (props+8) through
+// SetIceDarkeningFactor 0xc4d200; kPropIceDarkenEveryFrame (props+0xc) makes Think 0xf796c4 do it
+// every frame instead. A TimerMP1 (kTimerMP1) starts itself when kPropTimerAutostart is set; a
+// ScriptRelayMP1 (kScriptRelayMP1) passes on kActionScriptRelayFire.
+constexpr uint32_t kIceDarkener = 0x427c6c50;
+constexpr uint32_t kActionIceDarken = 0xe63b4292;
+constexpr uint32_t kPropIceDarkeningFactor = 0x160e1c00;
+constexpr uint32_t kPropIceDarkenEveryFrame = 0x35a2afcb;
+constexpr uint32_t kTimerMP1 = 0x25c6d2a3;
+constexpr uint32_t kPropTimerAutostart = 0xd0ecc8ea;
+constexpr uint32_t kActionTimerStart[2] = {0xd63b8f04, 0x55193b90};
+constexpr uint32_t kScriptRelayMP1 = 0x1b78f9a4;
+constexpr uint32_t kActionScriptRelayFire = 0x379d362e;
+// A trigger's own Activate / Deactivate (CTriggerMP1GOC::TranslateScriptActionToMessage 0xf3e434:
+// msg 1 / msg 4; kb topic/triggermp1-active-state.md).
+constexpr uint32_t kActionTriggerActivate = 0xb5dd4543;
+constexpr uint32_t kActionTriggerDeactivate = 0x3067f115;
 // An ActorKeyframe's Play (retail kSS_Play) tells its actor to play the keyframe's
 // animation (property kPropKeyframeAnim, a name in STRP; kPropKeyframeLoop: it loops).
 constexpr uint32_t kActorKeyframeMP1 = 0x3ce6630a;
@@ -701,6 +721,8 @@ constexpr uint8_t kRetailIdPrefix[12] = {0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x0
 constexpr uint8_t kRetailActor = 0x00;
 // How far Remastered moved a scenery actor off the retail one it stands for (0.38 at most).
 constexpr double kRetailActorNear = 0.5;
+// ChozoLore_Mat_B, the lore statues' glow sheet (port_remastered_convert_material.cpp's kShaderChozoLore).
+constexpr uint32_t kShaderChozoLoreSheet = 0x9D53CF06;
 // How far outside a Remastered stand-in model's world box a dropped retail Actor's origin
 // may lie and still be hidden with it (WriteGeometry): a floor's box is a few cm thick.
 constexpr double kStandinMargin = 0.25;
@@ -725,7 +747,45 @@ struct Connection {
   uint32_t event;
   uint32_t action;
   Id16 target;  // a component's guid
+  // The payload blocks: an IntCompareEventCriteria (kEnvCriteria: kPropCriteriaValue, kPropCriteriaOp)
+  // and an EnvironmentVarModifier's int (kEnvModifierPayload: kPropModifierPayloadValue), 0 when absent.
+  bool hasCriteria = false;
+  int32_t criteriaValue = 0;
+  uint32_t criteriaOp = 0;
+  bool hasPayload = false;
+  int32_t payloadValue = 0;
 };
+
+// Environment variables (kb topic/environment-var-query.md): an EnvironmentVarModifier sets, adds
+// to or subtracts from a world variable; an EnvironmentVarQuery sends kEventEnvQueryTrue on each
+// link whose criteria hold, on load and on change.
+constexpr uint32_t kEnvQuery = 0x4c183ebb;     // CEnvironmentVarQueryGOC
+constexpr uint32_t kEnvModifier = 0xf05bc9c3;  // EnvironmentVarModifier
+constexpr uint32_t kEnvCriteria = 0x96bcd2cf;  // IntCompareEventCriteria
+constexpr uint32_t kEnvModifierPayload = 0xc2add041;
+constexpr uint32_t kPropCriteriaValue = 0x68922137;
+constexpr uint32_t kPropCriteriaOp = 0x7ed94084;
+constexpr uint32_t kPropModifierPayloadValue = 0xe845edf4;
+constexpr uint32_t kPropModifierVar = 0xf2ccf18b;
+constexpr uint32_t kPropModifierValue = 0x789cebf4;
+constexpr uint32_t kPropQueryVar = 0xb11580e1;
+constexpr uint32_t kPropQueryOnLoad = 0x6bdef762;
+constexpr uint32_t kPropQueryOnChange = 0xdbe12b90;
+constexpr uint32_t kPropQuerySkipUnchanged = 0x7600c5bb;
+constexpr uint32_t kEventEnvQueryTrue = 0xfddbd7d4;
+// The modifier's actions: with the payload's value, or with its own (kPropModifierValue).
+constexpr uint32_t kActionEnvSetPayload = 0xf375af0f;
+constexpr uint32_t kActionEnvAddPayload = 0x1f0bf742;
+constexpr uint32_t kActionEnvSubPayload = 0xe39dfd33;
+constexpr uint32_t kActionEnvSet = 0xd00fd1eb;
+constexpr uint32_t kActionEnvAdd = 0xdd131cd6;
+constexpr uint32_t kActionEnvSub = 0x1e431630;
+// The op a connection into an EnvironmentVarModifier (`modifier`) asks for; false when its action
+// is none of the modifier's or the modifier names no variable.
+bool EnvModifierOp(const Room& room, const Component& modifier, const Connection& c, PortRoomEnv::EnvOp& op);
+// The world master's declared variables (the trailing form's META chunk); empty when it has none
+// or they do not read.
+std::vector<PortRoomEnv::EnvVar> ReadEnvVars(const Room& room);
 
 std::vector<Connection> ReadConnections(const Room& room);
 std::vector<int> ReadEntityLinks(const Room& room, size_t i);
@@ -735,6 +795,16 @@ std::vector<std::pair<uint32_t, int>> ReadEntityLinkIds(const Room& room, size_t
 // that a RelayAutoFire reaches, through Relays, with kActionEnvFxApply, else 1. A controller
 // nothing reaches at load (fired by a trigger, or by nothing) is left out, and noted in `notes`.
 float EnvFxIntensity(const Room& room, std::vector<std::string>& notes);
+// The ice darkeners the room fires at load (kb topic/frozen-enemy-icy-render.md): an
+// ActorIceDarkenerMP1 (kIceDarkener) told kActionIceDarken by an autostart TimerMP1 or a
+// RelayAutoFire, through non-autostart Timers (their start actions) and ScriptRelayMP1s. Each is
+// its factor (kPropIceDarkeningFactor, default 1) and the seconds after load the timers add. One
+// fired by anything else (a trigger, a camera) is left out, and noted in `notes`.
+struct IceDarkenerAtLoad {
+  float factor;
+  float delay;
+};
+std::vector<IceDarkenerAtLoad> IceDarkeners(const Room& room, std::vector<std::string>& notes);
 double MaxAbs(const Vec3& a, const Vec3& b);
 
 // What drives the scenery actors of a room.
@@ -757,6 +827,14 @@ struct SceneryScripts {
   // in component order, which is the order the clips are written in.
   std::map<int, std::vector<size_t>> keyframes;
   size_t scriptUnresolved = 0;    // connections into the script not traced
+  // The room's own TriggerMP1s that switch its hints (kSenderRoomVolume + index), area space.
+  std::vector<PortRoomEnv::RoomVolume> roomVolumes;
+  // Environment variable ops (a room's: its room volumes' senders; the master's: world volumes'),
+  // and the master's query branches (kSenderEnvQuery + index) and declared variables.
+  std::vector<PortRoomEnv::EnvOp> envOps;
+  std::vector<PortRoomEnv::EnvBranch> envBranches;
+  std::vector<PortRoomEnv::EnvVar> envVars;
+  size_t envUnresolved = 0;  // connections into a modifier not traced (a Relay's, say)
   // A float driver of a material variable (see kRealNumberDriver): by the entity of each actor it
   // feeds. The importer checks that the actor's model binds the variable to a parameter it can
   // drive; the start links are in `links` under `driverStart`.

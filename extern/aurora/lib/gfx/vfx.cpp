@@ -734,11 +734,10 @@ R"(  } else if ((FEAT & 536870912u) != 0u) {
     let gain = 10.0 - 9.0 * fade;
     rgb = vec3f(
               gain * sc.r,
-              gain * (sc.g + 40.0 * rim * (edge * (2.0 * mask - 0.1) + 0.1) + 10.5 * rg + 2.8 * in.mesh.z + 3.0 * high) +
-                  0.5,
+              gain * (sc.g + 40.0 * rim * (edge * (2.0 * mask - 0.1) + 0.1) + 10.5 * rg + 2.8 * in.mesh.z + 3.0 * high +
+                      0.5),
               gain * (sc.b + 40.0 * rim * (edge * (10.0 * mask - 0.5) + 0.5) + 28.0 * rg + 5.95000029 * in.mesh.z +
-                      12.0 * high) +
-                  0.9) *
+                      12.0 * high + 0.9)) *
           vc.rgb * M;
     x = fade * (1.0 + in.mesh.y * (c.y - 1.0)) * 0.75;
   } else if ((FEAT & 1073741824u) != 0u) {
@@ -1744,9 +1743,15 @@ std::string pipeline_source(const PipelineConfig& p) {
   return source;
 }
 
-// Quads (4 vertices, 6 indices) or triangles (3 vertices, drawn in order).
-static void draw_prims(const DrawDesc& desc, const Vertex* verts, uint32_t vertexCount, bool quads) {
-  if (verts == nullptr || vertexCount == 0 || vertexCount > MaxQuads * 4 || !ensure_registered()) {
+// Quads (4 vertices, 6 indices), triangles (3 vertices, drawn in order), or, with `index`, the
+// triangles `index` lists.
+static void draw_prims(const DrawDesc& desc, const Vertex* verts, uint32_t vertexCount, bool quads,
+                       const uint32_t* index = nullptr, uint32_t indexCount = 0) {
+  const uint32_t maxVerts = index != nullptr ? MaxIndexedVertices : MaxQuads * 4;
+  if (verts == nullptr || vertexCount == 0 || vertexCount > maxVerts || !ensure_registered()) {
+    return;
+  }
+  if (index != nullptr && (indexCount == 0 || indexCount % 3 != 0)) {
     return;
   }
   evict_idle();
@@ -1905,7 +1910,14 @@ static void draw_prims(const DrawDesc& desc, const Vertex* verts, uint32_t verte
   }
 
   std::vector<uint32_t> indices;
-  if (quads) {
+  if (index != nullptr) {
+    indices.assign(index, index + indexCount);
+    for (const uint32_t i : indices) {
+      if (i >= vertexCount) {
+        return;
+      }
+    }
+  } else if (quads) {
     const uint32_t quadCount = vertexCount / 4;
     indices.resize(size_t(quadCount) * 6);
     for (uint32_t q = 0; q < quadCount; ++q) {
@@ -1960,6 +1972,11 @@ void draw_triangles(const DrawDesc& desc, const Vertex* verts, uint32_t triCount
     draw_prims(desc, verts + size_t(done) * 3, n * 3, false);
     done += n;
   }
+}
+
+void draw_indexed_triangles(const DrawDesc& desc, const Vertex* verts, uint32_t vertexCount, const uint32_t* indices,
+                            uint32_t indexCount) {
+  draw_prims(desc, verts, vertexCount, false, indices, indexCount);
 }
 
 void capture_scene(bool again) {

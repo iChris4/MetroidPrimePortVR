@@ -1,3 +1,27 @@
+## VR: upstream 0.37 beta.7 local testing merge (2026-11-01)
+
+Merged 142 Prime 1 upstream commits through Odrannnn/MetroidPrimePort `port`
+at `d57a819a2` onto released beta.6 (`5d4095622`), on the local branch
+`codex/testing-upstream-beta7-20261101`. Do not promote this branch until
+headset testing is complete. The product version is beta.7; Quest versionCode
+is 12, following beta.6's 11.
+
+Preserve the separate eye depth copies, full-eye retail fog composites,
+HMD water visibility/near caps, tracked weather, and VR shader header extension.
+Upstream's new PBR shader-key flags use the remaining bits of byte 10; the VR
+bits stay in byte 13, with attributes at byte 16 and pipeline version 16.
+The shader output-declaration patch must retain material-specific coverage
+expressions when adding volumetric fog. Phazon shell remains disabled in
+immersive VR while respecting upstream's new toggle for desktop play.
+Adaptive simulation's current-state presentation is retained, without letting
+the flat-screen frame limiter disable normal headset interpolation.
+
+Windows now uses upstream Dawn v20261029.114630 (118436b3f8f6).
+The Quest source pin and verified archive hash follow the same revision;
+keep PrimedGun's multiview, OpenXR device, and fragment-density-map patches.
+Test fog, water, visors, Remastered frozen effects, menus, lock-on movement,
+morph transitions and cinema direction in-headset before pushing.
+
 ## VR water/fog visibility merge guards (beta.6 local testing)
 
 Water plane submission must not reject bounds behind the simulation camera:

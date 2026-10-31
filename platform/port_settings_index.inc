@@ -32,8 +32,11 @@
 {"Game", "", "Speedrun", "LiveSplit", "timer split tcp server speedrun"},
 {"Game", "", "Speedrun", "Server (host:port)", "livesplit address host port"},
 {"Game", "", "Speedrun", "Split on upgrades", "livesplit split item timer"},
+{"Controls", "Options", "Quick setup", "Use mouse & keyboard", "mouse aim keyboard wasd preset layout quick setup"},
+{"Controls", "Options", "Quick setup", "Use twin-stick controller", "twin stick dual sticks right stick aim controller gamepad remastered preset layout quick setup"},
 {"Controls", "Options", "On-screen prompts", "Button glyphs", "button icons prompts controller xbox playstation"},
 {"Controls", "Options", "Buttons", "Toggle Lock-On", "lock on target toggle hold"},
+{"Controls", "Options", "Buttons", "Aim Lock-On", "lock on target crosshair aim priority nearest"},
 {"Controls", "Options", "Buttons", "Sticky Charge", "charge beam hold fire"},
 {"Controls", "Options", "Buttons", "Remastered charge (rapid fire)", "rapid fire autofire charge remastered"},
 {"Controls", "Options", "Buttons", "Swap the Scan and X-Ray visor buttons", "visor scan xray swap buttons"},
@@ -47,6 +50,8 @@
 {"Controls", "Options", "Morph ball", "Fast Morph", "morph ball speed quick transform"},
 {"Controls", "Options", "Morph ball", "Spring Ball (C-stick up)", "spring ball jump c-stick"},
 {"Controls", "Options", "Rumble", "Rumble", "vibration vibrate force feedback controller shake"},
+{"Controls", "Options", "Map", "Invert map rotate X", "map rotate turn invert flip reverse horizontal"},
+{"Controls", "Options", "Map", "Invert map rotate Y", "map rotate turn invert flip reverse vertical"},
 {"Controls", "Mouse settings", "Mouse aim", "Mouse aim", "mouse aim look pointer"},
 {"Controls", "Mouse settings", "Mouse aim", "Sensitivity", "mouse speed sensitivity source quake apex dpi cm 360"},
 {"Controls", "Mouse settings", "Mouse aim", "Separate vertical speed", "horizontal vertical split mouse sensitivity"},
@@ -196,6 +201,7 @@
 {"Mods", "", "Mods", "Open mods folder", "mods folder open directory"},
 #endif
 {"Mods", "", "Built-in mods > Prime Remastered", "Use the Remastered models", "remastered mod enable disable toggle on off retail models"},
+{"Mods", "", "Built-in mods > Prime Remastered", "Phazon Suit aura", "phazon suit aura shell silhouette glow distortion remastered off"},
 {"Mods", "", "Built-in mods > Prime Remastered", "Performance mode", "performance fast faster speed fps glass fog exposure gun cannon remastered"},
 // The one key file row, above both built-in sections: both imports read it, so it has one row.
 #if defined(__ANDROID__)
@@ -207,6 +213,14 @@
 {"Mods", "", "Built-in mods > Prime Remastered > Import", "Browse...", "remastered browse image file path nsp xci game"},
 {"Mods", "", "Built-in mods > Metroid Dread > Import", "Load Metroid Dread image", "dread browse image file path nsp xci game"},
 #endif
+{"Mods", "", "Built-in mods > Prime Remastered > Parts to use", "Room geometry and lighting", "remastered parts use hide show render room geometry rooms retail lighting fog grade environment"},
+{"Mods", "", "Built-in mods > Prime Remastered > Parts to use", "Particle effects", "remastered parts use hide show render particle effects beams"},
+{"Mods", "", "Built-in mods > Prime Remastered > Parts to use", "Models", "remastered parts use hide show render models characters creatures items"},
+{"Mods", "", "Built-in mods > Prime Remastered > Parts to use", "HUD", "remastered parts use hide show render hud visor"},
+{"Mods", "", "Built-in mods > Prime Remastered > Parts to use", "Font", "remastered parts use hide show render font text sdf"},
+{"Mods", "", "Built-in mods > Prime Remastered > Parts to use", "Text", "remastered parts use hide show render text strings"},
+{"Mods", "", "Built-in mods > Prime Remastered > Parts to use", "Map", "remastered parts use hide show render map automap"},
+{"Mods", "", "Built-in mods > Prime Remastered > Parts to use", "Movies", "remastered parts use hide show render movies fmv"},
 {"Mods", "", "Built-in mods > Prime Remastered > Import", "Import##remastered", "remastered start import run room geometry particles effects movies"},
 {"Mods", "", "Built-in mods > Prime Remastered > Import", "Full import (no reuse)", "remastered full import again remake reuse convert everything"},
 {"Mods", "", "Built-in mods > Prime Remastered > Import", "Load it again", "remastered reload again import"},
@@ -222,11 +236,14 @@
 #if !defined(__ANDROID__)
 {"Mods", "", "Importers", "Argument", "importer argument parameter file"},
 #endif
+{"Mods", "", "Textures", "Use the texture pack", "texture pack custom hd textures enable disable toggle on off f7 compare"},
 #if defined(__ANDROID__)
 {"Mods", "", "Textures", "Choose texture pack folder...", "texture pack folder choose hd textures"},
+{"Mods", "", "Textures", "Import texture pack .zip...", "texture pack zip archive import hd textures"},
 {"Mods", "", "Textures", "Remove texture pack", "texture pack remove delete"},
 #else
 {"Mods", "", "Textures", "Reload texture pack", "texture pack reload refresh"},
+{"Mods", "", "Textures", "Import texture pack .zip...", "texture pack zip archive import hd textures"},
 #endif
 {"Randomizer", "", "Goal", "Required artifacts", "chozo artifacts count goal finish"},
 {"Randomizer", "", "Goal", "Final bosses", "bosses ridley prime finish goal"},
@@ -266,6 +283,7 @@
 {"Randomizer", "", "New seed", "Random", "random seed generate roll"},
 {"Randomizer", "", "New seed", "Generate", "generate seed create"},
 {"Randomizer", "", "New seed", "Generate & Play", "generate play start seed"},
+{"Randomizer", "", "Seeds", "Play the normal game", "vanilla normal game stop seed off unrandomized switch back"},
 {"Randomizer", "", "Seeds", "Play", "play start seed launch"},
 {"Randomizer", "", "Seeds", "Spoiler", "spoiler log show seed"},
 {"Randomizer", "", "Seeds", "Write spoiler file", "spoiler file write save text"},
@@ -325,6 +343,7 @@
 {"Debug", "", "Cheats", "Grant everything", "cheat items everything all unlock"},
 {"Debug", "", "Cheats", "Invulnerable", "cheat god mode damage immune"},
 {"Debug", "", "Cheats", "Phazon Beam", "cheat hypermode phazon gun power beam"},
+{"Debug", "", "Cheats", "Infinite ammo", "cheat infinite ammo missiles power bombs unlimited"},
 {"Debug", "", "Cheats", "Missiles", "cheat missile ammo count"},
 {"Debug", "", "Cheats", "Power Bombs", "cheat power bomb ammo count"},
 {"Debug", "", "Cheats", "Energy Tanks", "cheat energy tank count"},

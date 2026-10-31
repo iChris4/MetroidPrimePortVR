@@ -9,6 +9,8 @@
 #include "port_apclient.h"
 #include "port_controls.h"
 #include "port_input_devices.h"
+#include "port_input_remap_ui.h"
+#include <dolphin/pad.h>
 #include "port_mouse.h"
 
 #include "MetroidPrime/Player/CGameOptions.hpp"
@@ -30,6 +32,28 @@ namespace PortDebug {
 
 void DrawControlsOptions() {
   const bool locked = BeginOriginalLocked();
+  ImGui::SeparatorText("Quick setup");
+  if (ImGui::Button("Use mouse & keyboard")) {
+    PortInputRemap::ApplyPreset(PortInput::Family::Keyboard, "mouse");
+  }
+  ItemHelp("Turns on mouse aim and the Mouse & keyboard layout: WASD to move, mouse to aim, left "
+           "click to fire, Space to jump, Q to lock on. Replaces your own keyboard bindings; "
+           "Controls > Remap > Presets... has the others.");
+  SameLineAfterHelp();
+  ImGui::TextDisabled(sInput.mouseAim ? "Mouse aim is on." : "Mouse aim is off.");
+  // A GameCube pad has no right stick click for the dual-stick layout (as Remap's Presets...).
+  ImGui::BeginDisabled(PADIsGCAdapter(0) != 0);
+  if (ImGui::Button("Use twin-stick controller")) {
+    PortInputRemap::ApplyPreset(PortInput::Family::Pad, "remastered");
+  }
+  ImGui::EndDisabled();
+  ItemHelp("Turns on Twin Stick Aim and the Remastered layout for all controllers: left stick moves, "
+           "right stick aims, RT fire, LT lock on, A jump, X morph ball, right stick click free look. "
+           "Replaces your own controller bindings; Controls > Remap > Presets... has Modern and the "
+           "others. Not for a GameCube controller, which has no right stick click.");
+  SameLineAfterHelp();
+  ImGui::TextDisabled(PadTwinStick() ? "Twin-stick aim is on." : "Twin-stick aim is off.");
+
   ImGui::SeparatorText("On-screen prompts");
   int glyphs = sPromptGlyphs.load(std::memory_order_relaxed);
   if (ImGui::Combo("Button glyphs", &glyphs,
@@ -48,6 +72,12 @@ void DrawControlsOptions() {
   }
   ItemHelp("Press L once to lock on, scan or grapple, and again to let go. With no target, L works "
            "as usual.");
+  bool aimLockOn = sInput.aimLockOn;
+  if (ImGui::Checkbox("Aim Lock-On", &aimLockOn)) {
+    SetAimLockOn(aimLockOn);
+  }
+  ItemHelp("Lock onto the target nearest the crosshair. The original prefers a nearer target even "
+           "when it is off to the side. Scanning works as usual.");
   bool stickyCharge = sInput.stickyCharge;
   if (ImGui::Checkbox("Sticky Charge", &stickyCharge)) {
     SetStickyCharge(stickyCharge);
@@ -153,6 +183,17 @@ void DrawControlsOptions() {
   ImGui::EndDisabled();
   ItemHelp("Same switch as Rumble in the pause menu. A controller doesn't rumble while you last "
            "used the keyboard or mouse.");
+
+  ImGui::SeparatorText("Map");
+  if (ImGui::Checkbox("Invert map rotate X", &sInput.mapInvertX)) {
+    MarkDirty();
+  }
+  ImGui::SameLine();
+  if (ImGui::Checkbox("Invert map rotate Y", &sInput.mapInvertY)) {
+    MarkDirty();
+  }
+  ItemHelp("Flips which way the map turns when you rotate it. The game turns the map the "
+           "opposite way to the stick; check both for camera-style rotation.");
 }
 
 void DrawControlsKeyboardMouse() {
@@ -235,8 +276,8 @@ void DrawControlsController() {
     SetTwinStick(twinStick);
     MarkDirty();
   }
-  ItemHelp("Aims with the right stick like the mouse, so it no longer free-looks. Fire stays on A; "
-           "change it in Controls > Remap.");
+  ItemHelp("Aims with the right stick like the mouse, so it no longer free-looks, and the R trigger stops "
+           "free-looking (it stays Spider Ball in the Morph Ball). Fire stays on A; change it in Controls > Remap.");
   bool remasteredMovement = sInput.remasteredMovement;
   if (ImGui::Checkbox("Remastered movement (twin stick and mouse aim)", &remasteredMovement)) {
     SetRemasteredMovement(remasteredMovement);

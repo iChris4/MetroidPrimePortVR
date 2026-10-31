@@ -251,6 +251,16 @@ EReticleState CCompoundTargetReticle::GetDesiredReticleState(const CStateManager
 }
 
 void CCompoundTargetReticle::Update(float dt, const CStateManager& mgr) {
+#ifdef TARGET_PC
+  // Port: the 2-frame hide counts game ticks, not drawn frames (see Draw). Decrementing at the top
+  // of Update, before the state transition below sets it to 2, keeps the 60 FPS sequence of the
+  // retail per-Draw decrement: tick N sets 2 and the draw after it hides (retail 2->1), tick N+1
+  // makes it 1 and its draw hides (retail 1->0), tick N+2 makes it 0 and its draw shows. The
+  // transition's `x28_noDrawTicks <= 0` test also sees the same values on the same ticks.
+  if (x28_noDrawTicks > 0) {
+    --x28_noDrawTicks;
+  }
+#endif
   // 1. Orientation slerp
   CRelAngle angle = x10_laggingOrientation.AngleFrom(x0_leadingOrientation);
   float angleDeg = angle.AsDegrees();
@@ -752,9 +762,11 @@ void CCompoundTargetReticle::Draw(const CStateManager& mgr, bool hideLockon) con
     CGraphics::SetCullMode(kCM_Front);
   }
 
+#ifndef TARGET_PC
   if (x28_noDrawTicks > 0) {
     --x28_noDrawTicks;
   }
+#endif
 }
 
 void CCompoundTargetReticle::DrawGrappleGroup(const CMatrix3f& rot, const CStateManager& mgr,
@@ -2103,7 +2115,7 @@ void CCompoundTargetReticle::PortTriUpdateCombat(float dt, const CStateManager& 
   x260_aimCenterAlpha = 1.f; // fn_80015D2C: port pointer always valid/on-screen.
   if (player.GetGunHolsterState() == CPlayer::kGH_Holstered ||
       !PortTriReticle::AimVisible(x20_prevState)) x258_aimArmAlpha = x260_aimCenterAlpha = 0.f;
-  if (x388_triOffScreenTicks != 0) { // fn_80236E24: unreachable for port pointer sources.
+  if (x388_triOffScreenTicks != 0.f) { // fn_80236E24: unreachable for port pointer sources.
     x254_aimArmColor = x25c_aimCenterColor = skTriScanOverrideColor;
   }
 
@@ -2199,9 +2211,10 @@ void CCompoundTargetReticle::PortTriUpdateCombat(float dt, const CStateManager& 
       Clamp(x304_triLockAlpha - dt * (200.f / 255.f) / 3.5f, .35f, 200.f / 255.f) : 200.f / 255.f;
   x34c_triRelease = release;
   x2f0_triLocked = locked;
-  // fn_80235D18: update-count threshold, not an elapsed-time threshold.
+  // fn_80235D18: update-count threshold, not an elapsed-time threshold. The
+  // port counts 60 Hz updates, so it holds at other sim rates and adaptive.
   if (PortTriOffScreen(mgr)) {
-    if (++x388_triOffScreenTicks > 300) {
+    if ((x388_triOffScreenTicks += PortDebug::TickFrames()) > 300.f) {
       x384_triOffScreenTime += dt;
       if (x384_triOffScreenTime > 2.5f) x384_triOffScreenTime -= 2.5f;
     }

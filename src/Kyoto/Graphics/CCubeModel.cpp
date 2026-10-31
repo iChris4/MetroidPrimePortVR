@@ -17,10 +17,12 @@
 #ifdef TARGET_PC
 #include <dolphin/gx/GXExtra.h>
 #include "port_debug.h"
+#include "port_icy_assets.h"
 #include "port_pbr_record.h"
 #include "port_room_env.h"
 #include "port_visor_mesh.h"
 #include <algorithm>
+#include <aurora/pbr_kind.hpp>
 #include <cassert>
 #include <cmath>
 #include <vector>
@@ -265,6 +267,80 @@ f32 sPortKindValue = 0.f;
 bool sPortSky = false;
 f32 sPortSkyGain[3];
 f32 sPortChargeShell = 0.f;
+// The frozen enemy's icy pass (PortSetIcy): the freeze direction in the game's world and the
+// seconds since the freeze, and the actor's ice darkening. Remastered's RenderIcy material maps,
+// bound to maps 0-2.
+struct SPortIcy {
+  bool active;
+  f32 dir[3];
+  f32 t;
+  f32 darkening;
+};
+SPortIcy sPortIcy = {false, {0.f, 0.f, 0.f}, 0.f, 1.f};
+bool sPortIcyTexInit = false;
+GXTexObj sPortIcyTex[PortIcy::kCount];
+
+bool PortIcyTextures() {
+  const PortIcy::Assets* assets = PortIcy::Get();
+  if (assets == nullptr) {
+    return false;
+  }
+  if (!sPortIcyTexInit) {
+    for (int i = 0; i < PortIcy::kCount; ++i) {
+      const PortIcy::Image& img = assets->image[i];
+      if (img.width == 0 || img.height == 0 || img.mips == 0 || img.rgba.empty()) {
+        return false;
+      }
+      GXInitTexObj(&sPortIcyTex[i], const_cast< uint8_t* >(img.rgba.data()), u16(img.width), u16(img.height),
+                   static_cast< GXTexFmt >(GX_TF_RGBA8_PC), GX_REPEAT, GX_REPEAT, img.mips > 1 ? GX_TRUE : GX_FALSE);
+      GXInitTexObjLOD(&sPortIcyTex[i], img.mips > 1 ? GX_LIN_MIP_LIN : GX_LINEAR, GX_LINEAR, 0.f,
+                      float(img.mips - 1), 0.f, GX_FALSE, GX_FALSE, GX_ANISO_1);
+    }
+    sPortIcyTexInit = true;
+  }
+  return true;
+}
+
+// RenderIcy's constants (CPatternedMP1::RenderIcy 0xfc4794, kb topic/frozen-enemy-icy-render.md) as
+// kind 47's GXSetPBRShield rows: the extrude c = (0.1k, 0.2k, 2, 0) with k = min(1, t / 0.15), the freeze
+// direction normalised in Remastered's world R = (-x, z, y), CCH0, CCH1, view to the game's world in
+// rows 4-6, in row 7.x whether the colour map is sRGB and in 7.y the actor's ice darkening
+// (CActorMP1 +0x1d0, which RenderIcy puts in the command at +0x34).
+void PortSetIcyMaterial(const f32 viewToWorld[3][3], const CTransform4f& view) {
+  const PortIcy::Assets* assets = PortIcy::Get();
+  f32 shield[8][4] = {};
+  const f32 k = std::min(1.f, sPortIcy.t / 0.15f);
+  shield[0][0] = 0.1f * k;
+  shield[0][1] = 0.2f * k;
+  shield[0][2] = 2.f;
+  const f32 len = std::sqrt(sPortIcy.dir[0] * sPortIcy.dir[0] + sPortIcy.dir[1] * sPortIcy.dir[1] +
+                            sPortIcy.dir[2] * sPortIcy.dir[2]);
+  if (len > 1.1920929e-7f) {
+    shield[1][0] = -sPortIcy.dir[0] / len;
+    shield[1][1] = sPortIcy.dir[2] / len;
+    shield[1][2] = sPortIcy.dir[1] / len;
+  }
+  for (int i = 0; i < 4; ++i) {
+    shield[2][i] = assets->vector[PortIcy::kCch0][i];
+    shield[3][i] = assets->vector[PortIcy::kCch1][i];
+  }
+  const f32 eye[3] = {view.Get03(), view.Get13(), view.Get23()};
+  for (int row = 0; row < 3; ++row) {
+    for (int col = 0; col < 3; ++col) {
+      shield[4 + row][col] = viewToWorld[row][col];
+    }
+    shield[4 + row][3] = eye[row];
+  }
+  shield[7][0] = assets->image[PortIcy::kColor].srgb ? 1.f : 0.f;
+  shield[7][1] = sPortIcy.darkening;
+  GXSetPBRShield(shield);
+  f32 values[19] = {};
+  values[13] = 47.f;
+  const f32 up[3] = {view.Get20(), view.Get22(), -view.Get21()};
+  GXSetPBRMaterial(values, values + 3, values[6], values[7], values + 8, values + 13, up,
+                   PortRoomEnv::GlowGain(false));
+  GXSetPBRLightScale(1.f, 1.f, 1.f, GX_FALSE);
+}
 // The hot pass's thermal override (PortSetThermalOverride): its x and y.
 struct SPortThermalOverride {
   bool on;
@@ -343,6 +419,17 @@ void CCubeModel::PortTakeThermalSkipCounts(unsigned& cold, unsigned& hotDropped)
 }
 
 void CCubeModel::PortSetChargeShell(const f32 amount) { sPortChargeShell = amount; }
+
+void CCubeModel::PortSetIcy(const bool active, const f32 dirGC[3], const f32 t, const f32 darkening) {
+  sPortIcy.active = active;
+  if (active) {
+    sPortIcy.dir[0] = dirGC[0];
+    sPortIcy.dir[1] = dirGC[1];
+    sPortIcy.dir[2] = dirGC[2];
+    sPortIcy.t = t;
+    sPortIcy.darkening = darkening;
+  }
+}
 
 void CCubeModel::PortSetIceShellIint(const f32 iint) { sPortIceShellIint = iint; }
 
@@ -549,7 +636,8 @@ f32 CCubeModel::PortSetPBRMaterial(const int idx, const f32 fade, const bool fad
   f32 shield[32];
   PortReadPBRMaterial(idx, values, nullptr, lightScale, cube, shield);
   const f32 kind = values[13];
-  if (kind == 45.f && drawFlags) {
+  const aurora::PbrKind pk = aurora::PbrKindOf(kind);
+  if (pk == aurora::PbrKind::RouteHologram && drawFlags) {
     // main 0x1f7f9c -> GetColor 0x15fd8c -> Float4 binder 0x163974:
     // DIFC (ID 0x20, initializer 0x1556e0) is replaced, including its fade alpha.
     const auto trans = drawFlags->GetTrans();
@@ -595,7 +683,7 @@ f32 CCubeModel::PortSetPBRMaterial(const int idx, const f32 fade, const bool fad
     values[5] = sPortSkyGain[2];
     values[7] = f32((int(values[7] + 0.5f) & 15) | 17);
   }
-  if (kind > 11.5f && kind < 12.5f) {
+  if (pk == aurora::PbrKind::FrozenShell) {
     values[15] = sPortChargeShell;
     // The glow's IINT, set by CIceBeam::PreRenderGunFx; the record holds the peak, 10.
     const f32 pulse = sPortIceShellIint / 10.f;
@@ -617,7 +705,8 @@ f32 CCubeModel::PortSetPBRMaterial(const int idx, const f32 fade, const bool fad
   if ((values[13] > 4.5f && values[13] < 7.5f) || (values[13] > 8.5f && values[13] < 9.5f) ||
       (values[13] > 10.5f && values[13] < 11.5f) || (values[13] > 13.5f && values[13] < 15.5f) || (values[13] > 17.5f && values[13] < 18.5f) ||
       (values[13] > 20.5f && values[13] < 22.5f) || (values[13] > 28.5f && values[13] < 29.5f) ||
-       (values[13] > 31.5f && values[13] < 32.5f) || (values[13] > 42.5f && values[13] < 45.5f)) {
+       (values[13] > 31.5f && values[13] < 32.5f) || (values[13] > 42.5f && values[13] < 46.5f) ||
+      (values[13] > 47.5f && values[13] < 48.5f)) {
     // The Phazon3 stone and the PhazonPool blister read Remastered's scene clock (stops while paused, wraps at 15120 s).
     values[15] *= ((values[13] > 20.5f && values[13] < 22.5f) || (values[13] > 31.5f && values[13] < 32.5f))
                       ? CGraphics::GetSimTime()
@@ -627,7 +716,7 @@ f32 CCubeModel::PortSetPBRMaterial(const int idx, const f32 fade, const bool fad
   // The pickup (kind 15) reads its gradient at the world position: rows 4 and 5 of its constants
   // are world x and y as the dot of the view-space position (right, up, -forward) with xyz, plus w.
   // The hologram (kind 18) reads its texture at the world position the same way.
-  if ((kind > 14.5f && kind < 15.5f) || (kind > 17.5f && kind < 18.5f)) {
+  if (pk == aurora::PbrKind::Pickup || pk == aurora::PbrKind::Hologram) {
     shield[16] = view.Get00();
     shield[17] = view.Get02();
     shield[18] = -view.Get01();
@@ -639,7 +728,7 @@ f32 CCubeModel::PortSetPBRMaterial(const int idx, const f32 fade, const bool fad
   }
   // EnergyField's VS supplies Remastered world X/Y, not GameCube world X/Y:
   // the converter's R2G is (-x,z,y). These rows undo that change of basis.
-  if (kind > 43.5f && kind < 45.5f) {
+  if (pk == aurora::PbrKind::EnergyField || pk == aurora::PbrKind::RouteHologram) {
     shield[16] = -view.Get00();
     shield[17] = -view.Get02();
     shield[18] = view.Get01();
@@ -651,16 +740,16 @@ f32 CCubeModel::PortSetPBRMaterial(const int idx, const f32 fade, const bool fad
   }
   // The Phazon Beam's veins (kind 35) take DIFC.w, the "DisintegrationAmount" variable, from the
   // beam's fade (PortSetDisintegration); the record holds only its initial value.
-  if (kind > 34.5f && kind < 35.5f) {
+  if (pk == aurora::PbrKind::PhazonVeins) {
     shield[31] = sPortDisintegration;
   }
   // The HoloGlass (kind 29) offsets its layers by a per-object phase: the sum of the model matrix's
   // translation, times 0.33 (row 4 x of its constants). The simple glass (43) is taken to do the same.
   sPortCameraCube = false;
-  if ((kind > 28.5f && kind < 29.5f) || (kind > 42.5f && kind < 43.5f)) {
+  if (pk == aurora::PbrKind::HoloGlassB || pk == aurora::PbrKind::SimpleGlass) {
     const CTransform4f& model = CGraphics::GetModelMatrix();
     const f32 sum = model.Get03() + model.Get13() + model.Get23();
-    if (kind < 29.5f && shield[21] > 0.5f) {
+    if (pk == aurora::PbrKind::HoloGlassB && shield[21] > 0.5f) {
       // E2644678 (row 5 y): VS002 scales the sum by CCH4.x (row 4 w) before the 0.33, takes the
       // draw camera's near plane (row 4 y) for its depth factor, and reflects the cube
       // CMaterialMgr::ResolveReflectionProbe gives: the camera's blend, black with no probe
@@ -721,15 +810,18 @@ f32 CCubeModel::PortSetPBRMaterial(const int idx, const f32 fade, const bool fad
   }
   // Only the boundary shield, the pickup, the holograms (16-18), the Phazon3 stone (21) and the others listed
   // (the unlit cube surface, 38, the unlit vertex-coloured fx, 39, the unlit matcap, 40, and the unlit
-  // METL-weighted fx, 41, the spider ball's glass, 42, and the simple glass, 43: DIFC and their glow) have constants;
+  // METL-weighted fx, 41, the spider ball's glass, 42, and the simple glass, 43, the Chozo Lore, 46, and the crystal, 48: DIFC and their glow) have constants;
   // every other material clears the last one's.
-  GXSetPBRShield(wind || (kind > 10.5f && kind < 11.5f) || (kind > 13.5f && kind < 19.5f) || (kind > 20.5f && kind < 22.5f) || (kind > 24.5f && kind < 25.5f) || (kind > 27.5f && kind < 29.5f) || (kind > 30.5f && kind < 33.5f) || (kind > 34.5f && kind < 35.5f) || (kind > 37.5f && kind < 45.5f) ? reinterpret_cast< const f32(*)[4] >(shield) : nullptr);
+  GXSetPBRShield(wind || aurora::IsShieldKind(pk) ? reinterpret_cast< const f32(*)[4] >(shield) : nullptr);
   // World up as the shader sees it: view space is right, up, -forward.
   const f32 up[3] = {view.Get20(), view.Get22(), -view.Get21()};
-  GXSetPBRMaterial(values, values + 3, values[6], values[7], values + 8, values + 13, up);
+  // A special kind's bare glow is at the frame's exposure: the shader's tone w (GlowScale in the
+  // opaque pass) times this (kb topic/post-output.md).
+  GXSetPBRMaterial(values, values + 3, values[6], values[7], values + 8, values + 13, up,
+                   PortRoomEnv::GlowGain(frameExposed));
   // Every material sets its own, so a back copy's factors don't reach the next one.
-  GXSetPBRLightScale(lightScale[0], lightScale[1], kind == 45.f ? 1.f : fade,
-                     kind == 45.f ? GX_FALSE : fadeReplaces ? GX_TRUE : GX_FALSE);
+  GXSetPBRLightScale(lightScale[0], lightScale[1], pk == aurora::PbrKind::RouteHologram ? 1.f : fade,
+                     pk == aurora::PbrKind::RouteHologram ? GX_FALSE : fadeReplaces ? GX_TRUE : GX_FALSE);
   return kind;
 }
 
@@ -881,14 +973,48 @@ void CCubeModel::DrawSurface(const CCubeSurface& surface, const CModelFlags& mod
     // texture * vertex colour; T + T*c is that sum and the TEV clamps it the same way.
     CGX::SetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_TEXC, GX_CC_RASC, GX_CC_TEXC);
   }
+  // A frozen enemy (PortSetIcy) draws every surface as RenderIcy: Remastered's icy material from the
+  // render loose data, in place of its own, culling nothing, opaque and depth tested. Its maps are
+  // TCH0 on map 0, METL on map 1 and NMAP on map 2, each sampled by a stage of its own at the model's
+  // first coordinates; the kind 47 shader reads them where RenderIcy does.
+  const bool icy = sPortIcy.active && outside && !CCubeRenderer::That()->GetThermal() && PortIcyTextures();
+  const ERglCullMode icyCull = CGraphics::GetCullMode();
+  if (icy) {
+    CGX::SetNumIndStages(0);
+    CGX::SetNumTexGens(1);
+    CGX::SetTexCoordGen(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_IDENTITY, GX_FALSE, GX_PTIDENTITY);
+    CGX::SetNumTevStages(3);
+    static const int kIcyMaps[3] = {PortIcy::kColor, PortIcy::kMetal, PortIcy::kNormal};
+    for (int i = 0; i < 3; ++i) {
+      const GXTevStageID stage = static_cast< GXTevStageID >(GX_TEVSTAGE0 + i);
+      const GXTexMapID map = static_cast< GXTexMapID >(GX_TEXMAP0 + i);
+      CGX::SetTevOrder(stage, GX_TEXCOORD0, map, GX_COLOR0A0);
+      CGX::SetTevDirect(stage);
+      if (i == 0) {
+        CGX::SetTevColorIn(stage, GX_CC_ZERO, GX_CC_TEXC, GX_CC_RASC, GX_CC_ZERO);
+        CGX::SetTevAlphaIn(stage, GX_CA_ZERO, GX_CA_TEXA, GX_CA_RASA, GX_CA_ZERO);
+      } else {
+        CGX::SetTevColorIn(stage, GX_CC_CPREV, GX_CC_TEXC, GX_CC_ZERO, GX_CC_ZERO);
+        CGX::SetTevAlphaIn(stage, GX_CA_APREV, GX_CA_TEXA, GX_CA_ZERO, GX_CA_ZERO);
+      }
+      CGX::SetTevColorOp(stage, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+      CGX::SetTevAlphaOp(stage, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+      GXLoadTexObj(&sPortIcyTex[kIcyMaps[i]], map);
+      CTexture::InvalidateTexmap(map);
+    }
+    CGX::SetAlphaCompare(GX_ALWAYS, 0, GX_AOP_OR, GX_ALWAYS, 0);
+    CGX::SetBlendMode(GX_BM_NONE, GX_BL_ONE, GX_BL_ZERO, GX_LO_CLEAR);
+    CGX::SetZMode(true, GX_LEQUAL, true);
+    CGraphics::SetCullMode(kCM_None);
+  }
   // Port: PBR mod materials. The fallback TEV set above stays valid for the
   // paths PortPBRAllowed rejects.
-  const bool pbr = inventory || (outside && (fadeBlend || (material.IsFlagSet(kStateFlag_PortPBR) &&
-                                                           CCubeMaterial::PortPBRAllowed(drawFlags))));
+  const bool pbr = icy || inventory || (outside && (fadeBlend || (material.IsFlagSet(kStateFlag_PortPBR) &&
+                                                                  CCubeMaterial::PortPBRAllowed(drawFlags))));
   // A fading model is shaded as it is at full alpha.
   const CModelFlags& lookFlags = fadeBlend ? opaqueFlags : drawFlags;
-  const bool sortedDraw = (inventory ? modelFlags : lookFlags).GetTrans() >= CModelFlags::kT_Blend ||
-                          material.IsFlagSet(kStateFlag_DepthSorting);
+  const bool sortedDraw = !icy && ((inventory ? modelFlags : lookFlags).GetTrans() >= CModelFlags::kT_Blend ||
+                                   material.IsFlagSet(kStateFlag_DepthSorting));
   if (!pbr && material.IsFlagSet(kStateFlag_PortPBR)) {
     PortSetFallbackGlow(material, static_cast< int >(surface.GetMaterialIndex()),
                         sortedDraw && !sPortSky);
@@ -986,7 +1112,7 @@ void CCubeModel::DrawSurface(const CCubeSurface& surface, const CModelFlags& mod
     // Room geometry with a lookup into its room's lightmap is lit by that, per texel, in
     // place of the volume; the material says which texcoord holds the lightmap UV.
     const int lightmapSlot =
-        found && env.lightmap != 0 ? PortLightmapSlot(static_cast< int >(surface.GetMaterialIndex())) : -1;
+        !icy && found && env.lightmap != 0 ? PortLightmapSlot(static_cast< int >(surface.GetMaterialIndex())) : -1;
     if (lightmapSlot >= 0) {
       f32 axes[3][3];
       for (int row = 0; row < 3; ++row) {
@@ -1054,9 +1180,14 @@ void CCubeModel::DrawSurface(const CCubeSurface& surface, const CModelFlags& mod
     }
     // An opaque material's own alpha (dst factor zero) means nothing to a blend.
     uint materialCube = 0;
-    const f32 kind = PortSetPBRMaterial(surface.GetMaterialIndex(), fadeBlend ? tint.GetAlpha() : 1.f,
-                                        fadeBlend && (material.GetCompressedBlend() >> 16) == GX_BL_ZERO,
-                                        sortedDraw && !sPortSky, &materialCube, &modelFlags);
+    f32 kind = static_cast< f32 >(aurora::PbrKind::Icy);
+    if (icy) {
+      PortSetIcyMaterial(viewToWorld, view);
+    } else {
+      kind = PortSetPBRMaterial(surface.GetMaterialIndex(), fadeBlend ? tint.GetAlpha() : 1.f,
+                                fadeBlend && (material.GetCompressedBlend() >> 16) == GX_BL_ZERO,
+                                sortedDraw && !sPortSky, &materialCube, &modelFlags);
+    }
     // A material with its own reflection cube (the Remastered arm cannon's) reflects that in
     // place of the room's, as Remastered draws it; the room still lights it. The cube is in
     // Remastered's world, which maps from ours as the room probes' cubes do (-x, z, y).
@@ -1070,7 +1201,7 @@ void CCubeModel::DrawSurface(const CCubeSurface& surface, const CModelFlags& mod
           {viewToWorld[1][0], viewToWorld[1][1], viewToWorld[1][2]},
       };
       // The ice (kind 28, 088e025e) darkens its reflection by the room's occlusion as the room cubes do.
-      const bool occluded = found && kind > 27.5f && kind < 28.5f;
+      const bool occluded = found && aurora::PbrKindOf(kind) == aurora::PbrKind::Ice;
       GXSetPBRProbeEx(viewToCube, 1.f, occluded ? env.occlusionMin : 1.f, occluded ? env.occlusionInvMax : 1.f);
       GXSetPBRCube(materialCubeId, materialCubeParams);
     } else if (sPortCameraCube) {
@@ -1096,17 +1227,15 @@ void CCubeModel::DrawSurface(const CCubeSurface& surface, const CModelFlags& mod
     }
     // Glass (kinds 8 and 11) and the force fields (14) see what is behind them: the screen so far,
     // copied into map 7 as the refracting particles copy it (CElementGen).
-    if (((kind > 7.5f && kind < 8.5f) || (kind > 10.5f && kind < 11.5f) || (kind > 13.5f && kind < 14.5f) ||
-         (kind > 22.5f && kind < 23.5f) || (kind > 28.5f && kind < 30.5f) || (kind > 33.5f && kind < 34.5f) ||
-         (kind > 35.5f && kind < 36.5f) || (kind > 42.5f && kind < 43.5f)) &&
-        CCubeMaterial::PortScreenCopyUsed()) {
+    const aurora::PbrKind pk = aurora::PbrKindOf(kind);
+    if (aurora::IsScreenCopyKind(pk) && CCubeMaterial::PortScreenCopyUsed()) {
       int portLeft, portTop, portWidth, portHeight;
       CGraphics::GetViewport(portLeft, portTop, portWidth, portHeight);
-      const bool visorGlass = kind > 35.5f && kind < 36.5f;
+      const bool visorGlass = pk == aurora::PbrKind::InventoryGlass;
       const bool halfRate = !visorGlass && (GXPortGetPerformance() & GX_PORT_PERF_GLASS_HALF_RATE) != 0;
       SPortGlassCopy& copy = halfRate ? sPortGlassPerfCopy : sPortGlassCopy;
       void* const copyDest = halfRate ? static_cast< void* >(&sPortGlassPerfDest) : CGraphics::GetDolphinSpareBuffer();
-      const bool wantMips = (kind > 22.5f && kind < 23.5f) || (kind > 28.5f && kind < 30.5f) || (kind > 42.5f && kind < 43.5f);
+      const bool wantMips = aurora::IsScreenMipsKind(pk);
       const int frame = CGraphics::GetFrameCounter();
       const bool sameView = copy.valid && copy.left == portLeft && copy.top == portTop && copy.width == portWidth &&
                             copy.height == portHeight && (copy.mips || !wantMips);
@@ -1158,7 +1287,7 @@ void CCubeModel::DrawSurface(const CCubeSurface& surface, const CModelFlags& mod
       // unverified, so every ColorAdd takes it.
       f32 diffuse[4] = {1.f, 1.f, 1.f, 1.f};
       f32 incan[4] = {0.f, 0.f, 0.f, 1.f};
-      if (tintOpaque || pbrBlend) {
+      if (!icy && (tintOpaque || pbrBlend)) {
         if (trans == CModelFlags::kT_Two || trans == CModelFlags::kT_Three) {
           if (tint.GetRed() > 0.f || tint.GetGreen() > 0.f || tint.GetBlue() > 0.f) {
             incan[0] = tint.GetRed();
@@ -1225,6 +1354,9 @@ void CCubeModel::DrawSurface(const CCubeSurface& surface, const CModelFlags& mod
   }
   if (pbr) {
     GXSetPBR(GX_FALSE);
+  }
+  if (icy) {
+    CGraphics::SetCullMode(icyCull);
   }
 #endif
 }
@@ -1503,9 +1635,8 @@ bool CCubeModel::PortThermalOverrideSurface(const CCubeSurface& surface) const {
   }
   f32 values[19];
   PortReadPBRMaterial(static_cast< int >(surface.GetMaterialIndex()), values, nullptr, nullptr, nullptr);
-  const int kind = int(values[13] + 0.5f);
   // Kinds 6, 21, 32 and 35 and the unlit colour mode (8) keep the retail draw in Remastered too.
-  return kind != 6 && kind != 21 && kind != 32 && kind != 35 && (int(values[7] + 0.5f) & 8) == 0;
+  return !aurora::KeepsRetailHotPass(aurora::PbrKindOf(values[13])) && (int(values[7] + 0.5f) & 8) == 0;
 }
 
 void CCubeModel::PortDrawThermalOverride(const float* positions, const float* normals,

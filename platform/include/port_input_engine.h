@@ -160,6 +160,7 @@ enum class ActionKind : uint8_t {
   X(Screenshot, Digital, "screenshot", "Screenshot")                                               \
   X(ToggleOriginal, Digital, "toggle_original", "Original experience")                             \
   X(ToggleRemastered, Digital, "toggle_remastered", "Remastered graphics")                         \
+  X(ToggleTexturePack, Digital, "toggle_texture_pack", "Texture pack")                             \
   X(PhotoMode, Digital, "photo_mode", "Photo mode")                                                \
   X(GyroAim, Digital, "gyro_aim", "Gyro aim")                                                      \
   X(ResetAim, Digital, "reset_aim", "Reset aim")                                                   \
@@ -181,7 +182,8 @@ enum class ActionKind : uint8_t {
   X(BallSpider, Digital, "ball_spider", "Spider Ball")                                             \
   X(BallUnmorph, Digital, "ball_unmorph", "Unmorph")                                              \
   X(BeamMenu, Digital, "beam_menu", "Trilogy beam radial selector (hold)")                          \
-  X(VisorMenu, Digital, "visor_menu", "Trilogy visor radial selector (hold)")
+  X(VisorMenu, Digital, "visor_menu", "Trilogy visor radial selector (hold)")                      \
+  X(Dodge, Digital, "dodge", "Dodge (with strafe)")
 
 enum class Action : uint16_t {
 #define PORT_INPUT_ACTION_ENUM(id, kind, key, label) id,

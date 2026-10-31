@@ -1626,6 +1626,13 @@ void CPlayerGun::PortFireStackedBeams(float dt, CStateManager& mgr, const CTrans
         !playerState.HasPowerUp(mBeamArr[i])) {
       continue;
     }
+    // The port has 2048 object slots (retail 1024) and spins forever in AllocateUniqueId once
+    // they are gone. Stacked shots (up to 5 a trigger, with rapid fire) in a big room filled them
+    // and froze the game (Exterior Docking Hangar alone holds ~950), so they leave the
+    // primary shot and the room's own spawns a reserve.
+    if (mgr.GetObjectListById(kOL_All).size() > kMaxObjects - 48) {
+      break;
+    }
     beam->PortLockStackTokens();
     beam->PortFireStackedProjectile(
         x834_27_underwater, dt, CPlayerState::EChargeStage(x330_chargeState), xf, mgr,
@@ -1720,7 +1727,12 @@ void CPlayerGun::FireSecondary(float dt, CStateManager& mgr) {
   bool fired = false;
   switch (x318_comboAmmoIdx) {
   case 1: {
+#ifdef TARGET_PC
+    // Port: infinite ammo fires with none left (DecrPickUp then keeps the count).
+    x300_remainingMissiles = playerState->PortUsableAmount(CPlayerState::kIT_Missiles);
+#else
     x300_remainingMissiles = playerState->GetItemAmount(CPlayerState::kIT_Missiles);
+#endif
     if (mgr.GetWeaponIdCount(x538_playerId, kWT_Missile) < 3 && int(x300_remainingMissiles) != 0) {
       playerState->DecrPickUp(CPlayerState::kIT_Missiles,
                               x832_26_comboFiring ? playerState->GetMissileCostForAltAttack() : 1);
@@ -1852,7 +1864,12 @@ void CPlayerGun::ActivateCombo(CStateManager& mgr) {
 
   CPlayerState& playerState = *mgr.PlayerState();
   const int altCost = playerState.GetMissileCostForAltAttack();
+#ifdef TARGET_PC
+  // Port: infinite ammo starts a charge combo with too few missiles.
+  if (playerState.PortUsableAmount(skItemArr[x318_comboAmmoIdx]) >= altCost) {
+#else
   if (playerState.GetItemAmount(skItemArr[x318_comboAmmoIdx]) >= altCost) {
+#endif
     bool canFire = true;
     if (x310_currentBeam == CPlayerState::kBI_Plasma) {
       canFire = !x834_27_underwater;
@@ -2419,6 +2436,24 @@ void CPlayerGun::PortRenderFlashes(int first, int end) const {
   }
 }
 
+void CPlayerGun::PortRenderMuzzleFxAt(const CStateManager& mgr, const CTransform4f& muzzleXf) const {
+  // The effects are posed at x418_beamLocalXf in the gun's space (Update): seen from a camera
+  // moved into the space that puts that locator on `muzzleXf`, they form at the body's cannon.
+  const CTransform4f gunXf = muzzleXf * x418_beamLocalXf.GetInverse();
+  const CTransform4f oldViewMtx(CGraphics::GetViewMatrix());
+  CGraphics::SetViewPointMatrix(gunXf.GetInverse() * oldViewMtx);
+  gpRender->SetModelMatrix(CTransform4f::Identity());
+  if (x32c_chargePhase >= kCP_FxGrown && x32c_chargePhase < kCP_ComboXfer) {
+    x800_auxMuzzleGenerators[x320_currentAuxBeam]->Render();
+  }
+  if (x832_25_chargeEffectVisible &&
+      (x38c_muzzleEffectVisTimer > 0.f || x32c_chargePhase > kCP_AnimAndSfx)) {
+    x72c_currentBeam->DrawMuzzleFx(mgr);
+  }
+  PortRenderFlashes(0, kPortFirstChargeFlash);
+  CGraphics::SetViewPointMatrix(oldViewMtx);
+}
+
 // CPlayerMP1::ShouldGenerateUnderWaterBubbles 0xcf14bc: in normal water with the ball's top
 // (morphed) or the camera at least 0.9 below the surface.
 static bool PortShouldGenerateUnderWaterBubbles(const CPlayer& player, const CStateManager& mgr) {
@@ -2651,7 +2686,11 @@ void CPlayerGun::UpdateWeaponFire(float dt, CPlayerState& playerState, CStateMan
           DropBomb(kBW_Bomb, mgr);
       } else {
         x835_29_powerBombReady = playerState.HasPowerUp(CPlayerState::kIT_PowerBombs) &&
+#ifdef TARGET_PC
+                                 playerState.PortUsableAmount(CPlayerState::kIT_PowerBombs) > 0 &&
+#else
                                  playerState.GetItemAmount(CPlayerState::kIT_PowerBombs) > 0 &&
+#endif
                                  mgr.CanCreateProjectile(x538_playerId, kWT_PowerBomb, 1) &&
                                  mgr.CanCreateProjectile(x538_playerId, kWT_Bomb, 1);
         if ((pressedStates & 0x2) != 0 && x835_29_powerBombReady)
@@ -2664,7 +2703,11 @@ void CPlayerGun::UpdateWeaponFire(float dt, CPlayerState& playerState, CStateMan
     }
     if ((pressedStates & 0x2) != 0 && static_cast< int >(x318_comboAmmoIdx) == 0 &&
         !IsWeaponStateSet(0x2) && x32c_chargePhase == kCP_NotCharging) {
+#ifdef TARGET_PC
+      int missileCount = playerState.PortUsableAmount(CPlayerState::kIT_Missiles);
+#else
       int missileCount = playerState.GetItemAmount(CPlayerState::kIT_Missiles);
+#endif
       if (x338_nextState != kNS_EnterMissile && x338_nextState != kNS_ExitMissile) {
         if (playerState.HasPowerUp(CPlayerState::kIT_Missiles) && missileCount > 0) {
           x300_remainingMissiles = missileCount;

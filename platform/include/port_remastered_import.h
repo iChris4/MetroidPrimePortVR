@@ -104,7 +104,16 @@ namespace ImportStage {
 //     frame when the buffers its two-tangent surfaces draw have it, not only when all of them do.
 // 81: C78982B4 door frames and its twin family 131ED7F0 read their bake from coord 3 (TEXCOORD_1.zw).
 // 82: the surface's visor word keeps mesh bits 19 and 22 (the thermal visor's hot and cold passes).
-inline constexpr int kConverter = 82;
+// 83: 9D53CF06 (the Chozo Lore statues' sheet) draws as kind 46, its waved, bent, premultiplied glow.
+// 84: every Lava2EmissiveOnly shader draws as kind 6 (Monitor Station's pool is 696EA755).
+// 85: 34 more shader twins (exact, attribute-location-only and skinned copies) route to their handled family.
+// 86: bc1509e8 and its twins f43e3c13, 68eec2a3 draw as kind 41 with ICAN masked by BCLR.a and alpha DIFC.a.
+// 87: 16 more shader twins whose vertex shaders differ in the UVs only (AUVI and animated UVs) route to their family.
+// 88: ColorUnlit-white (568b8e25, 8afac076, ee2d9846) draws as ColorUnlit with base x CCH0.x, no vertex colour.
+// 89: 353d6547 draws as kind 29; 74c655e4 as kind 43 with the CCH1 tint and dual-source output.
+// 90: 54b4021f (Crystal) draws as kind 48.
+// 91: the skinned twins f07e9761 (of 98f0556d) and 3ef54cc4, 35acebd7 (of 4bc890c1) route to their family.
+inline constexpr int kConverter = 91;
 // What a converted texture holds: port_remastered_image/txtr/dds/astc, and Converter's Get and
 // Cube. Each converted texture is kept across imports under its tag and this number, so a
 // kConverter bump re-imports the models without converting their textures again.
@@ -129,7 +138,24 @@ inline constexpr int kTextures = 5;
 //     the elevator platforms 32103B70/F33A6018 take 6FA561D0's model, not a Frigate rubble sheet.
 // 21: intra-Mines elevator C0A4DF30 uses the shipped E8E0AB8D platform, not a VFX model.
 // 22: a static model on a rigid retail skin keeps each connected piece on one bone (the gunship's hatch).
-inline constexpr int kModels = 22;
+// 23: the HUD's minimap depth mask 5EA45156 keeps its retail model (a Remastered mesh in its
+//     place hid the whole map).
+// 24: the cutscene Power/Varia/Gravity bodies F39476F2/776C1A96/57F5C930 take the models
+//     Remastered's cutscene characters bind (913C579B/2AED633C/5D4B52E2, with the face and visor
+//     glass), not BallTransitions' unlit stand-ins.
+// 25: retail CMDLs 1D7B426A, 7DE8EF50, 9AB3B2AA and FD19ECA3 (the Eyon's ice overlay) keep their
+//     retail models: their partners are VFX_Model_Base meshes, whose texture is the placeholder.
+// 26: retail CMDL 4F607CB5 (a model particle of PART B60D289E, the Phazon stream that takes the
+//     suit in Metroid Prime's Lair) keeps its retail model: its partner was a mines metal trim.
+// 27: the frozen models (CCharacterInfo 0x0364A97A) of Magdolite, Metroid Prime and the elite
+//     and Phazon elite pirates replace their ice overlays, weighted by the character's body;
+//     an ANCS binding one pair in several characters is rebound in the named one only.
+// 28: retail CMDL 119683F6 (Monitor Station's spinner bridge, ANCS 2220567B) is in the table,
+//     paired with 96b2cc02, the skinned model of its CHPR.
+// 29: the Puffer (E7CDBAF2) is paired with its CHPR's plain skin 5a42cd1b, not Metal.Skin 36d02b0c.
+// 30: the Puffer's Metal.Skin is imported as variant 1 of its ANCS (8DC8052E), for the Tower of
+//     Light's puffers.
+inline constexpr int kModels = 30;
 // 63: ELPS reads its CNST surface flag; the system tween is 0 only at a 0x1000000 lifetime.
 // 62: NEGT, CRCV, SPEV, ELPS, ROTV, PNCV, KEYF, SLTW, CRLN octaves, KESP, one-stop GRAD, PAP0/9,
 //     ADV9 and IAV0..3 are converted; PLNV counts come from MAXP.
@@ -197,7 +223,8 @@ inline constexpr int kModels = 22;
 // 135: KESP kept as the ELC2 node tween (AtomicBeta ELC2 radius).
 // 136: GunTurret particle properties (room GENPs).
 // 137: GunTurret visor effects (room ELC2s).
-inline constexpr int kEffects = 138;   // Drone laser and scanner particles (room GENPs)
+// 138: Drone laser and scanner particles (room GENPs).
+inline constexpr int kEffects = 139;   // Queen barrier shield/glow models back-cull (MATI cull byte)
 // 20: two rooms matching one area write only the closer match's files, not the later room's.
 // 21: roomenv version 22, the world master's hints driven by its camera volumes (the table in every roomenv).
 // 22: a master's InventoryActivator fired by the camera going under water drives its hints (kSenderCameraWaterItem).
@@ -236,14 +263,27 @@ inline constexpr int kEffects = 138;   // Drone laser and scanner particles (roo
 // 61: a GunTurret's visor effect (actor slot 4: ELC2 or GENP).
 // 62: a Drone's laser particles and its scanner effect (actor slot 5).
 // 63: roomenv version 29, the suns' links and timelines (the intro's fill suns fade out).
-inline constexpr int kRooms = 63;
+// 64: the Queen barrier group survives its effects' back-cull bit (effects 139 dropped it).
+// 65: roomenv version 30, room trigger volumes (room-local TriggerMP1 player/camera detect) drive the room's hints.
+// 66: roomenv version 31, environment variables (the master's META vars, trigger modifiers, query branches).
+// 67: roomenv version 32, a room trigger volume's own active bit and the script links that switch it.
+// 69: a matched retail Effect object drawing another PART takes its GENP's shared PART and variables
+// (68 is port's trigger hash fix).
+// 70: the Chozo Lore sheets' actors (their own model, unmarked as added) stand in for retail's lore glow actors.
+// 71: roomenv version 33, the ice darkeners fired at load (ActorIceDarkenerMP1 0xf798e0).
+// 72: animated platforms are left to retail's Platform (they looped as scenery, without collision).
+// 74: a platform's model is drawn only riding its retail Platform; unbound or animated, retail draws it.
+// 75: the grid is the LTPB the ROOM's BLIT names, found in the master pak too (25 rooms had none).
+inline constexpr int kRooms = 75;
 inline constexpr int kRoomModels = 1;  // the rooms' own models and their levels of detail
 // kText: port_remastered_text, and the font (port_remastered_font).
 // 2: text/.disc, the disc the tables were merged from (kTextDiscName).
 inline constexpr int kText = 2;
 // 9: envfx.bin, the EnvironmentFX flake textures (port_envfx_file.h).
 // 10: shell.bin, the silhouette-shell textures (port_shell_file.h).
-inline constexpr int kHud = 17;        // port_remastered_hud, port_remastered_map, envfx.bin, shell.bin
+// 18: hud/.disc, the disc the frames were rebuilt from (kHudDiscName).
+// 19: icy.bin, the frozen-enemy material (port_icy_file.h).
+inline constexpr int kHud = 19;        // port_remastered_hud, port_remastered_map, envfx.bin, shell.bin, icy.bin
 inline constexpr int kMovies = 0;      // port_remastered_movie
 inline constexpr int kGallery = 0;     // the gallery pictures (port_gallery)
 }  // namespace ImportStage
@@ -660,6 +700,11 @@ inline constexpr const char* kImportStampName = ".import-version";
 // import's STRG_Main on Trilogy names GameCube-only icons, and Trilogy's map reads more strings).
 inline constexpr const char* kTextFolder = "text";
 inline constexpr const char* kTextDiscName = ".disc";
+// In the import's hud folder, the same record for its frames (FRME, .hudbars): each is rebuilt
+// from that disc's frame, and the discs' frames differ (Trilogy's pause screen names models the
+// GameCube's lacks, and the reverse), so another disc keeps its own.
+inline constexpr const char* kHudFolder = "hud";
+inline constexpr const char* kHudDiscName = kTextDiscName;
 
 // ~/.switch/prod.keys if it is there, else empty.
 std::string DefaultKeysPath();

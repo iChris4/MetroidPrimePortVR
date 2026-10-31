@@ -32,7 +32,6 @@
 #include <fstream>
 #include <memory>
 #include <mutex>
-#include <sstream>
 
 namespace aurora {
 void request_screenshot() noexcept;
@@ -343,7 +342,8 @@ void BindBeamChords(Profile& p) {
     if (!anyKey && !lshiftTaken) keyShifts.push_back(Make(Device::Key, SDL_SCANCODE_LSHIFT));
     bool anyPad = false;
     for (const Input& in : padShifts) anyPad = anyPad || (in.Valid() && in.device == Device::PadButton);
-    if (!anyPad && !PortDebug::TouchActive() && !PadButtonBoundBesidesL(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER)) {
+    // Also with the touch overlay on: its buttons are touch inputs, so a pad played beside it keeps LB.
+    if (!anyPad && !PadButtonBoundBesidesL(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER)) {
       padShifts.push_back(NativeInput(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER));
     }
   }
@@ -382,9 +382,11 @@ void BindPortControls(Profile& p) {
   BindBeamChords(p);
 
   // Turbo: A on one poll and off the next, so the gun sees a press edge every
-  // other tick. Retail has no turbo; the touch button has its own setting.
-  const float tick = PortDebug::TickPeriod();
-  const auto turboHz = static_cast< uint16_t >(std::lround(tick > 0.f ? 0.5f / tick : 30.f));
+  // other tick. Retail has no turbo; the touch button has its own setting. The
+  // rate is the nominal one: adaptive simulation changes the tick every frame,
+  // and a profile that changes every frame is rebuilt every frame (issue #235).
+  const unsigned rate = PortDebug::SimRate();
+  const auto turboHz = static_cast< uint16_t >(rate > 0 ? (rate + 1) / 2 : 30);
   if (!PortDebug::OriginalExperience()) {
     for (int slot = 0; slot < PAD_KEY_SLOT_COUNT; ++slot) {
       Bind(p, Action::PadA, KeySlotInput(PortDebug::TurboBinding(slot), kMouseHeld), turboHz);
@@ -413,6 +415,7 @@ void BindPortControls(Profile& p) {
   Bind(p, Action::LoadState, Make(Device::Key, SDL_SCANCODE_F9));
   Bind(p, Action::Screenshot, Make(Device::Key, SDL_SCANCODE_F12));
   Bind(p, Action::PhotoMode, Make(Device::Key, SDL_SCANCODE_F8));
+  Bind(p, Action::ToggleTexturePack, Make(Device::Key, SDL_SCANCODE_F7));
   // Hold to aim / hold to pause for the gyro (F1 > Controller > Gyro aim).
   Bind(p, Action::GyroAim, NativeInput(SDL_GAMEPAD_BUTTON_RIGHT_STICK));
   Bind(p, Action::GyroAim, Make(Device::Key, SDL_SCANCODE_LCTRL));
@@ -666,14 +669,15 @@ void RouteDirectActions(const PortInput::Output& out) {
   const int visorPick = PortRadial::TakePick(PortRadial::kVisor);
   PushCyclePick(false, visorDir != 0 ? CycleTarget(false, visorDir) : visorPick);
   if (out.Pressed(Action::SpringBall)) PortDebug::RequestSpringBall();
+  if (out.Pressed(Action::Dodge)) PortDebug::RequestDodge();
 }
 
 // The port's own actions: polled every frame by PollPortActions, not with the game
 // ticks, so they work while the game is paused or the F1 overlay is open.
 bool IsPortAction(Action a) {
   return a == Action::PortMenu || a == Action::SaveState || a == Action::LoadState || a == Action::Screenshot ||
-         a == Action::ToggleOriginal || a == Action::ToggleRemastered || a == Action::PhotoMode || a == Action::GyroAim ||
-         a == Action::ResetAim;
+         a == Action::ToggleOriginal || a == Action::ToggleRemastered || a == Action::ToggleTexturePack ||
+         a == Action::PhotoMode || a == Action::GyroAim || a == Action::ResetAim;
 }
 
 // Keys pressed since the last PollPortActions, added by an SDL event watch: a short
@@ -727,12 +731,19 @@ void RefreshLocked() {
   sUserTime = time;
   std::ifstream file(path, std::ios::binary);
   if (!file) return;
-  std::ostringstream text;
-  text << file.rdbuf();
+  // A bindings file is a few KiB; a huge one is a mistake, not a config.
+  constexpr std::streamsize kMaxControlsBytes = 1 << 20;
+  std::string content(static_cast< size_t >(kMaxControlsBytes) + 1, '\0');
+  file.read(content.data(), kMaxControlsBytes + 1);
+  content.resize(static_cast< size_t >(file.gcount()));
+  if (static_cast< std::streamsize >(content.size()) > kMaxControlsBytes) {
+    PortLog::Write("port: controls.toml is larger than 1 MiB; ignored\n");
+    return;
+  }
   PortInput::UserBindings parsed;
   std::string error;
   int dropped = 0;
-  if (PortInput::ParseUserBindings(text.str(), parsed, &error, &dropped)) {
+  if (PortInput::ParseUserBindings(content, parsed, &error, &dropped)) {
     PortLog::Write("port: controls.toml loaded (%zu profiles)\n", parsed.profiles.size());
     if (dropped > 0)
       PortLog::Write("port: controls.toml: skipped %d beam_shift row(s); beams are now default shift+D-pad chords\n", dropped);
@@ -1176,6 +1187,23 @@ PADStatus Synthesize(const PortInput::Output& out) {
   return s;
 }
 
+// Twin stick aims with the right stick, so the R trigger's free look (a stand-still mode) only
+// gets in the way, most of all with Fire moved onto RT: out of the Morph Ball, where R is the
+// Spider Ball, the controller's R trigger stops pressing R and pulling the R analog. Free look on
+// any other input (a stick click, a key) stays.
+static void ApplyTwinStickFreeAim(Profile& p, uint16_t contexts) {
+  if (!PortDebug::TwinStick() || (contexts & PortInput::kCtxMorphBall) != 0) return;
+  const auto rTrigger = [](const Input& in) {
+    if (in.device == Device::PadAxis) return in.code == SDL_GAMEPAD_AXIS_RIGHT_TRIGGER;
+    return in.device == Device::PadButton &&
+           (in.code == PAD_RAW_BUTTON_TRIGGER_RIGHT || in.code == PAD_RAW_BUTTON_TRIGGER_RIGHT_CLICK);
+  };
+  for (Binding& b : p.bindings) {
+    if (b.action != Action::PadR && b.action != Action::RAnalog) continue;
+    if (std::any_of(b.inputs.begin(), b.inputs.begin() + b.count, rTrigger)) b.blocked |= PortInput::kCtxGameplay;
+  }
+}
+
 SPoll Poll(unsigned mouseHeld, bool focused) {
   static Profile sProfile;
   static PortInput::Runtime sRuntime;
@@ -1186,6 +1214,8 @@ SPoll Poll(unsigned mouseHeld, bool focused) {
   BuildProfile(next);
   ApplyMenuButtons(next);
   PortInput::ApplyBallButtons(next);
+  const uint16_t contexts = GameContexts();
+  ApplyTwinStickFreeAim(next, contexts);
   if (!sInit || next != sProfile) {
     UpdatePromptBindings(next);
     sProfile = std::move(next);
@@ -1196,7 +1226,6 @@ SPoll Poll(unsigned mouseHeld, bool focused) {
   PortInput::RawState raw;
   FillRawState(raw, mouseHeld, focused);
   sClockMs += static_cast< double >(PortDebug::TickPeriod()) * 1000.0;
-  const uint16_t contexts = GameContexts();
   const PortInput::Output& out =
       sRuntime.Poll(raw, contexts, sClockMs, QuietContexts(sRuntime.ActiveContexts(), contexts));
   SPoll r;
@@ -1206,7 +1235,16 @@ SPoll Poll(unsigned mouseHeld, bool focused) {
     r.status.err = PAD_ERR_NO_CONTROLLER;
     return r;
   }
-  RouteDirectActions(out);
+  if (PortDebug::Visible()) {
+    // The F1 overlay owns the keyboard and pad: the direct actions (beam/visor picks, the
+    // radial menus, Spring Ball) reach the game outside the pad, so they wait too. A held
+    // radial menu is released and its pick dropped.
+    PortRadial::Tick(false, false, 0.f, 0.f);
+    PortRadial::TakePick(PortRadial::kBeam);
+    PortRadial::TakePick(PortRadial::kVisor);
+  } else {
+    RouteDirectActions(out);
+  }
 
   r.status = Synthesize(out);
   // The scan text reads only A: the Menu row's, not gameplay's (issue #93). The
@@ -1276,6 +1314,7 @@ void PollPortActions() {
   if (out.Pressed(Action::PhotoMode)) PortPhoto::RequestToggle();
   if (out.Pressed(Action::ToggleOriginal)) PortDebug::SetOriginalExperience(!PortDebug::OriginalExperience());
   if (out.Pressed(Action::ToggleRemastered)) PortDebug::ToggleRemastered();
+  if (out.Pressed(Action::ToggleTexturePack)) PortDebug::ToggleTexturePack();
   // The player's own actions (controls.toml [[custom_action]]): each one runs as
   // its binding is pressed, and the note it returns is the toast.
   out.ForEachCustomPressed([](Action action) {
