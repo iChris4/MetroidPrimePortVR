@@ -921,6 +921,18 @@ TEST_F(SceneHdrTest, ScreenKindsFogAsTheirFogPermsInHdr) {
   EXPECT_TRUE(g_uncapturedErrors.empty());
 }
 
+TEST_F(SceneHdrTest, InventoryCoverageSurvivesVolumetricFog) {
+  for (const bool hdr : {false, true}) {
+    auto config = screen_config(36, hdr);
+    config.volFog = gx::VolFogBlended;
+    const auto source = gx::build_shader_source(config);
+    EXPECT_NE(source.find("var pbr_out = max(pbr_lo + pbr_glow, vec3f(0.0)) * inv_c;"), std::string::npos);
+    EXPECT_NE(source.find("pbr_out = pbr_out * pbr_vf.a"), std::string::npos);
+    EXPECT_EQ(module_error(source), "");
+  }
+  EXPECT_TRUE(g_uncapturedErrors.empty());
+}
+
 TEST_F(SceneHdrTest, ScreenReadsAreRawOnlyInHdr) {
   for (const int kind : {8, 11, 14, 23, 29, 30, 34, 36}) {
     SCOPED_TRACE(kind);
