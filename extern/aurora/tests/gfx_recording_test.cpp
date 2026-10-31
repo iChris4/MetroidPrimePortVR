@@ -381,6 +381,8 @@ TEST(StereoShaderLayout, UpstreamFlagsDoNotOverwriteEyeReplayFlags) {
   config.shell = 2;
   config.pbrCut = 1;
   config.pbrThermal = 1;
+  config.pbrPlain = 1;
+  config.pbrNoDebug = 1;
   config.actorDecal = 1;
   EXPECT_EQ(config.currentPnMtx, 7);
   EXPECT_EQ(config.multiview, aurora::gx::EyeClipImmediate);
@@ -393,6 +395,8 @@ TEST(StereoShaderLayout, UpstreamFlagsDoNotOverwriteEyeReplayFlags) {
   EXPECT_EQ(config.shell, 2);
   EXPECT_EQ(config.pbrCut, 1);
   EXPECT_EQ(config.pbrThermal, 1);
+  EXPECT_EQ(config.pbrPlain, 1);
+  EXPECT_EQ(config.pbrNoDebug, 1);
   EXPECT_EQ(config.actorDecal, 1);
   // tools/primedgun_seed.py must agree with the serialized row layout.
   EXPECT_EQ(sizeof(aurora::gx::PipelineConfig), 2788u);
