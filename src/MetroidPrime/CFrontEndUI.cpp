@@ -36,6 +36,8 @@
 #include "MetroidPrime/CQuitGameScreen.hpp"
 
 #include "port_apclient.h"
+#include "vr/openxr_integration.h"
+#include "vr/vr_resume_prompt.h"
 #include "port_debug.h"
 #include "port_pointer_menu.h"
 #include "port_savestate.h"
@@ -1797,6 +1799,7 @@ bool sResumeSound = false;
 // Whether the offer may still appear (the opening logos and the title).
 bool sResumeInFlow = true;
 int sResumeFrames = 0;
+unsigned sResumePromptTicks = 0;
 PortSaveState::ResumeInfo sResumeInfo;
 
 // Pad, keyboard and the window's buttons all end here.
@@ -1818,6 +1821,7 @@ void PortResumePromptTick() {
     // while the splashes, loading, logos and title wait.
     if (sResumeInFlow && (sResumeFrames++ % 15) == 0 && PortSaveState::ResumeOffer(sResumeInfo)) {
       sResumeStage = kRS_Prompt;
+      sResumePromptTicks = 0;
       // A state that already crashed once after resuming starts on No.
       sResumeYes = !sResumeInfo.crashedAgain;
     }
@@ -1831,6 +1835,7 @@ void PortResumePromptTick() {
     }
   }
   if (sResumeStage == kRS_Prompt) {
+    ++sResumePromptTicks;
     PortSaveState::SetResumePrompt(&sResumeInfo, sResumeYes);
   } else {
     PortSaveState::SetResumePrompt(nullptr, false);
@@ -1846,6 +1851,15 @@ bool PortResumePromptInput(const CFinalInput& input) {
   }
   if (sResumeStage != kRS_Prompt) {
     return false;
+  }
+  if (PortVr::OpenXRIsRunning()) {
+    const int answer = PortVr::ResumePromptAnswer(sResumePromptTicks, input.PA(), input.PB(),
+                                                  PortDebug::MouseHeldButtons() != 0);
+    if (answer >= 0) {
+      sResumeSound = true;
+      AnswerResume(answer == 1);
+    }
+    return true;
   }
   if (input.PDPLeft() || input.PDPRight() || input.PDPUp() || input.PDPDown()) {
     sResumeYes = !sResumeYes;

@@ -322,8 +322,8 @@ const SettingKey kSettingKeys[] = {
      },
      [](std::ostream& out) { out << sBootLogos; }, false, "0", "2"},
     BoolKey< &sSaveStateHotkeys >("savestate_hotkeys"),
-    // Fresh opt-in: ignore legacy quick_resume=1, which previously defaulted on.
-    BoolKey< &sQuickResume >("quick_resume_enabled"),
+    // Ask-and-wait defaults on, including profiles from the old opt-in behavior.
+    BoolKey< &sQuickResume >("quick_resume_prompt_enabled"),
     BoolKey< &sSaveStateRoomState >("savestate_room_state"),
     {"fov",
      [](const std::string& value) {

@@ -2,7 +2,7 @@
 <resources>
     <string name="app_name">PrimedGun v2</string>
     <string name="primedgun_quick_resume">Quick resume</string>
-    <string name="primedgun_quick_resume_note">Save your place when quitting and offer to resume it at the next launch. Off by default.</string>
+    <string name="primedgun_quick_resume_note">Save your place when quitting and offer to resume it at the next launch. On by default. Startup waits for your choice and never loads automatically.</string>
     <string name="primedgun_texture_pack_folder">Texture Pack Folder</string>
     <string name="primedgun_texture_pack_help">Installing HD Texture Packs</string>
 </resources>

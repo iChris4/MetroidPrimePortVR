@@ -50,7 +50,7 @@ void DrawSaveStatesTab() {
   ItemHelp("On leaving the app (Android) or quitting (desktop) during play, a resume state is "
            "written, and the next launch asks \"Resume where you left off?\" Yes restores it like "
            "a save state (room and enemies too, unless \"Keep enemies and room objects\" is off); "
-           "No deletes it. Nothing is written in cutscenes, elevator rides, while Samus is dead or "
+           "No keeps the state and opens the normal game menu. Enabled by default; waits for an explicit answer. Nothing is written in cutscenes, elevator rides, while Samus is dead or "
            "on the title screen.");
   const bool running = sStateManager != nullptr;
   if (!running) {

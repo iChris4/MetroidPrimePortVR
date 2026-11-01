@@ -43,7 +43,7 @@ constexpr KeyInfo kKeys[] = {
 #include "vr/vr_controller_bindings.inc"
 #undef VR_BIND
 
-    {"quick_resume_enabled", K::Bool, "0"},
+    {"quick_resume_prompt_enabled", K::Bool, "1"},
 
     // Port Config: headset
     {"vr_enabled", K::Bool, "1"},

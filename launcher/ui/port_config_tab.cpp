@@ -40,8 +40,8 @@ void BuildPortConfigTab(TabContext& ctx, QTabWidget* tabs) {
     if (ctx.openPortOptions) ctx.openPortOptions();
   });
 
-  ctx.Check(layout, QObject::tr("Quick resume"), "quick_resume_enabled",
-            QObject::tr("Save your place when quitting and offer to resume it at the next launch. Off by default."));
+  ctx.Check(layout, QObject::tr("Quick resume"), "quick_resume_prompt_enabled",
+            QObject::tr("Save your place when quitting and ask at the next launch. On by default; waits for your choice and never loads automatically. Save states are experimental."));
 
   layout->addWidget(ctx.Section(QObject::tr("VR Headset")));
   ctx.Check(layout, QObject::tr("Enable VR"), "vr_enabled",

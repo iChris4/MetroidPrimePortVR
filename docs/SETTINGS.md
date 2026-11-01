@@ -1099,8 +1099,9 @@ other `X:\Users\<name>`: `X:\Users\<user>`); the
   rides the elevator after loading, like stepping onto it. Console:
   `state list | last | save [n] | load [n] | undo | slot <n>`.
 - Quick resume (launcher > Port Config, VR > Debug, or F1 > Save states;
-  `quick_resume_enabled`, off by default for new and existing users): the legacy
-  `quick_resume` preference is ignored; enable this option again to opt in. When the app
+  `quick_resume_prompt_enabled`, on by default for new and existing users): old
+  `quick_resume` and `quick_resume_enabled` values are replaced by this ask-and-wait preference.
+  You can disable it in any settings menu. When the app
   goes to the background (Android) or you quit (desktop, window close, the
   overlay's Exit game or the console `quit`) during play, one more state is
   written to `savestates/resume.mpss`, outside the eight slots (slot 0's undo is
@@ -1125,7 +1126,9 @@ other `X:\Users\<name>`: `X:\Users\<user>`); the
   answer); Yes starts the file it came from and loads the state like a
   save state, straight from black without the file-select movie (a Yes during a
   splash skips the rest of the splashes; with `savestate_room_state` the room keeps its enemies and doors as saved, for the rooms whose script still matches: see the note under Save states; boss progress is not kept),
-  No dismisses the prompt and keeps the file; B does nothing. The file stays after Yes too, until the next safe point replaces it. Nothing is written
+  No dismisses the prompt and keeps the file. In VR, the headset shows the question
+  and startup waits indefinitely: A answers Yes and B answers No. On desktop,
+  B does nothing. The file stays after Yes too, until the next safe point replaces it. Nothing is written
   (and a previous resume file stays) on the title screen or before the first
   safe point of a session.
   A resume from another card, randomizer seed or Archipelago session is never

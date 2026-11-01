@@ -298,7 +298,7 @@ struct View {
     bool streamed_audio = true;
     bool musyx_audio = true;
     bool log_file = false;
-    bool quick_resume = false;
+    bool quick_resume = true;
     bool draw_tags = true; // PortDebug::DrawTags
     uint32_t eye_width = 0; // per eye at the chosen render scale; 0 without a session
     uint32_t eye_height = 0;
@@ -2363,6 +2363,51 @@ inline Pixels BuildCompileToastPixels(uint32_t done, uint32_t total) {
 // count moves many times a second.
 inline uint32_t CompileToastKey(uint32_t done, uint32_t total) {
     return total == 0 ? 0u : static_cast<uint32_t>(static_cast<uint64_t>(std::min(done, total)) * 100u / total) + 1u;
+}
+
+inline Pixels BuildResumeToastPixels(const std::string& room, const std::string& saved, bool after_crash,
+                                     bool crashed_again) {
+    Pixels pixels(static_cast<size_t>(kWidth) * kImageHeight, 0u);
+    const int width = kWidth;
+    const int height = kImageHeight;
+    FillRect(pixels, width, height, 0, 0, kWidth, kToastHeight, 0xD0100804u);
+    FillRect(pixels, width, height, 0, 0, kWidth, 8, 0xE0FFB030u);
+    FillRect(pixels, width, height, 0, kToastHeight - 8, kWidth, 8, 0xE0FFB030u);
+    const auto centred = [&](const std::string& text, int y, int scale, uint32_t color) {
+        DrawString(pixels, width, height, text.c_str(), (kWidth - TextWidth(text.c_str(), scale)) / 2, y, scale,
+                   color);
+    };
+
+    if (crashed_again) {
+        centred("IT CLOSED AGAIN AFTER RESUMING HERE", 34, 4, 0xFFFFD8A0u);
+        centred("RESUME ANYWAY", 80, 4, 0xFFFFD8A0u);
+    } else if (after_crash) {
+        centred("THE GAME CLOSED UNEXPECTEDLY", 34, 4, 0xFFFFD8A0u);
+        centred("RESUME WHERE YOU LEFT OFF", 80, 4, 0xFFFFD8A0u);
+    } else {
+        centred("RESUME WHERE YOU LEFT OFF", 50, 5, 0xFFFFD8A0u);
+    }
+    std::string place = room;
+    for (char& ch : place) {
+        ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+    }
+    centred(place, 136, TextWidth(place.c_str(), 3) <= kWidth - 64 ? 3 : 2, 0xFFFFF0C8u);
+    if (!saved.empty()) {
+        centred("SAVED " + saved, 176, 2, 0xFFD8C0A0u);
+    }
+
+    constexpr int box_y = 226;
+    constexpr int box_w = 360;
+    constexpr int box_h = 112;
+    constexpr const char* labels[2] = {"A  YES", "B  NO"};
+    for (int i = 0; i < 2; ++i) {
+        const int box_x = i == 0 ? kWidth / 2 - 24 - box_w : kWidth / 2 + 24;
+        FillRect(pixels, width, height, box_x - 4, box_y - 4, box_w + 8, box_h + 8, 0xE0FFB030u);
+        FillRect(pixels, width, height, box_x, box_y, box_w, box_h, 0xF0201810u);
+        DrawString(pixels, width, height, labels[i], box_x + (box_w - TextWidth(labels[i], 5)) / 2,
+                   box_y + (box_h - 7 * 5) / 2, 5, 0xFFFFF0C8u);
+    }
+    return pixels;
 }
 
 struct ToastPlacement {

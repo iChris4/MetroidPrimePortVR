@@ -1,3 +1,4 @@
+#include "vr/vr_resume_prompt.h"
 // PrimedGun's VR menu (platform/include/vr/vr_menu.h and the controls in
 // openxr_settings_panel.h): the image keeps PrimedGun's pixels and byte order,
 // clicks land where PrimedGun's hit boxes put them, the two-press actions
@@ -1009,6 +1010,16 @@ void TestLiveSettings() {
 } // namespace
 
 int main() {
+  for (unsigned ticks : {0u, 15u, 16u, 600u, 360000u}) {
+    Check(PortVr::ResumePromptAnswer(ticks, false, false, false) == -1,
+          "resume waits indefinitely without an explicit choice");
+  }
+  Check(PortVr::ResumePromptAnswer(1, true, false, false) == -1, "launch press cannot accept resume");
+  Check(PortVr::ResumePromptAnswer(20, true, false, false) == 1, "A accepts resume");
+  Check(PortVr::ResumePromptAnswer(20, false, true, false) == 0, "B declines resume");
+  Check(PortVr::ResumePromptAnswer(20, true, true, false) == -1, "ambiguous inputs wait");
+  const auto resume = BuildResumeToastPixels("Landing Site", "2026-11-01 10:00", false, false);
+  Check(resume.size() == static_cast<size_t>(kWidth) * kImageHeight, "resume question fills VR panel image");
   TestLiveSettings();
   TestImage();
   TestRows();

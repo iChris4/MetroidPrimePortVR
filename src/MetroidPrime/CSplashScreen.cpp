@@ -51,6 +51,12 @@ CIOWin::EMessageReturn CSplashScreen::OnMessage(const CArchitectureMessage& mess
       fprintf(stderr, "[resume] accepted during splash %d\n", static_cast< int >(mSplash));
       return kMR_RemoveIOWinAndExit;
     }
+    PortSaveState::ResumeInfo pending;
+    bool yes = true;
+    if (PortSaveState::ResumePromptShown(pending, yes)) {
+      // Keep the boot here until the user answers in VR or on the desktop.
+      return kMR_Exit;
+    }
   } else if (message.GetType() == kAM_UserInput) {
     if (PortResumePromptInput(MakeMsg::GetParmUserInput(message).GetUserInput())) {
       // The front end's sounds are not loaded yet: drop the click, don't defer it.

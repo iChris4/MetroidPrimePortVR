@@ -17,6 +17,7 @@
 #include "port_log_file.h"
 #include "port_paths.h"
 #include "port_savestate.h"
+#include <ctime>
 #include "port_textures.h"
 #include "port_tracker.h"
 #include "vr/openxr_integration.h"
@@ -281,38 +282,83 @@ struct Menu {
     // DEBUG's readouts, sampled twice a second so the image is not redrawn every frame.
     VrMenu::View readouts;
     double readouts_at = 0.0;
-    // The shader compilation toast has the panel's image (it shows while the menu is
-    // closed), at this VrMenu::CompileToastKey.
-    bool toast_shown = false;
+    // Resume questions take priority over compilation progress while the menu is closed.
+    enum class Toast { None, Compile, Resume };
+    Toast toast = Toast::None;
     uint32_t toast_key = 0;
 };
 
-// The startup compile's progress (PortDebug::ShaderCompilationProgress) on the panel layer,
-// which the menu has while it is open. The image is rebuilt only when the percent changes.
-void UpdateCompileToast(Menu& menu, bool compiling, uint32_t done, uint32_t total) noexcept {
-    if (!compiling || OpenXRSettingsPanelOpen()) {
-        if (menu.toast_shown) {
-            menu.toast_shown = false;
+const char* ToastName(Menu::Toast toast) noexcept {
+    return toast == Menu::Toast::Resume ? "resume question" : "shader compilation toast";
+}
+
+// The panel layer while the menu is closed (the menu has it while it is open): the boot's
+// resume question, which holds the game until the pad answers it, else the startup compile's
+// progress (PortDebug::ShaderCompilationProgress). The image is rebuilt only when what it shows
+// changes, for the compile when its percent does.
+void UpdateToast(Menu& menu, bool compiling, uint32_t done, uint32_t total) noexcept {
+    const bool menu_open = OpenXRSettingsPanelOpen();
+    PortSaveState::ResumeInfo question;
+    bool yesSelected = true;
+    const bool asking = OpenXRIsRunning() && PortSaveState::ResumePromptShown(question, yesSelected);
+    std::string saved;
+    if (asking) {
+        const std::time_t timestamp = static_cast<std::time_t>(question.savedAt);
+        std::tm local{};
+#if defined(_WIN32)
+        const bool dated = localtime_s(&local, &timestamp) == 0;
+#else
+        const bool dated = localtime_r(&timestamp, &local) != nullptr;
+#endif
+        if (dated) {
+            char when[32]{};
+            std::strftime(when, sizeof(when), "%Y-%m-%d %H:%M", &local);
+            saved = when;
+        }
+    }
+    const Menu::Toast toast = menu_open ? Menu::Toast::None
+                              : asking  ? Menu::Toast::Resume
+                              : compiling ? Menu::Toast::Compile
+                                          : Menu::Toast::None;
+    if (toast != menu.toast && menu.toast != Menu::Toast::None) {
+        PORTVR_LOG() << ToastName(menu.toast) << " hidden" << (menu_open ? " (VR menu open)" : "") << std::endl;
+    }
+    if (toast == Menu::Toast::None) {
+        if (menu.toast != Menu::Toast::None) {
+            menu.toast = Menu::Toast::None;
             OpenXRSetCompileToastShown(false);
-            PORTVR_LOG() << "shader compilation toast hidden" << (compiling ? " (VR menu open)" : "") << std::endl;
-            if (!OpenXRSettingsPanelOpen()) {
+            if (!menu_open) {
                 aurora_set_stereo_panel_image(nullptr, 0, 0);
             }
         }
         return;
     }
-    const uint32_t key = VrMenu::CompileToastKey(done, total);
-    if (!menu.toast_shown || key != menu.toast_key) {
-        const VrMenu::Pixels pixels = VrMenu::BuildCompileToastPixels(done, total);
+    const uint32_t key = toast == Menu::Toast::Resume
+                             ? (question.afterCrash ? 1u : 0u) | (question.crashedAgain ? 2u : 0u)
+                             : VrMenu::CompileToastKey(done, total);
+    if (toast != menu.toast || key != menu.toast_key) {
+        const VrMenu::Pixels pixels =
+            toast == Menu::Toast::Resume
+                ? VrMenu::BuildResumeToastPixels(question.room, saved, question.afterCrash,
+                                                 question.crashedAgain)
+                : VrMenu::BuildCompileToastPixels(done, total);
         aurora_set_stereo_panel_image(pixels.data(), VrMenu::kWidth, VrMenu::kImageHeight);
         menu.toast_key = key;
     }
-    if (!menu.toast_shown) {
-        menu.toast_shown = true;
-        OpenXRSetCompileToastShown(true);
-        PORTVR_LOG() << "shader compilation toast shown: " << done << " / " << total << std::endl;
+    if (toast != menu.toast) {
+        if (menu.toast == Menu::Toast::None) {
+            OpenXRSetCompileToastShown(true);
+        }
+        menu.toast = toast;
+        if (toast == Menu::Toast::Resume) {
+            PORTVR_LOG() << "resume question shown: " << question.room << (question.afterCrash ? " (after a crash)" : "")
+                         << std::endl;
+        } else {
+            PORTVR_LOG() << "shader compilation toast shown: " << done << " / " << total << std::endl;
+        }
     }
 }
+
 
 // DEBUG's TELEPORT lists, as the F1 overlay's pickers name them: the rooms by area index
 // (PortTracker's names, which load over a few calls) and the card's world table.
@@ -409,11 +455,11 @@ void VrMenuUpdate() noexcept {
             menu.shown.clear();
             aurora_set_stereo_panel_image(nullptr, 0, 0);
         }
-        UpdateCompileToast(menu, compiling, compiled, toCompile);
+        UpdateToast(menu, compiling, compiled, toCompile);
         return;
     }
     // The menu takes the panel's image over.
-    UpdateCompileToast(menu, false, 0, 0);
+    UpdateToast(menu, false, 0, 0);
     if (!menu.was_open) {
         menu.was_open = true;
         VrMenu::Open(menu.state);

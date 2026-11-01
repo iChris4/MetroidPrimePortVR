@@ -238,7 +238,7 @@ object PrimedGunTabs {
             (context as? LauncherActivity)?.openPortOptions()
         })
         add(PrimedGunItem.Note("Opens the full options in a 2D panel, with or without a running game."))
-        add(switch(context, R.string.primedgun_quick_resume, "quick_resume_enabled", R.string.primedgun_quick_resume_note))
+        add(switch(context, R.string.primedgun_quick_resume, "quick_resume_prompt_enabled", R.string.primedgun_quick_resume_note))
 
         add(header(context, R.string.primedgun_section_vr_headset))
         add(
