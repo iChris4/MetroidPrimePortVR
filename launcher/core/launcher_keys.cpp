@@ -111,6 +111,7 @@ constexpr KeyInfo kKeys[] = {
     {"vr_vr_overlays_enabled", K::Bool, "1"},
     {"vr_height_prompt_enabled", K::Bool, "1", 0, 0, 0, false},
     {"vr_cinematic_screen_enabled", K::Bool, "1"},
+    {"vr_xray_blur_enabled", K::Bool, "1"},
     {"vr_vr_menu_floating", K::Bool, "0"},
     {"vr_game_menu_screen_enabled", K::Bool, "0"},
     {"vr_message_box_immersive", K::Bool, "1"},

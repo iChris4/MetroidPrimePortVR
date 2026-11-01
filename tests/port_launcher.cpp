@@ -245,6 +245,7 @@ void TestDefaultsMatchGame() {
       {"vr_vr_overlays_enabled", FormatBool(s.vr_overlays_enabled)},
       {"vr_height_prompt_enabled", FormatBool(s.height_prompt_enabled)},
       {"vr_cinematic_screen_enabled", FormatBool(s.cinematic_screen_enabled)},
+      {"vr_xray_blur_enabled", FormatBool(s.xray_blur_enabled)},
       {"vr_vr_menu_floating", FormatBool(s.vr_menu_floating)},
       {"vr_game_menu_screen_enabled", FormatBool(s.game_menu_screen_enabled)},
       {"vr_message_box_immersive", FormatBool(s.message_box_immersive)},

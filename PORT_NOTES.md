@@ -1,3 +1,12 @@
+## VR: retail X-ray orientation and blur correction (2026-11-01)
+
+The user confirmed depth in the first test but reported its image upside down
+and asked to retain the blur. Use the retail four-tap blur and its authored
+framebuffer UV orientation. Immersive VR still uses the full viewport and an
+undistorted base-image mapping (scale 1 instead of retail's 0.9); each blur tap
+samples its own eye's palette output. Do not replace this with a conventional
+quad whose V direction is inverted. Headset confirmation remains required.
+
 ## VR: retail X-ray depth-cue test change (2026-11-01)
 
 Retail X-ray uses an I8 framebuffer copy, C8 palette conversion and a four-tap

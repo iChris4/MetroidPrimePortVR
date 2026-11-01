@@ -187,7 +187,7 @@ inline constexpr uint32_t kTabCount = 8;
 inline constexpr std::array<const char*, kTabCount> kTabLabels = {
     "LAYOUT", "CONFIG", "CALIBRATION", "CONTROL", "MOVEMENT", "TEXTURES", "STATES", "DEBUG"};
 inline constexpr uint32_t kCalibrationFirstPageItems = 12;
-inline constexpr uint32_t kCalibrationTotalItems = 24;
+inline constexpr uint32_t kCalibrationTotalItems = 25;
 inline constexpr uint32_t kControlFirstPageItems = 8;
 inline constexpr uint32_t kControlTotalItems = 16;
 // The most rows a page of the port's tabs holds, as PrimedGun's longest page.
@@ -612,7 +612,7 @@ inline int PerformanceLevelIndex(const std::string& level) {
 // A row's place in its tab's whole list, both pages together (PrimedGun's
 // numbering, which its settings and resets are keyed on).
 inline int CalibrationActualIndex(const State& s, uint32_t local) {
-    return static_cast<int>(s.calibration_page == 0 ? local : kCalibrationFirstPageItems + local);
+    return static_cast<int>(s.calibration_page * kCalibrationFirstPageItems + local);
 }
 
 inline int ControlActualIndex(const State& s, uint32_t local) {
@@ -622,6 +622,7 @@ inline int ControlActualIndex(const State& s, uint32_t local) {
 inline uint32_t PageCount(uint32_t tab, const View& view) {
     switch (tab) {
     case kCalibrationTab:
+        return (kCalibrationTotalItems + kCalibrationFirstPageItems - 1) / kCalibrationFirstPageItems;
     case kControlTab:
         return 2;
     case kPortConfigTab:
@@ -659,8 +660,7 @@ inline PortItem PortItemAt(const State& s, const View& view, uint32_t local) {
 inline uint32_t ItemCount(const State& s, const View& view) {
     switch (s.tab) {
     case kCalibrationTab:
-        return s.calibration_page == 0 ? kCalibrationFirstPageItems
-                                       : kCalibrationTotalItems - kCalibrationFirstPageItems;
+        return std::min(kCalibrationFirstPageItems, kCalibrationTotalItems - s.calibration_page * kCalibrationFirstPageItems);
     case kControlTab:
         return s.control_page == 0 ? kControlFirstPageItems : kControlTotalItems - kControlFirstPageItems;
     case kMovementTab:
@@ -1024,7 +1024,7 @@ inline std::vector<Row> BuildRows(const State& s, const PortVrSettings& v, const
             rows.push_back({"FRUSTUM CULLING", OnOff(v.frustum_culling_enabled)});
             rows.push_back({"CULLING CONE", FloatText(v.frustum_culling_degrees, 0)});
             rows.push_back({"RESET TARGETING", ConfirmText(s, kResetTargeting)});
-        } else {
+        } else if (s.calibration_page == 1) {
             rows.push_back({"POSITION LEFT/RIGHT", FloatText(v.model_offset_x, 3)});
             rows.push_back({"POSITION FORWARD/BACK", FloatText(v.model_offset_y, 3)});
             rows.push_back({"POSITION UP/DOWN", FloatText(v.model_offset_z, 3)});
@@ -1037,6 +1037,8 @@ inline std::vector<Row> BuildRows(const State& s, const PortVrSettings& v, const
             rows.push_back({"SAMUS ARM PRESET", "APPLY"});
             rows.push_back({"DETACH VR MENU FROM HAND", OnOff(v.vr_menu_floating)});
             rows.push_back({"DETACH GAME MENU AND MAP", OnOff(v.game_menu_screen_enabled)});
+        } else {
+            rows.push_back({"X-RAY VISOR BLUR", OnOff(v.xray_blur_enabled)});
         }
         break;
     case kControlTab:
@@ -1493,6 +1495,7 @@ inline void ResetAll(PortVrSettings& v) {
     v.vr_menu_requires_head_zone = d.vr_menu_requires_head_zone;
     v.vr_menu_floating = d.vr_menu_floating;
     v.cinematic_screen_enabled = d.cinematic_screen_enabled;
+    v.xray_blur_enabled = d.xray_blur_enabled;
     v.game_menu_screen_enabled = d.game_menu_screen_enabled;
     v.message_box_immersive = d.message_box_immersive;
     v.floating_hud = d.floating_hud;
@@ -1776,6 +1779,9 @@ inline void Activate(State& s, PortVrSettings& v, const View& view, double now, 
             break;
         case 22:
             v.vr_menu_floating = !v.vr_menu_floating;
+            break;
+        case 24:
+            v.xray_blur_enabled = !v.xray_blur_enabled;
             break;
         case 23:
             v.game_menu_screen_enabled = !v.game_menu_screen_enabled;

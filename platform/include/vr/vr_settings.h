@@ -102,6 +102,7 @@ struct PortVrSettings {
     // Where a virtual screen (menus, cinematics, pause/map when detached) hangs.
     float screen_distance_meters = 1.5f;  // PrimedGun ScreenDistance
     float screen_width_meters = 2.0f;     // PrimedGun ScreenSize: 1.5 m tall at 4:3
+    bool xray_blur_enabled = true; // retain retail X-ray blur in immersive VR
     bool cinematic_screen_enabled = true; // cutscenes on the virtual screen
     // The pause menu, logbook and map on the virtual screen. Off (default), they
     // stay in the immersive view like the message boxes: the world keeps head
