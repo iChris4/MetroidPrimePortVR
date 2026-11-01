@@ -924,6 +924,10 @@ TEST_F(SceneHdrTest, ScreenKindsFogAsTheirFogPermsInHdr) {
 TEST_F(SceneHdrTest, InventoryCoverageSurvivesVolumetricFog) {
   for (const bool hdr : {false, true}) {
     auto config = screen_config(36, hdr);
+    // The visor is unlayered: base colour plus the scene copy, not the
+    // eight-map layered surface used by the general screen-read tests.
+    config.tevStageCount = 2;
+    config.tevStages[1].texMapId = GX_TEXMAP7;
     config.volFog = gx::VolFogBlended;
     const auto source = gx::build_shader_source(config);
     EXPECT_NE(source.find("var pbr_out = max(pbr_lo + pbr_glow, vec3f(0.0)) * inv_c;"), std::string::npos);
