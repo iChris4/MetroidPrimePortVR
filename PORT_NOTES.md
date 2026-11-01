@@ -22,6 +22,22 @@ keep PrimedGun's multiview, OpenXR device, and fragment-density-map patches.
 Test fog, water, visors, Remastered frozen effects, menus, lock-on movement,
 morph transitions and cinema direction in-headset before pushing.
 
+## VR: the Teleport block in the VR menu's DEBUG tab (2026-10-31)
+
+The user asked for the F1 overlay's Teleport block (Cheats page) in the headset,
+in both games. DEBUG now has pages: its switches and readouts, then TELEPORT
+(PREVIOUS AREA, NEXT AREA, PREVIOUS WORLD, NEXT WORLD, RELOAD ROOM, and WORLDS
+and ROOMS, which open lists on the pages after it, twelve to a page, at the page
+holding where the player is, marked HERE). The overlay's combos and their filter
+become these lists: the headset has no keyboard. Prime 1's overlay has no
+previous/next buttons (PrimedGun Echoes' has); here they step through the area
+indexes and the card's world table with the overlay's own rule (`goToArea`: a
+loaded room is entered in place with `RequestTeleport`, any other reloads the
+world into it). RELOAD ROOM is the overlay's Reload. Room names come from
+`PortTracker::RoomNames` ("Area N" while one loads); WORLDS lists the card's
+named worlds. The shared `vr_menu.h` and its test also carry Echoes' LIGHT /
+DARK WORLD row and dark room list, shown only when `View::dimensions` is set.
+
 ## VR water/fog visibility merge guards (beta.6 local testing)
 
 Water plane submission must not reject bounds behind the simulation camera:

@@ -13,12 +13,20 @@
 #if defined(MP_ENABLE_OPENXR)
 #include "cannon_textures.h"
 #include "port_debug.h"
+#include "port_discord.h"
 #include "port_log_file.h"
 #include "port_paths.h"
 #include "port_savestate.h"
 #include "port_textures.h"
+#include "port_tracker.h"
 #include "vr/openxr_integration.h"
 #include "vr/openxr_settings_panel.h"
+
+#include "MetroidPrime/CGameArea.hpp"
+#include "MetroidPrime/CMemoryCard.hpp"
+#include "MetroidPrime/CStateManager.hpp"
+#include "MetroidPrime/CWorld.hpp"
+#include "MetroidPrime/Player/CGameState.hpp"
 
 #include <aurora/aurora.h>
 #include <aurora/gfx.h>
@@ -28,6 +36,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <string>
 #endif
 
@@ -39,6 +48,25 @@ namespace {
 double NowSeconds() noexcept {
     using namespace std::chrono;
     return duration< double >(steady_clock::now().time_since_epoch()).count();
+}
+
+CWorld* CurrentWorld() {
+    CStateManager* mgr = PortDebug::StateManager();
+    return mgr != nullptr ? mgr->World() : nullptr;
+}
+
+// The F1 overlay's goToArea (debug_ui/cheats.cpp): a loaded room (the current one and
+// its neighbours) is entered in place; any other reloads the world straight into it.
+void GoToArea(CWorld& world, int area) {
+    if (area < 0 || area >= world.IGetAreaCount()) {
+        return;
+    }
+    if (world.GetArea(TAreaId(area))->IsPostConstructed() || gpGameState == nullptr) {
+        PortDebug::RequestTeleport(area);
+    } else {
+        PortDebug::RequestWorldTeleport(static_cast< uint32_t >(gpGameState->CurrentWorldAssetId()),
+                                        static_cast< uint32_t >(world.IGetAreaAlways(TAreaId(area))->IGetAreaAssetId()));
+    }
 }
 
 // The menu's actions on the port: the settings file, the port's save states
@@ -151,6 +179,48 @@ public:
     }
     void SetDrawTags(bool on) override { PortDebug::SetDrawTags(on); }
 
+    // DEBUG's TELEPORT pages: the F1 overlay's Teleport block and its requests. The
+    // overlay has no previous/next buttons here (Echoes' has); these step through the
+    // same area and world tables its pickers list.
+    void CycleArea(int direction) override {
+        if (CWorld* world = CurrentWorld()) {
+            const int count = world->IGetAreaCount();
+            if (count > 0) {
+                GoToArea(*world, ((world->GetCurrentAreaId().Value() + direction) % count + count) % count);
+            }
+        }
+    }
+    void CycleWorld(int direction) override {
+        if (gpMemoryCard == nullptr || gpGameState == nullptr) {
+            return;
+        }
+        const rstl::vector< CMemoryCard::MemoryWorld >& worlds = gpMemoryCard->GetMemoryWorlds();
+        const int count = worlds.size();
+        if (count == 0) {
+            return;
+        }
+        int index = 0;
+        for (int i = 0; i < count; ++i) {
+            if (static_cast< uint32_t >(worlds[i].first) == static_cast< uint32_t >(gpGameState->CurrentWorldAssetId())) {
+                index = i;
+            }
+        }
+        index = ((index + direction) % count + count) % count;
+        PortDebug::RequestWorldTeleport(static_cast< uint32_t >(worlds[index].first), 0u);
+    }
+    void CrossDimension() override {} // Prime 1 has one; the row is not shown
+    void ReloadRoom() override {
+        if (CWorld* world = CurrentWorld()) {
+            GoToArea(*world, world->GetCurrentAreaId().Value());
+        }
+    }
+    void GoToRoom(uint32_t area) override {
+        if (CWorld* world = CurrentWorld()) {
+            GoToArea(*world, static_cast< int >(area));
+        }
+    }
+    void GoToWorld(uint32_t world) override { PortDebug::RequestWorldTeleport(world, 0u); }
+
     // After the click's settings are stored: the requested save, then the exit
     // the way closing the window exits (the F1 overlay's Exit game).
     void Flush() {
@@ -244,6 +314,38 @@ void UpdateCompileToast(Menu& menu, bool compiling, uint32_t done, uint32_t tota
     }
 }
 
+// DEBUG's TELEPORT lists, as the F1 overlay's pickers name them: the rooms by area index
+// (PortTracker's names, which load over a few calls) and the card's world table.
+void AddTeleportPlaces(VrMenu::View& view) {
+    CWorld* world = CurrentWorld();
+    if (world == nullptr) {
+        return;
+    }
+    view.area = world->GetCurrentAreaId().Value();
+    view.world = gpGameState != nullptr ? static_cast< uint32_t >(gpGameState->CurrentWorldAssetId()) : 0;
+    const std::vector< std::string >& names = PortTracker::RoomNames(*world);
+    const int count = world->IGetAreaCount();
+    view.rooms.reserve(static_cast< size_t >(count));
+    for (int i = 0; i < count; ++i) {
+        char label[160];
+        if (i < static_cast< int >(names.size()) && !names[i].empty()) {
+            std::snprintf(label, sizeof(label), "%d  %s", i, names[i].c_str());
+        } else {
+            std::snprintf(label, sizeof(label), "Area %d", i);
+        }
+        view.rooms.push_back({static_cast< uint32_t >(i), label});
+    }
+    if (gpMemoryCard != nullptr) {
+        const rstl::vector< CMemoryCard::MemoryWorld >& worlds = gpMemoryCard->GetMemoryWorlds();
+        for (int i = 0; i < worlds.size(); ++i) {
+            std::string name = PortDiscord::GameTextToUtf8(worlds[i].second.GetFrontEndName());
+            if (!name.empty()) {
+                view.worlds.push_back({static_cast< uint32_t >(worlds[i].first), std::move(name)});
+            }
+        }
+    }
+}
+
 // What the menu shows besides its own state and the settings.
 VrMenu::View BuildView(Menu& menu, const PortVrSettings& settings, double now) {
     if (now >= menu.readouts_at) {
@@ -274,6 +376,10 @@ VrMenu::View BuildView(Menu& menu, const PortVrSettings& settings, double now) {
     const OpenXREyeResolution eye = OpenXRGetEyeResolution(settings.render_scale);
     view.eye_width = eye.scaled_width;
     view.eye_height = eye.scaled_height;
+    // Only DEBUG shows the lists, and they are a few dozen names to copy.
+    if (menu.state.tab == VrMenu::kDebugTab) {
+        AddTeleportPlaces(view);
+    }
     return view;
 }
 
