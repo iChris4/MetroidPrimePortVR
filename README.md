@@ -305,8 +305,9 @@ make PrimedGun possible, and the Dolphin team.
 
 ## Licensing
 
-The original Prime 1 decompilation had no root licence file before the native
-port additions. Its original third-party licences remain with their components,
+PrimeDecomp's original CC0 dedication is restored verbatim in [LICENSE](LICENSE),
+from the Prime 1 snapshot's [original licence commit](https://github.com/rzkowskii/prime/commit/4b87a52c07bf84d77312607be00e74036801af95).
+Original third-party licences remain with their components,
 including [Aurora](extern/aurora/LICENSE) and [MusyX](extern/musyx/LICENSE).
 
 Later PrimedGun files marked GPL-3.0-or-later retain those terms; their full
