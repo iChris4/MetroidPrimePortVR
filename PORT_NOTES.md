@@ -1,3 +1,13 @@
+## VR: retail X-ray depth-cue test change (2026-11-01)
+
+Retail X-ray uses an I8 framebuffer copy, C8 palette conversion and a four-tap
+radially stretched composite. Immersive VR now keeps the full viewport and
+composites the palette result once at unchanged UVs, preserving binocular
+features instead of smearing them. Desktop and virtual-screen effects retain
+the retail distortion. Keep the per-eye intensity copies and palette outputs;
+regression: RetailXrayPaletteKeepsSeparateEyeImages. This verifies routing,
+not the reported depth perception: confirmation in-headset is still needed.
+
 ## VR: upstream 0.37 beta.7 local testing merge (2026-11-01)
 
 Merged 142 Prime 1 upstream commits through Odrannnn/MetroidPrimePort `port`

@@ -739,6 +739,34 @@ void CCameraBlurPass::Draw() const {
   gpRender->SetModelMatrix(CTransform4f::Identity());
 
   if (x10_curType == kBT_XRay) {
+#ifdef TARGET_PC
+    if (PortVr::VrImmersive()) {
+      // VR MERGE GUARD: the palette texture already contains each eye's view.
+      // Keep it at that eye's original UVs. Retail's radial stretch and four
+      // differently scaled samples smear binocular disparity and distort depth.
+      gpRender->SetBlendMode_Replace();
+      const GXVtxDescList desc[] = {{GX_VA_POS, GX_DIRECT}, {GX_VA_TEX0, GX_DIRECT},
+                                     {GX_VA_NULL, GX_NONE}};
+      CGX::SetVtxDescv(desc);
+      CGX::SetNumChans(0);
+      CGX::SetNumTexGens(1);
+      CGX::SetNumTevStages(1);
+      CGX::SetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, CGraphics::kSpareBufferTexMapID, GX_COLOR_NULL);
+      CGX::SetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_TEXC);
+      CGX::SetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_KONST);
+      CGX::SetTevKAlphaSel(GX_TEVSTAGE0, GX_TEV_KASEL_8_8);
+      CGX::SetStandardTevColorAlphaOp(GX_TEVSTAGE0);
+      CGX::SetTexCoordGen(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_IDENTITY, false, GX_PTIDENTITY);
+      CGraphics::SetCullMode(kCM_None);
+      CGX::Begin(GX_TRIANGLESTRIP, GX_VTXFMT0, 4);
+      GXPosition3f32(vLeft, 0.f, vTop); GXTexCoord2f32(0.f, 0.f);
+      GXPosition3f32(vLeft, 0.f, bottom); GXTexCoord2f32(0.f, 1.f);
+      GXPosition3f32(right, 0.f, vTop); GXTexCoord2f32(1.f, 0.f);
+      GXPosition3f32(right, 0.f, bottom); GXTexCoord2f32(1.f, 1.f);
+      CGX::End();
+      return;
+    }
+#endif
     gpRender->SetBlendMode_Replace();
 
     const GXVtxDescList xrayVtxDescList[] = {

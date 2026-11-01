@@ -235,6 +235,34 @@ TEST_F(SceneHdrTest, RetailFogDepthCopiesHaveSeparateEyeTargets) {
   EXPECT_EQ(stereo_shadow::eye_texture(copy.get(), 1), pass.stereo.copyTargets[1].get());
 }
 
+TEST_F(SceneHdrTest, RetailXrayPaletteKeepsSeparateEyeImages) {
+  struct Cleanup {
+    ~Cleanup() {
+      set_frame_stereo({});
+      release_stereo_eye_targets();
+      stereo_shadow::shutdown();
+    }
+  } cleanup;
+  StereoFrameState stereo{};
+  stereo.immersive = true;
+  stereo.eyes[0].width = stereo.eyes[1].width = 800;
+  stereo.eyes[0].height = stereo.eyes[1].height = 600;
+  ASSERT_TRUE(ensure_stereo_eye_targets(stereo.eyes));
+  set_frame_stereo(stereo);
+  auto intensity = new_conv_texture(640, 480, GX_TF_I8, "X-ray intensity");
+  resolve_pass_into(intensity, {0, 0, 640, 480}, false, false, false, {}, 1.f, GX_TF_I8);
+  auto colored = new_conv_texture(640, 480, GX_TF_RGBA8, "X-ray palette output");
+  std::array<tex_palette_conv::ConvRequest, 2> eyes{};
+  ASSERT_TRUE(stereo_shadow::palette_conv({.variant = tex_palette_conv::Variant::FromFloat8,
+                                         .src = intensity, .dst = colored}, eyes));
+  EXPECT_NE(eyes[0].src.get(), eyes[1].src.get());
+  EXPECT_NE(eyes[0].dst.get(), eyes[1].dst.get());
+  for (uint32_t eye = 0; eye < 2; ++eye) {
+    EXPECT_EQ(eyes[eye].src.get(), stereo_shadow::eye_texture(intensity.get(), eye));
+    EXPECT_EQ(eyes[eye].dst.get(), stereo_shadow::eye_texture(colored.get(), eye));
+  }
+}
+
 TEST_F(SceneHdrTest, OffKeepsTheLdrLayoutAndKey) {
   for (const uint32_t samples : {1u, 4u}) {
     webgpu::g_graphicsConfig.msaaSamples = samples;
