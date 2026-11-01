@@ -305,17 +305,14 @@ make PrimedGun possible, and the Dolphin team.
 
 ## Licensing
 
-This is a fork of the [PrimeDecomp/prime](https://github.com/PrimeDecomp/prime)
-decompilation, which the game logic is built from. Aurora (`extern/aurora`) and
-MusyX (`extern/musyx`) are MIT-licensed vendored snapshots, and the button
-prompt icons come from Kenney's Input Prompts pack (CC0), vendored under
-`tools/prompt_icons`. Their licences are kept alongside them and are copied into
-release packages.
+PrimedGun's GPL-3.0-or-later launcher and VR code retain their original terms.
+The full GPL text is in [LICENSE](LICENSE) and [COPYING](COPYING).
 
-`LICENSE` covers this project's own work — the platform layer, the build and
-packaging scripts, and the Android integration. It does **not** cover
-the game code under `src/` and `include/`, which comes from the decompilation
-and remains Nintendo's. See `NOTICE`.
+The upstream native port's original MIT licence is preserved separately in
+[packaging/licenses/native-port-MIT.txt](packaging/licenses/native-port-MIT.txt).
+Third-party components retain their original licences and copyright notices;
+see [NOTICE](NOTICE) and [packaging/licenses](packaging/licenses).
+These licences do not cover Nintendo's game code or assets.
 
 Metroid Prime is a trademark of Nintendo. This project is unaffiliated with
 Nintendo and Retro Studios, and ships no game data.

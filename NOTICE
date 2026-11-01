@@ -1,11 +1,19 @@
 # NOTICE
 
-## What the licence covers
+## Licence scope
 
-`LICENSE` is an MIT grant over **this project's own work**: the platform layer
-under `platform/`, the build and packaging scripts, the tests, the tooling under
-`tools/`, and the documentation under `docs/`. Those files carry no licence
-header of their own, so this is where their terms are stated.
+PrimedGun's original GPL-3.0-or-later notices remain in force. The full GNU
+GPL version 3 text is restored in `LICENSE` and `COPYING` for PrimedGun's
+GPL-covered launcher and VR additions. This does not relicense third-party
+components or the game code.
+
+The native port's original MIT grant is preserved verbatim at
+`packaging/licenses/native-port-MIT.txt`. It applies only to the upstream
+work its authors licensed under MIT; it does not replace existing GPL file
+headers or other original copyright and licence notices.
+
+Original texture-importer notices are retained in `packaging/licenses/remastered-*`,
+with the full Apache licence in `packaging/licenses/Apache-2.0.txt`.
 
 ## What it does not cover
 
@@ -81,7 +89,5 @@ the AppImage (both through `tools/collect_licenses.sh`), `/app/share/licenses/`
 in the Flatpak, and `assets/` in the APK. See `docs/RELEASING.md` for the per-platform position, including
 what is still missing.
 
-The separate PrimeDecomp **GPL** recompilation toolchain is not part of this
-native link and nothing here is derived from its output. If GPL-covered code
-ever does end up in the combined work, the corresponding source and build
-material must be provided under the applicable GPL terms.
+Distributions containing GPL-covered PrimedGun code must provide the corresponding
+source and build material under the applicable GPL terms.
