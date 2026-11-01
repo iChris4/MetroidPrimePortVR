@@ -18,6 +18,6 @@ their original project licence files. The astc-decode notice preserves both
 Weiyi Wang's and UNC Chapel Hill's attribution. Its Apache terms are included
 in full in `Apache-2.0.txt`.
 
-The full GPL v3 text is retained at the repository root in `COPYING`, and
+The full GPL v3 text is retained at the repository root in `packaging/licenses/GPL-3.0.txt`, and
 packaged as `GPL-3.0.txt` for files marked GPL-3.0-or-later. Upstream's
 `LICENSE`, and Aurora's and MusyX's MIT licences, remain unchanged.

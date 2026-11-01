@@ -311,7 +311,7 @@ Original third-party licences remain with their components,
 including [Aurora](extern/aurora/LICENSE) and [MusyX](extern/musyx/LICENSE).
 
 Later PrimedGun files marked GPL-3.0-or-later retain those terms; their full
-licence text is in [COPYING](COPYING). The native port's later MIT grant is
+licence text is in [GPL-3.0.txt](packaging/licenses/GPL-3.0.txt). The native port's later MIT grant is
 preserved separately in
 [packaging/licenses/native-port-MIT.txt](packaging/licenses/native-port-MIT.txt).
 Neither grant replaces the original component licences or covers Nintendo's
