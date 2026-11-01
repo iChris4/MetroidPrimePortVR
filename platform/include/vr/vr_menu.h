@@ -28,8 +28,9 @@
 //   where PrimedGun had a PAGE row at the top of the list.
 // - Two tabs of the port's own join PrimedGun's six: CONFIG, next to LAYOUT,
 //   holds the headset renderer's settings, and DEBUG, last, the F1 overlay's
-//   cheats, audio and log switches with live readouts. To fit eight, each tab
-//   is as wide as its label.
+//   cheats, audio and log switches with live readouts, then on its next pages
+//   the overlay's Teleport block. To fit eight, each tab is as wide as its
+//   label.
 // - The game's frame rate shows beside the title on every tab.
 
 #pragma once
@@ -269,11 +270,19 @@ struct State {
     uint32_t calibration_page = 0;
     uint32_t control_page = 0;
     uint32_t port_page = 0;
+    uint32_t debug_page = 0;
     uint32_t reset_confirm = kNoReset;
     double reset_confirm_until = 0.0;
     uint32_t state_confirm = kNoStateAction;
     double state_confirm_until = 0.0;
     double saved_notice_until = 0.0;
+};
+
+// A room (`id` its area index) or a world (`id` its asset id) on DEBUG's
+// TELEPORT pages, named as the game names it.
+struct TeleportPlace {
+    uint32_t id = 0;
+    std::string name;
 };
 
 // What the menu shows besides its own state and the VR settings: which
@@ -297,6 +306,15 @@ struct View {
     float headset_fps = 0.0f; // new frames to the headset per second
     float game_fps = 0.0f;    // frames the game drew per second; 0 while unknown
     uint32_t draws = 0; // GX draws in the game's last frame
+    // DEBUG's TELEPORT pages, filled while a game runs: the overlay's room and
+    // world pickers, in its order.
+    std::vector<TeleportPlace> rooms;      // the current world's (Light Aether's on Echoes)
+    std::vector<TeleportPlace> dark_rooms; // Echoes: Dark Aether's
+    std::vector<TeleportPlace> worlds;     // the game's worlds that have a name
+    int area = -1;                         // where the player is
+    uint32_t world = 0;
+    bool dimensions = false;   // Echoes: LIGHT / DARK WORLD and a list per dimension
+    bool no_twin_room = false; // the last LIGHT / DARK WORLD found no twin room
 };
 
 // What the menu does outside its own state and the settings. The game thread
@@ -327,6 +345,13 @@ public:
     virtual void SetLogFile(bool on) = 0;
     virtual void SetDrawTags(bool on) = 0;
     virtual void SetQuickResume(bool on) = 0;
+    // DEBUG's TELEPORT pages: the overlay's Teleport block.
+    virtual void CycleArea(int direction) = 0;
+    virtual void CycleWorld(int direction) = 0;
+    virtual void CrossDimension() = 0; // Echoes
+    virtual void ReloadRoom() = 0;
+    virtual void GoToRoom(uint32_t area) = 0;
+    virtual void GoToWorld(uint32_t world) = 0;
 };
 
 // --- The port's tabs ---
@@ -438,6 +463,126 @@ enum class DebugItem : uint8_t {
 };
 inline constexpr uint32_t kDebugItems = 13;
 
+// DEBUG's second page, TELEPORT: the overlay's Teleport block. Its room and
+// world pickers are lists here, on the pages after it, which the last rows
+// open where the player is: the headset has no keyboard for the filter.
+enum class TeleportItem : uint8_t {
+    PreviousArea,
+    NextArea,
+    PreviousWorld,
+    NextWorld,
+    Dimension, // Echoes
+    ReloadRoom,
+    Worlds,
+    Rooms,
+    DarkRooms, // Echoes
+};
+
+struct TeleportList {
+    std::array<TeleportItem, 9> items{};
+    uint32_t count = 0;
+};
+
+inline TeleportList TeleportItems(const View& view) {
+    TeleportList list;
+    const auto add = [&list](TeleportItem item) { list.items[list.count++] = item; };
+    add(TeleportItem::PreviousArea);
+    add(TeleportItem::NextArea);
+    add(TeleportItem::PreviousWorld);
+    add(TeleportItem::NextWorld);
+    if (view.dimensions) {
+        add(TeleportItem::Dimension);
+    }
+    add(TeleportItem::ReloadRoom);
+    add(TeleportItem::Worlds);
+    add(TeleportItem::Rooms);
+    if (view.dimensions) {
+        add(TeleportItem::DarkRooms);
+    }
+    return list;
+}
+
+// DEBUG's pages: its own rows, TELEPORT, then the worlds and the rooms, each
+// list kRowsPerPage to a page and from a page of its own.
+enum class DebugPageKind : uint8_t { Switches, Teleport, Worlds, Rooms, DarkRooms };
+inline constexpr std::array<DebugPageKind, 3> kTeleportLists = {DebugPageKind::Worlds, DebugPageKind::Rooms,
+                                                                DebugPageKind::DarkRooms};
+
+struct DebugPage {
+    DebugPageKind kind = DebugPageKind::Switches;
+    uint32_t first = 0;  // the list's entry on the first row
+    uint32_t count = 0;  // the rows
+    uint32_t number = 0; // the page within its list
+    uint32_t pages = 1;  // the list's pages
+};
+
+inline const std::vector<TeleportPlace>& TeleportPlaces(const View& view, DebugPageKind list) {
+    return list == DebugPageKind::Worlds ? view.worlds : list == DebugPageKind::DarkRooms ? view.dark_rooms : view.rooms;
+}
+
+inline uint32_t ListPages(size_t entries) {
+    return static_cast<uint32_t>((entries + kRowsPerPage - 1) / kRowsPerPage);
+}
+
+inline uint32_t DebugPageCount(const View& view) {
+    uint32_t pages = 2;
+    for (const DebugPageKind list : kTeleportLists) {
+        pages += ListPages(TeleportPlaces(view, list).size());
+    }
+    return pages;
+}
+
+inline DebugPage DebugPageAt(const View& view, uint32_t page) {
+    DebugPage at;
+    page = std::min(page, DebugPageCount(view) - 1);
+    if (page == 0) {
+        at.count = kDebugItems;
+        return at;
+    }
+    at.kind = DebugPageKind::Teleport;
+    at.count = TeleportItems(view).count;
+    uint32_t start = 2;
+    for (const DebugPageKind list : kTeleportLists) {
+        const size_t entries = TeleportPlaces(view, list).size();
+        const uint32_t pages = ListPages(entries);
+        if (page >= start && page < start + pages) {
+            at.kind = list;
+            at.number = page - start;
+            at.pages = pages;
+            at.first = at.number * kRowsPerPage;
+            at.count = std::min(kRowsPerPage, static_cast<uint32_t>(entries) - at.first);
+            return at;
+        }
+        start += pages;
+    }
+    return at;
+}
+
+// Whether a list's entry is where the player is.
+inline bool IsHere(const View& view, DebugPageKind list, const TeleportPlace& place) {
+    return list == DebugPageKind::Worlds ? place.id == view.world
+                                         : view.area >= 0 && place.id == static_cast<uint32_t>(view.area);
+}
+
+// The page of a list that shows where the player is, else its first; the list
+// must not be empty.
+inline uint32_t DebugListPage(const View& view, DebugPageKind list) {
+    uint32_t start = 2;
+    for (const DebugPageKind kind : kTeleportLists) {
+        const std::vector<TeleportPlace>& places = TeleportPlaces(view, kind);
+        if (kind == list) {
+            for (size_t i = 0; i < places.size(); ++i) {
+                if (IsHere(view, list, places[i])) {
+                    return start + static_cast<uint32_t>(i / kRowsPerPage);
+                }
+            }
+            return start;
+        }
+        start += ListPages(places.size());
+    }
+    return 1;
+}
+
 inline constexpr std::array<float, 5> kRefreshRates = {0.0f, 72.0f, 80.0f, 90.0f, 120.0f};
 inline constexpr std::array<const char*, 5> kPerformanceLevels = {"boost", "sustained_high", "sustained_low",
                                                                   "power_savings", "default"};
@@ -481,13 +626,16 @@ inline uint32_t PageCount(uint32_t tab, const View& view) {
         return 2;
     case kPortConfigTab:
         return (PortItems(view).count + kRowsPerPage - 1) / kRowsPerPage;
+    case kDebugTab:
+        return DebugPageCount(view);
     default:
         return 1;
     }
 }
 
-// The page a tab shows (0 for the one-page tabs).
-inline uint32_t Page(const State& s) {
+// The page a tab shows (0 for the one-page tabs). DEBUG's lists change with
+// the world, so its page is kept within them.
+inline uint32_t Page(const State& s, const View& view) {
     switch (s.tab) {
     case kCalibrationTab:
         return s.calibration_page;
@@ -495,6 +643,8 @@ inline uint32_t Page(const State& s) {
         return s.control_page;
     case kPortConfigTab:
         return s.port_page;
+    case kDebugTab:
+        return std::min(s.debug_page, DebugPageCount(view) - 1);
     default:
         return 0;
     }
@@ -525,7 +675,7 @@ inline uint32_t ItemCount(const State& s, const View& view) {
         return first < count ? std::min(kRowsPerPage, count - first) : 0;
     }
     case kDebugTab:
-        return kDebugItems;
+        return DebugPageAt(view, Page(s, view)).count;
     default:
         return 0;
     }
@@ -636,7 +786,7 @@ inline const char* FoveationText(FoveationLevel level) {
 inline const char* OnOff(bool value) { return value ? "ON" : "OFF"; }
 
 struct Row {
-    const char* label = "";
+    std::string label;
     std::string value;
 };
 
@@ -763,6 +913,99 @@ inline Row DebugRow(const State& s, const PortVrSettings& v, const View& view, D
     return {};
 }
 
+inline Row TeleportRow(const View& view, TeleportItem item) {
+    const std::string press = view.in_game ? "PRESS" : "NO GAME";
+    const auto list = [&view](DebugPageKind kind) {
+        return !view.in_game ? "NO GAME" : TeleportPlaces(view, kind).empty() ? "NONE" : "LIST";
+    };
+    switch (item) {
+    case TeleportItem::PreviousArea:
+        return {"PREVIOUS AREA", press};
+    case TeleportItem::NextArea:
+        return {"NEXT AREA", press};
+    case TeleportItem::PreviousWorld:
+        return {"PREVIOUS WORLD", press};
+    case TeleportItem::NextWorld:
+        return {"NEXT WORLD", press};
+    case TeleportItem::Dimension:
+        return {"LIGHT / DARK WORLD", view.in_game && view.no_twin_room ? "NO TWIN ROOM" : press};
+    case TeleportItem::ReloadRoom:
+        return {"RELOAD ROOM", press};
+    case TeleportItem::Worlds:
+        return {"WORLDS", list(DebugPageKind::Worlds)};
+    case TeleportItem::Rooms:
+        return {view.dimensions ? "LIGHT ROOMS" : "ROOMS", list(DebugPageKind::Rooms)};
+    case TeleportItem::DarkRooms:
+        return {"DARK ROOMS", list(DebugPageKind::DarkRooms)};
+    }
+    return {};
+}
+
+// A room's or world's name as the font draws it: upper case, cut short of the
+// value box.
+inline std::string PlaceText(const std::string& name) {
+    constexpr size_t kMaxChars = 58;
+    std::string text = name.substr(0, kMaxChars);
+    for (char& ch : text) {
+        if (ch >= 'a' && ch <= 'z') {
+            ch = static_cast<char>(ch - 'a' + 'A');
+        }
+    }
+    return text;
+}
+
+// Beside SAVE SETTINGS and RESET ALL: which of DEBUG's pages this is, the
+// TELEPORT page naming the world the player is in.
+inline std::string DebugHeadline(const View& view, const DebugPage& page) {
+    const auto numbered = [&page](std::string text) {
+        return page.pages > 1 ? text + " " + std::to_string(page.number + 1) + "/" + std::to_string(page.pages) : text;
+    };
+    switch (page.kind) {
+    case DebugPageKind::Switches:
+        return {};
+    case DebugPageKind::Teleport:
+        for (const TeleportPlace& world : view.worlds) {
+            if (IsHere(view, DebugPageKind::Worlds, world)) {
+                return PlaceText("TELEPORT - " + world.name).substr(0, 35);
+            }
+        }
+        return "TELEPORT";
+    case DebugPageKind::Worlds:
+        return numbered("WORLDS");
+    case DebugPageKind::Rooms:
+        return numbered(view.dimensions ? "LIGHT ROOMS" : "ROOMS");
+    case DebugPageKind::DarkRooms:
+        return numbered("DARK ROOMS");
+    }
+    return {};
+}
+
+inline void AddDebugRows(std::vector<Row>& rows, const State& s, const PortVrSettings& v, const View& view) {
+    const DebugPage page = DebugPageAt(view, Page(s, view));
+    switch (page.kind) {
+    case DebugPageKind::Switches:
+        for (uint32_t i = 0; i < kDebugItems; ++i) {
+            rows.push_back(DebugRow(s, v, view, static_cast<DebugItem>(i)));
+        }
+        return;
+    case DebugPageKind::Teleport: {
+        const TeleportList items = TeleportItems(view);
+        for (uint32_t i = 0; i < items.count; ++i) {
+            rows.push_back(TeleportRow(view, items.items[i]));
+        }
+        return;
+    }
+    default: {
+        const std::vector<TeleportPlace>& places = TeleportPlaces(view, page.kind);
+        for (uint32_t i = 0; i < page.count; ++i) {
+            const TeleportPlace& place = places[page.first + i];
+            rows.push_back({PlaceText(place.name), IsHere(view, page.kind, place) ? "HERE" : "GO"});
+        }
+        return;
+    }
+    }
+}
+
 inline std::vector<Row> BuildRows(const State& s, const PortVrSettings& v, const View& view) {
     std::vector<Row> rows;
     switch (s.tab) {
@@ -857,9 +1100,7 @@ inline std::vector<Row> BuildRows(const State& s, const PortVrSettings& v, const
         }
         break;
     case kDebugTab:
-        for (uint32_t i = 0; i < kDebugItems; ++i) {
-            rows.push_back(DebugRow(s, v, view, static_cast<DebugItem>(i)));
-        }
+        AddDebugRows(rows, s, v, view);
         break;
     default:
         break;
@@ -975,6 +1216,10 @@ inline Pixels BuildPixels(const State& s, const PortVrSettings& v, const View& v
             DrawString(pixels, width, height, "EXPERIMENTAL SAVE STATES", 548, 116, 2, 0xFFFFB030u);
             DrawString(pixels, width, height, "KEEP NORMAL MEMORY CARD SAVES TOO", 68, 436, 2, 0xFFFFB030u);
         }
+        if (s.tab == kDebugTab) {
+            const std::string headline = DebugHeadline(view, DebugPageAt(view, Page(s, view)));
+            DrawString(pixels, width, height, headline.c_str(), 548, 116, 2, 0xFFFFB030u);
+        }
 
         const auto rows = BuildRows(s, v, view);
         constexpr int row_x = 52;
@@ -984,7 +1229,7 @@ inline Pixels BuildPixels(const State& s, const PortVrSettings& v, const View& v
             const bool selected = i == static_cast<int>(s.selected);
             FillRect(pixels, width, height, row_x, y - 8, row_w, 24, selected ? 0xE04A2C12u : 0x70201810u);
             FillRect(pixels, width, height, row_x, y - 8, 6, 24, selected ? 0xFFFFB030u : 0x80FFB030u);
-            DrawString(pixels, width, height, rows[static_cast<size_t>(i)].label, row_x + 16, y, 2,
+            DrawString(pixels, width, height, rows[static_cast<size_t>(i)].label.c_str(), row_x + 16, y, 2,
                        selected ? 0xFFFFE6B8u : 0xFFD8C0A0u);
             constexpr int value_x = row_x + row_w - 190;
             FillRect(pixels, width, height, value_x, y - 4, 170, 20, selected ? 0xD030180Cu : 0x9030180Cu);
@@ -998,7 +1243,7 @@ inline Pixels BuildPixels(const State& s, const PortVrSettings& v, const View& v
         const uint32_t pages = PageCount(s.tab, view);
         if (pages > 1) {
             // Only the button that leads somewhere; the page number between them.
-            const uint32_t page = Page(s);
+            const uint32_t page = Page(s, view);
             if (page > 0) {
                 draw_button("PREVIOUS", kPreviousButtonX, kPageButtonY, kPageButtonWidth);
             }
@@ -1020,10 +1265,13 @@ inline std::string ViewKey(const State& s, const PortVrSettings& v, const View& 
     std::string key;
     key.reserve(512);
     key += static_cast<char>('0' + s.tab);
-    key += static_cast<char>('0' + Page(s));
+    key += static_cast<char>('0' + Page(s, view));
     key += static_cast<char>('0' + s.reset_confirm);
     key += saved_notice ? '1' : '0';
     key += FpsText(view);
+    if (s.tab == kDebugTab) {
+        key += DebugHeadline(view, DebugPageAt(view, Page(s, view)));
+    }
     if (s.tab != kLayoutTab) {
         key += '|';
         key += std::to_string(s.selected);
@@ -1059,6 +1307,9 @@ inline void SetPage(State& s, const View& view, uint32_t page) {
         break;
     case kPortConfigTab:
         s.port_page = page;
+        break;
+    case kDebugTab:
+        s.debug_page = page;
         break;
     default:
         return;
@@ -1124,7 +1375,8 @@ inline uint32_t ResetActionForSelection(const State& s, const View& view) {
     if (s.tab == kPortConfigTab && PortItemAt(s, view, s.selected) == PortItem::Reset) {
         return kResetPortConfig;
     }
-    if (s.tab == kDebugTab && static_cast<DebugItem>(s.selected) == DebugItem::GrantEverything) {
+    if (s.tab == kDebugTab && DebugPageAt(view, Page(s, view)).kind == DebugPageKind::Switches &&
+        static_cast<DebugItem>(s.selected) == DebugItem::GrantEverything) {
         return kGrantEverything;
     }
     return kNoReset;
@@ -1715,7 +1967,56 @@ inline void Activate(State& s, PortVrSettings& v, const View& view, double now, 
         }
         return;
     }
-    case kDebugTab:
+    case kDebugTab: {
+        const DebugPage page = DebugPageAt(view, Page(s, view));
+        if (page.kind == DebugPageKind::Teleport) {
+            const TeleportList items = TeleportItems(view);
+            if (!view.in_game || s.selected >= items.count) {
+                return;
+            }
+            const TeleportItem item = items.items[s.selected];
+            switch (item) {
+            case TeleportItem::PreviousArea:
+            case TeleportItem::NextArea:
+                actions.CycleArea(item == TeleportItem::NextArea ? 1 : -1);
+                break;
+            case TeleportItem::PreviousWorld:
+            case TeleportItem::NextWorld:
+                actions.CycleWorld(item == TeleportItem::NextWorld ? 1 : -1);
+                break;
+            case TeleportItem::Dimension:
+                actions.CrossDimension();
+                break;
+            case TeleportItem::ReloadRoom:
+                actions.ReloadRoom();
+                break;
+            default: {
+                const DebugPageKind list = item == TeleportItem::Worlds ? DebugPageKind::Worlds
+                                           : item == TeleportItem::Rooms ? DebugPageKind::Rooms
+                                                                         : DebugPageKind::DarkRooms;
+                if (!TeleportPlaces(view, list).empty()) {
+                    SetPage(s, view, DebugListPage(view, list));
+                }
+                break;
+            }
+            }
+            return;
+        }
+        if (page.kind != DebugPageKind::Switches) {
+            // A list's row: go there, unless the player is already there (RELOAD ROOM is for that).
+            if (view.in_game && s.selected < page.count) {
+                const TeleportPlace& place = TeleportPlaces(view, page.kind)[page.first + s.selected];
+                if (IsHere(view, page.kind, place)) {
+                    return;
+                }
+                if (page.kind == DebugPageKind::Worlds) {
+                    actions.GoToWorld(place.id);
+                } else {
+                    actions.GoToRoom(place.id);
+                }
+            }
+            return;
+        }
         switch (static_cast<DebugItem>(s.selected)) {
         case DebugItem::FullHealth:
             if (view.in_game) {
@@ -1752,6 +2053,7 @@ inline void Activate(State& s, PortVrSettings& v, const View& view, double now, 
             break; // readouts
         }
         return;
+    }
     default:
         return;
     }
@@ -1806,7 +2108,7 @@ inline void Click(State& s, PortVrSettings& v, const View& view, float x, float 
         const auto on = [x](int button_x) {
             return x >= static_cast<float>(button_x) && x <= static_cast<float>(button_x + kPageButtonWidth);
         };
-        const uint32_t page = Page(s);
+        const uint32_t page = Page(s, view);
         uint32_t turned = page;
         if (on(kPreviousButtonX) && page > 0) {
             turned = page - 1;

@@ -61,6 +61,12 @@ public:
   void SetLogFile(bool on) override { log = on ? 1 : 0; }
   void SetQuickResume(bool on) override { quickResume = on ? 1 : 0; }
   void SetDrawTags(bool on) override { tags = on ? 1 : 0; }
+  void CycleArea(int direction) override { areaSteps += direction; }
+  void CycleWorld(int direction) override { worldSteps += direction; }
+  void CrossDimension() override { ++crossed; }
+  void ReloadRoom() override { ++reloaded; }
+  void GoToRoom(uint32_t area) override { room = static_cast<int>(area); }
+  void GoToWorld(uint32_t id) override { world = id; }
 
   int saves = 0;
   int exits = 0;
@@ -78,6 +84,12 @@ public:
   int log = -1;
   int tags = -1;
   int quickResume = -1;
+  int areaSteps = 0;
+  int worldSteps = 0;
+  int crossed = 0;
+  int reloaded = 0;
+  int room = -1;
+  uint32_t world = 0;
 };
 
 // The middle of row `index`'s hit band, and of its value box's halves.
@@ -173,8 +185,8 @@ void TestRows() {
   State calibration{};
   calibration.tab = kCalibrationTab;
   const auto rows = BuildRows(calibration, settings, View{});
-  Check(rows.size() == 12 && std::strcmp(rows[0].label, "CUTSCENE CINEMA SCREEN") == 0 &&
-            std::strcmp(rows[10].label, "CULLING CONE") == 0 && rows[10].value == "115.00",
+  Check(rows.size() == 12 && rows[0].label == "CUTSCENE CINEMA SCREEN" && rows[10].label == "CULLING CONE" &&
+            rows[10].value == "115.00",
         "PrimedGun's rows without the PAGE row, and its culling cone text");
   Check(SnapTurnStep(45, 1) == 60 && SnapTurnStep(90, 1) == 90 && SnapTurnStep(30, -1) == 30, "snap turn steps");
 }
@@ -492,7 +504,7 @@ void TestDebug() {
   const auto rows = BuildRows(s, v, view);
   Check(rows[8].value == "90 HZ" && rows[9].value == "89.9" && rows[10].value == "UNKNOWN" && rows[11].value == "1234",
         "readouts");
-  Check(PageCount(kDebugTab, view) == 1, "one page");
+  Check(PageCount(kDebugTab, view) == 2, "the switches and TELEPORT, no lists without a game");
   Check(BuildRows(s, v, view)[12].value == "OFF", "quick resume defaults off");
   Click(s, v, view, kLabelX, RowY(kDebugTab, 12), now, actions);
   Check(actions.quickResume == 1, "quick resume enables");
@@ -522,6 +534,116 @@ void TestDebug() {
   Check(title_row_lit(BuildPixels(layout, settings, measured, false)), "rate drawn on LAYOUT");
   Check(!title_row_lit(BuildPixels(layout, settings, measured, true)), "SETTINGS SAVED takes its place");
   Check(ViewKey(layout, settings, measured, false) != ViewKey(layout, settings, unknown, false), "rate in the key");
+}
+
+// DEBUG's TELEPORT pages: the overlay's Teleport block, its pickers as lists.
+void TestTeleport() {
+  RecordingActions actions;
+  PortVrSettings v{};
+  View view{};
+  double now = 10.0;
+  State s{};
+  s.tab = kDebugTab;
+  // NEXT turns to TELEPORT; without a game its rows say so and do nothing.
+  Click(s, v, view, kNextX, kPageY, now, actions);
+  Check(Page(s, view) == 1 && ItemCount(s, view) == 7, "teleport page, no dimension rows");
+  Check(BuildRows(s, v, view)[0].label == "PREVIOUS AREA" && BuildRows(s, v, view)[0].value == "NO GAME" &&
+            BuildRows(s, v, view)[6].value == "NO GAME",
+        "no game");
+  Click(s, v, view, kLabelX, RowY(kDebugTab, 1), now, actions);
+  Check(actions.areaSteps == 0, "no warp without a game");
+
+  // A game: 30 rooms on three pages, two worlds on one.
+  view.in_game = true;
+  for (uint32_t i = 0; i < 30; ++i) {
+    view.rooms.push_back({i, std::to_string(i) + "  Room"});
+  }
+  view.worlds = {{0x1000u, "Tallon Overworld"}, {0x2000u, "Chozo Ruins"}};
+  view.area = 14;
+  view.world = 0x2000u;
+  Check(PageCount(kDebugTab, view) == 2 + 1 + 3, "a page of worlds, three of rooms");
+  Check(DebugHeadline(view, DebugPageAt(view, 1)) == "TELEPORT - CHOZO RUINS", "TELEPORT names the world");
+  Check(BuildRows(s, v, view)[6].label == "ROOMS" && BuildRows(s, v, view)[6].value == "LIST", "list rows");
+  Click(s, v, view, kLabelX, RowY(kDebugTab, 0), now, actions);
+  Click(s, v, view, kLabelX, RowY(kDebugTab, 1), now, actions);
+  Click(s, v, view, kLabelX, RowY(kDebugTab, 1), now, actions);
+  Check(actions.areaSteps == 1, "previous and next area");
+  Click(s, v, view, kLabelX, RowY(kDebugTab, 2), now, actions);
+  Check(actions.worldSteps == -1, "previous world");
+  Click(s, v, view, kLabelX, RowY(kDebugTab, 3), now, actions);
+  Click(s, v, view, kLabelX, RowY(kDebugTab, 4), now, actions);
+  Check(actions.worldSteps == 0 && actions.reloaded == 1 && actions.crossed == 0, "next world, reload room");
+
+  // ROOMS opens its list on the page with the player's room, the second.
+  Click(s, v, view, kLabelX, RowY(kDebugTab, 6), now, actions);
+  const DebugPage rooms = DebugPageAt(view, Page(s, view));
+  Check(rooms.kind == DebugPageKind::Rooms && rooms.number == 1 && rooms.first == 12 && ItemCount(s, view) == 12,
+        "rooms open where the player is");
+  Check(DebugHeadline(view, rooms) == "ROOMS 2/3", "rooms headline");
+  const auto list = BuildRows(s, v, view);
+  Check(list[2].label == "14  ROOM" && list[2].value == "HERE" && list[3].value == "GO", "room rows");
+  Click(s, v, view, kLabelX, RowY(kDebugTab, 2), now, actions);
+  Check(actions.room == -1, "the player's room takes no click");
+  Click(s, v, view, kLabelX, RowY(kDebugTab, 3), now, actions);
+  Check(actions.room == 15, "go to a room");
+  Click(s, v, view, kNextX, kPageY, now, actions);
+  Check(ItemCount(s, view) == 6 && BuildRows(s, v, view)[5].label == "29  ROOM", "the last page");
+  // The headline is drawn, in the states tab's place.
+  bool headline = false;
+  const Pixels pixels = BuildPixels(s, v, view, false);
+  for (int x = 548; x < 700 && !headline; ++x) {
+    headline = At(pixels, x, 118) == 0xFFFFB030u;
+  }
+  Check(headline, "headline drawn");
+  Check(ViewKey(s, v, view, false) != ViewKey(State{kDebugTab}, v, view, false), "list page in the key");
+
+  // A world that has fewer rooms keeps the page within them.
+  View fewer = view;
+  fewer.rooms.resize(5);
+  Check(Page(s, fewer) == 3 && ItemCount(s, fewer) == 5, "page kept within a shorter list");
+
+  // WORLDS: the card's worlds, the current one marked.
+  s.debug_page = 1;
+  Click(s, v, view, kLabelX, RowY(kDebugTab, 5), now, actions);
+  Check(DebugPageAt(view, Page(s, view)).kind == DebugPageKind::Worlds && ItemCount(s, view) == 2 &&
+            BuildRows(s, v, view)[0].label == "TALLON OVERWORLD" && BuildRows(s, v, view)[1].value == "HERE",
+        "worlds list");
+  Check(DebugHeadline(view, DebugPageAt(view, Page(s, view))) == "WORLDS", "one page, no number");
+  Click(s, v, view, kLabelX, RowY(kDebugTab, 1), now, actions);
+  Check(actions.world == 0u && s.reset_confirm == kNoReset, "the current world takes no click");
+  Click(s, v, view, kLabelX, RowY(kDebugTab, 0), now, actions);
+  Check(actions.world == 0x1000u, "go to a world");
+
+  // Echoes: LIGHT / DARK WORLD and a list per dimension.
+  View echoes = view;
+  echoes.dimensions = true;
+  echoes.dark_rooms = {{40u, "40  Dark Room"}};
+  State e{};
+  e.tab = kDebugTab;
+  e.debug_page = 1;
+  Check(ItemCount(e, echoes) == 9 && BuildRows(e, v, echoes)[4].label == "LIGHT / DARK WORLD" &&
+            BuildRows(e, v, echoes)[7].label == "LIGHT ROOMS" && BuildRows(e, v, echoes)[8].label == "DARK ROOMS",
+        "dimension rows");
+  Click(e, v, echoes, kLabelX, RowY(kDebugTab, 4), now, actions);
+  Check(actions.crossed == 1, "cross to the other dimension");
+  echoes.no_twin_room = true;
+  Check(BuildRows(e, v, echoes)[4].value == "NO TWIN ROOM", "no twin room");
+  Click(e, v, echoes, kLabelX, RowY(kDebugTab, 8), now, actions);
+  Check(DebugPageAt(echoes, Page(e, echoes)).kind == DebugPageKind::DarkRooms &&
+            Page(e, echoes) == PageCount(kDebugTab, echoes) - 1 &&
+            DebugHeadline(echoes, DebugPageAt(echoes, Page(e, echoes))) == "DARK ROOMS",
+        "dark rooms last");
+  Click(e, v, echoes, kLabelX, RowY(kDebugTab, 0), now, actions);
+  Check(actions.room == 40, "go to a dark room");
+
+  // GRANT EVERYTHING's confirmation is the first page's alone.
+  State grant{};
+  grant.tab = kDebugTab;
+  grant.selected = static_cast<uint32_t>(DebugItem::GrantEverything);
+  Check(ResetActionForSelection(grant, view) == kGrantEverything, "grant on the first page");
+  grant.debug_page = 2;
+  Check(ResetActionForSelection(grant, view) == kNoReset, "not on a list");
+  Check(PlaceText(std::string(80, 'a')) == std::string(58, 'A'), "names upper case, cut short of the value box");
 }
 
 void TestPlacement() {
@@ -894,6 +1016,7 @@ int main() {
   TestTabs();
   TestConfig();
   TestDebug();
+  TestTeleport();
   TestPlacement();
   TestScreenAnchor();
   TestCinemaCooldown();
