@@ -19,12 +19,12 @@ ships no disc image, and neither does any package or release built from it.
 
 ## Features
 
-- Native OpenXR VR on PC and standalone Meta Quest.
-- Roomscale movement with a modern VR control scheme.
-- 6DOF arm cannon tracking for targeting and grapple controls.
+- Native OpenXR VR on PC (Direct3D 12, or Vulkan for SteamVR headsets such as PSVR2) and standalone Meta Quest (tested on Quest 3).
+- Room-scale movement with a modern VR control scheme, snap or smooth turning.
+- 6DOF arm cannon tracking for aiming, grapple, lock-on and left-handed play.
 - One-click height calibration and adjustable cannon position and rotation.
-- Left-handed support.
-- Easy texture swapping tools.
+- Beam wheel and visor gestures configurations.
+- 3D map, pause screens and message boxes in the headset.
 - In-headset settings for controls, calibration, graphics, and more.
 - Randomizer, and Archipelago multiworld support.
 
