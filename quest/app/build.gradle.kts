@@ -272,7 +272,6 @@ val syncLicenseNotices by tasks.registering(Sync::class) {
     into(generatedLicenses)
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
     from(File(portRoot, "LICENSE")) { into("licenses"); rename { "port-license.txt" } }
-    from(File(portRoot, "COPYING")) { into("licenses"); rename { "GPL-3.0.txt" } }
     from(File(portRoot, "NOTICE")) { into("licenses"); rename { "port-notice.txt" } }
     from(File(portRoot, "extern/aurora/LICENSE")) { into("licenses"); rename { "aurora.txt" } }
     from(File(portRoot, "extern/musyx/LICENSE")) { into("licenses"); rename { "musyx.txt" } }

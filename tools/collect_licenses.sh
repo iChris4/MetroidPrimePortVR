@@ -31,7 +31,6 @@ copy() {
 }
 
 copy "$ROOT/LICENSE" port-license.txt
-copy "$ROOT/COPYING" GPL-3.0.txt
 copy "$ROOT/NOTICE" port-notice.txt
 copy "$ROOT/extern/aurora/LICENSE" aurora.txt
 copy "$ROOT/extern/musyx/LICENSE" musyx.txt
