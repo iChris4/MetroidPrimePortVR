@@ -2,8 +2,9 @@
 
 ## Licence scope
 
-PrimedGun's original GPL-3.0-or-later notices remain in force. The full GNU
-GPL version 3 text is restored in `LICENSE` and `COPYING` for PrimedGun's
+The original Prime 1 decompilation had no root licence file before the native
+port additions. PrimedGun's later GPL-3.0-or-later file notices remain in force.
+The full GNU GPL version 3 text is retained in `COPYING` for PrimedGun's
 GPL-covered launcher and VR additions. This does not relicense third-party
 components or the game code.
 

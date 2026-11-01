@@ -353,14 +353,16 @@ libpng, zlib-ng, [zstd](https://github.com/facebook/zstd), [xxHash](https://gith
 
 ## Licensing
 
-PrimedGun's GPL-3.0-or-later launcher and VR code retain their original terms.
-The full GPL text is in [LICENSE](LICENSE) and [COPYING](COPYING).
+The original Prime 1 decompilation had no root licence file before the native
+port additions. Its original third-party licences remain with their components,
+including [Aurora](extern/aurora/LICENSE) and [MusyX](extern/musyx/LICENSE).
 
-The upstream native port's original MIT licence is preserved separately in
+Later PrimedGun files marked GPL-3.0-or-later retain those terms; their full
+licence text is in [COPYING](COPYING). The native port's later MIT grant is
+preserved separately in
 [packaging/licenses/native-port-MIT.txt](packaging/licenses/native-port-MIT.txt).
-Third-party components retain their original licences and copyright notices;
-see [NOTICE](NOTICE) and [packaging/licenses](packaging/licenses).
-These licences do not cover Nintendo's game code or assets.
+Neither grant replaces the original component licences or covers Nintendo's
+retail game code or assets. See [NOTICE](NOTICE) for the scope and attributions.
 
 Metroid Prime is a trademark of Nintendo. This project is unaffiliated with
 Nintendo and Retro Studios, and ships no game data.
