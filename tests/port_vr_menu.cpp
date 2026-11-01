@@ -506,13 +506,13 @@ void TestDebug() {
   Check(rows[8].value == "90 HZ" && rows[9].value == "89.9" && rows[10].value == "UNKNOWN" && rows[11].value == "1234",
         "readouts");
   Check(PageCount(kDebugTab, view) == 2, "the switches and TELEPORT, no lists without a game");
-  Check(BuildRows(s, v, view)[12].value == "OFF", "quick resume defaults off");
+  Check(BuildRows(s, v, view)[12].value == "ON", "resume question defaults on");
   Click(s, v, view, kLabelX, RowY(kDebugTab, 12), now, actions);
-  Check(actions.quickResume == 1, "quick resume enables");
-  view.quick_resume = true;
-  Check(BuildRows(s, v, view)[12].value == "ON", "quick resume reflects live state");
+  Check(actions.quickResume == 0, "resume question disables");
+  view.quick_resume = false;
+  Check(BuildRows(s, v, view)[12].value == "OFF", "resume question reflects live state");
   Click(s, v, view, kLabelX, RowY(kDebugTab, 12), now, actions);
-  Check(actions.quickResume == 0, "quick resume disables");
+  Check(actions.quickResume == 1, "resume question enables");
 
   // The frame rate beside the title, on every tab; nothing while it is unknown.
   State layout{};
