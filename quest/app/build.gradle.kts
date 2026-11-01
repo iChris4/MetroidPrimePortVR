@@ -272,19 +272,37 @@ val syncLicenseNotices by tasks.registering(Sync::class) {
     into(generatedLicenses)
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
     from(File(portRoot, "LICENSE")) { into("licenses"); rename { "port-license.txt" } }
+    from(File(portRoot, "COPYING")) { into("licenses"); rename { "GPL-3.0.txt" } }
     from(File(portRoot, "NOTICE")) { into("licenses"); rename { "port-notice.txt" } }
     from(File(portRoot, "extern/aurora/LICENSE")) { into("licenses"); rename { "aurora.txt" } }
     from(File(portRoot, "extern/musyx/LICENSE")) { into("licenses"); rename { "musyx.txt" } }
-    listOf(
-        "sdl-src", "imgui-src", "fmt-src", "zstd-src", "openxr-src", "dawn_prebuilt-src",
-        "abseil-cpp-src", "aurora_nod-src", "freetype-src", "png-src", "zlib-src", "xxhash-src",
-    ).forEach { dep ->
-        from(nativeStagingDir) {
-            include("**/_deps/$dep/LICENSE*")
-            include("**/_deps/$dep/COPYING*")
-            eachFile { relativePath = RelativePath(true, "licenses", "$dep.txt") }
-            includeEmptyDirs = false
+    from(File(portRoot, "extern/astcenc/LICENSE.txt")) { into("licenses"); rename { "astcenc.txt" } }
+    from(File(portRoot, "extern/GamepadMotionHelpers/LICENSE")) { into("licenses"); rename { "gamepadmotionhelpers.txt" } }
+    from(File(portRoot, "extern/adrenotools/LICENSE")) { into("licenses"); rename { "adrenotools.txt" } }
+    from(File(portRoot, "extern/adrenotools/lib/linkernsbypass/LICENSE")) { into("licenses"); rename { "linkernsbypass.txt" } }
+    from(File(portRoot, "packaging/licenses")) { into("licenses"); include("*.txt") }
+    from(nativeStagingDir) {
+        include(
+            "**/_deps/**/LICENSE*", "**/_deps/**/LICENCE*", "**/_deps/**/COPYING*", "**/_deps/**/NOTICE*",
+            "**/_deps/**/license*", "**/_deps/**/licence*", "**/_deps/**/copying*", "**/_deps/**/notice*",
+            "**/_deps/**/FTL.TXT",
+        )
+        exclude("**/_deps/**/build/**")
+        eachFile {
+            val parts = relativePath.segments.toList()
+            val depIndex = parts.indexOf("_deps") + 1
+            val name = file.name.lowercase()
+            val isNotice = name.startsWith("license") || name.startsWith("licence") ||
+                name.startsWith("copying") || name.startsWith("notice") || name == "ftl.txt"
+            if (depIndex <= 0 || depIndex >= parts.size - 1 || !isNotice) {
+                exclude()
+            } else {
+                // Keep every notice's original filename and relative path. LICENSE
+                // and COPYING (or nested third-party notices) must not collide.
+                relativePath = RelativePath(true, "licenses", *parts.drop(depIndex).toTypedArray())
+            }
         }
+        includeEmptyDirs = false
     }
 }
 

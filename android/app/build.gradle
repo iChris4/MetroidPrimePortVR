@@ -216,6 +216,7 @@ tasks.register("syncLicenseNotices", Sync) {
     // MIT and zlib components has to carry their terms, and a grant nobody can
     // read inside the package is not much of a grant.
     from("../../LICENSE") { rename { "port-license.txt" } }
+    from("../../COPYING") { rename { "GPL-3.0.txt" } }
     from("../../NOTICE") { rename { "port-notice.txt" } }
     from("../../extern/aurora/LICENSE") { rename { "aurora.txt" } }
     from("../../extern/musyx/LICENSE") { rename { "musyx.txt" } }

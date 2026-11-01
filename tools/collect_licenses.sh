@@ -31,11 +31,14 @@ copy() {
 }
 
 copy "$ROOT/LICENSE" port-license.txt
+copy "$ROOT/COPYING" GPL-3.0.txt
 copy "$ROOT/NOTICE" port-notice.txt
 copy "$ROOT/extern/aurora/LICENSE" aurora.txt
 copy "$ROOT/extern/musyx/LICENSE" musyx.txt
 copy "$ROOT/extern/astcenc/LICENSE.txt" astcenc.txt
 copy "$ROOT/extern/GamepadMotionHelpers/LICENSE" gamepadmotionhelpers.txt
+copy "$ROOT/extern/adrenotools/LICENSE" adrenotools.txt
+copy "$ROOT/extern/adrenotools/lib/linkernsbypass/LICENSE" linkernsbypass.txt
 # freetype's LICENSE.TXT only points at the licence it is used under, and the
 # fetched loop below only looks at the package's top level.
 copy "$BUILD"/_deps/freetype-src/docs/FTL.TXT freetype-FTL.txt
