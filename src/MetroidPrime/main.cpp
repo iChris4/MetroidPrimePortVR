@@ -532,7 +532,8 @@ bool CGameArchitectureSupport::UpdateTicks() {
   // variable frame rate is matched exactly); otherwise a fixed 1/SimRate() step
   // catches up with whole ticks.
   double period;
-  if (PortDebug::SimAdaptive() && !PortDebug::Turbo()) {
+  const bool adaptive = PortDebug::SimAdaptive() && !PortDebug::Turbo();
+  if (adaptive) {
     period = static_cast< double >(elapsed);
     if (period < 1.0 / 480.0) {
       period = 1.0 / 480.0;
@@ -546,6 +547,11 @@ bool CGameArchitectureSupport::UpdateTicks() {
   unsigned ticks =
       x7c_tickClock.Advance(elapsed, gpMain->GetScreenFading() || PortDebug::Turbo(),
                             PortDebug::FrameLimitEnabled());
+  // A frame within the clamp is covered by its one step; past it (a hitch)
+  // the remainder is kept so the following frames catch up.
+  if (adaptive && ticks > 0 && elapsed <= 1.f / 30.f) {
+    x7c_tickClock.DropRemainder();
+  }
   if (PortDebug::Turbo() && !gpMain->GetScreenFading()) {
     ticks = PortDebug::TurboTicks();
   }
@@ -1168,7 +1174,7 @@ int CMain::RsMain(int argc, const char* const* argv) {
       dt = archSupport->GetTickPeriod();
       // Advance the animation clock with simulation ticks so draw-time
       // animations stay real-time at any presentation frame rate.
-      CGraphics::TickRenderTimings(sTicksAdvanced);
+      CGraphics::TickRenderTimings(sTicksAdvanced, static_cast< float >(dt));
       double t1 = archSupport->GetStopwatch2().GetElapsedTime();
       AddFrameTime(xf0_tickTimes, t1 / dt);
       x118_averageTickTime = xf0_tickTimes.GetAverage().data();
@@ -1252,16 +1258,17 @@ int CMain::RsMain(int argc, const char* const* argv) {
           interpolation = 0.f;
         else if (interpolation > 1.f)
           interpolation = 1.f;
-        // The headset draws at its own rate, so the 60 FPS limiter never
-        // disables interpolation while it paces the loop.
-        if (PortDebug::FrameLimitEnabled() && !PortVr::OpenXRIsRunning())
+        // Keep headset interpolation independent of the flat-screen frame cap.
+        // Adaptive simulation already presents its current state at present time.
+        if ((PortDebug::FrameLimitEnabled() && !PortVr::OpenXRIsRunning()) ||
+            (PortDebug::SimAdaptive() && !PortDebug::Turbo()))
           interpolation = -1.f;
         PortDebug::PresentOverride(interpolation);
         CCameraManager::SetPresentationInterpolation(interpolation);
-        // The render clock steps 1/60 s per tick (TickRenderTimings above).
+        // The render clock advances dt per tick (TickRenderTimings above).
         CGraphics::SetRenderTimePresentLag(
             interpolation >= 0.f && interpolation < 1.f && PortDebug::ParticleInterpolation()
-                ? (1.f - interpolation) / 60.f
+                ? static_cast< float >((1.f - interpolation) * dt)
                 : 0.f);
         aurora::phase::set(aurora::phase::Main, "game draw");
         archSupport->GetIOWinManager().Draw();
@@ -1276,7 +1283,11 @@ int CMain::RsMain(int argc, const char* const* argv) {
         x11c_averageDrawTime = x104_drawTimes.GetAverage().data();
 
         uint idleMicros;
-        double idleTime = (dt - (t1 + (t2 - beginSceneWait))) - 0.00075;
+        // Adaptive dt is the last frame's length: budgeting the loader from it
+        // lets loading frames lengthen each other, so use the sim rate's frame.
+        const double idleFrame =
+            PortDebug::SimAdaptive() && !PortDebug::Turbo() ? PortDebug::SimPeriod() : dt;
+        double idleTime = (idleFrame - (t1 + (t2 - beginSceneWait))) - 0.00075;
         if (idleTime > 0)
           idleMicros = idleTime * 1000000;
         else

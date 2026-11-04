@@ -3,6 +3,7 @@
 #include "MetroidPrime/Tweaks/CTweakGui.hpp"
 #ifdef TARGET_PC
 #include "vr/vr_view.h"
+#include "vr/vr_settings.h"
 #endif
 
 #include "port_debug.h"
@@ -739,6 +740,16 @@ void CCameraBlurPass::Draw() const {
   gpRender->SetModelMatrix(CTransform4f::Identity());
 
   if (x10_curType == kBT_XRay) {
+    // Keep the retail four-tap blur, sampling each eye's own palette image.
+    // Only the base-image squeeze/warp is omitted in immersive VR. The
+    // authored UV orientation below is important: framebuffer V runs opposite
+    // to this orthographic draw's Y, so a conventional quad flips the image.
+    float imageScale = 0.9f;
+#ifdef TARGET_PC
+    if (PortVr::VrImmersive()) {
+      imageScale = 1.f;
+    }
+#endif
     gpRender->SetBlendMode_Replace();
 
     const GXVtxDescList xrayVtxDescList[] = {
@@ -776,8 +787,14 @@ void CCameraBlurPass::Draw() const {
 
     float tweakLinear = gpTweakGui->GetXrayBlurScaleLinear() / 4.f;
     float tweakQuad = gpTweakGui->GetXrayBlurScaleQuadratic() / 4.f;
-    float linearCoeff = x1c_curValue * tweakLinear;
-    float quadCoeff = x1c_curValue * tweakQuad;
+    float blurValue = x1c_curValue;
+#ifdef TARGET_PC
+    if (PortVr::VrImmersive() && !PortVr::GetVrSettings().xray_blur_enabled) {
+      blurValue = 0.f;
+    }
+#endif
+    float linearCoeff = blurValue * tweakLinear;
+    float quadCoeff = blurValue * tweakQuad;
 
     for (int i = 0; i < 4; ++i) {
       float val = linearCoeff * static_cast< float >(i) +
@@ -803,16 +820,16 @@ void CCameraBlurPass::Draw() const {
     const float uStep = 1.0f / 7.0f;
 
     for (float v = 0.f; v < 1.f; v += step) {
-      float posYBot = vHeight * get_stretched_t(1.0f - v - step, 0.9f) + vTop;
-      float posYTop = vHeight * get_stretched_t(1.0f - v, 0.9f) + vTop;
-      float texVTop = 0.9f * (v - 0.5f) + 0.5f;
-      float texVBot = 0.9f * (v + step - 0.5f) + 0.5f;
+      float posYBot = vHeight * get_stretched_t(1.0f - v - step, imageScale) + vTop;
+      float posYTop = vHeight * get_stretched_t(1.0f - v, imageScale) + vTop;
+      float texVTop = imageScale * (v - 0.5f) + 0.5f;
+      float texVBot = imageScale * (v + step - 0.5f) + 0.5f;
 
       for (float u = 0.f; u < 1.f; u += uStep) {
-        float posXLeft = vWidth * get_stretched_t(u, 0.9f) + vLeft;
-        float posXRight = vWidth * get_stretched_t(uStep + u, 0.9f) + vLeft;
-        float texULeft = 0.9f * (u - 0.5f) + 0.5f;
-        float texURight = 0.9f * (uStep + u - 0.5f) + 0.5f;
+        float posXLeft = vWidth * get_stretched_t(u, imageScale) + vLeft;
+        float posXRight = vWidth * get_stretched_t(uStep + u, imageScale) + vLeft;
+        float texULeft = imageScale * (u - 0.5f) + 0.5f;
+        float texURight = imageScale * (uStep + u - 0.5f) + 0.5f;
 
         CGX::Begin(GX_TRIANGLESTRIP, GX_VTXFMT0, 4);
         GXPosition3f32(posXLeft, 0.f, posYTop);

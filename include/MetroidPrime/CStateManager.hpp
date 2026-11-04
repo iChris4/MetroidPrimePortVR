@@ -79,7 +79,7 @@ namespace SL {
 class CSortedListManager;
 } // namespace SL
 
-#define kMaxEntities 1024
+#define kMaxEntities kMaxObjects
 typedef rstl::reserved_vector< TUniqueId, kMaxEntities > TEntityList;
 
 enum EStateManagerTransition {
@@ -316,6 +316,7 @@ public:
   void DrawWorld() const;
 #ifdef TARGET_PC
   void PortCaptureProbeFace() const;
+  void PortUpdateIceDarkeners(float dt);
   // CMFGame snapshots this per-world-pass policy; DrawWorld consumes and clears it before
   // recording the LDR probe capture or beginning the real scene.
   static bool sPortSceneHdrRequest;
@@ -424,7 +425,7 @@ private:
   enum EInitPhase { kIP_LoadWorld, kIP_LoadFirstArea, kIP_Done };
 
   ushort x0_nextFreeIndex;
-  rstl::reserved_vector< ushort, 1024 > x4_objectIndexArray;
+  rstl::reserved_vector< ushort, kMaxObjects > x4_objectIndexArray;
   rstl::reserved_vector< rstl::auto_ptr< CObjectList >, 8 > x808_objectLists;
   CPlayer* x84c_player;
   rstl::single_ptr< CWorld > x850_world;

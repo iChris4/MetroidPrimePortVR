@@ -36,10 +36,13 @@ inline constexpr float kBlendSeconds = 0.25f;
 inline constexpr float kAimMaxRadians = 1.4f;
 inline constexpr float kAimInSeconds = 0.08f;
 inline constexpr float kAimOutSeconds = 0.3f;
-// While the grapple beam is out the left arm reaches for the grapple point, easing in over
-// kReachInSeconds and out over kReachOutSeconds.
+// While the grapple arm is out (from its wind-up, before the beam) the left arm reaches for the
+// grapple point, easing in over kReachInSeconds and out over kReachOutSeconds. The hand stops at
+// kReachStraight of the arm's length, the elbow bent down and kReachElbowOut out to the side.
 inline constexpr float kReachInSeconds = 0.1f;
 inline constexpr float kReachOutSeconds = 0.3f;
+inline constexpr float kReachStraight = 0.98f;
+inline constexpr float kReachElbowOut = 0.5f;
 // Below this speed (game units per second) the body stands.
 inline constexpr float kStandSpeed = 0.5f;
 // The aim-pose grid's coordinates move at most this fast (grid units, 1 = one aim clip, per
@@ -51,14 +54,36 @@ inline constexpr float kAimGridAccel = 10.f;
 // kerb doesn't crouch).
 inline constexpr float kLandAirSeconds = 0.5f;
 
+// The body (and its cannon) fades as the camera comes within kFadeDistance of its bounds, to
+// kFadeAlpha with the camera inside them.
+inline constexpr float kFadeDistance = 0.6f;
+inline constexpr float kFadeAlpha = 0.2f;
+
+// A walk stops only once the body has stood kSettleSeconds: a stick held near its dead zone
+// dips under kStandSpeed for a tick or two, which would flick the legs to Stop and back.
+inline constexpr float kSettleSeconds = 0.1f;
+
+// A walk brakes once its speed has fallen by at least kBrakeDecel (units per second squared)
+// each tick for kBrakeSeconds (or until it is under kBrakeHold) and is under kBrakeSpeed: the
+// stick let go, the body halts in a few ticks. Braking stops straight away, so the walk's
+// stride doesn't play on while she slows, and the collision's last jitter under kBrakeHold
+// doesn't start it again.
+inline constexpr float kBrakeDecel = 30.f;
+inline constexpr float kBrakeSeconds = 0.05f;
+inline constexpr float kBrakeSpeed = 6.f;
+inline constexpr float kBrakeHold = 1.2f;
+
 // The stance the movement asks for. fwd and side are the speeds along the facing (+ forward)
-// and across it, rise the vertical one; landing: the body was in the air kLandAirSeconds.
+// and across it, rise the vertical one; landing: the body was in the air kLandAirSeconds;
+// settled: it has been under kStandSpeed kSettleSeconds; braking: as kBrakeDecel.
 // Stopping from a walk plays Stop, and landing Land, until done (the current stance's clip
 // played out), unless the body moves (again: the touchdown tick's own speed, a blip of the
-// collision, doesn't count).
+// collision, doesn't count) and isn't braking.
 inline Stance ChooseStance(float fwd, float side, bool grounded, float rise, Stance current,
-                           bool done, bool landing) {
-  if (!grounded) {
+                           bool done, bool landing, bool settled = true, bool braking = false) {
+  // The tick that leaves the ground has no rise yet (it comes from the position delta): it
+  // keeps the ground stance, so a jump doesn't flick through Fall first.
+  if (!grounded && (rise != 0.f || current == Stance::Jump || current == Stance::Fall)) {
     return rise > 0.f ? Stance::Jump : Stance::Fall;
   }
   if ((current == Stance::Jump || current == Stance::Fall) && landing) {
@@ -66,6 +91,9 @@ inline Stance ChooseStance(float fwd, float side, bool grounded, float rise, Sta
   }
   const float speed = std::sqrt(fwd * fwd + side * side);
   if (speed < kStandSpeed) {
+    if (current == Stance::Loco && !settled && !braking) {
+      return Stance::Loco;
+    }
     if (current == Stance::Loco || (current == Stance::Stop && !done)) {
       return Stance::Stop;
     }
@@ -74,13 +102,17 @@ inline Stance ChooseStance(float fwd, float side, bool grounded, float rise, Sta
     }
     return Stance::Idle;
   }
+  if (braking && (current == Stance::Loco || (current == Stance::Stop && !done))) {
+    return Stance::Stop;
+  }
   return Stance::Loco;
 }
 
 // Strafing: the legs walk the way the body goes, turned from the facing by the angle LegYaw
 // gives (radians, + to the left, at most a quarter turn past the side), the upper body turned
 // back to the facing. Backward (back, kept within kLegFlip of the side so the legs don't swap
-// over at it) they walk back, the way the body came from.
+// over at it) they walk back, the way the body came from. (With BackWalk::Procedural only nearer
+// the front than Stepping: past it the procedural gait sidesteps or backpedals instead.)
 inline constexpr float kLegFlip = 0.2f;
 inline bool LegsBackward(float fwd, float side, bool backward) {
   const float speed = std::sqrt(fwd * fwd + side * side);
@@ -134,6 +166,44 @@ inline float CurvePeak(const float* d, int n) {
   return p - std::floor(p);
 }
 
+// Where to start the Stop clip so its feet carry on from the walk's. lead: the left ankle's lead
+// over the right along the facing, as a share of the walk's widest (-1..1); rising: it grows as
+// the stride goes on. stop: the Stop clip's leads at n phases over the whole clip. The clip steps
+// on from the walk before it settles; the phase returned (0..1) is the one there whose lead,
+// as a share of the clip's widest, is nearest lead and moves the same way, 0 when none does.
+inline float StopStart(float lead, bool rising, const float* stop, int n) {
+  float amp = 0.f;
+  for (int k = 0; k < n; ++k) {
+    amp = std::max(amp, std::fabs(stop[k]));
+  }
+  if (amp <= 0.f) {
+    return 0.f;
+  }
+  // Settled: the lead holds within 2% of its widest from here to the end.
+  int moving = 0;
+  for (int k = 0; k + 1 < n; ++k) {
+    if (std::fabs(stop[k + 1] - stop[k]) > 0.02f * amp) {
+      moving = k + 1;
+    }
+  }
+  float best = 0.f;
+  float bestMiss = 1e9f;
+  for (int k = 0; k < moving; ++k) {
+    const float a = stop[k] / amp;
+    const float b = stop[k + 1] / amp;
+    if ((b > a) != rising || a == b) {
+      continue;
+    }
+    const float t = std::clamp((lead - a) / (b - a), 0.f, 1.f);
+    const float miss = std::fabs(a + (b - a) * t - lead);
+    if (miss < bestMiss - 1e-4f) {
+      bestMiss = miss;
+      best = (k + t) / n;
+    }
+  }
+  return best;
+}
+
 // Moves value toward target by at most step.
 inline float Approach(float value, float target, float step) {
   return value < target ? std::min(value + step, target) : std::max(value - step, target);
@@ -173,6 +243,69 @@ inline void AimGridWeights(float u, float v, float (&w)[9]) {
   w[(r + 1) * 3 + c + 1] += fu * fv;
 }
 
+// The procedural backpedal (BackWalk::Procedural): each foot loops through stance (planted,
+// sliding forward under her at ground speed) for duty of the step (kBackDuty walking, less once a
+// planted foot can't cover the stride: then both feet leave the ground, a run) and swing (lifted,
+// carried back) for the rest. It lands toe first, kBackToeDown, and rolls up onto the toe, kBackToeUp,
+// before it lifts, as a step backward does.
+inline constexpr float kBackDuty = 0.6f;
+inline constexpr float kBackToeDown = 0.35f;
+inline constexpr float kBackToeUp = 0.2f;
+
+// One foot at phase 0..1 (0 = touch-down, furthest back): y in half strides (-1 back .. 1 front),
+// lift 0..1, pitch in radians (+ toe up, - toe down).
+struct BackFoot {
+  float y;
+  float lift;
+  float pitch;
+};
+inline BackFoot BackpedalFoot(float phase, float duty = kBackDuty) {
+  const float p = phase - std::floor(phase);
+  const auto ease = [](float t) { return t * t * (3.f - 2.f * t); };
+  if (p < duty) {
+    const float t = p / duty;
+    float pitch = 0.f;
+    if (t < 0.2f) {
+      pitch = -kBackToeDown * (1.f - ease(t / 0.2f));
+    } else if (t > 0.85f) {
+      pitch = kBackToeUp * ease((t - 0.85f) / 0.15f);
+    }
+    return {-1.f + 2.f * t, 0.f, pitch};
+  }
+  const float t = (p - duty) / (1.f - duty);
+  return {1.f - 2.f * ease(t), std::sin(3.14159265f * t), kBackToeUp + (-kBackToeDown - kBackToeUp) * ease(t)};
+}
+
+// The pelvis bob at the left foot's phase: 0 at mid-stance of either foot (highest), 1 lowest.
+inline float BackpedalBob(float phaseL, float duty = kBackDuty) {
+  return 0.5f * (1.f - std::cos(4.f * 3.14159265f * (phaseL - duty * 0.5f)));
+}
+
+// The interior angle at the knee (radians) of a leg with thigh a and shin b whose hip and ankle are
+// d apart: pi straight.
+inline float KneeAngle(float a, float b, float d) {
+  return std::acos(std::clamp((a * a + b * b - d * d) / (2.f * a * b), -1.f, 1.f));
+}
+
+// With BackWalk::Procedural the procedural gait walks every way but the front: straight back the
+// backpedal, to the side a sidestep, the hips facing forward throughout (nearer the front the
+// forward walk plays, its legs turned by LegYaw). It takes over past kStepAngle (radians) from the
+// facing, kStepFlip either side of it so it doesn't flicker there.
+inline constexpr float kStepAngle = 0.96f;
+inline constexpr float kStepFlip = 0.09f;
+inline bool Stepping(float fwd, float side, bool stepping) {
+  const float a = std::atan2(std::fabs(side), fwd);
+  return stepping ? a > kStepAngle - kStepFlip : a > kStepAngle + kStepFlip;
+}
+
+// How far each foot stands out from the ready pose's place so the feet never come nearer than
+// minGap: across, the gait's share across the facing; half, how far a foot moves either way of
+// its place; gap, the ready pose's feet apart. Out of step by half a loop, they close by up to
+// 2 |across| half.
+inline float StepWiden(float across, float half, float gap, float minGap) {
+  return std::max(std::fabs(across) * half - 0.5f * (gap - minGap), 0.f);
+}
+
 // A shot left the cannon (CPlayerGun): the body raises it for kGunUpSeconds.
 void NoteShot();
 // Once per game tick while the third-person camera is active (PortThirdPerson::Update).
@@ -183,9 +316,13 @@ bool Ready();
 void PreRender(const CStateManager& mgr);
 // Draws the body (and its cannon) at the player's transform; false if it is not ready.
 bool Render(const CStateManager& mgr, const CTransform4f& xf, const CActorLights* lights);
-// The cannon's muzzle in the world (the body's Charge_LCTR) as the body is posed now; false when the
+// The cannon's muzzle in the world (the drawn cannon's tip down the barrel, else the body's
+// Charge_LCTR) as the body is posed now; false when the
 // body is not ready, then the first-person muzzle stands in.
 bool CannonPosition(const CPlayer& player, CVector3f& out);
+// The muzzle in the world, facing down the barrel, as this frame's Render drew it; false (once
+// taken, or when the body was not drawn) leaves out the cannon's charge effect.
+bool TakeMuzzle(CTransform4f& out);
 // The grapple hand in the world (the body's L_middle_1) as the body is posed now; false when the
 // body is not ready or the third-person camera is off, then the first-person arm's nozzle stands in.
 bool GrappleHand(const CPlayer& player, CVector3f& out);
@@ -201,5 +338,11 @@ std::string DescribeFeet();
 // Holds the named clip at phase 0..1 instead of the movement's clip, the body turned by yaw degrees;
 // nullptr lets go. False if the body has no such clip (or is not built).
 bool PinClip(const char* name, float phase, float yaw = 0.f);
+// Debug (console `thirdperson backwalk`): how Samus walks backward: the procedural backpedal (the
+// default; no clip walks backward well), the walk-back clip (Phazon_Struggle_walkback's legs), or
+// the forward walks played in reverse.
+enum class BackWalk { Struggle, Reverse, Procedural };
+void SetBackWalk(BackWalk mode);
+BackWalk GetBackWalk();
 
 } // namespace PortThirdPersonBody

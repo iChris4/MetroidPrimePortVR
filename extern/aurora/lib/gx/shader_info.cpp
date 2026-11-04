@@ -3,6 +3,7 @@
 #include "../gfx/recording.hpp"
 #include "../gfx/stereo_uniform.hpp"
 
+#include <cassert>
 #include <cmath>
 
 #include <tracy/Tracy.hpp>
@@ -678,6 +679,8 @@ gfx::Range build_uniform(const ShaderInfo& info) noexcept {
   }
   ByteBuffer buf{out, MaxUniformSize};
   fill_uniform(buf, info);
+  // build_shader_info's size formula must match the bytes fill_uniform appends (debug builds only).
+  assert(gfx::align_uniform(buf.size()) == info.uniformSize && "uniformSize formula out of step with fill_uniform");
   gfx::unmap_uniform(range, buf.size());
   return range;
 }

@@ -50,7 +50,8 @@ enum {
   GX_PORT_PERF_SMALL_MEASURE = 1u << 1,   // the exposure measure starts at a quarter of the scene
   GX_PORT_PERF_BLEND_FOG = 1u << 2,       // volumetric fog blended onto the scene, not copied and rewritten
   GX_PORT_PERF_GUN_FIRST = 1u << 3,       // the gun's depth is laid before the world, hiding it there
-  GX_PORT_PERF_ALL = (1u << 4) - 1,
+  GX_PORT_PERF_COARSE_LOD = 1u << 4,      // room models switch to coarser levels at half the distance
+  GX_PORT_PERF_ALL = (1u << 5) - 1,
 };
 void GXPortSetPerformance(u32 flags);
 u32 GXPortGetPerformance(void);
@@ -113,8 +114,11 @@ void GXSetPBRProbeEx(const f32 viewToProbe[3][3], f32 weight, f32 occlusionMin, 
 // the layer's four scale/offset values (red, green) and the second and third parameters
 // (blue) times the first (the time); their sum less twice the vertex colour's, plus the
 // fourth, picks the glow from map 5, a ramp whose row is the vertex alpha, times the strength.
+// `bareGain` is what a special kind's bare glow (one with no exposure factor in Remastered) is
+// multiplied by besides the tone's w so that it is at the frame's exposure (PortRoomEnv::GlowGain);
+// 0 or less leaves it at 1.
 void GXSetPBRMaterial(const f32 emissive[3], const f32 backlight[3], f32 heightBlend, f32 mode, const f32 layer[5],
-                      const f32 kind[6], const f32 up[3]);
+                      const f32 kind[6], const f32 up[3], f32 bareGain);
 // Aurora extension: room cubes (see GX_AURORA_CREATE_PBR_CUBE). `texels` is RGBA16Float,
 // every mip of face 0 from the largest down, then face 1 and so on; it is copied.
 void GXCreatePBRCube(u32 id, u32 size, u32 mipCount, const void* texels, u32 length);

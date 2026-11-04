@@ -90,6 +90,7 @@ extern float sDynScale;
 extern PortDebug::EAspectMode sAspectMode;
 extern bool sHudWide;
 extern bool sCinemaBars;
+extern bool sPhazonShell;
 extern bool sSharpScanWindow;
 extern bool sGeneratedBallLooks;
 extern bool sAutoAim;
@@ -136,6 +137,7 @@ extern std::atomic< bool > sTouchTurboFire;
 extern bool sInvulnerable;
 extern bool sPhazonBeamCheat;
 extern int sInvulnerableRun;
+extern unsigned sInfiniteAmmo;
 extern bool sLogFile;
 extern std::mutex sRandoMutex;
 extern PortRandoGen::Settings sRandoSettings;
@@ -274,6 +276,7 @@ extern std::string sDiscPath;
 extern std::string sRemasteredImagePath;
 extern std::string sRemasteredKeysPath;
 extern std::string sRemasteredSkip;
+extern std::string sRemasteredHide;
 
 std::string SettingsFilePath();
 bool ParseBool(const std::string& value);
@@ -358,6 +361,12 @@ ImGuiWindow* ScrollableWindowAt(ImGuiWindow* window);
 
 // window.cpp
 bool TouchScrolling(); // a finger drag is scrolling a page, taken from the widget it began on
+
+#if defined(__ANDROID__)
+// android_jni.cpp: the cutout and visible system bars, in pixels; false until
+// the activity has sent them.
+bool DrawInsetsPx(int& left, int& top, int& right, int& bottom);
+#endif
 
 // ui_common.cpp
 bool PageLayout();
@@ -470,7 +479,7 @@ void DrawDiscordSection();
 void DrawUpdateSection();
 std::string TexturePackStatus();
 void SetTexturePackStatus(std::string status);
-void PickTexturePack();
+void PickTexturePack(bool zip);
 void DrawOverlaySection();
 
 // video.cpp

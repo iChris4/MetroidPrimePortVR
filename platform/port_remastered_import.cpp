@@ -2,6 +2,7 @@
 #include "port_remastered_effect_convert.h"
 #include "port_queen_barrier_validate.h"
 #include "port_envfx_file.h"
+#include "port_icy_file.h"
 #include "port_shell_file.h"
 #include "port_retail_placement.h"
 #include "port_dread_reskin.h"
@@ -19,7 +20,6 @@ constexpr const char* kRoomFolder = "roomenv";
 constexpr const char* kGeometryFolder = "roomgeo";
 constexpr const char* kFontFolder = "font";
 constexpr const char* kFontName = "deface.sdfont";
-constexpr const char* kHudFolder = "hud";
 constexpr const char* kMapFolder = "map";
 // The disc's own folder: a mod's file there is opened in place of the disc's.
 constexpr const char* kMovieFolder = "Video";
@@ -308,8 +308,8 @@ std::string TableKey() {
   char buffer[160];
   for (size_t i = 0; i < count; ++i) {
     const TableEntry& entry = table[i];
-    std::snprintf(buffer, sizeof(buffer), "%08X %08X %d %d %d|", entry.retail, entry.ancs, int(entry.key),
-                  int(entry.pbr), int(entry.options));
+    std::snprintf(buffer, sizeof(buffer), "%08X %08X %d %d %d %08X|", entry.retail, entry.ancs, int(entry.key),
+                  int(entry.pbr), int(entry.options), entry.character);
     text += buffer;
     text.append(reinterpret_cast<const char*>(entry.rem), sizeof(entry.rem));
     text.append(reinterpret_cast<const char*>(entry.orient), sizeof(entry.orient));
@@ -1914,6 +1914,7 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
     size_t entry;
     std::vector<uint8_t> from, to;
     uint32_t skin;  // the CSKR `to` names
+    size_t at = SIZE_MAX;  // only there (TableEntry::character), else wherever `from` is
   };
   struct Character {
     uint32_t source = 0;  // the retail ANCS it is a copy of
@@ -1935,6 +1936,23 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
     char name[16];
     std::snprintf(name, sizeof(name), "%08X", id);
     return std::string(name);
+  };
+  // The CCharacterInfo a pair at `at` of an ANCS belongs to: the offset of its body, the
+  // CMDL, CSKR, CINF triple that leads it (0x14..0x1c of the info, after the id, the
+  // version and the name), the nearest one at or before `at`. A pair after it is another
+  // model of the character, its ice overlay. SIZE_MAX when there is none.
+  auto bodyBefore = [&](const std::vector<uint8_t>& data, size_t at) {
+    const auto isBody = [&](size_t p) {
+      return p + 12 <= data.size() && retail.HasResource(kCMDL, port::ReadBE32(&data[p])) &&
+             retail.HasResource(kCSKR, port::ReadBE32(&data[p + 4])) &&
+             retail.HasResource(kCINF, port::ReadBE32(&data[p + 8]));
+    };
+    for (size_t p = at + 1; p-- > 0;) {
+      if (isBody(p)) {
+        return p;
+      }
+    }
+    return SIZE_MAX;
   };
   {
     auto variant = [&](Look& look, uint32_t id, int key) {
@@ -2008,20 +2026,28 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
       const std::vector<uint8_t> pair = bytesOf({entry.retail, TableSkins(entry)[0]});
       const std::vector<uint8_t>& data = character.data;
       int found = 0;
+      size_t at = SIZE_MAX;
       for (auto it = std::search(data.begin(), data.end(), pair.begin(), pair.end()); it != data.end();
            it = std::search(it + 1, data.end(), pair.begin(), pair.end())) {
-        ++found;
+        const size_t offset = size_t(it - data.begin());
+        const size_t body = entry.character != 0 ? bodyBefore(data, offset) : SIZE_MAX;
+        if (entry.character == 0 || (body != SIZE_MAX && port::ReadBE32(&data[body]) == entry.character)) {
+          ++found;
+          at = offset;
+        }
       }
       if (found != 1) {
         look.ok = false;
         look.error = "character " + hex(entry.ancs) + " binds " + hex(entry.retail) + " " + std::to_string(found) +
-                     " times";
+                     " times" + (entry.character != 0 ? " in the character of " + hex(entry.character) : "");
         continue;
       }
-      const uint32_t seed = entry.ancs * 0x9E3779B1u ^ entry.retail ^ uint32_t(entry.key + 1) * 0x85EBCA6Bu;
+      const uint32_t seed =
+          entry.ancs * 0x9E3779B1u ^ entry.retail ^ uint32_t(entry.key + 1) * 0x85EBCA6Bu ^ entry.character;
       look.model = fresh(seed);
       look.skins = {fresh(seed ^ 0x534B494Eu)};
-      character.rebinds.push_back({i, pair, bytesOf({look.model, look.skins[0]}), look.skins[0]});
+      character.rebinds.push_back({i, pair, bytesOf({look.model, look.skins[0]}), look.skins[0],
+                                   entry.character != 0 ? at : SIZE_MAX});
     }
     // A body whose skin another model shares keeps its id but takes skins of
     // its own, and every character that binds it is rebound to them. Its
@@ -2088,9 +2114,13 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
   // the retail ANCS that binds the model to its first skin names the CINF, and
   // the CHPR under that ANCS's id is the Remastered character, whose joints are
   // the model's if its skinned model is the one converted.
+  // A pair that is not the character's body (its ice overlay, CCharacterInfo's frozen
+  // pair) sits under the character's CINF too: the CINF is the body triple's, the nearest
+  // CMDL, CSKR, CINF before the pair, and the body votes (ConvertOptions::weightModel).
   struct Rig {
     std::vector<std::array<double, 3>> pivots;
     std::vector<ConvertOptions::RetailBone> bones;
+    uint32_t bodyModel = 0, bodySkin = 0;
   };
   std::vector<Rig> rigs(modelsReused ? 0 : count);
   if (!modelsReused) {
@@ -2107,17 +2137,38 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
       if (byPair.empty() || !retail.Read(kANCS, ancs, data)) {
         continue;
       }
-      std::vector<std::pair<size_t, uint32_t>> bound;  // table entry, CINF
-      for (size_t at = 0; at + 12 <= data.size(); ++at) {
+      struct Bound {
+        size_t entry;
+        uint32_t cinf, bodyModel, bodySkin;  // body 0: the pair is the body
+      };
+      std::vector<Bound> bound;
+      for (size_t at = 0; at + 8 <= data.size(); ++at) {
         const auto it = byPair.find(uint64_t(port::ReadBE32(&data[at])) << 32 | port::ReadBE32(&data[at + 4]));
-        if (it != byPair.end()) {
-          for (size_t i : it->second) {
-            bound.emplace_back(i, port::ReadBE32(&data[at + 8]));
+        if (it == byPair.end()) {
+          continue;
+        }
+        const size_t p = bodyBefore(data, at);
+        if (p == SIZE_MAX) {
+          continue;
+        }
+        for (size_t i : it->second) {
+          if (table[i].character != 0 && (table[i].ancs != ancs || port::ReadBE32(&data[p]) != table[i].character)) {
+            continue;
           }
+          bound.push_back({i, port::ReadBE32(&data[p + 8]), p == at ? 0 : port::ReadBE32(&data[p]),
+                           p == at ? 0 : port::ReadBE32(&data[p + 4])});
         }
       }
       if (bound.empty()) {
         continue;
+      }
+      // The body votes with or without the Remastered character (Magdolite and Metroid
+      // Prime have no CHPR).
+      for (const Bound& b : bound) {
+        if (b.bodyModel != 0 && rigs[b.entry].bodyModel == 0) {
+          rigs[b.entry].bodyModel = b.bodyModel;
+          rigs[b.entry].bodySkin = b.bodySkin;
+        }
       }
       ModelUuid chprId = {0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0xf0, 0x00, 0xf0, 0x00, 0x00, 0x00,
                           uint8_t(ancs >> 24), uint8_t(ancs >> 16), uint8_t(ancs >> 8), uint8_t(ancs)};
@@ -2139,7 +2190,9 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
         }
         return std::search(chpr.begin(), chpr.end(), id, id + 16) != chpr.end();
       };
-      for (const auto& [i, cinf] : bound) {
+      for (const auto& [i, cinf, bodyModel, bodySkin] : bound) {
+        (void)bodyModel;
+        (void)bodySkin;
         std::vector<uint8_t> cinfData;
         PortDread::PrimeSkeleton skeleton;
         if (!rigs[i].pivots.empty() || !names(table[i].rem) ||
@@ -2202,6 +2255,8 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
         if (i < rigs.size()) {
           options.jointPivots = rigs[i].pivots;
           options.retailBones = rigs[i].bones;
+          options.weightModel = rigs[i].bodyModel;
+          options.weightSkin = rigs[i].bodySkin;
         }
         ok = look.ok && remastered.ReadModel(id, raw, modelError) &&
              ParseModel(raw.data(), raw.size(), model, modelError) && converter.Convert(model, options, modelError);
@@ -2264,7 +2319,14 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
       auto apply = [&](const Rebind& rebind) {
         bool swapped = false;
         std::error_code skinError;
-        if (modelOk[rebind.entry] != 0 && fs::exists(staging / (hex(rebind.skin) + ".CSKR"), skinError)) {
+        if (modelOk[rebind.entry] != 0 && fs::exists(staging / (hex(rebind.skin) + ".CSKR"), skinError) &&
+            rebind.at != SIZE_MAX) {
+          if (rebind.at + rebind.from.size() <= data.size() &&
+              std::equal(rebind.from.begin(), rebind.from.end(), data.begin() + ptrdiff_t(rebind.at))) {
+            std::copy(rebind.to.begin(), rebind.to.end(), data.begin() + ptrdiff_t(rebind.at));
+            swapped = true;
+          }
+        } else if (modelOk[rebind.entry] != 0 && fs::exists(staging / (hex(rebind.skin) + ".CSKR"), skinError)) {
           for (auto it = std::search(data.begin(), data.end(), rebind.from.begin(), rebind.from.end());
                 it != data.end();
                it = std::search(it + rebind.from.size(), data.end(), rebind.from.begin(), rebind.from.end())) {
@@ -2846,7 +2908,9 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
           const fs::path texture = staging / PathFromString(Hex8(id) + ".TXTR");
           return fs::is_regular_file(texture, ec) && !ec && fs::file_size(texture, ec) > 0 && !ec;
         };
-        return PortQueenBarrier::ValidatePart(bytes, feature, vars, dependency, reason);
+        if (PortQueenBarrier::ValidatePart(bytes, feature, vars, dependency, reason)) return true;
+        PortLog::Write("remastered import: barrier effect %s: %s\n", Hex8(part).c_str(), reason.c_str());
+        return false;
       };
       io.matched = [&](const std::array<uint8_t, 16>& genp) {
         std::vector<uint32_t> out;
@@ -3604,6 +3668,12 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
       }
       ++hudFrames;
     }
+    if (hudFrames != 0) {
+      const std::string disc = PortDisc::Name(PortDisc::Current());
+      if (!writeFile(hudFolder / kHudDiscName, std::vector<uint8_t>(disc.begin(), disc.end()))) {
+        AddLine(std::string("hud/") + kHudDiscName + ": cannot write");
+      }
+    }
     // The map screen's compass, which the game draws itself (port_map_icons.h).
     int compassModels = 0;
     for (const auto& [name, id] : {std::pair<const char*, uint32_t>{"CMDL_MapCompassShell", PortMapIcons::kCompassShell},
@@ -3752,6 +3822,76 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
         AddLine("silhouette shell textures: " + shellError);
       } else if (!makeIO(0, hudFolder).write("shell.bin", file)) {
         AddLine("silhouette shell textures: cannot write");
+      }
+    }
+
+    // Remastered's frozen-enemy material (port_icy_file.h) as icy.bin: the icy MATI the render
+    // loose data names, its three textures and four constants (build/mpr/kb
+    // topic/frozen-enemy-icy-render.md). All of it or no file, and frozen enemies draw as retail.
+    {
+      PortIcy::Assets icy;
+      std::string icyError;
+      std::vector<uint8_t> raw;
+      ModelUuid material{};
+      MaterialParams params;
+      // A GUID as the file holds it, else with its first three groups swapped.
+      const auto swap = [](ModelUuid id) {
+        std::swap(id[0], id[3]);
+        std::swap(id[1], id[2]);
+        std::swap(id[4], id[5]);
+        std::swap(id[6], id[7]);
+        return id;
+      };
+      std::string readError;
+      if (!remastered.ReadTweak("RenderLooseDataMP1", raw, readError) ||
+          !RenderIcyMaterial(raw.data(), raw.size(), material, readError)) {
+        icyError = "RenderLooseDataMP1: " + readError;
+      } else if (!remastered.ReadEffectAsset(kMATI, material, raw, readError) &&
+                 !remastered.ReadEffectAsset(kMATI, swap(material), raw, readError)) {
+        icyError = "the icy material: " + readError;
+      } else if (!ReadMaterialParams(raw, params)) {
+        icyError = "the icy material does not parse";
+      }
+      for (int i = 0; i < PortIcy::kCount && icyError.empty(); ++i) {
+        const auto texture = params.textures.find(PortIcy::kImageTag[i]);
+        if (texture == params.textures.end()) {
+          icyError = std::string("the icy material has no ") + PortIcy::kImageTag[i];
+          break;
+        }
+        std::string error;
+        TxtrImage tex;
+        if (!remastered.ReadTexture(texture->second, raw, error) &&
+            !remastered.ReadTexture(swap(texture->second), raw, error)) {
+          icyError = std::string(PortIcy::kImageTag[i]) + ": " + error;
+        } else if (!DecodeTxtr(raw.data(), raw.size(), tex, error)) {
+          icyError = std::string(PortIcy::kImageTag[i]) + ": " + error;
+        } else if (tex.width < 1 || tex.height < 1 || tex.width > 4096 || tex.height > 4096) {
+          icyError = std::string(PortIcy::kImageTag[i]) + ": " + std::to_string(tex.width) + "x" +
+                     std::to_string(tex.height);
+        } else {
+          BuildShellImage(tex, icy.image[i]);
+        }
+      }
+      for (int i = 0; i < PortIcy::kVectors && icyError.empty(); ++i) {
+        const auto vector = params.vectors.find(PortIcy::kVectorTag[i]);
+        if (vector == params.vectors.end()) {
+          icyError = std::string("the icy material has no ") + PortIcy::kVectorTag[i];
+        } else {
+          icy.vector[i] = vector->second;
+        }
+      }
+      PortIcy::Assets check;
+      std::vector<uint8_t> file;
+      if (icyError.empty()) {
+        file = PortIcy::Serialize(icy);
+        if (!PortIcy::Parse(file.data(), file.size(), check, icyError)) {
+          icyError = "unexpected size: " + icyError;
+        }
+      }
+      if (!icyError.empty()) {
+        AddLine("frozen-enemy material: " + icyError);
+      } else if (!makeIO(0, hudFolder).write("icy.bin", file)) {
+        AddLine("frozen-enemy material: cannot write");
       }
     }
     if (hudFrames == 0 && compassModels == 0) {

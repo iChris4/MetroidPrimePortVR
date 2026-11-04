@@ -61,6 +61,36 @@ static CAABox BuildNearListBox(bool cropBottom, const CTransform4f& xf, float x,
   return bounds.GetTransformedAABox(xf);
 }
 
+#ifdef TARGET_PC
+// FindBestOrbitableObject's line-of-sight test: nothing solid between the eye and the target,
+// skipping occluders in occluded areas.
+static bool PortOrbitLineOfSight(CStateManager& mgr, const CVector3f& eyePosition,
+                                 const CVector3f& eyeToOrbit, float distance, const CActor* act) {
+  if (!eyeToOrbit.CanBeNormalized()) {
+    return true;
+  }
+  const CVector3f direction = eyeToOrbit.AsNormalized();
+  TEntityList nearList;
+  mgr.BuildNearList(nearList, eyePosition, direction, distance, kOccluderFilter, act);
+  for (AUTO(nearIt, nearList.begin()); nearIt != nearList.end();) {
+    if (const CEntity* ent = mgr.GetObjectById(*nearIt)) {
+      const TAreaId areaId = ent->GetCurrentAreaId();
+      if (areaId == kInvalidAreaId ||
+          (areaId != mgr.GetNextAreaId() &&
+           mgr.GetWorld()->GetAreaAlways(areaId).GetOcclusionState() == CGameArea::kOS_Occluded)) {
+        nearIt = nearList.erase(nearIt);
+        continue;
+      }
+    }
+    ++nearIt;
+  }
+  TUniqueId intersectId = kInvalidUniqueId;
+  return mgr.RayWorldIntersection(intersectId, eyePosition, direction, distance,
+                                  kLineOfSightFilter, nearList)
+      .IsInvalid();
+}
+#endif
+
 bool CPlayer::ValidateOrbitTargetIdAndPointer(const TUniqueId id, CStateManager& mgr) const {
   if (id == kInvalidUniqueId) {
     return false;
@@ -791,7 +821,7 @@ bool CPlayer::WithinOrbitScreenBox(const CVector3f& screenCoords, EPlayerZoneInf
   return false;
 }
 
-void CPlayer::FindOrbitableObjects(const rstl::reserved_vector< TUniqueId, 1024 >& nearObjects,
+void CPlayer::FindOrbitableObjects(const rstl::reserved_vector< TUniqueId, kMaxObjects >& nearObjects,
                                    rstl::vector< TUniqueId >& listOut, EPlayerZoneInfo zone,
                                    EPlayerZoneType type, CStateManager& mgr,
                                    bool onScreenTest) const {
@@ -851,6 +881,15 @@ TUniqueId CPlayer::FindBestOrbitableObject(const rstl::vector< TUniqueId >& ids,
     boxLeft += pointerX;
     boxTop += pointerY;
   }
+  // Aim Lock-On: the target nearest the crosshair wins whatever its distance (retail prefers one
+  // nearer the player by more than the orbit distance threshold). Screen x is weighed by the
+  // aspect ratio so the measure is the same angle both ways on a wide screen. Not in the scan visor.
+  const bool aimPriority =
+      PortDebug::AimLockOn() && mgr.GetPlayerState()->GetCurrentVisor() != CPlayerState::kPV_Scan;
+  const float aimAspect = aimPriority && CGraphics::GetViewportHeight() > 0
+                              ? CCast::LtoF(CGraphics::GetViewportWidth()) /
+                                    CCast::LtoF(CGraphics::GetViewportHeight())
+                              : 1.f;
 #else
   const float boxLeft = OrbitZoneIdealNdcX(zone);
   const float boxTop = OrbitZoneIdealNdcY(zone);
@@ -896,10 +935,29 @@ TUniqueId CPlayer::FindBestOrbitableObject(const rstl::vector< TUniqueId >& ids,
                 const float screenXSq = screenX * screenX;
                 minDistance = distance;
                 minScreenDistanceSq = screenXSq + screenYSq;
+#ifdef TARGET_PC
+                if (aimPriority) {
+                  minScreenDistanceSq = screenXSq * aimAspect * aimAspect + screenYSq;
+                }
+#endif
               }
             }
             continue;
           }
+#ifdef TARGET_PC
+          if (aimPriority) {
+            const float screenX = (screenPosition.GetX() - boxLeft) * aimAspect;
+            const float screenY = screenPosition.GetY() - boxTop;
+            const float screenDistanceSq = screenX * screenX + screenY * screenY;
+            if (screenDistanceSq < minScreenDistanceSq &&
+                PortOrbitLineOfSight(mgr, eyePosition, eyeToOrbit, distance, act)) {
+              bestId = act->GetUniqueId();
+              minScreenDistanceSq = screenDistanceSq;
+              minDistance = distance;
+            }
+            continue;
+          }
+#endif
           if (minDistance - distance > gpTweakPlayer->GetOrbitDistanceThreshold() &&
               mgr.GetPlayerState()->GetCurrentVisor() != CPlayerState::kPV_Scan) {
             TEntityList nearList;
@@ -1030,7 +1088,7 @@ TUniqueId CPlayer::FindOrbitTargetId(CStateManager& mgr) {
   return bestId;
 }
 
-TUniqueId CPlayer::CheckEnemiesAgainstOrbitZone(const rstl::reserved_vector< TUniqueId, 1024 >& ids,
+TUniqueId CPlayer::CheckEnemiesAgainstOrbitZone(const rstl::reserved_vector< TUniqueId, kMaxObjects >& ids,
                                                 EPlayerZoneInfo zone, EPlayerZoneType type,
                                                 CStateManager& mgr) const {
   const CVector3f eyePosition = GetEyePosition();
@@ -1285,11 +1343,9 @@ void CPlayer::UpdateAimTarget(CStateManager& mgr) {
 }
 
 void CPlayer::SetOrbitPosition(float distance, CStateManager& mgr) {
-#ifdef TARGET_PC
-  CTransform4f cameraXf = PortThirdPerson::TickView(GetFirstPersonCameraTransform(mgr));
-#else
+  // port: from the eye even in third person (issue #224): a point ahead of the shoulder
+  // camera sits off to its right, and Samus turning toward it drags the view right.
   CTransform4f cameraXf = GetFirstPersonCameraTransform(mgr);
-#endif
   if (x304_orbitState == kOS_OrbitPoint && x30c_orbitBrokenType == kOB_BadVerticalAngle) {
     cameraXf = GetTransform();
   }

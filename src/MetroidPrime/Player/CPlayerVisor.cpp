@@ -134,10 +134,20 @@ CPlayerVisor::~CPlayerVisor() {
 }
 
 float CPlayerVisor::GetDesiredViewportScaleX(const CStateManager& mgr) const {
+#ifdef TARGET_PC
+  if (PortVr::VrImmersive() && mgr.GetPlayerState()->GetActiveVisor(mgr) == CPlayerState::kPV_XRay) {
+    return 1.f;
+  }
+#endif
   return mgr.GetPlayerState()->GetActiveVisor(mgr) == CPlayerState::kPV_Combat ? 1.f : xc4_vpScaleX;
 }
 
 float CPlayerVisor::GetDesiredViewportScaleY(const CStateManager& mgr) const {
+#ifdef TARGET_PC
+  if (PortVr::VrImmersive() && mgr.GetPlayerState()->GetActiveVisor(mgr) == CPlayerState::kPV_XRay) {
+    return 1.f;
+  }
+#endif
   return mgr.GetPlayerState()->GetActiveVisor(mgr) == CPlayerState::kPV_Combat ? 1.f : xc8_vpScaleY;
 }
 

@@ -8,20 +8,25 @@
 #include "Kyoto/CDvdRequest.hpp"
 #include "port_ap_world.h"
 #include "port_custom_res.h"
+#include "port_disc.h"
 #include "port_log.h"
 #include "port_mods.h"
+#include "port_prompts.h"
 #include "port_skip_cutscenes.h"
 
 #include <dolphin/ar.h>
 #include <dolphin/dvd.h>
 #include <dolphin/os.h>
 
+#include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <cstring>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <vector>
 #endif
 
@@ -218,7 +223,37 @@ void CResLoader::MoveToCorrectLoadedList(const rstl::auto_ptr< CPakFile >& pak) 
   }
 }
 
+#ifdef TARGET_PC
+namespace {
+// Trilogy's RS5.pak, mounted ahead of the rest, holds Wii-remote art under the
+// ids of the GameCube button textures (the PlayerRes tweak and the strings'
+// &image= tags name the same ids). Looking past it for these finds the GC art
+// in Strings/NoARAM/GGuiSys, which port_prompts re-icons for the active input
+// as on a GC disc (#220). RS5's other assets (beam/visor select, scan rings)
+// stay.
+bool PortSkipRS5Button(const CPakFile& pak, const CAssetId asset) {
+  if (!PortPrompts::IsPromptAsset(asset))
+    return false;
+  if (!PortDisc::IsTrilogy(PortDisc::Current()))
+    return false;
+  const char* name = pak.GetDvdFile().GetFilename().data();
+  // "aram:RS5.pak"
+  const char* base = strrchr(name, ':');
+  base = base ? base + 1 : name;
+  constexpr std::string_view rs5 = "RS5.";
+  return std::strlen(base) >= rs5.size() &&
+         std::equal(rs5.begin(), rs5.end(), base, [](char a, char b) {
+           return a == std::toupper(static_cast<unsigned char>(b));
+         });
+}
+} // namespace
+#endif
+
 bool CResLoader::CacheFromPak(const CPakFile& pak, const CAssetId asset) const {
+#ifdef TARGET_PC
+  if (PortSkipRS5Button(pak, asset))
+    return false;
+#endif
   const CPakFile::SResInfo* resInfo = pak.GetResInfo(asset);
   if (!resInfo) {
     return false;
@@ -231,6 +266,10 @@ bool CResLoader::CacheFromPak(const CPakFile& pak, const CAssetId asset) const {
 }
 
 bool CResLoader::CacheFromPakForLoad(CPakFile& pak, const CAssetId asset) {
+#ifdef TARGET_PC
+  if (PortSkipRS5Button(pak, asset))
+    return false;
+#endif
   const CPakFile::SResInfo* resInfo = nullptr;
   if (x54_forwardSeek) {
     resInfo = pak.GetResInfoForLoadPreferForward(asset);

@@ -515,6 +515,34 @@ wgpu::RenderPipeline build_pipeline(const PipelineConfig& config, ArrayRef<wgpu:
   return g_device.CreateRenderPipeline(&descriptor);
 }
 
+// Strips the draw's own shading from a shader config: no PBR, fog, lighting, indirect or TEV state reaches the shader.
+// Shared by the actor shadow decal and the silhouette shell, which each write their own colour; the fields they
+// set differently (actorDecal, shadow, depthOnly) stay at the call sites.
+static void strip_to_flat_shading(ShaderConfig& sc) noexcept {
+  sc.pbr = 0;
+  sc.pbrKind = 0;
+  sc.pbrCut = 0;
+  sc.pbrThermal = 0;
+  sc.pbrPlain = 0;
+  sc.pbrNoDebug = 0;
+  sc.pbrBindPos = false;
+  sc.pbrBindLe = false;
+  sc.pbrLightmapAttr = GX_VA_NULL;
+  sc.sdf = 0;
+  sc.hudSample = 0;
+  sc.perPixelLight = 0;
+  sc.fogType = GX_FOG_NONE;
+  sc.fogRangeEnabled = false;
+  sc.volFog = VolFogNone;
+  sc.alphaCompare = {};
+  sc.numIndStages = 0;
+  sc.indStages = {};
+  for (auto& ts : sc.tevStages) {
+    ts = {};
+  }
+  sc.tevStageCount = 1;
+}
+
 // How a draw after the volumetric fog fogs itself. Remastered fogs its transparents per vertex,
 // over a frame the full-screen pass has already fogged: an alpha-blended surface as colour T +
 // in-scatter, an additive one as colour T, so it adds no in-scatter of its own. Blends that
@@ -579,6 +607,9 @@ void populate_pipeline_config(PipelineConfig& config, GXPrimitive primitive, GXV
       config.shaderConfig.pbrLightmapAttr = lightmapAttr;
     }
     config.shaderConfig.pbrThermal = config.shaderConfig.sceneHdr && g_gxState.pbrThermal.w() > 0.5f;
+    const u8 flags = pbr_static_flags();
+    config.shaderConfig.pbrPlain = (flags & 1) != 0;
+    config.shaderConfig.pbrNoDebug = (flags & 2) != 0;
   }
   // Port (VR fork): the shader reads the bind pose with the vertex's own POS index, which a
   // de-indexed record (GXState::deindexVertices, and the native/cached records built from it)
@@ -715,26 +746,7 @@ void populate_pipeline_config(PipelineConfig& config, GXPrimitive primitive, GXV
     // alone, so none of the draw's own shading, fog or PBR reaches the shader.
     auto& sc = config.shaderConfig;
     sc.actorDecal = 1;
-    sc.pbr = 0;
-    sc.pbrKind = 0;
-    sc.pbrCut = 0;
-    sc.pbrThermal = 0;
-    sc.pbrBindPos = false;
-    sc.pbrBindLe = false;
-    sc.pbrLightmapAttr = GX_VA_NULL;
-    sc.sdf = 0;
-    sc.hudSample = 0;
-    sc.perPixelLight = 0;
-    sc.fogType = GX_FOG_NONE;
-    sc.fogRangeEnabled = false;
-    sc.volFog = VolFogNone;
-    sc.alphaCompare = {};
-    sc.numIndStages = 0;
-    sc.indStages = {};
-    for (auto& ts : sc.tevStages) {
-      ts = {};
-    }
-    sc.tevStageCount = 1;
+    strip_to_flat_shading(sc);
   } else if (g_gxState.actorDecal) {
     config.shaderConfig.shadow = false;
   }
@@ -747,26 +759,7 @@ void populate_pipeline_config(PipelineConfig& config, GXPrimitive primitive, GXV
     auto& sc = config.shaderConfig;
     sc.depthOnly = shell == 1;
     sc.actorDecal = 0;
-    sc.pbr = 0;
-    sc.pbrKind = 0;
-    sc.pbrCut = 0;
-    sc.pbrThermal = 0;
-    sc.pbrBindPos = false;
-    sc.pbrBindLe = false;
-    sc.pbrLightmapAttr = GX_VA_NULL;
-    sc.sdf = 0;
-    sc.hudSample = 0;
-    sc.perPixelLight = 0;
-    sc.fogType = GX_FOG_NONE;
-    sc.fogRangeEnabled = false;
-    sc.volFog = VolFogNone;
-    sc.alphaCompare = {};
-    sc.numIndStages = 0;
-    sc.indStages = {};
-    for (auto& ts : sc.tevStages) {
-      ts = {};
-    }
-    sc.tevStageCount = 1;
+    strip_to_flat_shading(sc);
     sc.shadow = false;
   }
   // Field by field: an aggregate assignment would copy the 2.7 KB shader config twice more on

@@ -275,8 +275,8 @@ void DrawUpdateSection() {
   ImGui::SetItemTooltip("Opens github.com/iChris4/MetroidPrimePortVR/releases in the browser.");
 }
 
-#if defined(__ANDROID__)
-// The folder picker's progress, set from the Java copy thread.
+// The texture pack import's progress: set from the Java copy thread on Android,
+// from the zip import thread on desktop.
 std::mutex sTexturePackStatusMutex;
 std::string sTexturePackStatus;
 
@@ -290,27 +290,30 @@ void SetTexturePackStatus(std::string status) {
   sTexturePackStatus = std::move(status);
 }
 
-// MetroidPrimeActivity.pickTexturePack opens the system folder picker and
-// copies the chosen folder in the background, reporting back through the
-// nativeTexturePack* functions below.
-void PickTexturePack() {
+#if defined(__ANDROID__)
+
+// MetroidPrimeActivity.pickTexturePack opens the system folder (or, with zip,
+// file) picker and copies the chosen pack in the background, reporting back
+// through the nativeTexturePack* functions below.
+void PickTexturePack(bool zip) {
+  const char* failed = zip ? "Could not open the file picker." : "Could not open the folder picker.";
   JNIEnv* env = static_cast< JNIEnv* >(SDL_GetAndroidJNIEnv());
   jobject activity = static_cast< jobject >(SDL_GetAndroidActivity());
   if (env == nullptr || activity == nullptr) {
-    SetTexturePackStatus("Could not open the folder picker.");
+    SetTexturePackStatus(failed);
     return;
   }
   jclass cls = env->GetObjectClass(activity);
-  jmethodID method = env->GetMethodID(cls, "pickTexturePack", "(Ljava/lang/String;)V");
+  jmethodID method = env->GetMethodID(cls, "pickTexturePack", "(Ljava/lang/String;Z)V");
   if (method != nullptr) {
     // The pack is copied into the data folder, wherever that is.
     jstring folder = env->NewStringUTF(PortPaths::UserFolder().c_str());
-    env->CallVoidMethod(activity, method, folder);
+    env->CallVoidMethod(activity, method, folder, static_cast< jboolean >(zip));
     env->DeleteLocalRef(folder);
   }
   if (env->ExceptionCheck()) {
     env->ExceptionClear();
-    SetTexturePackStatus("Could not open the folder picker.");
+    SetTexturePackStatus(failed);
   }
   env->DeleteLocalRef(cls);
   env->DeleteLocalRef(activity);

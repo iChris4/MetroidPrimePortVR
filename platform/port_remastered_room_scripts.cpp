@@ -259,8 +259,8 @@ bool ReadComponentConnections(const Room& room, size_t i, std::vector<Connection
     const size_t count = ReadLE16(b + o);
     o += 2;
     bool ok = true;
-    // Two optional strings, then a fixed tail.
-    auto block = [&]() {
+    // Two optional payloads (a type, then its property list and a sized extra), then a fixed tail.
+    auto block = [&](Connection& c) {
       if (!has(4)) {
         return false;
       }
@@ -272,7 +272,26 @@ bool ReadComponentConnections(const Room& room, size_t i, std::vector<Connection
       if (!has(2) || (o += 2, !has(ReadLE16(b + o - 2)))) {
         return false;
       }
-      o += ReadLE16(b + o - 2);
+      const size_t len = ReadLE16(b + o - 2);
+      std::vector<Prop> props;
+      if ((present == kEnvCriteria || present == kEnvModifierPayload) && PropList(b + o, len, &props)) {
+        const bool criteria = present == kEnvCriteria;
+        (criteria ? c.hasCriteria : c.hasPayload) = true;
+        for (const Prop& p : props) {
+          if (p.data.size != 4) {
+            continue;
+          }
+          const uint32_t v = ReadLE32(b + o + p.data.start);
+          if (criteria && p.id == kPropCriteriaValue) {
+            c.criteriaValue = int32_t(v);
+          } else if (criteria && p.id == kPropCriteriaOp) {
+            c.criteriaOp = v;
+          } else if (!criteria && p.id == kPropModifierPayloadValue) {
+            c.payloadValue = int32_t(v);
+          }
+        }
+      }
+      o += len;
       if (!has(4)) {
         return false;
       }
@@ -292,7 +311,7 @@ bool ReadComponentConnections(const Room& room, size_t i, std::vector<Connection
       Connection c{i, ReadLE32(b + o), ReadLE32(b + o + 4), {}};
       std::memcpy(c.target.data(), b + o + 8, 16);
       o += 26;
-      ok = block() && block() && has(19);
+      ok = block(c) && block(c) && has(19);
       o += 19;
       mine.push_back(c);
     }
@@ -309,6 +328,92 @@ std::vector<Connection> ReadConnections(const Room& room) {
     if (ReadComponentConnections(room, i, mine, end)) {
       out.insert(out.end(), mine.begin(), mine.end());
     }
+  }
+  return out;
+}
+
+bool EnvModifierOp(const Room& room, const Component& modifier, const Connection& c, PortRoomEnv::EnvOp& op) {
+  const bool payload = c.action == kActionEnvSetPayload || c.action == kActionEnvAddPayload ||
+                       c.action == kActionEnvSubPayload;
+  const bool own = c.action == kActionEnvSet || c.action == kActionEnvAdd || c.action == kActionEnvSub;
+  if (!payload && !own) {
+    return false;
+  }
+  const auto f = room.Flat(modifier);
+  const auto var = f.find(kPropModifierVar);
+  if (var == f.end() || var->second.size != 16) {
+    return false;
+  }
+  std::memcpy(op.var.data(), room.Bytes(var->second), 16);
+  op.op = c.action == kActionEnvSetPayload || c.action == kActionEnvSet   ? PortRoomEnv::kEnvSet
+          : c.action == kActionEnvAddPayload || c.action == kActionEnvAdd ? PortRoomEnv::kEnvAdd
+                                                                          : PortRoomEnv::kEnvSub;
+  if (payload) {
+    op.value = c.payloadValue;  // an empty (or absent) payload is 0
+  } else {
+    const auto value = f.find(kPropModifierValue);
+    op.value = value != f.end() && value->second.size == 4 ? int32_t(ReadLE32(room.Bytes(value->second))) : 0;
+  }
+  return true;
+}
+
+std::vector<PortRoomEnv::EnvVar> ReadEnvVars(const Room& room) {
+  // META: fields not followed yet, up to the first `ffff 00000000`; then u16 count, and per
+  // variable guid[16], u32 name length, name, u32 n and n bytes skipped, u32 value, u32 flags,
+  // u32 min if flags & 1, u32 max if flags & 2 (NGameArea::get_meta_data_from_stream).
+  std::vector<PortRoomEnv::EnvVar> out;
+  const Span& meta = room.Meta();
+  if (meta.size == 0) {
+    return out;
+  }
+  const uint8_t* const b = room.Bytes(meta);
+  const size_t n = meta.size;
+  static constexpr uint8_t kMark[] = {0xff, 0xff, 0, 0, 0, 0};
+  const uint8_t* const mark = std::search(b, b + n, kMark, kMark + sizeof kMark);
+  if (mark == b + n) {
+    return out;
+  }
+  size_t o = size_t(mark - b) + sizeof kMark;
+  auto has = [&](size_t k) { return o <= n && n - o >= k; };
+  if (!has(2)) {
+    return out;
+  }
+  const size_t count = ReadLE16(b + o);
+  o += 2;
+  for (size_t i = 0; i < count; ++i) {
+    PortRoomEnv::EnvVar v;
+    if (!has(20)) {
+      return {};
+    }
+    std::memcpy(v.guid.data(), b + o, 16);
+    const size_t nameLen = ReadLE32(b + o + 16);
+    o += 20;
+    if (nameLen > 1024 || !has(nameLen)) {
+      return {};
+    }
+    v.name.assign(reinterpret_cast<const char*>(b + o), nameLen);
+    o += nameLen;
+    if (!has(4) || (o += 4, !has(ReadLE32(b + o - 4)))) {
+      return {};
+    }
+    o += ReadLE32(b + o - 4);
+    if (!has(8)) {
+      return {};
+    }
+    v.value = int32_t(ReadLE32(b + o));
+    v.flags = ReadLE32(b + o + 4);
+    o += 8;
+    for (const uint32_t bit : {PortRoomEnv::kEnvVarMin, PortRoomEnv::kEnvVarMax}) {
+      if ((v.flags & bit) == 0) {
+        continue;
+      }
+      if (!has(4)) {
+        return {};
+      }
+      (bit == PortRoomEnv::kEnvVarMin ? v.min : v.max) = int32_t(ReadLE32(b + o));
+      o += 4;
+    }
+    out.push_back(std::move(v));
   }
   return out;
 }
@@ -472,6 +577,100 @@ float EnvFxIntensity(const Room& room, std::vector<std::string>& notes) {
                                        : "not fired at load by the apply action; reached by type " + by));
   }
   return result;
+}
+
+std::vector<IceDarkenerAtLoad> IceDarkeners(const Room& room, std::vector<std::string>& notes) {
+  const std::vector<Component>& comps = room.Components();
+  const std::vector<Connection> conns = ReadConnections(room);
+  const auto entityOf = [&](const Id16& guid) {
+    const int t = room.ByGuid(guid);
+    return t < 0 ? -1 : comps[size_t(t)].type == kEntity ? t : comps[size_t(t)].entity;
+  };
+  const auto floatOf = [&](size_t c, uint32_t prop, float def) {
+    const auto f = room.Flat(comps[c]);
+    const auto it = f.find(prop);
+    return it != f.end() && it->second.size >= 4 ? ReadLEFloat(room.Bytes(it->second)) : def;
+  };
+  const auto byteOf = [&](size_t c, uint32_t prop) {
+    const auto f = room.Flat(comps[c]);
+    const auto it = f.find(prop);
+    return it != f.end() && it->second.size >= 1 ? room.Bytes(it->second)[0] : uint8_t(0);
+  };
+  constexpr int kMaxDepth = 6;
+  std::vector<IceDarkenerAtLoad> out;
+  char text[192];
+  for (size_t d = 0; d < comps.size(); ++d) {
+    if (comps[d].type != kIceDarkener) {
+      continue;
+    }
+    const float factor = floatOf(d, kPropIceDarkeningFactor, 1.f);
+    if (!std::isfinite(factor)) {
+      notes.push_back("ice darkener #" + std::to_string(d) + " has a bad factor, skipped");
+      continue;
+    }
+    if (byteOf(d, kPropIceDarkenEveryFrame) != 0) {
+      notes.push_back("ice darkener #" + std::to_string(d) + " applies every frame; applied once at load");
+    }
+    // Back from the darkener: who sends what reaches `to`'s entity, adding the timers' waits.
+    bool atLoad = false;
+    std::set<std::string> others;
+    std::function<void(size_t, bool, float, int, std::vector<size_t>&)> back =
+        [&](size_t to, bool darken, float delay, int depth, std::vector<size_t>& path) {
+          const int entity = comps[to].type == kEntity ? int(to) : comps[to].entity;
+          for (const Connection& c : conns) {
+            if (entity < 0 || entityOf(c.target) != entity) {
+              continue;
+            }
+            const uint32_t want = comps[to].type;
+            const bool passes = darken ? c.action == kActionIceDarken
+                                : want == kTimerMP1 ? c.action == kActionTimerStart[0] || c.action == kActionTimerStart[1]
+                                                    : c.action == kActionScriptRelayFire;
+            if (!passes) {
+              continue;
+            }
+            const size_t s = c.sender;
+            const uint32_t type = comps[s].type;
+            float wait = 0.f;
+            if (type == kTimerMP1) {
+              wait = floatOf(s, kPropTimerDelay, 0.f);
+              if (!std::isfinite(wait) || wait < 0.f) {
+                wait = 0.f;
+              }
+            }
+            if (type == kRelayAutoFire || (type == kTimerMP1 && byteOf(s, kPropTimerAutostart) != 0)) {
+              if (!room.Active(comps[s])) {
+                std::snprintf(text, sizeof text, "ice darkener #%zu: its load sender #%zu starts inactive", d, s);
+                notes.push_back(text);
+                continue;
+              }
+              out.push_back({factor, delay + wait});
+              atLoad = true;
+              std::snprintf(text, sizeof text, "ice darkener #%zu (factor %g) fires %gs after load from #%zu", d, factor,
+                            delay + wait, s);
+              notes.push_back(text);
+            } else if ((type == kTimerMP1 || type == kScriptRelayMP1) && depth < kMaxDepth &&
+                       std::find(path.begin(), path.end(), s) == path.end()) {
+              path.push_back(s);
+              back(s, false, delay + wait, depth + 1, path);
+              path.pop_back();
+            } else {
+              std::snprintf(text, sizeof text, "%08X", type);
+              others.insert(text);
+            }
+          }
+        };
+    std::vector<size_t> path{d};
+    back(d, true, 0.f, 0, path);
+    if (!atLoad) {
+      std::string by;
+      for (const std::string& o : others) {
+        by += (by.empty() ? "" : ", ") + o;
+      }
+      std::snprintf(text, sizeof text, "ice darkener #%zu (factor %g) skipped: ", d, factor);
+      notes.push_back(text + (by.empty() ? std::string("nothing fires it") : "not fired at load; reached by type " + by));
+    }
+  }
+  return out;
 }
 
 double MaxAbs(const Vec3& a, const Vec3& b) {
@@ -1051,6 +1250,136 @@ SceneryScripts MatchScripts(const Room& room, const Area& area) {
   }
   std::set<int> driverStarts;
   result.drivers = FindMaterialDrivers(room, driverStarts);
+  // A room TriggerMP1 no retail object stands for, that a hint hears through Entered/Exited: its
+  // box in the file's room volume table, by component; -1 when it detects nothing here (neither
+  // the player nor the camera, or it starts inactive and nothing here activates it). An inactive
+  // trigger tests nothing (Remastered's Touch, Think and camera test each check the active bit,
+  // and Deactivate clears the touch list and the camera-inside bit without an Exited; kb topic
+  // triggermp1-active-state.md), so one the room's script switches keeps its box with `on` clear
+  // and the links that switch it.
+  std::map<size_t, int> roomVolumeOf;
+  const auto roomVolumeFor = [&](size_t comp) -> int {
+    const auto known = roomVolumeOf.find(comp);
+    if (known != roomVolumeOf.end()) {
+      return known->second;
+    }
+    const Component& c = comps[comp];
+    const auto f = room.Flat(c);
+    const auto prop = f.find(kPropTriggerFlags);
+    uint32_t flags = 1;  // absent: DetectPlayer
+    if (prop != f.end() && prop->second.size == 4) {
+      flags = ReadLE32(room.Bytes(prop->second));
+    }
+    const uint8_t detect = uint8_t(((flags & 0x1) != 0 ? PortRoomEnv::kRoomVolumePlayer : 0) |
+                                   ((flags & kTriggerDetectCamera) != 0 ? PortRoomEnv::kRoomVolumeCamera : 0));
+    // The script that switches this trigger, followed back to matched senders through whatever
+    // passes the action on (a Relay's own): show activates it, hide deactivates it.
+    std::vector<PortRoomEnv::GradeLink> toggles;
+    std::vector<PortRoomEnv::GradeLink> selfToggles;
+    std::vector<int> toggleSeen{int(c.entity)};
+    std::function<void(int, uint8_t, int, int)> togglesFor = [&](int entity, uint8_t act, int depth, int via) {
+      const auto in = incoming.find(entity);
+      if (in == incoming.end()) {
+        return;
+      }
+      for (const Connection* cc : in->second) {
+        const Component& sender = comps[cc->sender];
+        // Only the trigger takes the activate actions; what passes them on takes what fires it.
+        uint8_t next = act;
+        if (depth == 0) {
+          const bool on = cc->action == kActionActivate || cc->action == kActionEntityActivate ||
+                          cc->action == kActionTriggerActivate;
+          const bool off = cc->action == kActionDeactivate || cc->action == kActionEntityDeactivate ||
+                           cc->action == kActionTriggerDeactivate;
+          next = on ? PortRoomGeo::kShow : off ? PortRoomGeo::kHide
+                                               : cc->action == kActionToggleActive ? PortRoomGeo::kToggle : uint8_t(0);
+        } else if (!PassFires(via, cc->action)) {
+          continue;
+        }
+        if (next == 0) {
+          continue;
+        }
+        const int s = entityOf(int(cc->sender));
+        // The trigger switching itself on its own Entered or Exited (07_Intro_Reactor #884 turns
+        // off as the player leaves): by its own volume, numbered once it is kept.
+        if (sender.entity == c.entity && sender.type == kTriggerMP1 &&
+            (cc->event == kEventEntered || cc->event == kEventExited)) {
+          selfToggles.push_back({0, uint8_t(cc->event == kEventEntered ? 0 : 1), next});
+          continue;
+        }
+        const int state = RetailState(sender.type, cc->event);
+        if (s >= 0 && match[size_t(s)] >= 0 && state >= 0 && state < 256) {
+          toggles.push_back({objects[size_t(match[size_t(s)])].id, uint8_t(state), next});
+          continue;
+        }
+        const int type = RetailType(sender.type);
+        if (IsPass(type) && sender.entity >= 0 && depth < 6 &&
+            std::find(toggleSeen.begin(), toggleSeen.end(), sender.entity) == toggleSeen.end()) {
+          toggleSeen.push_back(sender.entity);
+          togglesFor(sender.entity, next, depth + 1, type);
+          toggleSeen.pop_back();
+        }
+      }
+    };
+    if (c.entity >= 0) {
+      togglesFor(c.entity, 0, 0, -1);
+    }
+    Vec3 pos, rot, scale;
+    int index = -1;
+    // An inactive trigger nothing here turns on (or toggles) never sees the player or the camera.
+    const bool startsOn = room.Active(c);
+    const bool switchedOn =
+        std::any_of(toggles.begin(), toggles.end(), [](const PortRoomEnv::GradeLink& l) {
+          return l.action == PortRoomGeo::kShow || l.action == PortRoomGeo::kToggle;
+        });
+    if (detect != 0 && (startsOn || switchedOn) && room.Xform(c, pos, rot, scale) &&
+        result.roomVolumes.size() < PortRoomEnv::kMaxRoomVolumes) {
+      PortRoomEnv::RoomVolume v;
+      CameraBox(pos, rot, scale, v.centre, v.half, v.axes);
+      v.detect = detect;
+      v.on = startsOn;
+      v.links = std::move(toggles);
+      index = int(result.roomVolumes.size());
+      for (PortRoomEnv::GradeLink& l : selfToggles) {
+        l.sender = PortRoomEnv::kSenderRoomVolume + uint32_t(index);
+        v.links.push_back(l);
+      }
+      result.roomVolumes.push_back(std::move(v));
+    }
+    roomVolumeOf[comp] = index;
+    return index;
+  };
+  // A room's own variable modifiers, fired by a TriggerMP1 no retail object stands for (as
+  // 07_Intro_Reactor's): by its room volume. A matched trigger's, or another sender's, is not
+  // followed.
+  for (const Connection& c : conns) {
+    const int t = room.ByGuid(c.target);
+    if (t < 0) {
+      continue;
+    }
+    int modifier = comps[size_t(t)].type == kEnvModifier ? t : -1;
+    for (size_t k = 0; modifier < 0 && comps[size_t(t)].type == kEntity && k < comps.size(); ++k) {
+      if (comps[k].type == kEnvModifier && comps[k].entity == t) {
+        modifier = int(k);
+      }
+    }
+    PortRoomEnv::EnvOp op;
+    if (modifier < 0 || !EnvModifierOp(room, comps[size_t(modifier)], c, op)) {
+      continue;
+    }
+    const int s = entityOf(int(c.sender));
+    const int volume = comps[c.sender].type == kTriggerMP1 && (c.event == kEventEntered || c.event == kEventExited) &&
+                               (s < 0 || match[size_t(s)] < 0)
+                           ? roomVolumeFor(c.sender)
+                           : -1;
+    if (volume < 0) {
+      ++result.envUnresolved;
+      continue;
+    }
+    op.sender = PortRoomEnv::kSenderRoomVolume + uint32_t(volume);
+    op.state = uint8_t(c.event == kEventEntered ? 0 : 1);
+    result.envOps.push_back(op);
+  }
   for (const Ent& e : ents) {
     const auto v = votes.find(e.layer);
     if (v != votes.end() && !e.baseLayer) {
@@ -1145,6 +1474,23 @@ SceneryScripts MatchScripts(const Room& room, const Area& area) {
         // A light that switches itself off as a backward play reaches its start (PointLightData::offAtStart).
         if (light && depth == 0 && sender.entity == e.entity && c->event == kEventLightReachedStart) {
           continue;
+        }
+        // A room TriggerMP1 of its own that switches a hint (directly or through relays): the
+        // player or camera in its box, as a room volume. Camera ones are script objects too;
+        // the geometry's script follows those for the actors.
+        if (hintEntities.count(e.entity) != 0 && sender.type == kTriggerMP1 &&
+            (c->event == kEventEntered || c->event == kEventExited) &&
+            (depth == 0 || PassFires(via, c->action))) {
+          const int ts = entityOf(int(c->sender));
+          if (ts < 0 || match[size_t(ts)] < 0) {
+            const uint8_t volumeAct = act(depth > 0 ? action : c->action);
+            const int volume = volumeAct != 0 ? roomVolumeFor(c->sender) : -1;
+            if (volume >= 0) {
+              links.push_back({PortRoomEnv::kSenderRoomVolume + uint32_t(volume),
+                               uint8_t(c->event == kEventEntered ? 0 : 1), volumeAct, delay});
+              continue;
+            }
+          }
         }
         // Remastered's own objects, and keyframes, are followed by the script (below).
         if (sender.type == kTemplateManager || sender.type == kDebugOptions || isScriptObject(c->sender) ||
@@ -1441,14 +1787,21 @@ SceneryScripts MasterScripts(const Room& room, const Vec3& shift, std::vector<Po
     }
     const Component& c = comps[comp];
     const auto f = room.Flat(c);
-    const auto flags = f.find(kPropTriggerFlags);
+    const auto prop = f.find(kPropTriggerFlags);
+    uint32_t flags = 1;  // absent: DetectPlayer
+    if (prop != f.end() && prop->second.size == 4) {
+      flags = ReadLE32(room.Bytes(prop->second));
+    }
+    const uint8_t detect = uint8_t(((flags & 0x1) != 0 ? PortRoomEnv::kRoomVolumePlayer : 0) |
+                                   ((flags & kTriggerDetectCamera) != 0 ? PortRoomEnv::kRoomVolumeCamera : 0));
     Vec3 pos, rot, scale;
     int index = -1;
-    // Only an active trigger sees the camera, and nothing here activates one.
-    if (flags != f.end() && flags->second.size == 4 && (ReadLE32(room.Bytes(flags->second)) & kTriggerDetectCamera) != 0 &&
-        room.Active(c) && room.Xform(c, pos, rot, scale) && volumes.size() < PortRoomEnv::kMaxWorldVolumes) {
+    // Only an active trigger sees the player or the camera, and nothing here activates one.
+    if (detect != 0 && room.Active(c) && room.Xform(c, pos, rot, scale) &&
+        volumes.size() < PortRoomEnv::kMaxWorldVolumes) {
       PortRoomEnv::WorldVolume v;
       CameraBox(pos, rot, scale, v.centre, v.half, v.axes);
+      v.detect = detect;
       for (int i = 0; i < 3; ++i) {
         v.centre[i] += float(shift[size_t(i)]);
       }
@@ -1456,6 +1809,35 @@ SceneryScripts MasterScripts(const Room& room, const Vec3& shift, std::vector<Po
       volumes.push_back(v);
     }
     volumeOf[comp] = index;
+    return index;
+  };
+  // An EnvironmentVarQuery's criteria connection, as a branch: its index, -1 when it does not read.
+  std::map<const Connection*, int> branchOf;
+  const auto branchFor = [&](const Connection& c) -> int {
+    const auto known = branchOf.find(&c);
+    if (known != branchOf.end()) {
+      return known->second;
+    }
+    const auto f = room.Flat(comps[c.sender]);
+    const auto var = f.find(kPropQueryVar);
+    const auto flag = [&](uint32_t id) {
+      const auto p = f.find(id);
+      return p != f.end() && p->second.size >= 1 && room.Bytes(p->second)[0] != 0;
+    };
+    int index = -1;
+    if (var != f.end() && var->second.size == 16 && c.hasCriteria && c.criteriaOp <= 5 &&
+        result.envBranches.size() < PortRoomEnv::kMaxEnvBranches) {
+      PortRoomEnv::EnvBranch b;
+      std::memcpy(b.var.data(), room.Bytes(var->second), 16);
+      b.relop = uint8_t(c.criteriaOp);
+      b.value = c.criteriaValue;
+      b.flags = uint8_t((flag(kPropQueryOnLoad) ? PortRoomEnv::kEnvOnLoad : 0) |
+                        (flag(kPropQueryOnChange) ? PortRoomEnv::kEnvOnChange : 0) |
+                        (flag(kPropQuerySkipUnchanged) ? PortRoomEnv::kEnvSkipUnchanged : 0));
+      index = int(result.envBranches.size());
+      result.envBranches.push_back(b);
+    }
+    branchOf[&c] = index;
     return index;
   };
   for (const int hint : hints) {
@@ -1490,6 +1872,8 @@ SceneryScripts MasterScripts(const Room& room, const Vec3& shift, std::vector<Po
                    volumeFor(c->sender) >= 0) {
           links.push_back({PortRoomEnv::kSenderWorldVolume + uint32_t(volumeFor(c->sender)),
                            uint8_t(c->event == kEventEntered ? 0 : 1), act});
+        } else if (sender.type == kEnvQuery && c->event == kEventEnvQueryTrue && act != 0 && branchFor(*c) >= 0) {
+          links.push_back({PortRoomEnv::kSenderEnvQuery + uint32_t(branchFor(*c)), 0, act});
         } else if (sender.type == kRelay && c->event == kEventRelayFired && sender.entity >= 0 && depth < 6 &&
                    std::find(seen.begin(), seen.end(), sender.entity) == seen.end()) {
           seen.push_back(sender.entity);
@@ -1508,6 +1892,34 @@ SceneryScripts MasterScripts(const Room& room, const Vec3& shift, std::vector<Po
       result.unresolved[hint] = bad;
       result.unresolvedHow[hint] = how;
     }
+  }
+  // The world's variables, and the master's triggers that change them.
+  result.envVars = ReadEnvVars(room);
+  for (const Connection& c : conns) {
+    const int t = room.ByGuid(c.target);
+    if (t < 0) {
+      continue;
+    }
+    int modifier = comps[size_t(t)].type == kEnvModifier ? t : -1;
+    for (size_t k = 0; modifier < 0 && comps[size_t(t)].type == kEntity && k < comps.size(); ++k) {
+      if (comps[k].type == kEnvModifier && comps[k].entity == t) {
+        modifier = int(k);
+      }
+    }
+    PortRoomEnv::EnvOp op;
+    if (modifier < 0 || !EnvModifierOp(room, comps[size_t(modifier)], c, op)) {
+      continue;
+    }
+    const int volume = comps[c.sender].type == kTriggerMP1 && (c.event == kEventEntered || c.event == kEventExited)
+                           ? volumeFor(c.sender)
+                           : -1;
+    if (volume < 0) {
+      ++result.envUnresolved;
+      continue;
+    }
+    op.sender = PortRoomEnv::kSenderWorldVolume + uint32_t(volume);
+    op.state = uint8_t(c.event == kEventEntered ? 0 : 1);
+    result.envOps.push_back(op);
   }
   return result;
 }

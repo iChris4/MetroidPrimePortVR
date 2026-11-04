@@ -42,6 +42,8 @@
 
 #ifdef TARGET_PC
 #include "Kyoto/CResFactory.hpp"
+#include "Kyoto/Graphics/CCubeModel.hpp"
+#include "port_icy_assets.h"
 #include "port_room_effects.h"
 #endif
 
@@ -186,7 +188,12 @@ CPatterned::CPatterned(const EPatternedAI character, const TUniqueId uid, const 
 , x530_deathExplosionElectric()
 , x540_iceDeathExplosionOffset(pinfo.x124_particle2Scale)
 , x54c_iceDeathExplosionParticle()
-, x55c_moveScale(1.f, 1.f, 1.f) {
+, x55c_moveScale(1.f, 1.f, 1.f)
+#ifdef TARGET_PC
+, xPortFreezeDir(CVector3f::Zero())
+, xPortFreezeTime(0.f)
+#endif
+{
   CAssetId particle1 = pinfo.x11c_particle1;
   CAssetId particle2 = pinfo.x130_particle2;
 #ifdef TARGET_PC
@@ -1205,6 +1212,12 @@ void CPatterned::Freeze(CStateManager& mgr, const CVector3f& pos, CUnitVector3f 
     playSfx = true;
   } else if (!x450_bodyController->IsElectrocuting() && !x450_bodyController->IsOnFire()) {
     x450_bodyController->Freeze(x4f4_intoFreezeDur, frozenDur, x4f8_outofFreezeDur);
+#ifdef TARGET_PC
+    // Remastered's Freeze (0xd2b900) keeps the direction and the scene clock of a new freeze
+    // (+0x71c, +0x728) for RenderIcy; a refreeze keeps both.
+    xPortFreezeDir = dir;
+    xPortFreezeTime = CGraphics::GetSimTime();
+#endif
     if (x510_vertexMorph) {
       x510_vertexMorph->Reset(dir, pos, x4f4_intoFreezeDur);
     }
@@ -1372,6 +1385,9 @@ void CPatterned::Render(const CStateManager& mgr) const {
   const EThermalDrawFlag thermalFlag = mgr.GetThermalDrawFlag();
   if ((thermalFlag == kTD_Cold && !x402_31_thawed) || (thermalFlag == kTD_Hot && x402_31_thawed) ||
       thermalFlag == kTD_Bypass) {
+#ifdef TARGET_PC
+    bool icyDrawn = false;
+#endif
     if (x401_28_burning) {
       CTexture* ashyTexture =
           const_cast< CStateManager& >(mgr).ActorModelParticles()->GetAshyTexture(
@@ -1404,9 +1420,47 @@ void CPatterned::Render(const CStateManager& mgr) const {
         CPhysicsActor::Render(mgr);
       }
     } else {
+#ifdef TARGET_PC
+      // Remastered's Render (0xd2d94c): a frozen enemy that isn't burning draws its body as
+      // RenderIcy (0xfc4794) in place of the body and the ice model, given the time since the
+      // freeze on the scene clock (which wraps at 15120 s). It does so in every pass the thermal
+      // gate lets through: the thermal visor's cold pass draws it on the thermal model
+      // (CModelDataMP1::RenderIcy 0xfa79ec); a frozen enemy is cold (UpdateThermalFrozenState), so
+      // the hot pass skips it, and the icy material yields to the thermal override. The X-ray visor draws the body as X-ray and then RenderIcy on the
+      // normal model (PickRenderProxy(which == 1 ? 0 : which)). With no icy material from a mod
+      // it draws as retail.
+      // With a frozen model (PortFrozenModel), 0xd2d94c skips RenderIcy and draws the actor
+      // normally, the frozen model standing in for the body (0xc4c4cc), and no ice overlay.
+      if (x450_bodyController->IsFrozen() && GetModelData()->PortFrozenModel() != nullptr) {
+        CModelData::sPortDrawFrozen = true;
+        CPhysicsActor::Render(mgr);
+        CModelData::sPortDrawFrozen = false;
+        icyDrawn = true;
+      } else if (x450_bodyController->IsFrozen() && PortIcy::Get() != nullptr) {
+        float t = CGraphics::GetSimTime() - xPortFreezeTime;
+        if (t < 0.f) {
+          t += 15120.f;
+        }
+        const float dir[3] = {xPortFreezeDir.GetX(), xPortFreezeDir.GetY(), xPortFreezeDir.GetZ()};
+        if (CModelData::GetRenderingModel(mgr) == CModelData::kWM_XRay) {
+          CPhysicsActor::Render(mgr);
+          CCubeModel::PortSetIcy(true, dir, t, GetPortIceDarkening());
+          GetModelData()->Render(CModelData::kWM_Normal, GetTransform(), GetActorLights(),
+                                 CModelFlags(CModelFlags::kT_Opaque, 1.f));
+        } else {
+          CCubeModel::PortSetIcy(true, dir, t, GetPortIceDarkening());
+          CPhysicsActor::Render(mgr);
+        }
+        CCubeModel::PortSetIcy(false, dir, 0.f);
+        icyDrawn = true;
+      } else
+#endif
       CPhysicsActor::Render(mgr);
     }
 
+#ifdef TARGET_PC
+    if (!icyDrawn)
+#endif
     if (x450_bodyController->IsFrozen() && !x401_28_burning) {
       CModelFlags flags(CModelFlags::kT_Opaque, 1.f);
       RenderIceModelWithFlags(flags);

@@ -52,6 +52,49 @@ starting without the headset). The game takes a change made while it runs
 at the next save; `port_launcher_tests` checks the launcher's names against
 `PortGraphicsBackend::Choices`.
 
+## VR: retail X-ray orientation and blur correction (2026-11-01)
+
+The user confirmed depth in the first test but reported its image upside down
+and asked to retain the blur. Use the retail four-tap blur and its authored
+framebuffer UV orientation. Immersive VR still uses the full viewport and an
+undistorted base-image mapping (scale 1 instead of retail's 0.9); each blur tap
+samples its own eye's palette output. Do not replace this with a conventional
+quad whose V direction is inverted. Headset confirmation remains required.
+
+## VR: retail X-ray depth-cue test change (2026-11-01)
+
+Retail X-ray uses an I8 framebuffer copy, C8 palette conversion and a four-tap
+radially stretched composite. Immersive VR now keeps the full viewport and
+composites the palette result once at unchanged UVs, preserving binocular
+features instead of smearing them. Desktop and virtual-screen effects retain
+the retail distortion. Keep the per-eye intensity copies and palette outputs;
+regression: RetailXrayPaletteKeepsSeparateEyeImages. This verifies routing,
+not the reported depth perception: confirmation in-headset is still needed.
+
+## VR: upstream 0.37 beta.7 local testing merge (2026-11-01)
+
+Merged 142 Prime 1 upstream commits through Odrannnn/MetroidPrimePort `port`
+at `d57a819a2` onto released beta.6 (`5d4095622`), on the local branch
+`codex/testing-upstream-beta7-20261101`. Do not promote this branch until
+headset testing is complete. The product version is beta.7; Quest versionCode
+is 12, following beta.6's 11.
+
+Preserve the separate eye depth copies, full-eye retail fog composites,
+HMD water visibility/near caps, tracked weather, and VR shader header extension.
+Upstream's new PBR shader-key flags use the remaining bits of byte 10; the VR
+bits stay in byte 13, with attributes at byte 16 and pipeline version 16.
+The shader output-declaration patch must retain material-specific coverage
+expressions when adding volumetric fog. Phazon shell remains disabled in
+immersive VR while respecting upstream's new toggle for desktop play.
+Adaptive simulation's current-state presentation is retained, without letting
+the flat-screen frame limiter disable normal headset interpolation.
+
+Windows now uses upstream Dawn v20261029.114630 (118436b3f8f6).
+The Quest source pin and verified archive hash follow the same revision;
+keep PrimedGun's multiview, OpenXR device, and fragment-density-map patches.
+Test fog, water, visors, Remastered frozen effects, menus, lock-on movement,
+morph transitions and cinema direction in-headset before pushing.
+
 ## VR: the Teleport block in the VR menu's DEBUG tab (2026-10-31)
 
 The user asked for the F1 overlay's Teleport block (Cheats page) in the headset,

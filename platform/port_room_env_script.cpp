@@ -283,8 +283,42 @@ void StepLights(uint32_t mrea, Area& area, float dt) {
   StepLightList(mrea, area, area.suns, area.file.suns, dt);
 }
 
+// The room's own script switching its triggers (a volume's version 32 links): the active bit
+// SetAreaPoints tests by. Deactivation sends no event and clears the trigger's inside state
+// (kb topic/triggermp1-active-state.md), so the volume forgets the side of its box it was on;
+// the hint it drove keeps what it had, and the next SetAreaPoints decides again once it is on.
+void DriveRoomVolumes(uint32_t mrea, Area& area, uint32_t sender, int state) {
+  if (area.roomActive.size() != area.file.roomVolumes.size()) {
+    area.roomActive.assign(area.file.roomVolumes.size(), 0);
+    for (size_t i = 0; i < area.roomActive.size(); ++i) {
+      area.roomActive[i] = area.file.roomVolumes[i].on ? 1 : 0;
+    }
+  }
+  for (size_t k = 0; k < area.file.roomVolumes.size(); ++k) {
+    for (const GradeLink& link : area.file.roomVolumes[k].links) {
+      if (link.sender != sender || link.state != state) {
+        continue;
+      }
+      const uint8_t next = link.action == PortRoomGeo::kShow     ? uint8_t(1)
+                           : link.action == PortRoomGeo::kHide   ? uint8_t(0)
+                           : link.action == PortRoomGeo::kToggle ? uint8_t(!area.roomActive[k])
+                                                                 : area.roomActive[k];
+      if (next == area.roomActive[k]) {
+        continue;
+      }
+      area.roomActive[k] = next;
+      if (next == 0 && k < area.roomInside.size()) {
+        area.roomInside[k] = 0;
+      }
+      PortLog::Write("room env: %08X room volume %zu %s by %08X state %d\n", mrea, k,
+                     next != 0 ? "switched on" : "switched off", sender, state);
+    }
+  }
+}
+
 // The grades and backlights `sender` drives on `state`.
 void DriveGrades(uint32_t mrea, Area& area, uint32_t sender, int state) {
+  DriveRoomVolumes(mrea, area, sender, state);
   DriveHints(mrea, "grade", area.file.grades, area.grades, sGradeOrder, sender, state);
   DriveHints(mrea, "backlight", area.file.backlights, area.backlights, sBacklightOrder, sender, state);
   DriveHints(mrea, "fog", area.file.fogs, area.fogs, sFogOrder, sender, state);
@@ -305,6 +339,13 @@ void DriveCameraWaterItems(uint32_t mrea, Area& area, uint64_t items) {
 
 // Every grade and backlight as it starts, then the fluids the player and camera are in already.
 void StartGrades(uint32_t mrea, Area& area, bool playerFluid, bool cameraWater) {
+  // Its room volumes start outside, so what is in one enters it on the next SetAreaPoints;
+  // one whose trigger starts off (version 32) is not tested until its script switches it on.
+  area.roomInside.assign(area.file.roomVolumes.size(), 0);
+  area.roomActive.assign(area.file.roomVolumes.size(), 0);
+  for (size_t i = 0; i < area.roomActive.size(); ++i) {
+    area.roomActive[i] = area.file.roomVolumes[i].on ? 1 : 0;
+  }
   // The exposure hints' entities as they load (their registrations follow).
   if (area.hints.on.size() == area.file.fluidHints.size()) {
     bool changed = false;
@@ -371,12 +412,83 @@ void ReplayWorldVolumes(uint32_t mrea, Area& area) {
   if (!SameWorldVolumes(area.file.worldVolumes, sWorldVolumes)) {
     sWorldVolumes = area.file.worldVolumes;
     sWorldVolumeState.Clear();
+    sWorldEnvOps.clear();
+    for (const EnvOp& op : area.file.envOps) {
+      if (op.sender >= kSenderWorldVolume && op.sender - kSenderWorldVolume < kMaxWorldVolumes) {
+        sWorldEnvOps.push_back(op);
+      }
+    }
     return;
   }
   std::vector<WorldVolumeState::Event> events;
   sWorldVolumeState.Replay(events);
   for (const WorldVolumeState::Event& e : events) {
     DriveGrades(mrea, area, kSenderWorldVolume + e.volume, e.state);
+  }
+}
+
+namespace {
+
+EnvVarLive* FindEnvVar(const std::array<uint8_t, 16>& guid) {
+  for (EnvVarLive& v : sEnvVars) {
+    if (v.var.guid == guid) {
+      return &v;
+    }
+  }
+  return nullptr;
+}
+
+// The area's branches on `var` that `flag` lets run and that hold for its value now.
+void DriveEnvBranches(uint32_t mrea, Area& area, const EnvVarLive& var, uint8_t flag, bool changed) {
+  for (size_t b = 0; b < area.file.envBranches.size() && b < kMaxEnvBranches; ++b) {
+    const EnvBranch& branch = area.file.envBranches[b];
+    if (branch.var != var.var.guid || (branch.flags & flag) == 0 ||
+        (flag == kEnvOnChange && (branch.flags & kEnvSkipUnchanged) != 0 && !changed) ||
+        !EnvBranchHolds(branch, var.value)) {
+      continue;
+    }
+    PortLog::Write("room env: %08X env branch %zu (%s %s %d) holds at %d\n", mrea, b, var.var.name.c_str(),
+                   flag == kEnvOnLoad ? "load" : "change", int(branch.value), int(var.value));
+    DriveGrades(mrea, area, kSenderEnvQuery + uint32_t(b), 0);
+  }
+}
+
+}  // namespace
+
+void LoadEnvVars(uint32_t mrea, Area& area) {
+  for (const EnvVar& v : area.file.envVars) {
+    if (FindEnvVar(v.guid) == nullptr) {
+      sEnvVars.push_back({v, v.value});
+    }
+  }
+  if (area.file.envBranches.empty()) {
+    return;
+  }
+  for (const EnvVarLive& v : sEnvVars) {
+    DriveEnvBranches(mrea, area, v, kEnvOnLoad, false);
+  }
+}
+
+void RunEnvOps(const std::vector<EnvOp>& ops, uint32_t sender, int state) {
+  for (const EnvOp& op : ops) {
+    if (op.sender != sender || op.state != state) {
+      continue;
+    }
+    // One the world does not declare changes nothing.
+    EnvVarLive* const var = FindEnvVar(op.var);
+    if (var == nullptr) {
+      continue;
+    }
+    const int32_t old = var->value;
+    var->value = ApplyEnvOp(var->var, old, op.op, op.value);
+    PortLog::Write("room env: env var %s %d -> %d (op %u %d by %08X state %d)\n", var->var.name.c_str(), int(old),
+                   int(var->value), unsigned(op.op), int(op.value), sender, state);
+    const EnvVarLive now = *var;
+    for (auto& [mrea, area] : sAreas) {
+      if (!area.pending.valid() && area.hasFile) {
+        DriveEnvBranches(mrea, area, now, kEnvOnChange, now.value != old);
+      }
+    }
   }
 }
 

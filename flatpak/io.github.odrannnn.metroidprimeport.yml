@@ -19,10 +19,16 @@ finish-args:
   # --device=all covers hidraw.
   - --device=all
   - --share=ipc
+  # x11, not fallback-x11: the game picks SDL's x11 driver whenever DISPLAY is set
+  # (Dawn's OpenGL backend fails eglInitialize on Wayland), and fallback-x11 hides
+  # DISPLAY on every Wayland desktop. Wayland stays for SDL_VIDEODRIVER=wayland.
   - --socket=wayland
-  - --socket=fallback-x11
+  - --socket=x11
   # The disc image lives wherever the user keeps it; it is read-only to us.
   - --filesystem=home:ro
+  # Audio: SDL talks to PulseAudio or PipeWire's pulse server; without the socket
+  # it fails to open a device ("Host is down", issue #202) and the game is silent.
+  - --socket=pulseaudio
   # The update check (api.github.com) and Archipelago servers.
   - --share=network
   # Discord Rich Presence (off by default): the native and Flatpak Discord
@@ -75,6 +81,11 @@ modules:
       # The first version used bare "extern/aurora/LICENSE" and died with
       # "install: cannot stat" - the file is tracked and present, just not
       # relative to where the script runs.
+      # Dawn's OpenGL/GLES backends dlopen the unversioned "libEGL.so", which only
+      # the SDK has; the runtime ships libEGL.so.1 (libglvnd). Without this link the
+      # GL fallback finds no adapter and the game ends up on the Null backend.
+      - mkdir -p /app/lib
+      - ln -s /usr/lib/$(gcc -print-multiarch)/libEGL.so.1 /app/lib/libEGL.so
       - install -Dm644 ../extern/aurora/LICENSE /app/share/licenses/metroid-prime-port/aurora.txt
       - install -Dm644 ../extern/musyx/LICENSE /app/share/licenses/metroid-prime-port/musyx.txt
       - install -Dm644 ../extern/astcenc/LICENSE.txt /app/share/licenses/metroid-prime-port/astcenc.txt
@@ -143,6 +154,11 @@ modules:
         url: https://github.com/libsdl-org/SDL/archive/refs/tags/release-3.4.10.tar.gz
         sha256: 0dc11d980ba17250200718fa4e28011da293f27ed92f92203afffe396811f307
         dest: sdl-src
+      # FetchContent skips PATCH_COMMAND for a FETCHCONTENT_SOURCE_DIR_* source,
+      # so Aurora's SDL patches (AuroraSDL3Provider.cmake) are applied here.
+      - type: shell
+        commands:
+          - for p in extern/aurora/cmake/patches/apply-sdl3-*.cmake; do cmake -DSDL_SOURCE_DIR=sdl-src -P "$p" || exit 1; done
 
       # The rest of Aurora's dependencies, transcribed from
       # extern/aurora/extern/CMakeLists.txt. Ten of the eleven digests are the
@@ -177,6 +193,9 @@ modules:
 
       - type: archive
         url: https://files.twilitrealm.dev/freetype-2.14.3.tar.gz
+        mirror-urls:
+          - https://download.savannah.gnu.org/releases/freetype/freetype-2.14.3.tar.gz
+          - https://downloads.sourceforge.net/project/freetype/freetype2/2.14.3/freetype-2.14.3.tar.gz
         sha256: e61b31ab26358b946e767ed7eb7f4bb2e507da1cfefeb7a8861ace7fd5c899a1
         dest: freetype
 

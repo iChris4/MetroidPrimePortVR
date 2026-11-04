@@ -2,9 +2,12 @@
 
 ## Licence scope
 
-The original Prime 1 decompilation had no root licence file before the native
-port additions. PrimedGun's later GPL-3.0-or-later file notices remain in force.
-The full GNU GPL version 3 text is retained in `COPYING` for PrimedGun's
+PrimeDecomp's original CC0 dedication is retained verbatim in `LICENSE`, from
+Prime 1 commit 4b87a52c07bf84d77312607be00e74036801af95 ("Add CC0",
+Phillip Stephens, 2026-10-02), preserved at https://github.com/rzkowskii/prime.
+The dedication speaks for its authors' contributions, not Nintendo's rights.
+PrimedGun's later GPL-3.0-or-later file notices remain in force.
+The full GNU GPL version 3 text is retained in `packaging/licenses/GPL-3.0.txt` for PrimedGun's
 GPL-covered launcher and VR additions. This does not relicense third-party
 components or the game code.
 

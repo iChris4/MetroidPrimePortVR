@@ -1,3 +1,4 @@
+#include "vr/vr_resume_prompt.h"
 // PrimedGun's VR menu (platform/include/vr/vr_menu.h and the controls in
 // openxr_settings_panel.h): the image keeps PrimedGun's pixels and byte order,
 // clicks land where PrimedGun's hit boxes put them, the two-press actions
@@ -151,7 +152,7 @@ void TestImage() {
         "page 1 buttons");
   calibration.calibration_page = 1;
   const Pixels second = BuildPixels(calibration, settings, View{}, false);
-  Check(accent(second, kPreviousButtonX) == 0x80FFB030u && accent(second, kNextButtonX) == 0xD0100804u,
+  Check(accent(second, kPreviousButtonX) == 0x80FFB030u && accent(second, kNextButtonX) == 0x80FFB030u,
         "page 2 buttons");
   Check(ViewKey(calibration, settings, View{}, false) != ViewKey(State{calibration.tab}, settings, View{}, false),
         "page in the key");
@@ -220,7 +221,7 @@ void TestClicks() {
   Check(Near(v.metroid_hud_offset_down, 0.01f) && Near(v.metroid_hud_offset_up, 0.0f), "HUD vertical split");
 
   // Pages: PREVIOUS does nothing on page 1, NEXT turns to page 2 (and lets go
-  // of a pending reset), NEXT does nothing there.
+  // of a pending reset); page 3 holds the X-ray blur toggle.
   Click(s, v, view, kPreviousX, kPageY, now, actions);
   Check(s.calibration_page == 0, "no page before the first");
   Click(s, v, view, kLabelX, RowY(kCalibrationTab, 11), now, actions);
@@ -228,9 +229,12 @@ void TestClicks() {
   Click(s, v, view, kNextX, kPageY, now, actions);
   Check(s.calibration_page == 1 && s.reset_confirm == kNoReset, "next page");
   Click(s, v, view, kNextX, kPageY, now, actions);
-  Check(s.calibration_page == 1, "no page after the last");
+  Check(s.calibration_page == 2, "next to X-ray calibration page");
+  Click(s, v, view, kNextX, kPageY, now, actions);
+  Check(s.calibration_page == 2, "no page after the last");
   Click(s, v, view, 512.0f, kPageY, now, actions);
-  Check(s.calibration_page == 1, "the page number is not a button");
+  Check(s.calibration_page == 2, "the page number is not a button");
+  Click(s, v, view, kPreviousX, kPageY, now, actions);
   // SAMUS ARM PRESET is on page 2.
   Click(s, v, view, kLabelX, RowY(kCalibrationTab, 9), now, actions);
   Check(Near(v.model_offset_y, -0.3f) && Near(v.rot_offset_y, 20.0f) && Near(v.rot_offset_z, -90.0f),
@@ -505,13 +509,13 @@ void TestDebug() {
   Check(rows[8].value == "90 HZ" && rows[9].value == "89.9" && rows[10].value == "UNKNOWN" && rows[11].value == "1234",
         "readouts");
   Check(PageCount(kDebugTab, view) == 2, "the switches and TELEPORT, no lists without a game");
-  Check(BuildRows(s, v, view)[12].value == "OFF", "quick resume defaults off");
+  Check(BuildRows(s, v, view)[12].value == "ON", "resume question defaults on");
   Click(s, v, view, kLabelX, RowY(kDebugTab, 12), now, actions);
-  Check(actions.quickResume == 1, "quick resume enables");
-  view.quick_resume = true;
-  Check(BuildRows(s, v, view)[12].value == "ON", "quick resume reflects live state");
+  Check(actions.quickResume == 0, "resume question disables");
+  view.quick_resume = false;
+  Check(BuildRows(s, v, view)[12].value == "OFF", "resume question reflects live state");
   Click(s, v, view, kLabelX, RowY(kDebugTab, 12), now, actions);
-  Check(actions.quickResume == 0, "quick resume disables");
+  Check(actions.quickResume == 1, "resume question enables");
 
   // The frame rate beside the title, on every tab; nothing while it is unknown.
   State layout{};
@@ -1009,6 +1013,28 @@ void TestLiveSettings() {
 } // namespace
 
 int main() {
+  for (unsigned ticks : {0u, 15u, 16u, 600u, 360000u}) {
+    Check(PortVr::ResumePromptAnswer(ticks, false, false, false) == -1,
+          "resume waits indefinitely without an explicit choice");
+  }
+  Check(PortVr::ResumePromptAnswer(1, true, false, false) == -1, "launch press cannot accept resume");
+  Check(PortVr::ResumePromptAnswer(20, true, false, false) == 1, "A accepts resume");
+  Check(PortVr::ResumePromptAnswer(20, false, true, false) == 0, "B declines resume");
+  Check(PortVr::ResumePromptAnswer(20, true, true, false) == -1, "ambiguous inputs wait");
+  const auto resume = BuildResumeToastPixels("Landing Site", "2026-11-01 10:00", false, false);
+  Check(resume.size() == static_cast<size_t>(kWidth) * kImageHeight, "resume question fills VR panel image");
+  {
+    State state{};
+    state.tab = kCalibrationTab;
+    state.calibration_page = 2;
+    PortVrSettings settings{};
+    View view{};
+    RecordingActions actions;
+    Check(ItemCount(state, view) == 1, "third calibration page holds X-ray blur");
+    Check(BuildRows(state, settings, view)[0].value == "ON", "X-ray blur defaults on");
+    Click(state, settings, view, kLabelX, RowY(kCalibrationTab, 0), 1.0, actions);
+    Check(!settings.xray_blur_enabled, "X-ray blur can be disabled");
+  }
   TestLiveSettings();
   TestImage();
   TestRows();

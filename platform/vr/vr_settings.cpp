@@ -224,6 +224,7 @@ const Field kFields[] = {
     VR_FLOAT(screen_distance_meters, 0.25f, 10.0f),
     VR_FLOAT(screen_width_meters, 0.25f, 10.0f),
     VR_BOOL(cinematic_screen_enabled),
+    VR_BOOL(xray_blur_enabled),
     VR_BOOL(game_menu_screen_enabled),
     VR_BOOL(message_box_immersive),
     VR_BOOL(floating_hud),

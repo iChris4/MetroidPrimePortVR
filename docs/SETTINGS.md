@@ -4,7 +4,20 @@
 - Keyboard defaults: WASD / IJKL for sticks, X/Z/C/V for A/B/X/Y, Return for
   Start, arrows for D-pad, Q/E for L/R, and F for Z. Existing mappings take
   precedence. SDL controllers are supported.
-- F1: debug overlay. F10: 60 FPS cap on/off (off: F1 Video > Frame rate "FPS cap", `fps_cap=`, `MP_FPS_CAP`; 0 = unlimited). F11: fullscreen.
+- GameCube controller adapters (issue #222): Nintendo's adapter and Mayflash's
+  in Wii U mode (USB `057E:0337`) work as in Dolphin, four ports with rumble,
+  read by SDL through libusb. On Windows, install the WinUSB driver for the
+  adapter once with [Zadig](https://zadig.akeo.ie/) ("WUP-028"; Options > List
+  All Devices); the Windows package ships `libusb-1.0.dll`, without which the
+  adapter is not seen. Pads on it read as on a console: the stick and
+  trigger values the pad sends, less the rest position taken when the pad is
+  plugged in (hold X+Y+Start for 3 seconds to take it again), with no
+  deadzone besides the game's own; the stick deadzone slider does not apply,
+  and remapping a stick or trigger puts that pad back on the ordinary path. On Linux the device needs a udev rule giving your user
+  access, the same one Dolphin documents. A Mayflash adapter switched to PC
+  mode shows up as ordinary controllers instead, one per port, without any
+  driver.
+- F1: debug overlay. F7: user texture pack on/off. F10: 60 FPS cap on/off (off: F1 Video > Frame rate "FPS cap", `fps_cap=`, `MP_FPS_CAP`; 0 = unlimited). F11: fullscreen.
   F12: screenshot.
 - Settings search: the box at the top of the F1 overlay (Ctrl+F) lists the
   settings whose name, page, section or keywords contain every typed word;
@@ -119,6 +132,11 @@
   sharpens in one filter), and only to a frame smaller than the window. The file also
   takes a manual `render_scale` under 1.
 - `MP_ASPECT=4:3|16:9|window` (default `window`, persisted as `aspect`); the legacy `MP_WIDESCREEN` selects 16:9.
+- Quick setup (Controls > Options): "Use mouse & keyboard" turns on mouse aim (with twin stick) and applies
+  the Mouse & keyboard layout; "Use twin-stick controller" turns on twin stick and applies the
+  Remastered layout to all controllers (greyed out with a GameCube adapter). Both replace your own
+  bindings for that device (Remap > Presets...) and are saved. "Save current as..." in Remap > My presets...
+  keeps your bindings as a preset of your own (see Control presets).
 - `MP_TWIN_STICK=1` (Controls > Options, persisted as `twin_stick`): twin-stick aiming. The
   right stick feeds the first-person aim through the same path as the mouse (so
   the same sensitivity/invert apply, tuned by `stick_aim_rate`, default 900 px/s, 50-10000; the F1
@@ -177,6 +195,9 @@
   sweep it across the screen, independent of the mouse sensitivity. With
   `gyro_cursor_camera` (default off) the gyro also turns the camera at
   `gyro_sensitivity` while it moves the pointer.
+- Invert map rotate X / Y (Controls > Options > Map, `map_invert_x`, `map_invert_y`, off by
+  default) flip which way the map view turns on the map rotate inputs, left/right and up/down.
+  The game turns the map opposite to the stick; both on gives camera-style rotation.
 - Spring Ball (Controls > Options, persisted as `spring_ball`, off by default): C-stick
   up in morph ball jumps, as in Metroid Prime Trilogy and the randomprime discs
   the Archipelago world makes, once the Morph Ball Bombs are held. It is a bomb
@@ -303,6 +324,15 @@
   none): a second controller button or trigger per GameCube button. Aurora maps
   one native button to each PAD button, so the port reads the alt one itself and
   ORs it in (`PortControls::HeldAltPadButtons`, from `CDolphinController`).
+- Your own presets (Remap > My presets... > "Save current as..."): one list; a preset covers every device the
+  Remap page shows. It snapshots the keyboard & mouse bindings, the touch bindings (when there are any) and, when a
+  controller is connected, the controller bindings, each with its custom actions, plus the controller's button/axis
+  mapping and the device settings (twin stick, mouse aim, shift buttons, mouse button actions, alt buttons; not
+  turbo). Saved in their own popup beside Presets...; one click applies every part it has (replacing your own
+  bindings for those devices), x deletes it; saving over a name replaces all its parts. One file per device
+  part, `control_presets/<keyboard|pad|touch>-<name>.toml` in the user folder: valid `controls.toml` text with
+  `#! key = value` header lines, so it can be shared. Older single-device files are still listed and apply to
+  their device. Console: `keypreset|padpreset <saved name>` applies, `... save <name>` saves, per device.
 - Control presets (Controls > Remap, "Presets..." beside the device list: one click applies a layout to Keyboard & mouse or to all Controllers, replacing your own bindings there; a selected kind or model keeps its own on top). Keyboard: **Classic** (the first-run layout)
   and **Mouse & keyboard** (WASD, E fire, Space jump, left ctrl/C morph, F
   missile, Q lock on, left alt free look, Tab/M map, 1-4 beams and 5-8 visors
@@ -347,6 +377,22 @@
   for 0.35 s or more keeps the charge held after letting go, and the next press
   fires it; shorter taps shoot as usual. Both are off in morph ball and while
   input is disabled. The console's `status` prints the game's L/A and the charge.
+- Aim Lock-On (Controls > Options and pause Options > Controller, persisted as
+  `aim_lock_on`, off by default, issue #236): lock-on picks the target nearest
+  the crosshair, measured as an angle (screen x weighed by the aspect ratio).
+  Retail prefers a target nearer the player by more than the orbit distance
+  threshold even when it is off to the side, and weighs screen offset only
+  between targets at about the same distance. Grapple points and the scan visor
+  keep retail's pick. Off under Original Experience.
+- Dodge (Controls > Move and aim, binding `dodge`, unbound by default, issue #236):
+  pressed on the ground while strafing (strafe at least as strong as forward/back),
+  it dashes. Locked on, it does what a jump tapped while strafing does: retail's
+  dash around the target. Not locked on, it does the same dash (same hop, speed,
+  length, sound and rumble) straight sideways along the facing at the press, with
+  mouse/stick look free during it. A press is kept for 0.12 s, so pressing just
+  before the strafe works. Like any digital action it can be added as a touch
+  button in the touch layout editor. Off under Original Experience; the jump-tap
+  dash is unchanged.
 - Remastered charge (Controls > Options, "Remastered charge (rapid fire)", persisted as
   `rapid_charge`, off by default, `MP_RAPID_CHARGE=<0|1>`): as in Remastered, holding
   fire fires a few shots before charging (3 in all with Power, 2 with Wave or Plasma,
@@ -732,9 +778,9 @@
   cutscenes and scripted cameras are unchanged. The camera pulls in at walls.
   It is how the Dread Samus bodies are seen in play (`docs/DREAD_SAMUS.md`).
   `third_person_distance` (metres behind, 0.5..10, default 3.5),
-  `third_person_shoulder` (metres right, -2..2, default 0.6) and
+  `third_person_shoulder` (metres right, -2..2, default 0.9) and
   `third_person_height` (metres above the first-person eye, -1..2, default
-  0.1) place it. Console: `thirdperson [on|off] [distance N] [shoulder N]
+  0.25) place it. Console: `thirdperson [on|off] [distance N] [shoulder N]
   [height N]`.
 - Speedrun timer and LiveSplit (F1 > Game > Speedrun; the timer also in pause Options >
   Display as In-Game Timer). `speedrun_timer` draws the in-game time (the play
@@ -944,7 +990,13 @@
   (`dread_first_person_cannon`, on by default; off keeps Prime's arm cannon,
   `DREAD_SAMUS.md`); the Remastered import's "What to import" (`remastered_skip`: the
   parts left out, comma-separated from `geometry`, `effects`, `hud`, `text`,
-  `movies` and `gallery`; `MODS.md`); the
+  `movies` and `gallery`; `MODS.md`); its "Parts to use" (`remastered_hide`:
+  the installed parts the mods load without, comma-separated from `geometry`,
+  `effects`, `models`, `hud`, `font`, `text`, `map` and `movies`;
+  `MP_REMASTERED_HIDE` overrides it; `MODS.md`); the Textures section's "Use the
+  texture pack" (`texture_pack`, on by default; off shows the game's own textures
+  without deleting the pack, and the Texture pack binding, F7 by default,
+  switches it in game to compare); the
   Randomizer page's options (`rando_settings`, one line of JSON;
   `RANDOMIZER.md`); and Archipelago's "Staggered suit damage" (`ap_suit_damage`:
   0 Default, 1 Progressive, the default, 2 Additive), set by hand to match the
@@ -964,6 +1016,11 @@
   place, in any room and without the Phazon Suit: selecting Wave, Ice or Plasma leaves it through
   the game's exit morph, selecting Power enters it again, and missiles fire from it. Unticking
   it leaves the beam at once; real phazon pools behave as in the original either way.
+  Infinite, beside the Missiles and Power Bombs sliders, makes firing that ammo use none, even
+  at zero (charge combos fire too, once Samus has them); the HUD shows ∞ in place of the count
+  (keeping "/capacity" where the HUD shows it) with full meters. The real count is kept and
+  pickups still add to it; not saved. Refused in the Original experience and while connected to
+  Archipelago. `MP_INFINITE_AMMO=1` turns it on for both for one run (see below).
 - F1 > System > Log, "Write the log to a file" (`logging`, on by default; the older `log_file` key is ignored):
   everything the game prints to stdout/stderr, including the
   line Aurora prints before it aborts, also goes to `metroid_prime_port.log` in
@@ -1042,8 +1099,9 @@ other `X:\Users\<name>`: `X:\Users\<user>`); the
   rides the elevator after loading, like stepping onto it. Console:
   `state list | last | save [n] | load [n] | undo | slot <n>`.
 - Quick resume (launcher > Port Config, VR > Debug, or F1 > Save states;
-  `quick_resume_enabled`, off by default for new and existing users): the legacy
-  `quick_resume` preference is ignored; enable this option again to opt in. When the app
+  `quick_resume_prompt_enabled`, on by default for new and existing users): old
+  `quick_resume` and `quick_resume_enabled` values are replaced by this ask-and-wait preference.
+  You can disable it in any settings menu. When the app
   goes to the background (Android) or you quit (desktop, window close, the
   overlay's Exit game or the console `quit`) during play, one more state is
   written to `savestates/resume.mpss`, outside the eight slots (slot 0's undo is
@@ -1068,7 +1126,9 @@ other `X:\Users\<name>`: `X:\Users\<user>`); the
   answer); Yes starts the file it came from and loads the state like a
   save state, straight from black without the file-select movie (a Yes during a
   splash skips the rest of the splashes; with `savestate_room_state` the room keeps its enemies and doors as saved, for the rooms whose script still matches: see the note under Save states; boss progress is not kept),
-  No dismisses the prompt and keeps the file; B does nothing. The file stays after Yes too, until the next safe point replaces it. Nothing is written
+  No dismisses the prompt and keeps the file. In VR, the headset shows the question
+  and startup waits indefinitely: A answers Yes and B answers No. On desktop,
+  B does nothing. The file stays after Yes too, until the next safe point replaces it. Nothing is written
   (and a previous resume file stays) on the title screen or before the first
   safe point of a session.
   A resume from another card, randomizer seed or Archipelago session is never
@@ -1269,6 +1329,8 @@ other `X:\Users\<name>`: `X:\Users\<user>`); the
 - `MP_PBR_ANISO=<1-16>`: the most anisotropic filtering a PBR mod's native maps
   take, 2 by default whatever the Anisotropy setting says: higher levels turn a
   tiled floor into streaks towards the horizon.
+- `MP_INFINITE_AMMO=1`: infinite missiles and power bombs for this run (F1 > Debug > Cheats,
+  above), refused in the Original experience and with Archipelago as the cheat is.
 - `MP_GODMODE=<0|1>`: the Invulnerable cheat for this run, whatever the setting
   says. The console's `god [on|off]` changes the setting itself.
 - `MP_LOG_FILE=<0|1>`: the file log (`metroid_prime_port.log` in the user
@@ -1310,11 +1372,19 @@ other `X:\Users\<name>`: `X:\Users\<user>`); the
   Remastered room models > Skip small models, console `roomgeo minpx <n>`; default 0): leaves out room
   geometry instances that span fewer than n pixels of the game's 480-line
   screen.
+- `MP_ICE_DARKENERS=0` (debugging aid; default on): the Remastered rooms' ice
+  darkeners (ActorIceDarkenerMP1) stay unfired, so frozen enemies' icy shell
+  keeps its full glow in those rooms.
 - `remastered_performance=<0|1>` (Mods > Prime Remastered > Performance mode;
   default 1): faster Remastered drawing that is no longer exact (glass copy
   every second frame, quarter-size exposure measure, blended volumetric fog,
-  arm cannon depth laid first); see `docs/MODS.md`. Console `roomgeo perf
-  [mask]` sets single shortcuts (1 glass, 2 measure, 4 fog, 8 gun), not saved.
+  arm cannon depth laid first, room models' coarser levels at half the
+  distance); see `docs/MODS.md`. Console `roomgeo perf [mask]` sets single
+  shortcuts (1 glass, 2 measure, 4 fog, 8 gun, 16 LOD), not saved.
+- `phazon_shell=<0|1>` (Mods > Prime Remastered > Phazon Suit aura; default 1):
+  the Phazon Suit wears Remastered's aura, its silhouette shell (on Samus, the
+  third-person body and the pause screen's doll). Off: the suit draws the
+  original game's distortion effect instead.
 - `MP_ROOM_GEO_LOD=<scale>` (setting `room_geo_lod`, F1 > Debug >
   Remastered room models > Detail distance, console `roomgeo lod <scale>`;
   default 1): the import also converts each room model's coarser Remastered
@@ -1541,6 +1611,15 @@ headers, applies the same rule to its own on/off variables (`MP_LOG_COPY_TEX`,
   twice, freed or reused before the flush); a fault logs `HEAP CHECK:` lines and aborts.
 - `MP_PIPELINE_SEED=0`: start from an empty pipeline cache instead of the shipped
   seed (`tools/pipeline_seed.py` records with it).
+- `MP_PIPELINE_LAZY=<0|1>`: build pipelines on first use instead of compiling the
+  cache at startup. On by default on Android and on low-RAM devices (issue #162).
+  In lazy mode, built pipelines are trimmed when memory runs short (issue #187):
+  `MP_PIPELINE_TRIM_MIB=<n>` (default 1024) releases those a minute of frames didn't
+  draw when less than that is available, `MP_PIPELINE_TRIM_SEVERE_MIB=<n>` (default
+  512) all but what the last frames drew; 0 turns a level off.
+  `MP_PIPELINE_EVICT=<frames>` adds a fixed sweep of pipelines idle that long.
+- `MP_PIPELINE_PBR=<0|1>`: compile the cached PBR pipelines at startup. By default
+  only when a mod is enabled, since only converted materials draw with them.
 - `MP_HOLD_FRONTEND_SHADERS=<0|1>`: hold the seed's background shader builds while no
   game is loaded. On by default under D3D11 only, whose drivers made the front end
   crawl behind them (issue #54).

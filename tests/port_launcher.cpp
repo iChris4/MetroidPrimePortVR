@@ -104,18 +104,18 @@ void TestSettingsFile(const fs::path& root) {
 
 void TestModel() {
   PortSettingsFile legacyResume;
-  legacyResume.Parse("quick_resume=1\n");
+  legacyResume.Parse("quick_resume=1\nquick_resume_enabled=0\n");
   SettingsModel resume;
   resume.Load(legacyResume);
-  Check(!resume.Bool("quick_resume_enabled"), "legacy quick resume does not opt existing users in");
-  resume.SetBool("quick_resume_enabled", true);
+  Check(resume.Bool("quick_resume_prompt_enabled"), "resume question defaults on for existing users");
+  resume.SetBool("quick_resume_prompt_enabled", true);
   resume.ApplyChanges(legacyResume);
   SettingsModel reloadedResume;
   reloadedResume.Load(legacyResume);
-  Check(reloadedResume.Bool("quick_resume_enabled"), "explicit quick resume opt-in persists");
-  legacyResume.Parse("quick_resume_enabled=0\n");
+  Check(reloadedResume.Bool("quick_resume_prompt_enabled"), "explicit quick resume opt-in persists");
+  legacyResume.Parse("quick_resume_prompt_enabled=0\n");
   reloadedResume.Refresh(legacyResume);
-  Check(!reloadedResume.Bool("quick_resume_enabled"), "live quick resume disable reaches desktop");
+  Check(!reloadedResume.Bool("quick_resume_prompt_enabled"), "live quick resume disable reaches desktop");
   PortSettingsFile file;
   file.Parse("vr_world_scale=2.50\nvr_use_right_hand=yes\nvr_rumble_hand=LEFT\nmsaa=x\n");
   SettingsModel model;
@@ -246,6 +246,7 @@ void TestDefaultsMatchGame() {
       {"vr_vr_overlays_enabled", FormatBool(s.vr_overlays_enabled)},
       {"vr_height_prompt_enabled", FormatBool(s.height_prompt_enabled)},
       {"vr_cinematic_screen_enabled", FormatBool(s.cinematic_screen_enabled)},
+      {"vr_xray_blur_enabled", FormatBool(s.xray_blur_enabled)},
       {"vr_vr_menu_floating", FormatBool(s.vr_menu_floating)},
       {"vr_game_menu_screen_enabled", FormatBool(s.game_menu_screen_enabled)},
       {"vr_message_box_immersive", FormatBool(s.message_box_immersive)},

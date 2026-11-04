@@ -51,6 +51,8 @@ void BuildCalibrationTab(TabContext& ctx, QTabWidget* tabs) {
   ctx.Check(layout, QObject::tr("In-headset overlays"), "vr_vr_overlays_enabled");
   ctx.Check(layout, QObject::tr("Show height prompt"), "vr_height_prompt_enabled");
   ctx.Check(layout, QObject::tr("Show cutscenes on cinema screen"), "vr_cinematic_screen_enabled");
+  ctx.Check(layout, QObject::tr("X-ray visor blur"), "vr_xray_blur_enabled", {},
+            QObject::tr("Turn off for a sharp X-ray image in VR. Keeps stereo depth and X-ray colours."));
   ctx.Check(layout, QObject::tr("Detach VR menu from hand"), "vr_vr_menu_floating");
   ctx.Check(layout, QObject::tr("Detach game menu and map from view"),
             "vr_game_menu_screen_enabled");

@@ -2,6 +2,9 @@
 
 **Created by Nobbie and iChris4.**
 
+> This independent project is not affiliated with or endorsed by PrimeDecomp.
+> Please report port issues here rather than to the decompilation project.
+
 PrimedGun 2.0 brings **Metroid Prime** to native VR on Windows PC and standalone
 Meta Quest. It builds on the controls and VR experience of
 [the original PrimedGun](https://github.com/Nobbie248/PrimedGun), with a native
@@ -16,12 +19,12 @@ ships no disc image, and neither does any package or release built from it.
 
 ## Features
 
-- Native OpenXR VR on PC and standalone Meta Quest.
-- Roomscale movement with a modern VR control scheme.
-- 6DOF arm cannon tracking for targeting and grapple controls.
+- Native OpenXR VR on PC (Direct3D 12, or Vulkan for SteamVR headsets such as PSVR2) and standalone Meta Quest (tested on Quest 3).
+- Room-scale movement with a modern VR control scheme, snap or smooth turning.
+- 6DOF arm cannon tracking for aiming, grapple, lock-on and left-handed play.
 - One-click height calibration and adjustable cannon position and rotation.
-- Left-handed support.
-- Easy texture swapping tools.
+- Beam wheel and visor gestures configurations.
+- 3D map, pause screens and message boxes in the headset.
 - In-headset settings for controls, calibration, graphics, and more.
 - Randomizer, and Archipelago multiworld support.
 
@@ -303,14 +306,60 @@ budwheizzah
 The Metroid Prime modding community, for the resources and research that helped
 make PrimedGun possible, and the Dolphin team.
 
+### Upstream project acknowledgements
+
+This port would not exist without the work of these projects. Thank you.
+
+**Foundation**
+
+- [PrimeDecomp](https://github.com/PrimeDecomp/prime): the decompilation the game
+  code is built from, and the decompiled Dolphin SDK.
+- [Aurora](https://github.com/encounter/aurora): the GameCube graphics, input and
+  platform layer over SDL3 and WebGPU.
+- [MusyX](https://github.com/AxioDL/musyx): the audio mixer.
+- [nod](https://github.com/encounter/nod): the disc image reader.
+
+**Randomizer and Archipelago**
+
+- [randomprime](https://github.com/aprilwade/randomprime): the room patches for
+  skippable cutscenes and Archipelago pickups, the room and elevator tables, and
+  the custom pickup and door assets are generated from it.
+- The [Metroid Prime APWorld](https://github.com/UltiNaruto/MetroidAPrime): the
+  door table, and the game this client connects to.
+- The Metroid Prime AP PopTracker pack: the Archipelago logic rules.
+- [Archipelago](https://archipelago.gg): the multiworld itself.
+
+**Remastered import**
+
+- [astc-encoder](https://github.com/ARM-software/astc-encoder): the ASTC texture encoder.
+- tegra_swizzle, bcdec_rs and astc-decode, ported to C++ for the texture importer.
+
+**Platform and input**
+
+- [libadrenotools](https://github.com/bylaws/libadrenotools): custom Vulkan drivers on Android.
+- [GamepadMotionHelpers](https://github.com/JibbSmart/GamepadMotionHelpers): gyro
+  calibration and aiming spaces.
+- [Kenney Input Prompts](https://kenney.nl/assets/input-prompts) (CC0): the
+  controller button icons.
+- [Dolphin](https://dolphin-emu.org): the texture pack and save formats the port reads and writes.
+
+**Libraries**
+
+[SDL3](https://libsdl.org), [Dawn](https://dawn.googlesource.com/dawn),
+[Dear ImGui](https://github.com/ocornut/imgui), [RmlUi](https://github.com/mikke89/RmlUi),
+[fmt](https://github.com/fmtlib/fmt), [Abseil](https://abseil.io), [FreeType](https://freetype.org),
+libpng, zlib-ng, [zstd](https://github.com/facebook/zstd), [xxHash](https://github.com/Cyan4973/xxHash),
+[SQLite](https://sqlite.org) and OpenSSL.
+
 ## Licensing
 
-The original Prime 1 decompilation had no root licence file before the native
-port additions. Its original third-party licences remain with their components,
+PrimeDecomp's original CC0 dedication is restored verbatim in [LICENSE](LICENSE),
+from the Prime 1 snapshot's [original licence commit](https://github.com/rzkowskii/prime/commit/4b87a52c07bf84d77312607be00e74036801af95).
+Original third-party licences remain with their components,
 including [Aurora](extern/aurora/LICENSE) and [MusyX](extern/musyx/LICENSE).
 
 Later PrimedGun files marked GPL-3.0-or-later retain those terms; their full
-licence text is in [COPYING](COPYING). The native port's later MIT grant is
+licence text is in [GPL-3.0.txt](packaging/licenses/GPL-3.0.txt). The native port's later MIT grant is
 preserved separately in
 [packaging/licenses/native-port-MIT.txt](packaging/licenses/native-port-MIT.txt).
 Neither grant replaces the original component licences or covers Nintendo's
@@ -338,7 +387,3 @@ Nintendo and Retro Studios, and ships no game data.
 | `docs/FRAME_INTERPOLATION.md`, `docs/HIGH_FPS_AUDIT.md` | High frame rate design notes |
 | `decomp/` | The original decompilation's GameCube build and notes (not used by the port) |
 | `PORT_NOTES.md` | Open follow-ups and non-obvious facts |
-
-## AI assistance
-
-Parts of this port were written with AI coding assistants, under my oversight.

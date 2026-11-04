@@ -187,6 +187,10 @@ bool ApplySetting(std::string_view keyView, std::string_view valueView) {
     s.mouseInvertX = ParseBool(value);
   } else if (key == "mouse_invert_y") {
     s.mouseInvertY = ParseBool(value);
+  } else if (key == "map_invert_x") {
+    s.mapInvertX = ParseBool(value);
+  } else if (key == "map_invert_y") {
+    s.mapInvertY = ParseBool(value);
   } else if (key == "mouse_buttons") {
     s.mouseButtons = ParseBool(value);
   } else if (key == "mouse_crosshair") {
@@ -267,6 +271,8 @@ bool ApplySetting(std::string_view keyView, std::string_view valueView) {
     s.fastMorph = ParseBool(value);
   } else if (key == "lock_on_toggle") {
     s.lockOnToggle = ParseBool(value);
+  } else if (key == "aim_lock_on") {
+    s.aimLockOn = ParseBool(value);
   } else if (key == "sticky_charge") {
     s.stickyCharge = ParseBool(value);
   } else if (key == "rapid_charge") {
@@ -330,6 +336,7 @@ void WriteControlSettings(std::ostream& out) {
 void WriteGameplaySettings(std::ostream& out) {
   const Settings& s = Get();
   out << "lock_on_toggle=" << (s.lockOnToggle ? 1 : 0) << '\n';
+  out << "aim_lock_on=" << (s.aimLockOn ? 1 : 0) << '\n';
   out << "sticky_charge=" << (s.stickyCharge ? 1 : 0) << '\n';
   out << "rapid_charge=" << (s.rapidCharge ? 1 : 0) << '\n';
   out << "remastered_movement=" << (s.remasteredMovement ? 1 : 0) << '\n';
@@ -372,6 +379,8 @@ void WriteAimSettings(std::ostream& out) {
   out << "touch_visor_tap_scan=" << (s.touchVisorTapScan ? 1 : 0) << '\n';
   out << "mouse_invert_x=" << (s.mouseInvertX ? 1 : 0) << '\n';
   out << "mouse_invert_y=" << (s.mouseInvertY ? 1 : 0) << '\n';
+  out << "map_invert_x=" << (s.mapInvertX ? 1 : 0) << '\n';
+  out << "map_invert_y=" << (s.mapInvertY ? 1 : 0) << '\n';
   out << "mouse_buttons=" << (s.mouseButtons ? 1 : 0) << '\n';
   for (int i = 0; i < PortInputMap::kMouseButtonCount; ++i) {
     out << PortInputMap::MouseButtonKey(i) << '=' << PortInputMap::MouseActionInfo(s.mouseActions[i]).name

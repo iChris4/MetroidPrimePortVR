@@ -149,6 +149,14 @@ exists). Prime Remastered > Import then asks only for the image.
 - "What to import" leaves parts out of the next import (room geometry, particle effects, HUD,
   text, movies, gallery), kept as `remastered_skip` in the settings file. The `MP_REMASTERED_*`
   [switches](#import-switches) can still leave out a part the panel keeps.
+- "Parts to use", under the section's switch, picks which parts of the installed import load
+  (room geometry and lighting, particle effects, models, HUD, font, text, map, movies); the
+  disc's own stands in for each part left out, and nothing is imported again. It applies at the
+  next mod reload. Converted textures always load: they have ids of their own, used only by the
+  models that name them. Kept as `remastered_hide` in the settings file (the parts left out,
+  comma-separated: `geometry`, `effects`, `models`, `hud`, `font`, `text`, `map`,
+  `movies`); `MP_REMASTERED_HIDE` overrides it for one run. With room geometry left out the
+  import loads without the restart room geometry otherwise needs on a phone started without it.
 
 From a terminal, `metroid_prime_port --import-remastered <image.nsp|image.xci> [key file]` does
 the same on every core without starting the game, installs at once and prints the folder it
@@ -241,6 +249,9 @@ as before.
 - In first person with the combat visor, the arm cannon's depth is laid before the world, so the
   world behind it is never shaded (the exposure measure leaves that area out; frames that copy
   the screen while drawing the world, such as glass, turn this off for a few frames).
+- Room models switch to their coarser levels of detail at half the distance (on top of the
+  Detail distance setting); 0.4 to 1.7 ms on a 2-CU Ryzen 7000 iGPU at 1080p, with no visible
+  change.
 
 Console `roomgeo perf [mask]` turns on single shortcuts for comparison.
 
@@ -301,18 +312,24 @@ See [`docs/DREAD_SAMUS.md`](DREAD_SAMUS.md) for the import and its limits.
 Texture packs replace the game's textures with Aurora-format images named
 `tex1_<w>x<h>_<texhash>[_<tluthash>]_<fmt>.dds` or `.png`.
 
-- **Built-in set:** embedded in the executable (`<executable dir>/textures` only in a build
-  without embedding, or on Android). `MP_TEXTURES` points at another folder, overriding it.
+- **Built-in folder:** the executable no longer carries a texture pack. `MP_TEXTURES` points at
+  a folder of replacements, and a build that keeps `textures/` next to the executable reads that
+  one (`<executable dir>/textures`); both are the layer under your pack, and whatever else a build
+  carries inside the executable is only the button-prompt icons.
 - **Your own pack:** put it in `user_textures` in the [user folder](#installing-mods), or wherever
-  `MP_USER_TEXTURES` points, so updates never touch it. It is layered over the built-in set, with
+  `MP_USER_TEXTURES` points, so updates never touch it. It is layered over the folder above, with
   the same folder rules. The overlay's Mods page has a Reload button.
+  Its Import texture pack .zip button extracts a `.zip`'s `.png`/`.dds` files (keeping its
+  folders) over the current pack, which is swapped in once the copy finishes.
 - **Android:** Mods > Texture pack > Choose texture pack folder opens the system folder picker
   and copies the folder's `.png`/`.dds` files into the data folder (pick it again after changing
-  it; Remove deletes the copy). The copy lands in `user_textures.new` and is swapped in on the
-  next frame, or at the next start if the app closed first.
+  it; Remove deletes the copy). Import texture pack .zip does the same from a `.zip` file,
+  keeping the archive's folders; use it where the folder picker lists no files (a single file can
+  still be picked from Downloads or Recents). The copy lands in `user_textures.new` and is swapped
+  in on the next frame, or at the next start if the app closed first.
 
-Priorities: built-in 0, user pack 1, binding icons 2, so a remapped action still shows its
-binding.
+Priorities: built-in folder 0, user pack 1, binding icons 2, so a remapped action still shows
+its binding.
 
 ### Button prompts
 
@@ -361,7 +378,7 @@ What the importer gets:
 | --- | --- | --- |
 | `MP_MODS` | `<user>/mods` | The mods folder. |
 | `MP_USER_PATH` | — | The user folder (moves the mods folder and a desktop Remastered import with it). |
-| `MP_TEXTURES` | built-in | Folder of texture replacements overriding the built-in set. |
+| `MP_TEXTURES` | built-in folder | Folder of texture replacements overriding `<executable dir>/textures`. |
 | `MP_USER_TEXTURES` | `<user>/user_textures` | Your own texture pack. |
 | `MP_TEXTURE_DEVICE` | last input | Forces the button-prompt set by folder name. |
 | `MP_DUMP_TEXTURES` | off | `1` dumps every source texture to `<cachePath>/texture_dumps`. |

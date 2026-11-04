@@ -9,11 +9,14 @@
 #include "port_graphics_backend.h"
 #include "port_gyro_motion.h"
 #include "port_dynamic_res.h"
+#include "port_input_devices.h"
+#include "port_input_remap_ui.h"
 #include "port_pointer.h"
 #include "port_hd_font.h"
 #include "port_paths.h"
 #include "port_config_reset.h"
 #include "port_textures.h"
+#include "port_zip.h"
 #include "port_gpu_driver.h"
 #include "port_mods.h"
 #include "port_savestate.h"
@@ -32,6 +35,8 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <filesystem>
+#include <thread>
 #include <cstdio>
 #include <mutex>
 #include <optional>
@@ -816,14 +821,117 @@ void DrawTexturesSection() {
 // The user's texture pack, layered over the built-in set (see port_textures.h).
 // On Android the folder is picked with the system folder picker and copied into
 // the data folder; on the desktop the player fills the folder themselves.
+#if !defined(__ANDROID__)
+// Import texture pack .zip: the file dialog answers on another thread, so its
+// pick waits in sTexturePackZipPick for DrawTexturePack; the extraction runs on
+// its own detached thread (it touches only statics) into `<root>.partial`, then
+// the finished folder is renamed to `<root>.new` for PortTextures to swap in.
+namespace {
+std::mutex sTexturePackZipMutex;
+std::optional<std::string> sTexturePackZipPick;
+std::atomic<bool> sTexturePackZipDialogOpen{false};
+std::atomic<bool> sTexturePackZipBusy{false};
+
+void ImportTexturePackZip(std::string zipPath, std::string root) {
+  namespace fs = std::filesystem;
+  const auto utf8 = [](const std::string& text) {
+    return fs::path(std::u8string(text.begin(), text.end()));
+  };
+  const std::string partial = root + ".partial";
+  std::error_code ec;
+  fs::remove_all(utf8(partial), ec);
+  size_t count = 0;
+  std::string error;
+  const bool ok = PortZip::Extract(
+      zipPath, partial, PortZip::TexturePackFilter,
+      [](size_t done) {
+        SetTexturePackStatus("Copying the texture pack... " + std::to_string(done) + " textures");
+      },
+      count, error);
+  if (!ok) {
+    fs::remove_all(utf8(partial), ec);
+    SetTexturePackStatus("Copying the texture pack failed: " + error);
+  } else if (count == 0) {
+    fs::remove_all(utf8(partial), ec);
+    SetTexturePackStatus("No .png or .dds textures in that file (is it a .zip?); nothing changed.");
+  } else {
+    fs::remove_all(utf8(root + ".new"), ec);
+    fs::rename(utf8(partial), utf8(root + ".new"), ec);
+    if (ec) {
+      fs::remove_all(utf8(partial), ec);
+      SetTexturePackStatus("Copying the texture pack failed: " + ec.message());
+    } else {
+      PortTextures::RequestUserPackReload();
+      SetTexturePackStatus("Copied " + std::to_string(count) + " textures.");
+    }
+  }
+  sTexturePackZipBusy = false;
+}
+
+void OpenTexturePackZipDialog() {
+  int windowCount = 0;
+  SDL_Window** windows = SDL_GetWindows(&windowCount);
+  SDL_Window* window = windows != nullptr && windowCount > 0 ? windows[0] : nullptr;
+  SDL_free(windows);
+  static const SDL_DialogFileFilter filters[] = {
+      {"Zip archives", "zip"},
+      {"All files", "*"},
+  };
+  const SDL_DialogFileCallback done = [](void*, const char* const* files, int) {
+    std::lock_guard lock(sTexturePackZipMutex);
+    // Empty = cancelled; a leading \x01 marks a failed dialog's error.
+    sTexturePackZipPick = files != nullptr ? std::string(files[0] != nullptr ? files[0] : "")
+                                           : std::string("\x01") + SDL_GetError();
+    sTexturePackZipDialogOpen = false;
+  };
+  sTexturePackZipDialogOpen = true;
+  SDL_ShowOpenFileDialog(done, nullptr, window, filters, 2, nullptr, false);
+}
+
+// Starts the extraction for a pick the dialog delivered.
+void ProcessTexturePackZipPick(const char* root) {
+  std::optional<std::string> pick;
+  {
+    std::lock_guard lock(sTexturePackZipMutex);
+    pick.swap(sTexturePackZipPick);
+  }
+  if (!pick || pick->empty()) {
+    return;
+  }
+  if ((*pick)[0] == '\x01') {
+    SetTexturePackStatus("Could not open the file picker: " + pick->substr(1));
+    return;
+  }
+  if (sTexturePackZipBusy.exchange(true)) {
+    SetTexturePackStatus("A texture pack is still being copied.");
+    return;
+  }
+  SetTexturePackStatus("Copying the texture pack... 0 textures");
+  std::thread(ImportTexturePackZip, std::move(*pick), std::string(root != nullptr ? root : "")).detach();
+}
+} // namespace
+#endif
+
 void DrawTexturePack() {
   const char* root = PortTextures::UserRoot();
   if (root[0] == '\0') {
     ImGui::TextUnformatted("No user texture folder.");
     return;
   }
+  bool enabled = PortTextures::UserPackEnabled();
+  const std::string toggleKeys = PortInputRemap::BindingsText(PortInput::Action::ToggleTexturePack, " / ");
+  const std::string toggleLabel =
+      (toggleKeys.empty() ? std::string("Use the texture pack") : "Use the texture pack (" + toggleKeys + ")") +
+      "###texture-pack-enabled";
+  if (ImGui::Checkbox(toggleLabel.c_str(), &enabled)) {
+    PortTextures::SetUserPackEnabled(enabled);
+  }
+  ImGui::SetItemTooltip("Off shows the game's own textures, without deleting the pack.\n"
+                        "The binding (Controls > Remap > Port) switches it in game, to compare.");
   const size_t count = PortTextures::UserPackCount();
-  if (count > 0) {
+  if (!enabled) {
+    ImGui::TextUnformatted("Texture pack off.");
+  } else if (count > 0) {
     ImGui::Text("%zu replacements loaded, over the built-in set.", count);
   } else {
     ImGui::TextUnformatted("No texture pack loaded.");
@@ -834,22 +942,50 @@ void DrawTexturePack() {
     ImGui::TextWrapped("%s", status.c_str());
   }
   if (ImGui::Button("Choose texture pack folder...")) {
-    PickTexturePack();
+    PickTexturePack(false);
   }
   ImGui::SameLine();
+  if (ImGui::Button("Import texture pack .zip...")) {
+    PickTexturePack(true);
+  }
   if (ImGui::Button("Remove texture pack")) {
     PortTextures::RequestUserPackRemoval();
     SetTexturePackStatus("Texture pack removed.");
   }
   ImGui::TextWrapped(
-      "The folder is copied into the data folder, so it keeps working if the original is "
-      "moved. Pick it again after changing it.");
+      "The pack is copied into the data folder, so it keeps working if the original is "
+      "moved. Pick it again after changing it. Use the .zip import if the folder picker "
+      "shows no files.");
 #else
   ImGui::TextWrapped("Folder: %s", root);
+  ProcessTexturePackZipPick(root);
+  const std::string status = TexturePackStatus();
+  if (!status.empty()) {
+    ImGui::TextWrapped("%s", status.c_str());
+  }
   if (ImGui::Button("Reload texture pack")) {
     PortTextures::RequestUserPackReload();
   }
+  ImGui::SameLine();
+  const bool busy = sTexturePackZipBusy || sTexturePackZipDialogOpen;
+  ImGui::BeginDisabled(busy);
+  if (ImGui::Button("Import texture pack .zip...")) {
+    if (root == nullptr || root[0] == '\0') {
+      SetTexturePackStatus("There is no texture pack folder to import into.");
+    } else {
+      OpenTexturePackZipDialog();
+    }
+  }
+  ImGui::EndDisabled();
 #endif
+}
+
+void ToggleTexturePack() {
+  const bool on = !PortTextures::UserPackEnabled();
+  PortTextures::SetUserPackEnabled(on);
+  // Saved now: outside the overlay, changes are otherwise written at exit.
+  SaveSettingsNow();
+  ShowNote(on ? "Texture pack: on" : "Texture pack: off");
 }
 
 } // namespace PortDebug

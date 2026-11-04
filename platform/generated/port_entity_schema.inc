@@ -994,12 +994,12 @@ template <> const PortSchemaClass& PortEntitySchema::Describe< CFireFlea >() {
   static const PortSchemaField fields[] = {
       {"x568_", "float", PortSchemaKind::float_, 0, kPortSchemaPrivate, sizeof(CFireFlea::x568_), PES_ADDR(CFireFlea, x568_), nullptr, nullptr},
       {"x56c_", "float", PortSchemaKind::float_, 0, kPortSchemaPrivate, sizeof(CFireFlea::x56c_), PES_ADDR(CFireFlea, x56c_), nullptr, nullptr},
-      {"x570_nearList", "rstl::reserved_vector<TUniqueId, 1024>", PortSchemaKind::container, 0, kPortSchemaPrivate, sizeof(CFireFlea::x570_nearList), PES_ADDR(CFireFlea, x570_nearList), nullptr, nullptr},
+      {"x570_nearList", "rstl::reserved_vector<TUniqueId, 2048>", PortSchemaKind::container, 0, kPortSchemaPrivate, sizeof(CFireFlea::x570_nearList), PES_ADDR(CFireFlea, x570_nearList), nullptr, nullptr},
       {"xd74_", "CVector3f", PortSchemaKind::math, 0, kPortSchemaPrivate, sizeof(CFireFlea::xd74_), PES_ADDR(CFireFlea, xd74_), nullptr, nullptr},
       {"xd80_targetPos", "CVector3f", PortSchemaKind::math, 0, kPortSchemaPrivate, sizeof(CFireFlea::xd80_targetPos), PES_ADDR(CFireFlea, xd80_targetPos), nullptr, nullptr},
       {"xd8c_pathFind", "CPathFindSearch", PortSchemaKind::path_search, 0, kPortSchemaPrivate, sizeof(CFireFlea::xd8c_pathFind), PES_ADDR(CFireFlea, xd8c_pathFind), nullptr, nullptr},
   };
-  static const PortSchemaClass desc = {"CFireFlea", "CPatterned", fields, 6, 0xE66F741AD2E9E6EBull};
+  static const PortSchemaClass desc = {"CFireFlea", "CPatterned", fields, 6, 0xE8807094394CC5FCull};
   return desc;
 }
 template <> const PortSchemaClass& PortEntitySchema::Describe< CFireFlea::CDeathCameraEffect >() {
@@ -2247,8 +2247,10 @@ template <> const PortSchemaClass& PortEntitySchema::Describe< CPatterned >() {
       {"x540_iceDeathExplosionOffset", "CVector3f", PortSchemaKind::math, 0, kPortSchemaPrivate, sizeof(CPatterned::x540_iceDeathExplosionOffset), PES_ADDR(CPatterned, x540_iceDeathExplosionOffset), nullptr, nullptr},
       {"x54c_iceDeathExplosionParticle", "rstl::optional_object<TCachedToken<CGenDescription>>", PortSchemaKind::container, 0, kPortSchemaPrivate, sizeof(CPatterned::x54c_iceDeathExplosionParticle), PES_ADDR(CPatterned, x54c_iceDeathExplosionParticle), nullptr, nullptr},
       {"x55c_moveScale", "CVector3f", PortSchemaKind::math, 0, kPortSchemaPrivate, sizeof(CPatterned::x55c_moveScale), PES_ADDR(CPatterned, x55c_moveScale), nullptr, nullptr},
+      {"xPortFreezeDir", "CVector3f", PortSchemaKind::math, 0, kPortSchemaPrivate, sizeof(CPatterned::xPortFreezeDir), PES_ADDR(CPatterned, xPortFreezeDir), nullptr, nullptr},
+      {"xPortFreezeTime", "float", PortSchemaKind::float_, 0, kPortSchemaPrivate, sizeof(CPatterned::xPortFreezeTime), PES_ADDR(CPatterned, xPortFreezeTime), nullptr, nullptr},
   };
-  static const PortSchemaClass desc = {"CPatterned", "CAi", fields, 112, 0x764620E9E2317F89ull};
+  static const PortSchemaClass desc = {"CPatterned", "CAi", fields, 114, 0xFEFBF8874819644Aull};
   return desc;
 }
 template <> const PortSchemaClass& PortEntitySchema::Describe< CPhazonHealingNodule >() {
@@ -2300,8 +2302,9 @@ template <> const PortSchemaClass& PortEntitySchema::Describe< CPhysicsActor >()
       {"x24c_numTicksStuck", "unsigned int", PortSchemaKind::int_, 0, kPortSchemaPrivate, sizeof(CPhysicsActor::x24c_numTicksStuck), PES_ADDR(CPhysicsActor, x24c_numTicksStuck), PES_GETI(CPhysicsActor, x24c_numTicksStuck), PES_SETI(CPhysicsActor, x24c_numTicksStuck)},
       {"x250_numTicksPartialUpdate", "unsigned int", PortSchemaKind::int_, 0, kPortSchemaPrivate, sizeof(CPhysicsActor::x250_numTicksPartialUpdate), PES_ADDR(CPhysicsActor, x250_numTicksPartialUpdate), PES_GETI(CPhysicsActor, x250_numTicksPartialUpdate), PES_SETI(CPhysicsActor, x250_numTicksPartialUpdate)},
       {"x254_", "unsigned int", PortSchemaKind::int_, 0, kPortSchemaPrivate, sizeof(CPhysicsActor::x254_), PES_ADDR(CPhysicsActor, x254_), PES_GETI(CPhysicsActor, x254_), PES_SETI(CPhysicsActor, x254_)},
+      {"xPortIceDarkening", "float", PortSchemaKind::float_, 0, kPortSchemaPrivate, sizeof(CPhysicsActor::xPortIceDarkening), PES_ADDR(CPhysicsActor, xPortIceDarkening), nullptr, nullptr},
   };
-  static const PortSchemaClass desc = {"CPhysicsActor", "CActor", fields, 32, 0x055252C86697082Bull};
+  static const PortSchemaClass desc = {"CPhysicsActor", "CActor", fields, 33, 0x3ADD1381DFE263B6ull};
   return desc;
 }
 template <> const PortSchemaClass& PortEntitySchema::Describe< CPlasmaProjectile >() {
@@ -3246,8 +3249,10 @@ template <> const PortSchemaClass& PortEntitySchema::Describe< CScriptEffect >()
       {"xPortExternalVars", "std::vector<SPortExternalVar>", PortSchemaKind::other, 0, kPortSchemaPrivate, sizeof(CScriptEffect::xPortExternalVars), PES_ADDR(CScriptEffect, xPortExternalVars), nullptr, nullptr},
       {"xPortBarrierController", "TUniqueId", PortSchemaKind::uid, 0, kPortSchemaPrivate, sizeof(CScriptEffect::xPortBarrierController), PES_ADDR(CScriptEffect, xPortBarrierController), nullptr, nullptr},
       {"xPortBarrierPlatform", "TUniqueId", PortSchemaKind::uid, 0, kPortSchemaPrivate, sizeof(CScriptEffect::xPortBarrierPlatform), PES_ADDR(CScriptEffect, xPortBarrierPlatform), nullptr, nullptr},
+      {"xPortBarrierBounds", "CAABox", PortSchemaKind::math, 0, kPortSchemaPrivate, sizeof(CScriptEffect::xPortBarrierBounds), PES_ADDR(CScriptEffect, xPortBarrierBounds), nullptr, nullptr},
+      {"xPortHasBarrierBounds", "bool", PortSchemaKind::bool_, 0, kPortSchemaPrivate, sizeof(CScriptEffect::xPortHasBarrierBounds), PES_ADDR(CScriptEffect, xPortHasBarrierBounds), PES_GETI(CScriptEffect, xPortHasBarrierBounds), PES_SETI(CScriptEffect, xPortHasBarrierBounds)},
   };
-  static const PortSchemaClass desc = {"CScriptEffect", "CActor", fields, 33, 0x322690447EEF178Full};
+  static const PortSchemaClass desc = {"CScriptEffect", "CActor", fields, 35, 0xD737D146483CB5E1ull};
   return desc;
 }
 template <> const PortSchemaClass& PortEntitySchema::Describe< CScriptGenerator >() {
@@ -3974,11 +3979,11 @@ template <> const PortSchemaClass& PortEntitySchema::Describe< CShockWave >() {
       {"mTimeSinceHitPlayer", "float", PortSchemaKind::float_, 0, kPortSchemaPrivate, sizeof(CShockWave::mTimeSinceHitPlayer), PES_ADDR(CShockWave, mTimeSinceHitPlayer), nullptr, nullptr},
       {"mHitPlayerInAir", "bool", PortSchemaKind::bool_, 0, kPortSchemaPrivate, sizeof(CShockWave::mHitPlayerInAir), PES_ADDR(CShockWave, mHitPlayerInAir), PES_GETI(CShockWave, mHitPlayerInAir), PES_SETI(CShockWave, mHitPlayerInAir)},
       {"mHitPlayer", "bool", PortSchemaKind::bool_, 0, kPortSchemaPrivate, sizeof(CShockWave::mHitPlayer), PES_ADDR(CShockWave, mHitPlayer), PES_GETI(CShockWave, mHitPlayer), PES_SETI(CShockWave, mHitPlayer)},
-      {"mHitIds", "rstl::reserved_vector<TUniqueId, 1024>", PortSchemaKind::container, 0, kPortSchemaPrivate, sizeof(CShockWave::mHitIds), PES_ADDR(CShockWave, mHitIds), nullptr, nullptr},
+      {"mHitIds", "rstl::reserved_vector<TUniqueId, 2048>", PortSchemaKind::container, 0, kPortSchemaPrivate, sizeof(CShockWave::mHitIds), PES_ADDR(CShockWave, mHitIds), nullptr, nullptr},
       {"mElectricDesc", "rstl::optional_object<TToken<CElectricDescription>>", PortSchemaKind::container, 0, kPortSchemaPrivate, sizeof(CShockWave::mElectricDesc), PES_ADDR(CShockWave, mElectricDesc), nullptr, nullptr},
       {"mLightId", "TUniqueId", PortSchemaKind::uid, 0, kPortSchemaPrivate, sizeof(CShockWave::mLightId), PES_ADDR(CShockWave, mLightId), nullptr, nullptr},
   };
-  static const PortSchemaClass desc = {"CShockWave", "CActor", fields, 17, 0xB6CD0C67134A85C6ull};
+  static const PortSchemaClass desc = {"CShockWave", "CActor", fields, 17, 0x52EDA119EC257A69ull};
   return desc;
 }
 template <> const PortSchemaClass& PortEntitySchema::Describe< CSnakeWeedSwarm >() {
@@ -4694,4 +4699,4 @@ const PortSchemaClass* const* PortEntitySchema::Classes(int& count) {
 }
 
 const int PortEntitySchema::kClassCount = 159;
-const int PortEntitySchema::kFieldCount = 3420;
+const int PortEntitySchema::kFieldCount = 3425;

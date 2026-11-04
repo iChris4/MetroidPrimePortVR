@@ -187,6 +187,11 @@ void DrawRemasteredImport() {
            "refraction updated every second frame, exposure measured from a smaller image, "
            "volumetric fog blended onto the scene instead of rewriting it, and the world left "
            "unshaded behind the arm cannon.");
+  if (ImGui::Checkbox("Phazon Suit aura##remastered", &sPhazonShell)) {
+    MarkDirty();
+  }
+  ItemHelp("On: the Phazon Suit wears Remastered's glowing aura (its silhouette shell). Off: the "
+           "original game's distortion effect around the suit instead.");
   ImGui::BeginDisabled(state.running);
 #if defined(__ANDROID__)
   // No path to type here: the files are picked, and shown by name.
@@ -518,6 +523,10 @@ void DrawMods() {
       const bool wanted = ModsEnabled() && on;
       restartRequired = restartRequired || (wanted && mod.pendingRestart);
       changed = changed || (wanted != mod.enabled && !(wanted && mod.pendingRestart));
+      changed = changed || (mod.enabled && mod.import && !PortMods::SameImportParts(mod.hidden, RemasteredHidden()));
+      // Left out, the room geometry no longer needs the buffers a restart would reserve.
+      changed = changed || (wanted && mod.pendingRestart && mod.import &&
+                            PortMods::ImportPartHidden(RemasteredHidden(), "geometry"));
     }
   }
   if (PortMods::Suspended()) {

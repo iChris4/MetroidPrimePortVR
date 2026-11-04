@@ -47,8 +47,8 @@ $WorkDirectory = [IO.Path]::GetFullPath($WorkDirectory)
 
 # The source revision is aurora's; its archive hash is pinned here, so a Dawn bump in aurora fails
 # loudly until this script (and the patches) are checked against the new revision.
-$revision = 'bfa890082bf20bc10e0a3bfe122cf0bfa7f4da61'
-$archiveHash = 'e0cb2aabea2bde5957ab6bd5e7919c5ed61dd73dd8237027bd5755a9c91bf237'
+$revision = '118436b3f8f68583eb86e811ca605dc41637e8cc'
+$archiveHash = '033b1a2eca2dddc67fd9c1ca88a54b42d727f8a9f765ba669b84d9a77bb02576'
 $versions = [IO.File]::ReadAllText((Join-Path $repo 'extern\aurora\cmake\AuroraDependencyVersions.cmake'))
 $pinnedRevision = [regex]::Match($versions, '_aurora_dependency_version\(AURORA_DAWN_REF\s+"([a-f0-9]+)"').Groups[1].Value
 if ($pinnedRevision -ne $revision) {

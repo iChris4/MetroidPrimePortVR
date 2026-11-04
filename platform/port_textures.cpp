@@ -2,7 +2,6 @@
 
 #include "port_textures.h"
 
-#include "port_embedded.h"
 #include "port_log.h"
 #include "port_prompts.h"
 
@@ -15,27 +14,23 @@
 #include <chrono>
 #include <filesystem>
 #include <optional>
-#include <span>
 #include <string>
-#include <string_view>
 #include <vector>
 #include <thread>
 
 namespace {
-// One folder of replacements: the built-in set, or the user's pack over it.
+// One folder of replacements: the built-in one, or the user's pack over it.
 struct Layer {
   const char* label;
   int32_t priority;
   std::string root{};
-  // Served from the executable's built-in set (PortEmbedded) instead of `root`.
-  bool embedded = false;
   aurora::texture::ReplacementGroup group{};
   // The folder the registrations came from; empty when nothing is loaded.
   std::filesystem::path dir{};
   bool loaded = false;
 };
 
-// The user's pack sits above the built-in set but below the binding icons
+// The user's pack sits above the built-in folder but below the binding icons
 // (PortPrompts registers those at priority 2): a remapped action should still
 // show the key or button it is bound to, whatever art the pack has for it.
 Layer sBuiltIn{"built-in", 0};
@@ -43,6 +38,9 @@ Layer sUser{"user", 1};
 std::string sDevice = "keyboard";
 std::atomic<bool> sUserPending{false};
 std::atomic<bool> sUserRemove{false};
+// Asked for by SetUserPackEnabled, and what Poll last applied.
+std::atomic<bool> sUserEnabled{true};
+bool sUserOn = true;
 
 // Every name DeviceDirForType can return; used to tell a device-pack root from
 // a single device-agnostic pack.
@@ -108,56 +106,8 @@ void Unload(Layer& layer) {
   }
 }
 
-// Serves an embedded file to Aurora's worker threads. A mip sidecar Aurora probes
-// for is simply absent from the table.
-bool ReadEmbedded(void*, const char* path, std::vector<uint8_t>& out) {
-  const std::span<const uint8_t> bytes = PortEmbedded::Find(path);
-  out.assign(bytes.begin(), bytes.end());
-  return !bytes.empty();
-}
-
-// The embedded counterpart of ResolveDirectory plus load_replacement_directory:
-// the device's folder in the built-in set, registered file by file. A device with
-// no folder loads nothing, as with a pack on disk that has device folders.
-void LoadEmbedded(Layer& layer, bool force) {
-  const std::string dir = "textures/" + sDevice + "/";
-  const std::span<const PortEmbedded::Entry> entries = PortEmbedded::Under(dir);
-  if (entries.empty()) {
-    Unload(layer);
-    PortLog::Write("metroid_prime_port: no %s texture replacements for device '%s'\n", layer.label,
-                   sDevice.c_str());
-    return;
-  }
-  if (!force && layer.loaded && layer.dir == dir) {
-    return;
-  }
-  Unload(layer);
-  const aurora::texture::ReplacementOptions options{.priority = layer.priority};
-  for (const PortEmbedded::Entry& entry : entries) {
-    const std::string_view path = entry.path;
-    const std::string_view name = path.substr(path.rfind('/') + 1);
-    const auto key = aurora::texture::parse_replacement_filename(name);
-    if (!key.has_value()) {
-      continue;
-    }
-    const aurora::texture::ReplacementRegistration reg = aurora::texture::register_virtual_replacement(
-        path, aurora::texture::VirtualFileSource{&ReadEmbedded, nullptr}, options);
-    if (reg.id != 0) {
-      layer.group.registrations.push_back(reg);
-    }
-  }
-  layer.dir = dir;
-  layer.loaded = true;
-  PortLog::Write("metroid_prime_port: loaded %zu %s texture replacements built into the executable (device: %s)\n",
-                 layer.group.registrations.size(), layer.label, sDevice.c_str());
-}
-
 // force rescans a folder that is already loaded, for a pack whose files changed.
 void Load(Layer& layer, bool force) {
-  if (layer.embedded) {
-    LoadEmbedded(layer, force);
-    return;
-  }
   if (layer.root.empty()) {
     return;
   }
@@ -308,25 +258,39 @@ void ApplyPendingUserPack() {
     DeleteInBackground(old);
   }
 }
+
+void LoadUser(bool force) {
+  if (sUserOn) {
+    Load(sUser, force);
+  }
+}
 } // namespace
 
 namespace PortTextures {
 void Initialize(const char* root, const char* userRoot) {
   sBuiltIn.root = root != nullptr ? root : "";
-  // No folder given and the executable carries its own set: use that.
-  sBuiltIn.embedded = sBuiltIn.root.empty() && !PortEmbedded::Under("textures/").empty();
   sUser.root = userRoot != nullptr ? userRoot : "";
   sDevice = ResolveDeviceName();
+  sUserOn = sUserEnabled.load(std::memory_order_acquire);
   DeleteStaleUserPacks();
   ApplyPendingUserPack();
   Load(sBuiltIn, true);
-  Load(sUser, true);
+  LoadUser(true);
 }
 
 void Poll() {
   if (sUserPending.exchange(false, std::memory_order_acq_rel)) {
     ApplyPendingUserPack();
-    Load(sUser, true);
+    LoadUser(true);
+  }
+  if (const bool on = sUserEnabled.load(std::memory_order_acquire); on != sUserOn) {
+    sUserOn = on;
+    if (on) {
+      Load(sUser, true);
+    } else {
+      Unload(sUser);
+    }
+    PortLog::Write("metroid_prime_port: user texture pack %s\n", on ? "on" : "off");
   }
   const char* device = ResolveDeviceName();
   if (sDevice == device) {
@@ -335,7 +299,7 @@ void Poll() {
   sDevice = device;
   const uint64_t startNs = SDL_GetTicksNS();
   Load(sBuiltIn, false);
-  Load(sUser, false);
+  LoadUser(false);
   PortLog::Write("metroid_prime_port: switched the texture set to '%s' in %llu ms\n", device,
                  static_cast<unsigned long long>((SDL_GetTicksNS() - startNs) / 1000000ull));
 }
@@ -346,6 +310,10 @@ void RequestUserPackRemoval() {
   sUserRemove.store(true, std::memory_order_release);
   sUserPending.store(true, std::memory_order_release);
 }
+
+void SetUserPackEnabled(bool enabled) { sUserEnabled.store(enabled, std::memory_order_release); }
+
+bool UserPackEnabled() { return sUserEnabled.load(std::memory_order_acquire); }
 
 const char* UserRoot() { return sUser.root.c_str(); }
 

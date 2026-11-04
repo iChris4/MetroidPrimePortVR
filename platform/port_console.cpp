@@ -36,6 +36,7 @@
 #include "port_room_liquid.h"
 #include "port_console.h"
 #include "port_controls.h"
+#include "port_input_user_presets.h"
 #include "port_mods.h"
 #include "port_savestate.h"
 #include "port_statedump.h"
@@ -957,6 +958,9 @@ void CmdGive(CStateManager& mgr, bool take) {
   if (type == CPlayerState::kIT_EnergyTanks) {
     ps.HealthInfo()->SetHP(ps.CalculateHealth());
   }
+  if (type >= CPlayerState::kIT_Truth && type <= CPlayerState::kIT_Newborn) {
+    PortDebug::SyncTempleTotems(mgr, ps);
+  }
   Out("%s: %d/%d", kItemNames[item], ps.GetItemAmount(type), ps.GetItemCapacity(type));
   Finish();
 }
@@ -1209,6 +1213,26 @@ void CmdFxQuery() {
       Out("  %08X u%u PART %08X %s %s, %zu variable(s) set", s.eid, unsigned(s.uid), s.part,
           !alive ? "gone" : ent->GetActive() ? "active" : "inactive", s.name.c_str(), s.vars);
     }
+  } else if (sub == "barrier") {
+    // The Parasite Queen barrier group (port_queen_barrier.h), from each live ring controller.
+    const CStateManager* const mgr = PortDebug::StateManager();
+    if (mgr == nullptr) {
+      return Finish("no game");
+    }
+    const CObjectList& list = mgr->GetObjectListById(kOL_All);
+    size_t found = 0;
+    for (int i = list.GetFirstObjectIndex(); i != -1; i = list.GetNextObjectIndex(i)) {
+      const CScriptSpecialFunction* const func = TCastToConstPtr< CScriptSpecialFunction >(list[i]);
+      if (func == nullptr || func->PortFunction() != CScriptSpecialFunction::kSF_IntroBossRingController) {
+        continue;
+      }
+      ++found;
+      Out("fx barrier u%u %s: %s", unsigned(func->GetUniqueId().Value()), func->GetActive() ? "active" : "inactive",
+          func->PortDescribeBarrier().c_str());
+    }
+    if (found == 0) {
+      Out("fx barrier: no ring controller here");
+    }
   } else if (sub == "mute" || sub == "solo") {
     const std::string arg = sCmd.args.size() > 2 ? Lower(sCmd.args[2]) : "";
     if (arg == "clear" || (sub == "mute" && arg.empty())) {
@@ -1297,6 +1321,41 @@ void CmdKill(CStateManager& mgr) {
     damage = static_cast< float >(std::atof(sCmd.args[2].c_str()));
   }
   mgr.ApplyLocalDamage(actor->GetTranslation(), dir, *actor, damage, CWeaponMode::Power());
+  Finish();
+}
+
+// Freezes an enemy as an Ice Beam hit whose knockback freezes does (CPatterned::Freeze, hit
+// from the player's side), for looking at the frozen draw without having to land the shot.
+void CmdFreeze(CStateManager& mgr) {
+  if (sCmd.args.size() < 2) {
+    return Finish("usage: freeze <id>|target [seconds]");
+  }
+  CEntity* ent = nullptr;
+  if (Lower(sCmd.args[1]) == "target") {
+    const CPlayer* player = mgr.GetPlayer();
+    const TUniqueId target = player != nullptr ? player->GetOrbitTargetId() : kInvalidUniqueId;
+    if (target == kInvalidUniqueId) {
+      return Finish("nothing is locked on");
+    }
+    ent = const_cast< CEntity* >(mgr.GetObjectById(target));
+  } else {
+    ent = FindObject(mgr, sCmd.args[1]);
+  }
+  CPatterned* patterned = TCastToPtr< CPatterned >(ent);
+  if (patterned == nullptr) {
+    return Finish("not an enemy");
+  }
+  float duration = 10.f;
+  if (sCmd.args.size() > 2) {
+    duration = static_cast< float >(std::atof(sCmd.args[2].c_str()));
+  }
+  CVector3f dir = patterned->GetTranslation() - mgr.GetPlayer()->GetTranslation();
+  if (dir.CanBeNormalized()) {
+    dir.Normalize();
+  } else {
+    dir = patterned->GetTransform().GetForward();
+  }
+  patterned->Freeze(mgr, patterned->GetTranslation(), CUnitVector3f(dir), duration);
   Finish();
 }
 
@@ -1400,6 +1459,42 @@ void CmdGod() {
   Finish();
 }
 
+void CmdInfAmmo() {
+  // infammo [all|missile|powerbomb] [0|1]: no state prints each kind's.
+  unsigned kinds = PortDebug::kInfAmmoAll;
+  size_t next = 1;
+  if (sCmd.args.size() > next) {
+    const std::string kind = Lower(sCmd.args[next]);
+    if (kind == "all") {
+      ++next;
+    } else if (kind == "missile" || kind == "missiles") {
+      kinds = PortDebug::kInfAmmoMissile;
+      ++next;
+    } else if (kind == "powerbomb" || kind == "powerbombs") {
+      kinds = PortDebug::kInfAmmoPowerBomb;
+      ++next;
+    }
+  }
+  if (sCmd.args.size() > next + 1) {
+    return Finish("usage: infammo [all|missile|powerbomb] [0|1]");
+  }
+  if (sCmd.args.size() == next + 1) {
+    const std::string arg = Lower(sCmd.args[next]);
+    if (arg != "0" && arg != "1" && arg != "on" && arg != "off") {
+      return Finish("usage: infammo [all|missile|powerbomb] [0|1]");
+    }
+    PortDebug::SetInfiniteAmmo(kinds, arg == "1" || arg == "on");
+  }
+  const unsigned set = PortDebug::InfiniteAmmoSet();
+  std::string line = std::string("infammo missile ") + ((set & PortDebug::kInfAmmoMissile) ? "1" : "0") +
+                     " powerbomb " + ((set & PortDebug::kInfAmmoPowerBomb) ? "1" : "0");
+  if (set != 0 && !PortDebug::InfiniteAmmo(set)) {
+    line += " (refused: Original experience or Archipelago)";
+  }
+  Out("%s", line.c_str());
+  Finish();
+}
+
 void CmdHint() {
   if (sCmd.args.size() < 2 || Lower(sCmd.args[1]) != "show") {
     return Finish("usage: hint show");
@@ -1409,7 +1504,13 @@ void CmdHint() {
   Finish();
 }
 
-void CmdMemo() {
+void CmdMemo(CStateManager& mgr) {
+  uint32_t strg = 0;
+  if (sCmd.args.size() == 3 && sCmd.args[1] == "pause" && ParseHex(sCmd.args[2], strg)) {
+    // The boxed memo a paused HUDMemo shows, as for "Map data acquired" (CMessageScreen).
+    mgr.ShowPausedHUDMemo(CAssetId(strg), 0.f);
+    return Finish();
+  }
   std::wstring wide;
   for (size_t i = 1; i < sCmd.args.size(); ++i) {
     if (i > 1) {
@@ -2031,7 +2132,7 @@ void CmdCollDump() {
 void CmdThirdPerson() {
   static const char* const usage =
       "usage: thirdperson [on|off] [distance <m>] [shoulder <m>] [height <m>] [clips] [feet] "
-      "[clip <name>|off [phase [yaw]]]";
+      "[clip <name>|off [phase [yaw]]] [backwalk procedural|struggle|reverse]";
   for (size_t i = 1; i < sCmd.args.size(); ++i) {
     const std::string arg = Lower(sCmd.args[i]);
     float number = 0.f;
@@ -2040,6 +2141,14 @@ void CmdThirdPerson() {
     } else if (arg == "feet") {
       sCmd.out += PortThirdPersonBody::DescribeFeet();
       return Finish();
+    } else if (arg == "backwalk" && i + 1 < sCmd.args.size()) {
+      const std::string mode = Lower(sCmd.args[++i]);
+      if (mode != "struggle" && mode != "reverse" && mode != "procedural") {
+        return Finish(usage);
+      }
+      PortThirdPersonBody::SetBackWalk(mode == "struggle"  ? PortThirdPersonBody::BackWalk::Struggle
+                                       : mode == "reverse" ? PortThirdPersonBody::BackWalk::Reverse
+                                                           : PortThirdPersonBody::BackWalk::Procedural);
     } else if (arg == "clips") {
       sCmd.out += PortThirdPersonBody::DescribeClips();
       return Finish();
@@ -2078,10 +2187,10 @@ void CmdThirdPerson() {
   Finish();
 }
 
-// freecam [on|off|freeze on|off|player on|off|speed <n>|pos <x> <y> <z>|look <yaw> <pitch>]
+// freecam [on|off|freeze on|off|player on|off|drive on|off|speed <n>|pos <x> <y> <z>|look <yaw> <pitch>]
 void CmdFreeCam() {
   static const char* const usage =
-      "usage: freecam [on|off|freeze on|off|player on|off|speed <n>|pos <x> <y> <z>|look <yaw> <pitch>]";
+      "usage: freecam [on|off|freeze on|off|player on|off|drive on|off|speed <n>|pos <x> <y> <z>|look <yaw> <pitch>]";
   const CStateManager* mgr = PortDebug::StateManager();
   if (sCmd.args.size() > 1) {
     const std::string arg = Lower(sCmd.args[1]);
@@ -2097,6 +2206,8 @@ void CmdFreeCam() {
       PortFreeCam::SetFrozen(value == "on");
     } else if (arg == "player" && (value == "on" || value == "off")) {
       PortFreeCam::SetShowPlayer(value == "on");
+    } else if (arg == "drive" && (value == "on" || value == "off")) {
+      PortFreeCam::SetDrive(value == "on");
     } else if (arg == "speed" && sCmd.args.size() > 2 && ParseFloat(sCmd.args[2], number)) {
       PortFreeCam::SetSpeed(number);
     } else if (arg == "pos" && sCmd.args.size() > 4 && ParseFloat(sCmd.args[2], pose.x) &&
@@ -2281,18 +2392,45 @@ void CmdOriginal() {
   Finish();
 }
 
+// The words from args[first] on, as one name.
+std::string PresetNameArg(size_t first) {
+  std::string name;
+  for (size_t i = first; i < sCmd.args.size(); ++i) name += (name.empty() ? "" : " ") + sCmd.args[i];
+  return name;
+}
+
+// A saved preset (Remap > My presets...) of that name, matched case-insensitively.
+bool ApplySavedPreset(PortInput::Family family) {
+  const std::string name = PresetNameArg(1);
+  return !name.empty() && PortInputUserPresets::Apply(family, name);
+}
+
+void SavePreset(PortInput::Family family) {
+  const std::string name = PresetNameArg(2);
+  if (name.empty()) return Finish("usage: keypreset|padpreset save <name>");
+  if (!PortInputUserPresets::Save(family, name)) {
+    return Finish(family == PortInput::Family::Pad && PADGetIndexForPort(PAD_CHAN0) < 0
+                      ? "no controller in port 1 to save"
+                      : "could not save the preset");
+  }
+  Out("saved preset %s", PortInputUserPresets::CleanName(name).c_str());
+  Finish();
+}
+
 void CmdKeyPreset() {
   const std::string preset = sCmd.args.size() > 1 ? Lower(sCmd.args[1]) : "";
-  if (!PortControls::ApplyKeyPresetNamed(preset)) {
-    return Finish("usage: keypreset classic|mouse");
+  if (preset == "save") return SavePreset(PortInput::Family::Keyboard);
+  if (!PortControls::ApplyKeyPresetNamed(preset) && !ApplySavedPreset(PortInput::Family::Keyboard)) {
+    return Finish("usage: keypreset classic|mouse|<saved preset name>|save <name>");
   }
   Finish();
 }
 
 void CmdPadPreset() {
   const std::string preset = sCmd.args.size() > 1 ? Lower(sCmd.args[1]) : "";
-  if (!PortControls::ApplyPadPresetNamed(preset)) {
-    return Finish("usage: padpreset gamecube|remastered|modern|southpaw");
+  if (preset == "save") return SavePreset(PortInput::Family::Pad);
+  if (!PortControls::ApplyPadPresetNamed(preset) && !ApplySavedPreset(PortInput::Family::Pad)) {
+    return Finish("usage: padpreset gamecube|remastered|modern|southpaw|<saved preset name>|save <name>");
   }
   Finish();
 }
@@ -2552,6 +2690,27 @@ void CmdStackBeams() {
     PortDebug::SetStackBeams(v == "1");
   }
   Out(PortDebug::StackBeams() ? "stackbeams 1" : "stackbeams 0");
+  Finish();
+}
+
+void CmdAimLockOn() {
+  if (sCmd.args.size() > 1) {
+    const std::string& v = sCmd.args[1];
+    if (v != "0" && v != "1") {
+      return Finish("usage: aimlockon [0|1]");
+    }
+    PortDebug::SetAimLockOn(v == "1");
+  }
+  Out(PortDebug::AimLockOn() ? "aimlockon 1" : "aimlockon 0");
+  Finish();
+}
+
+// As the Dodge action's press: the player takes it within its window, on the
+// ground while strafing (hold one with `press sx:<n>`).
+void CmdDodge() {
+  PortDebug::RequestDodge();
+  Out(PortDebug::OriginalExperience() ? "dodge requested (off under original experience)"
+                                      : "dodge requested");
   Finish();
 }
 
@@ -3281,7 +3440,7 @@ void CmdRoomGeo() {
       if (sCmd.args.size() > 2) {
         GXPortSetPerformance(u32(std::strtoul(sCmd.args[2].c_str(), nullptr, 0)));
       }
-      Out("performance shortcuts: 0x%x (glass 0x1, measure 0x2, fog 0x4, gun 0x8; 0 exact)",
+      Out("performance shortcuts: 0x%x (glass 0x1, measure 0x2, fog 0x4, gun 0x8, lod 0x10; 0 exact)",
           unsigned(GXPortGetPerformance()));
       return Finish();
     } else if (arg == "script") {
@@ -3751,6 +3910,14 @@ void CmdRando() {
     if (!PortAp::PlaySolo(sCmd.args[2], error))
       return Finish(error.c_str());
     Out("playing seed %s", sCmd.args[2].c_str());
+  } else if (action == "off" && sCmd.args.size() == 2) {
+    if (PortAp::SoloSeedInPlay().empty())
+      return Finish("no seed is being played");
+    if (PortDebug::StateManager() != nullptr)
+      return Finish("quit to the title screen to go back to the normal game");
+    if (!PortAp::Disconnect(error))
+      return Finish(error.c_str());
+    Out("playing the normal game");
   } else if (action == "delete" && sCmd.args.size() == 3) {
     if (!PortAp::DeleteSolo(sCmd.args[2], error))
       return Finish(error.c_str());
@@ -3764,7 +3931,7 @@ void CmdRando() {
         Out("%s", file.substr(0, file.size() - 5).c_str());
     }
   } else {
-    return Finish("usage: rando [gen [seedtext] | play <name> | delete <name> | list]");
+    return Finish("usage: rando [gen [seedtext] | play <name> | off | delete <name> | list]");
   }
   Finish();
 }
@@ -4007,7 +4174,7 @@ struct CommandSpec {
 // fx's queries, which read the particle debug state rather than the world.
 bool FxIsQuery() {
   if (sCmd.args.size() > 1) {
-    static const char* const queries[] = {"list", "tree", "stats", "addons", "mute", "solo", "timescale"};
+    static const char* const queries[] = {"list", "tree", "stats", "addons", "barrier", "mute", "solo", "timescale"};
     for (const char* q : queries) {
       if (Lower(sCmd.args[1]) == q) {
         return true;
@@ -4037,6 +4204,7 @@ const CommandSpec kCommands[] = {
      "fx tree <#id>              one generator and its children, recursively\n"
      "fx stats                   live generators, vfx quads/triangles and CPU ms (update, render) last frame\n"
      "fx addons                  this area's Remastered effect actors a mod added, and the retail ones they replace\n"
+     "fx barrier                 the Parasite Queen barrier group: state, ring state, per-ring motion\n"
      "fx mute <asset>|clear|list  hide a PART/SWHC/ELSC asset (it still updates); fx solo <asset|#id> hides the rest\n"
      "fx timescale <s>           particle time scale (0 freezes particles only; 1 = off)",
      FxIsQuery},
@@ -4063,6 +4231,8 @@ const CommandSpec kCommands[] = {
     {"kill", nullptr, CmdKill,
      "kill <id>|target [damage]  kill an actor as with a last Power Beam shot (bosses too);\n"
      "                           target: the enemy the player is locked on to"},
+    {"freeze", nullptr, CmdFreeze,
+     "freeze <id>|target [s]     freeze an enemy as an Ice Beam hit does, for s seconds (default 10)"},
     {"phazongun", CmdPhazonGun, nullptr,
      "phazongun [off]            let the arm cannon fire the Phazon Beam (off: stop)"},
     {"hurt", nullptr, [](CStateManager&) { CmdHurt(sCmd.args.size() > 1 ? sCmd.args[1] : std::string()); },
@@ -4070,10 +4240,12 @@ const CommandSpec kCommands[] = {
     {"die", nullptr, CmdDie, ""},
     {"god", nullptr, [](CStateManager&) { CmdGod(); },
      "god [on|off]               the player takes no damage (no argument: show)"},
+    {"infammo", nullptr, [](CStateManager&) { CmdInfAmmo(); },
+     "infammo [all|missile|powerbomb] [0|1]  firing uses no ammo, the HUD shows infinity (no state: show)"},
     {"hint", nullptr, [](CStateManager&) { CmdHint(); },
      "hint show                  show the hint the game would show next"},
-    {"memo", nullptr, [](CStateManager&) { CmdMemo(); },
-     "memo <text>                show text as a HUD message"},
+    {"memo", nullptr, [](CStateManager& mgr) { CmdMemo(mgr); },
+     "memo <text> | pause <strg> show text as a HUD message, or a string table as the boxed one"},
     {"strg", nullptr, [](CStateManager&) { CmdStrg(); },
      "strg <id> [index]          a string table as the game loads it (mods included)"},
     {"language", nullptr, [](CStateManager&) { CmdLanguage(); },
@@ -4112,9 +4284,9 @@ const CommandSpec kCommands[] = {
     {"shadow", CmdShadow, nullptr,
      "shadow [casters on|off]   the sun's shadow map last frame: direction, colour, box, casters, and the room's suns"},
     {"roomgeo", nullptr, nullptr,
-     "roomgeo perf [mask]       performance-mode shortcuts (bits: 1 glass every 2nd frame, 2 quarter-size measure, 4 blended fog;\n"
-     "                          0 exact); no mask prints them\n"
-     "roomgeo costtest <n>      PBR shading cost test: 0 off, 1 flat, 2 no lights, 3 no volume, 4 no cube, 5 no normal maps, 6 no ORM/emissive, 7 maps only, 8 no aniso, 9 no aniso or mip blend, 10 no post-processing, 11 no screen copies"},
+     "roomgeo perf [mask]       performance-mode shortcuts (bits: 1 glass every 2nd frame, 2 quarter-size measure, 4 blended fog,\n"
+     "                          8 gun depth first, 16 half LOD distance; 0 exact); no mask prints them\n"
+     "roomgeo costtest <n>      PBR shading cost test: 0 off, 1 flat, 2 no lights, 3 no volume, 4 no cube, 5 no normal maps, 6 no ORM/emissive, 7 maps only, 8 no aniso, 9 no aniso or mip blend, 10 no post-processing, 11 no screen copies, 16 volume reads fixed"},
     {"gpuselftest", CmdGpuSelfTest, nullptr,
      "gpuselftest               render known patterns offscreen, compare the readback, log PASS/FAIL per case"},
     {"gputimes", CmdGpuTimes, nullptr,
@@ -4180,10 +4352,10 @@ const CommandSpec kCommands[] = {
     {"mappan", CmdMapPan, nullptr,
      "mappan <dx> <dy> [hold s]   drag the open map screen by dx,dy dp (view height 400 dp); finger down for hold s (0.25)"},
     {"freecam", CmdFreeCam, nullptr,
-     "freecam [on|off|freeze on|off|player on|off|speed <n>|pos <x> <y> <z>|look <yaw> <pitch>]\n"
+     "freecam [on|off|freeze on|off|player on|off|drive on|off|speed <n>|pos <x> <y> <z>|look <yaw> <pitch>]\n"
      "                           fly the view away from the player (HUD hidden; freeze holds the game still)"},
     {"thirdperson", CmdThirdPerson, nullptr,
-     "thirdperson [on|off] [distance <m>] [shoulder <m>] [height <m>] [clips] [feet] [clip <name>|off [phase [yaw]]]\n"
+     "thirdperson [on|off] [distance <m>] [shoulder <m>] [height <m>] [clips] [feet] [clip <name>|off [phase [yaw]]] [backwalk procedural|struggle|reverse]\n"
      "                           third-person gameplay camera (also third_person* settings)"},
     {"photo", nullptr, CmdPhoto,
      "photo [on|off|capture [1|2|4]|fov <n>|roll <n>|samus on|off|panel on|off|super 1|2|4|speed <n>]\n"
@@ -4193,9 +4365,9 @@ const CommandSpec kCommands[] = {
     {"original", CmdOriginal, nullptr,
      "original [on|off]   Original experience (retail settings over the saved ones)"},
     {"keypreset", CmdKeyPreset, nullptr,
-     "keypreset classic|mouse   apply a keyboard preset (Controls > Remap), as its button"},
+     "keypreset classic|mouse|<saved name>|save <name>   apply or save a keyboard preset (Controls > Remap)"},
     {"padpreset", CmdPadPreset, nullptr,
-     "padpreset gamecube|remastered|modern|southpaw   apply a controller preset to pad 1"},
+     "padpreset gamecube|remastered|modern|southpaw|<saved name>|save <name>   apply or save a controller preset"},
     {"fov", CmdFov, nullptr, "fov <45..120>              first-person vertical FOV, as the Options row does"},
     {"gunoffset", CmdGunOffset, nullptr,
      "gunoffset <r> <f> <u>      arm cannon offset in metres (+-1), as the Video row does"},
@@ -4242,6 +4414,10 @@ const CommandSpec kCommands[] = {
      "mapui [0|1]                 the map's extra legend entries and the Mark room prompt"},
     {"stackbeams", CmdStackBeams, nullptr,
      "stackbeams [0|1]           every shot also fires the other owned beams' projectiles (stack_beams)"},
+    {"aimlockon", CmdAimLockOn, nullptr,
+     "aimlockon [0|1]            lock-on picks the target nearest the crosshair (aim_lock_on)"},
+    {"dodge", CmdDodge, nullptr,
+     "dodge                      a Dodge press (sideways dash, locked on or not; needs a strafe held)"},
     {"radial", CmdRadial, nullptr,
      "radial [beam|visor [x y] | release]  holds a radial menu with its selection (x right, y up); radial_menus"},
     {"walkspeed", CmdWalkSpeed, nullptr,
@@ -4275,7 +4451,7 @@ const CommandSpec kCommands[] = {
     {"ap", CmdAp, nullptr,
      "ap [connect <server> <slot> [password] | disconnect | recent | resume <n> | say <text> | chat]   Archipelago, as the F1 Archipelago page does"},
     {"rando", CmdRando, nullptr,
-     "rando [gen [seedtext] | play <name> | delete <name> | list]  the built-in randomizer's seeds"},
+     "rando [gen [seedtext] | play <name> | off | delete <name> | list]  the built-in randomizer's seeds"},
     {"help", CmdHelp, nullptr, "help                       this list"},
     {"quit", CmdQuit, nullptr, "quit                       exit the game"},
     {"title", CmdTitle, nullptr, "title                      quit the game to the title screen"},

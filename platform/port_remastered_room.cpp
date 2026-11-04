@@ -240,8 +240,8 @@ private:
   void ReadSuns(const RoomData& r, const SceneryScripts& scripts, const Mat34& xf, std::vector<SunData>& out) const;
   void ReadPointLights(const RoomData& r, const SceneryScripts& scripts, const Mat34& xf,
                        std::vector<PointLightData>& out) const;
-  bool Grid(const RoomPak& rp, const Vec3& shift, const std::vector<Vec3>& check, std::vector<uint8_t>& out,
-            std::string& note) const;
+  bool Grid(const RoomPak& rp, const Id16& id, const Vec3& shift, const std::vector<Vec3>& check,
+            std::vector<uint8_t>& out, std::string& note) const;
   // Tells RoomIO::retailModel where the room's retail models stand (RetailPlacement), and
   // keeps the entities that placed one in m_retailEntities, for WriteGeometry to leave out.
   void PairRetailModels(const RoomData& r, const Area& area);
@@ -261,8 +261,8 @@ private:
   std::string WriteRoom(const RoomData& r, const std::map<std::string, Placement>& placed, const Vec3& shift,
                         const float tonemap[5], const BloomData& bloom, const std::vector<GradeData>& worldGrades,
                         const std::vector<BacklightData>& worldBacklights, const std::vector<FogData>& worldFogs,
-                        const std::vector<PortRoomEnv::WorldVolume>& worldVolumes, const Match& m, int& written,
-                        std::string& matched);
+                        const std::vector<PortRoomEnv::WorldVolume>& worldVolumes, const SceneryScripts& master,
+                        const Match& m, int& written, std::string& matched);
 
   const RoomPak& m_master;
   const std::vector<RoomPak>& m_rooms;
@@ -1527,18 +1527,17 @@ bool ReadGridTextures(const std::vector<uint8_t>& d, const std::function<bool(co
 // of such tiles: each loaded area registers its own copy of every tile it bakes, and which
 // copy is mapped depends on the load order (see port_room_env_tiles.h), so the runtime
 // decides that, and nothing here borrows from a neighbour.
-bool Writer::Grid(const RoomPak& rp, const Vec3& shift, const std::vector<Vec3>& check, std::vector<uint8_t>& out,
-                  std::string& note) const {
+// The LTPB is the one the ROOM's BLIT names: 25 rooms keep theirs in the world's master pak.
+bool Writer::Grid(const RoomPak& rp, const Id16& id, const Vec3& shift, const std::vector<Vec3>& check,
+                  std::vector<uint8_t>& out, std::string& note) const {
   out.clear();
   std::vector<uint8_t> d;
-  const PakAsset* asset = rp.pak != nullptr ? FirstOfType(*rp.pak, FourCC("LTPB")) : nullptr;
-  if (asset == nullptr) {
+  if (id == Id16{}) {
     note = "no grid";
     return false;
   }
-  std::string error;
-  if (!rp.pak->ReadAsset(*asset, d, error)) {
-    note = "grid not decoded";
+  if (!FindResource(id.data(), FourCC("LTPB"), rp, d, nullptr, nullptr)) {
+    note = "grid not found";
     return false;
   }
   size_t phdr = std::string::npos;
@@ -2392,6 +2391,30 @@ void Writer::WriteGeometry(const RoomData& r, uint32_t mrea, const Area& area) {
     }
     return lo[0] <= hi[0];
   };
+  // Whether a model draws a Chozo Lore sheet (9D53CF06, ChozoLore_Mat_B): the glow over the lore
+  // statues, which Remastered places as an actor of its own model where retail has its "Chozo Lore
+  // Glow" actor, unmarked as added. It stands in for that actor like a synthetic-model one.
+  std::map<Id16, bool> loreSheets;
+  auto loreSheet = [&](const uint8_t* id) {
+    const Id16 key = SwapUuid(id);
+    if (const auto found = loreSheets.find(key); found != loreSheets.end()) {
+      return found->second;
+    }
+    std::vector<uint8_t> data;
+    PortRemastered::Model cmdl;
+    std::string error;
+    bool lore = false;
+    if (FindResource(id, FourCC("CMDL"), home, data, nullptr, nullptr) &&
+        PortRemastered::ParseModel(data.data(), data.size(), cmdl, error)) {
+      lore = std::any_of(cmdl.materials.begin(), cmdl.materials.end(), [](const PortRemastered::ModelMaterial& m) {
+        uint8_t sid[4];
+        std::memcpy(sid, &m.shaderId, 4);
+        return ReadBE32(sid) == kShaderChozoLoreSheet;
+      });
+    }
+    loreSheets.emplace(key, lore);
+    return lore;
+  };
   // Whether a static model's bounds hold its origin, give or take half a metre.
   auto aroundOrigin = [&](const uint8_t* id) {
     Vec3 lo, hi;
@@ -2445,6 +2468,7 @@ void Writer::WriteGeometry(const RoomData& r, uint32_t mrea, const Area& area) {
   struct Standin {
     uint32_t instance;
     Vec3 pos, lo, hi;
+    bool lore;
   };
   std::vector<Standin> standins;
   std::vector<const Component*> renderActors = r.room.Of(kActorMP1);
@@ -2461,10 +2485,34 @@ void Writer::WriteGeometry(const RoomData& r, uint32_t mrea, const Area& area) {
                          chprProp.size == 16 && r.room.Nested(*c, {animProperty, kPropAnimName}, nameProp) &&
                          nameProp.size == 8;
     Vec3 pos, rot, scale;
-    const bool synthetic = hasModel && m_syntheticEntities.count(c->entity) != 0;
+    const bool synthetic = hasModel && (m_syntheticEntities.count(c->entity) != 0 ||
+                                        (!isPlatform && std::memcmp(r.room.Bytes(prop->second), kRetailIdPrefix, 12) != 0 &&
+                                         loreSheet(r.room.Bytes(prop->second))));
     if ((!isPlatform && f.find(kPropActorAdded) == f.end() && !synthetic) || (!hasModel && !hasAnim) ||
         !r.room.Xform(*c, pos, rot, scale)) {
       continue;
+    }
+    if (isPlatform) {
+      // A platform is a retail Platform that moves and collides as its script drives it.
+      // Its Remastered model is drawn only riding that Platform (`platformTransform`) or one it
+      // is attached to (`platform`); unbound, it would stand frozen at its placed pose while
+      // retail's moves. One that plays an animation (Monitor Station's spinner bridge) is left
+      // to retail too: drawn here it would loop the clip from area load, unbound to that state
+      // and without collision.
+      Span character;
+      const bool animates = r.room.Nested(*c, {animProperty, kPropAnimCharacter}, character) && character.size == 16 &&
+                            std::any_of(r.room.Bytes(character), r.room.Bytes(character) + 16, [](uint8_t b) { return b != 0; });
+      const auto bound = scripts.platformTransform.find(c->entity);
+      const bool rides = (bound != scripts.platformTransform.end() && bound->second->hasXf) ||
+                         scripts.platform.count(c->entity) != 0;
+      if (animates || !rides) {
+        if (hasModel) {
+          Log("  " + r.name + (animates ? ": a platform with a model plays an animation"
+                                        : ": a platform matched no retail Platform") + "; retail draws it");
+        }
+        ++retailDrawn;
+        continue;
+      }
     }
     const bool active = r.room.Active(*c);
     PortRoomGeo::Instance::Driver driver;
@@ -2587,6 +2635,7 @@ void Writer::WriteGeometry(const RoomData& r, uint32_t mrea, const Area& area) {
     if (Vec3 lo, hi; synthetic && modelBounds(r.room.Bytes(prop->second), lo, hi)) {
       Standin& s = standins.emplace_back();
       s.instance = uint32_t(instances.size() - 1);
+      s.lore = loreSheet(r.room.Bytes(prop->second));
       s.pos = Apply(area.xf, MulR2G(pos));
       s.lo = Vec3{HUGE_VAL, HUGE_VAL, HUGE_VAL};
       s.hi = Vec3{-HUGE_VAL, -HUGE_VAL, -HUGE_VAL};
@@ -2684,6 +2733,14 @@ void Writer::WriteGeometry(const RoomData& r, uint32_t mrea, const Area& area) {
   // covers (Central Dynamo's three grates under the wider centre one). Neither may draw a model
   // the room keeps under its retail id, nor (the dropped one) stand where any entity does.
   size_t standinHidden = 0;
+  auto inside = [](const Vec3& p, const Vec3& lo, const Vec3& hi, double margin) {
+    for (size_t k = 0; k < 3; ++k) {
+      if (!(p[k] >= lo[k] - margin && p[k] <= hi[k] + margin)) {
+        return false;
+      }
+    }
+    return true;
+  };
   if (!standins.empty()) {
     for (const ScriptObject& o : area.objects) {
       if (o.type != kRetailActor || !o.hasPos ||
@@ -2693,8 +2750,22 @@ void Writer::WriteGeometry(const RoomData& r, uint32_t mrea, const Area& area) {
           })) {
         continue;
       }
+      // A lore sheet's actor stands in for the retail "Chozo Lore Glow" actor (model 600D500E)
+      // over the same statue: the sheet is flat and set a little off retail's actor (a third of a
+      // metre in the Ruined Nursery), so the glow's origin need only lie by the sheet's box.
+      static constexpr uint8_t kLoreGlow[4] = {0x60, 0x0D, 0x50, 0x0E};
+      const bool loreGlow = std::search(o.props.begin(), o.props.end(), kLoreGlow, kLoreGlow + 4) != o.props.end();
       const Standin* by = nullptr;
       for (const Standin& s : standins) {
+        if (s.lore && loreGlow && inside(o.pos, s.lo, s.hi, kRetailActorNear)) {
+          by = &s;
+          break;
+        }
+      }
+      for (const Standin& s : standins) {
+        if (by != nullptr) {
+          break;
+        }
         if (MaxAbs(s.pos, o.pos) < kRetailActorNear) {
           by = &s;
           break;
@@ -2704,9 +2775,7 @@ void Writer::WriteGeometry(const RoomData& r, uint32_t mrea, const Area& area) {
             return MaxAbs(p, o.pos) < kRetailActorNear;
           })) {
         for (const Standin& s : standins) {
-          if (o.pos[0] >= s.lo[0] - kStandinMargin && o.pos[0] <= s.hi[0] + kStandinMargin &&
-              o.pos[1] >= s.lo[1] - kStandinMargin && o.pos[1] <= s.hi[1] + kStandinMargin &&
-              o.pos[2] >= s.lo[2] - kStandinMargin && o.pos[2] <= s.hi[2] + kStandinMargin) {
+          if (inside(o.pos, s.lo, s.hi, kStandinMargin)) {
             by = &s;
             break;
           }
@@ -2718,7 +2787,7 @@ void Writer::WriteGeometry(const RoomData& r, uint32_t mrea, const Area& area) {
       }
     }
   }
-  if (!m_syntheticEntities.empty()) {
+  if (!m_syntheticEntities.empty() || !standins.empty()) {
     Log("  " + r.name + ": " + std::to_string(standins.size()) + " of " + std::to_string(m_syntheticEntities.size()) +
         " Remastered stand-in actors drawn, " + std::to_string(standinHidden) + " retail actors hidden");
   }
@@ -3223,8 +3292,8 @@ std::string Writer::WriteRoom(const RoomData& r, const std::map<std::string, Pla
                               const float tonemap[5], const BloomData& worldBloom,
                               const std::vector<GradeData>& worldGrades,
                               const std::vector<BacklightData>& worldBacklights, const std::vector<FogData>& worldFogs,
-                              const std::vector<PortRoomEnv::WorldVolume>& worldVolumes, const Match& m, int& written,
-                              std::string& matched) {
+                              const std::vector<PortRoomEnv::WorldVolume>& worldVolumes,
+                              const SceneryScripts& master, const Match& m, int& written, std::string& matched) {
   matched.clear();
   char head[96];
   PairRetailModels(r, *m.area);
@@ -3376,7 +3445,7 @@ std::string Writer::WriteRoom(const RoomData& r, const std::map<std::string, Pla
   std::string gnote = "grid not placed";
   const auto it = placed.find(r.name);
   if (it != placed.end() && Distance(it->second.pos, {trans[0], trans[1], trans[2]}) < 0.5) {
-    Grid(RoomPak{r.name, r.pak}, shift, gdoors, grid, gnote);
+    Grid(RoomPak{r.name, r.pak}, r.room.Lighting().grid, shift, gdoors, grid, gnote);
   }
   const LightmapData& lightmap = Lightmap(r);
   const bool withLightmap = lightmap.ok && lightmap.lit != 0;
@@ -3385,7 +3454,7 @@ std::string Writer::WriteRoom(const RoomData& r, const std::map<std::string, Pla
   }
 
   std::vector<uint8_t> out = {'M', 'P', 'E', 'V'};
-  AppendLE32(out, 29);
+  AppendLE32(out, 33);
   float tone[5];
   std::copy(tonemap, tonemap + 5, tone);
   Tonemap(r, tone);
@@ -3690,6 +3759,102 @@ std::string Writer::WriteRoom(const RoomData& r, const std::map<std::string, Pla
       Log("  " + r.name + ": " + n);
     }
   }
+  AppendLE32(out, uint32_t(scripts.roomVolumes.size()));
+  for (const PortRoomEnv::RoomVolume& v : scripts.roomVolumes) {
+    for (const float* field : {v.centre, v.half}) {
+      for (int i = 0; i < 3; ++i) {
+        AppendLEFloat(out, field[i]);
+      }
+    }
+    for (float a : v.axes) {
+      AppendLEFloat(out, a);
+    }
+    out.push_back(v.detect);
+    out.insert(out.end(), 3, 0);
+    // Version 31: whether the trigger is active at load, and the script that switches it.
+    out.push_back(v.on ? 1 : 0);
+    out.insert(out.end(), 3, 0);
+    AppendLE32(out, uint32_t(v.links.size()));
+    for (const PortRoomEnv::GradeLink& link : v.links) {
+      // As CEntity sends it, no layer bits; a volume's own pseudo-sender is kept whole.
+      AppendLE32(out, PortRoomEnv::PseudoSender(link.sender) ? link.sender : link.sender & 0x3ffffff);
+      out.push_back(link.state);
+      out.push_back(link.action);
+      out.insert(out.end(), 2, 0);
+    }
+  }
+  if (!scripts.roomVolumes.empty()) {
+    std::string note = std::to_string(scripts.roomVolumes.size()) + " room trigger volume(s) switch hints";
+    for (size_t k = 0; k < scripts.roomVolumes.size(); ++k) {
+      const PortRoomEnv::RoomVolume& v = scripts.roomVolumes[k];
+      if (!v.on || !v.links.empty()) {
+        note += "; volume " + std::to_string(k) + (v.on ? " on" : " off at load");
+        for (const PortRoomEnv::GradeLink& link : v.links) {
+          char text[48];
+          std::snprintf(text, sizeof text, ", %s by %08X state %d",
+                        link.action == PortRoomGeo::kShow       ? "on"
+                        : link.action == PortRoomGeo::kHide     ? "off"
+                        : link.action == PortRoomGeo::kToggle   ? "toggle"
+                                                                : "?",
+                        PortRoomEnv::PseudoSender(link.sender) ? link.sender : link.sender & 0x3ffffff, link.state);
+          note += text;
+        }
+      }
+    }
+    Log("  " + r.name + ": " + note);
+  }
+  // Version 31: what each world volume detects, the world's variables, the modifiers the world's
+  // and this room's triggers fire, and the master's query branches.
+  AppendLE32(out, uint32_t(worldVolumes.size()));
+  for (const PortRoomEnv::WorldVolume& v : worldVolumes) {
+    out.push_back(v.detect);
+  }
+  AppendLE32(out, uint32_t(master.envVars.size()));
+  for (const PortRoomEnv::EnvVar& v : master.envVars) {
+    out.insert(out.end(), v.guid.begin(), v.guid.end());
+    AppendLE32(out, uint32_t(v.name.size()));
+    out.insert(out.end(), v.name.begin(), v.name.end());
+    AppendLE32(out, uint32_t(v.value));
+    AppendLE32(out, v.flags);
+    AppendLE32(out, uint32_t(v.min));
+    AppendLE32(out, uint32_t(v.max));
+  }
+  AppendLE32(out, uint32_t(master.envOps.size() + scripts.envOps.size()));
+  for (const std::vector<PortRoomEnv::EnvOp>* ops : {&master.envOps, &scripts.envOps}) {
+    for (const PortRoomEnv::EnvOp& op : *ops) {
+      AppendLE32(out, op.sender);
+      out.push_back(op.state);
+      out.push_back(op.op);
+      out.insert(out.end(), 2, 0);
+      AppendLE32(out, uint32_t(op.value));
+      out.insert(out.end(), op.var.begin(), op.var.end());
+    }
+  }
+  AppendLE32(out, uint32_t(master.envBranches.size()));
+  for (const PortRoomEnv::EnvBranch& b : master.envBranches) {
+    out.insert(out.end(), b.var.begin(), b.var.end());
+    out.push_back(b.relop);
+    out.push_back(b.flags);
+    out.insert(out.end(), 2, 0);
+    AppendLE32(out, uint32_t(b.value));
+    AppendLE32(out, b.query);
+  }
+  {
+    std::vector<std::string> notes;
+    const std::vector<IceDarkenerAtLoad> darkeners = IceDarkeners(r.room, notes);
+    AppendLE32(out, uint32_t(darkeners.size()));
+    for (const IceDarkenerAtLoad& d : darkeners) {
+      AppendLEFloat(out, d.factor);
+      AppendLEFloat(out, d.delay);
+    }
+    for (const std::string& n : notes) {
+      Log("  " + r.name + ": " + n);
+    }
+  }
+  if (!scripts.envOps.empty() || scripts.envUnresolved != 0) {
+    Log("  " + r.name + ": " + std::to_string(scripts.envOps.size()) + " environment variable op(s), " +
+        std::to_string(scripts.envUnresolved) + " modifier connection(s) not followed");
+  }
   if (!fogs.empty() || !regions.empty()) {
     Log("  " + r.name + ": " + std::to_string(fogs.size()) + " fog hint(s), " + std::to_string(regions.size()) +
         " fog region(s), " + std::to_string(transitions.size()) + " transition(s)");
@@ -3868,6 +4033,9 @@ bool Writer::Run(uint32_t mlvl, int& written, std::string& error) {
   Log("world: " + std::to_string(m_worldSkies.size()) + " sky model(s), " + std::to_string(grades.size()) + " grade(s), " + std::to_string(backlights.size()) +
       " backlight(s), " + std::to_string(fogs.size()) + " fog hint(s), " + std::to_string(volumes.size()) +
       " camera volume(s)");
+  Log("world: " + std::to_string(masterScripts.envVars.size()) + " environment variable(s), " +
+      std::to_string(masterScripts.envOps.size()) + " op(s), " + std::to_string(masterScripts.envBranches.size()) +
+      " query branch(es), " + std::to_string(masterScripts.envUnresolved) + " modifier connection(s) not followed");
   // Every room is matched before any is written: two rooms matching one area
   // would write the same files, so only the closer match (the first, on a tie)
   // is written and the other is logged as a clash.
@@ -3911,7 +4079,8 @@ bool Writer::Run(uint32_t mlvl, int& written, std::string& error) {
       continue;
     }
     std::string matched;
-    Log(WriteRoom(r, placed, shift, tonemap, bloom, grades, backlights, fogs, volumes, m, written, matched));
+    Log(WriteRoom(r, placed, shift, tonemap, bloom, grades, backlights, fogs, volumes, masterScripts, m, written,
+                  matched));
     if (!matched.empty()) {
       seen[matched] = r.name;
     }

@@ -63,6 +63,7 @@ bool Room::Parse(const std::vector<uint8_t>& data, std::string& error) {
   m_comps.clear();
   m_byGuid.clear();
   m_strings = {};
+  m_meta = {};
   m_listed.clear();
   m_blit = {};
   const std::vector<uint8_t>& d = data;
@@ -77,6 +78,16 @@ bool Room::Parse(const std::vector<uint8_t>& data, std::string& error) {
     return false;
   }
   const size_t re = rs + size_t(rsz);
+  // The world master's variables, in the form that follows the root one: one that does not read
+  // is left out.
+  {
+    std::vector<Span> meta;
+    std::string ignored;
+    const uint32_t pMeta[] = {FourCC("FOOT"), FourCC("META")};
+    if (Find(re, d.size(), pMeta, 2, meta, ignored) && !meta.empty()) {
+      m_meta = meta[0];
+    }
+  }
   std::vector<Span> sden, idta, layers, strp;
   const uint32_t pSden[] = {FourCC("SDTA"), FourCC("SDEN")}, pIdta[] = {FourCC("SDTA"), FourCC("IDTA")},
                  pLayr[] = {FourCC("LYRS"), FourCC("LAYR")}, pStrp[] = {FourCC("STRP")};
@@ -127,6 +138,10 @@ bool Room::Parse(const std::vector<uint8_t>& data, std::string& error) {
             v[k] = ReadLEFloat(b + at + 4 + 16 * i + 4 * k);
           }
           m_blit.lookups[g] = v;
+        }
+        const size_t g = at + 4 + 16 * m;
+        if ((m_blit.flags & 2) != 0 && size - g >= 16) {
+          std::memcpy(m_blit.grid.data(), b + g, 16);
         }
       }
     }

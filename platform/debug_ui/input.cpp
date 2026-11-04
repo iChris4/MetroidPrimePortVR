@@ -51,12 +51,17 @@ std::atomic<uint64_t> sVisorRequestUntilNs{0};
 std::atomic<int> sBeamRequest{-1};
 std::atomic<uint64_t> sBeamRequestUntilNs{0};
 std::atomic<uint64_t> sSpringRequestUntilNs{0};
+std::atomic<uint64_t> sDodgeRequestUntilNs{0};
 constexpr uint64_t kWheelRequestNs = 120'000'000;
 std::mutex sMinimapMutex;
 bool sMinimapValid = false;
 bool sMinimapDrawn = false;
 float sMinimapRect[4] = {};
 std::chrono::steady_clock::time_point sMinimapStamp;
+// The HUD draw in progress (game thread only); EndMinimapFrame publishes it whole.
+bool sMinimapPendingValid = false;
+bool sMinimapPendingDrawn = false;
+float sMinimapPendingRect[4] = {};
 std::atomic< int > sMapTapPending{0};
 bool sMapTapHeld = false;
 // Drag to pan the map screen (Android): the overlay sends dp deltas and the view
@@ -112,16 +117,19 @@ bool sAimAppliedLastTick = false;
 // The tick's first applied aim update: it keeps the twin stick turn it
 // recorded and makes the tick's only pointer edge turn (issue #140).
 PortMouse::TickAim sAimTick;
-// Gyro state: the phone's sensor is looked up once, so the sensor list is not
-// walked on every tick.
-bool sPhoneGyroSearched = false;
+// Gyro state: the phone's sensors are searched again after a miss (a sensor
+// can appear late), at most once a second so the list is not walked per tick.
+uint64_t sPhoneNextSearchNs = 0;
 SDL_Sensor* sPhoneGyro = nullptr;
 SDL_Sensor* sPhoneAccel = nullptr;
 const char* sGyroStatus = "off";
 // Calibration and gravity for the current source, reset when it changes (a
 // different pad, or the phone), and whether that source has an accelerometer.
 PortGyro::Motion sGyroMotion;
-const void* sGyroMotionSource = nullptr;
+// The source the motion state belongs to: a pad's joystick instance id (never
+// reused, unlike its pointer after a replug), or kPhoneSource; 0 for none.
+constexpr uint32_t kPhoneSource = 0xFFFFFFFFu;
+uint32_t sGyroMotionSource = 0;
 bool sGyroHasAccel = false;
 PortGyro::Filter sGyroFilter;
 } // namespace
@@ -241,7 +249,7 @@ void ResetGyroCalibration() { sGyroMotion.Reset(); }
 void RequestResetAim() { sResetAimRequested.store(true, std::memory_order_release); }
 
 float GyroCalibrationConfidence() {
-  return sGyroMotionSource != nullptr && sGyroHasAccel ? sGyroMotion.Confidence() : -1.f;
+  return sGyroMotionSource != 0 && sGyroHasAccel ? sGyroMotion.Confidence() : -1.f;
 }
 
 void SetGyroButton(bool held) { sGyroActivation.Update(sInput.gyroMode, held); }
@@ -280,7 +288,7 @@ bool ReadGyroRates(float& pitch, float& yaw, float dt) {
   float gyro[3];
   float accel[3];
   bool haveAccel = false;
-  const void* source = nullptr;
+  uint32_t source = 0;
 
   if (wantController) {
     // The player's pad, not the first one SDL lists: that can be another pad
@@ -293,7 +301,7 @@ bool ReadGyroRates(float& pitch, float& yaw, float dt) {
           SDL_SetGamepadSensorEnabled(pad, SDL_SENSOR_GYRO, true);
         }
         if (SDL_GetGamepadSensorData(pad, SDL_SENSOR_GYRO, gyro, 3)) {
-          source = pad;
+          source = static_cast< uint32_t >(SDL_GetGamepadID(pad));
           sGyroStatus = "controller";
           if (SDL_GamepadHasSensor(pad, SDL_SENSOR_ACCEL)) {
             if (!SDL_GamepadSensorEnabled(pad, SDL_SENSOR_ACCEL)) {
@@ -306,9 +314,10 @@ bool ReadGyroRates(float& pitch, float& yaw, float dt) {
     }
   }
 
-  if (source == nullptr && wantPhone) {
-    if (sPhoneGyro == nullptr && !sPhoneGyroSearched) {
-      sPhoneGyroSearched = true;
+  if (source == 0 && wantPhone) {
+    const uint64_t searchNow = SDL_GetTicksNS();
+    if (sPhoneGyro == nullptr && searchNow >= sPhoneNextSearchNs) {
+      sPhoneNextSearchNs = searchNow + 1000000000ull;
       int count = 0;
       if (SDL_SensorID* ids = SDL_GetSensors(&count)) {
         for (int i = 0; i < count; ++i) {
@@ -323,7 +332,7 @@ bool ReadGyroRates(float& pitch, float& yaw, float dt) {
       }
     }
     if (sPhoneGyro != nullptr && SDL_GetSensorData(sPhoneGyro, gyro, 3)) {
-      source = sPhoneGyro;
+      source = kPhoneSource;
       sGyroStatus = "phone";
       haveAccel = sPhoneAccel != nullptr && SDL_GetSensorData(sPhoneAccel, accel, 3);
       // The phone reports its own axes (x right, y up in its natural
@@ -361,7 +370,7 @@ bool ReadGyroRates(float& pitch, float& yaw, float dt) {
     }
   }
 
-  if (source == nullptr) {
+  if (source == 0) {
     return false;
   }
   if (source != sGyroMotionSource || haveAccel != sGyroHasAccel) {
@@ -523,6 +532,8 @@ void SetMouseGameplayActive(bool active) {
 }
 bool MouseInvertX() { EnsureInitialized(); return sInput.mouseInvertX; }
 bool MouseInvertY() { EnsureInitialized(); return sInput.mouseInvertY; }
+bool MapInvertX() { EnsureInitialized(); return sInput.mapInvertX; }
+bool MapInvertY() { EnsureInitialized(); return sInput.mapInvertY; }
 bool MouseButtons() { EnsureInitialized(); return sInput.mouseButtons; }
 bool MouseCrosshair() { EnsureInitialized(); return sInput.mouseCrosshair; }
 // Window travel (pixels) to pointer units (-1..1 of the half view). At a sensitivity of
@@ -903,6 +914,13 @@ void RequestSpringBall() { sSpringRequestUntilNs.store(SDL_GetTicksNS() + kWheel
 
 bool SpringBallRequested() { return SDL_GetTicksNS() < sSpringRequestUntilNs.load(); }
 
+void RequestDodge() { sDodgeRequestUntilNs.store(SDL_GetTicksNS() + kWheelRequestNs); }
+
+bool TakeDodgeRequest() {
+  const uint64_t until = sDodgeRequestUntilNs.exchange(0);
+  return SDL_GetTicksNS() < until && !OriginalExperience();
+}
+
 void RequestSaveStateHotkey(int which) {
   if (which == 1 || which == 2) {
     sSaveStateHotkey.store(which, std::memory_order_release);
@@ -910,15 +928,26 @@ void RequestSaveStateHotkey(int which) {
 }
 
 // Game thread, once per HUD draw (valid=false when the minimap isn't shown).
+void BeginMinimapFrame() {
+  sMinimapPendingValid = false;
+  sMinimapPendingDrawn = false;
+}
+
 void SetMinimapRect(bool valid, bool drawn, float x0, float y0, float x1, float y1) {
+  sMinimapPendingDrawn = drawn;
+  sMinimapPendingValid = valid && std::isfinite(x0) && std::isfinite(y0) && std::isfinite(x1) &&
+                         std::isfinite(y1);
+  sMinimapPendingRect[0] = x0;
+  sMinimapPendingRect[1] = y0;
+  sMinimapPendingRect[2] = x1;
+  sMinimapPendingRect[3] = y1;
+}
+
+void EndMinimapFrame() {
   std::lock_guard lock(sMinimapMutex);
-  sMinimapDrawn = drawn;
-  sMinimapValid = valid && std::isfinite(x0) && std::isfinite(y0) && std::isfinite(x1) &&
-                  std::isfinite(y1);
-  sMinimapRect[0] = x0;
-  sMinimapRect[1] = y0;
-  sMinimapRect[2] = x1;
-  sMinimapRect[3] = y1;
+  sMinimapValid = sMinimapPendingValid;
+  sMinimapDrawn = sMinimapPendingDrawn;
+  std::copy(sMinimapPendingRect, sMinimapPendingRect + 4, sMinimapRect);
   sMinimapStamp = std::chrono::steady_clock::now();
 }
 

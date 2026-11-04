@@ -39,7 +39,7 @@ bool BackLightScale(const RemMaterial& m) {
          !m.colorUnlit;
 }
 
-bool ColorUnlitDraw(const RemMaterial& m) { return m.colorUnlit && m.unlit && m.tinted; }
+bool ColorUnlitDraw(const RemMaterial& m) { return m.colorUnlit && m.unlit && (m.tinted || m.colorUnlitWhite); }
 
 // The PBR record's mode word: 1 unlit, 2 glow masked by the base alpha, 4 tinted by the vertex
 // colour, 8 ColorUnlit's draw, 32 a glow the runtime exposes (ExposedGlow), 64 a kind's
@@ -158,7 +158,7 @@ void PbrRecord(Blob& b, const RemMaterial& m, uint32_t wrap, uint32_t cube) {
     P32(b, cube);
   }
   b.insert(b.end(), tag, tag + 4);
-  if ((m.kind >= 14 && m.kind <= 19) || m.kind == 21 || m.kind == 22 || m.kind == 32 || m.kind == 35 || m.kind == 25 || m.kind == 28 || m.kind == 29 || m.kind == 11 || m.kind == 31 || m.kind == 33 || (m.kind >= 38 && m.kind <= 45) || m.wind) {
+  if ((m.kind >= 14 && m.kind <= 19) || m.kind == 21 || m.kind == 22 || m.kind == 32 || m.kind == 35 || m.kind == 25 || m.kind == 28 || m.kind == 29 || m.kind == 11 || m.kind == 31 || m.kind == 33 || (m.kind >= 38 && m.kind <= 46) || m.kind == 48 || m.wind) {
     // The boundary shield's (or pickup's) constants follow the record, as a trailer the reader strips first.
     // A swaying leaf's is the model's SWindSet (v1, v2, rate, b, c) in the first nine.
     for (double v : m.shieldRows) {
@@ -169,7 +169,7 @@ void PbrRecord(Blob& b, const RemMaterial& m, uint32_t wrap, uint32_t cube) {
   }
 }
 
-// The matcap shell (kind 13) is drawn premultiplied, GX_BL_ONE and GX_BL_INVSRCALPHA: its
+// The matcap shell (kind 13) and the Chozo Lore sheet (kind 46) are drawn premultiplied, GX_BL_ONE and GX_BL_INVSRCALPHA: its
 // shader scales the diffuse by the opacity, and the rim and reflection are added unscaled.
 // The boundary shield (kind 14) and cracked glass (kind 8, class 1 with the scene in rgb) are plainly alpha blended, GX_BL_SRCALPHA and GX_BL_INVSRCALPHA.
 // The pickup (kind 15) is SrcAlpha with the mesh class's destination: One where it is additive.
@@ -185,8 +185,8 @@ void PbrBlend(const RemMaterial& rem, const RetailMaterial& pm, uint32_t& src, u
   if (rem.classBlend) {
     ClassBlend(rem.blendClass, classSrc, classDst);
   }
-  dst = rem.kind == 8 || rem.kind == 13 || rem.kind == 14 || rem.kind == 29 || rem.kind == 34 || rem.kind == 36 || rem.kind == 43 ? 5 : rem.kind == 37 ? 1 : (rem.kind >= 15 && rem.kind <= 18) || rem.kind == 31 || rem.kind == 33 ? (rem.additive ? 1 : 5) : rem.kind == 19 ? (GunFxParticle(pm) ? 5 : 0) : lambertFx ? 0 : classDst;
-  src = rem.kind == 8 || rem.kind == 14 || rem.kind == 29 || rem.kind == 34 || rem.kind == 36 || rem.kind == 37 || rem.kind == 43 || (rem.kind >= 15 && rem.kind <= 18) || rem.kind == 31 || rem.kind == 33 ? 4 : rem.kind == 19 ? (GunFxParticle(pm) ? 4 : 1) : rem.kind == 13 || lambertFx ? 1 : classSrc;
+  dst = rem.kind == 8 || rem.kind == 13 || rem.kind == 46 || rem.kind == 14 || rem.kind == 29 || rem.kind == 34 || rem.kind == 36 || rem.kind == 43 || rem.kind == 48 ? 5 : rem.kind == 37 ? 1 : (rem.kind >= 15 && rem.kind <= 18) || rem.kind == 31 || rem.kind == 33 ? (rem.additive ? 1 : 5) : rem.kind == 19 ? (GunFxParticle(pm) ? 5 : 0) : lambertFx ? 0 : classDst;
+  src = rem.kind == 8 || rem.kind == 14 || rem.kind == 29 || rem.kind == 34 || rem.kind == 36 || rem.kind == 37 || rem.kind == 43 || rem.kind == 48 || (rem.kind >= 15 && rem.kind <= 18) || rem.kind == 31 || rem.kind == 33 ? 4 : rem.kind == 19 ? (GunFxParticle(pm) ? 4 : 1) : rem.kind == 13 || rem.kind == 46 || lambertFx ? 1 : classSrc;
 }
 
 // A retail material rebuilt for the port's PBR path: maps 0-3 are base, MR,
@@ -272,14 +272,16 @@ Blob PbrMaterial(const RetailMaterial& pm, uint32_t vtx, const uint32_t* texIdx,
   };
   // Glass samples the frame behind it, which the game copies into map 7 (the
   // spare buffer's) before it draws one: a stage of its own binds it.
-  const int nstages = rem.kind == 8 || rem.kind == 11 || rem.kind == 14 || rem.kind == 23 || rem.kind == 29 || rem.kind == 30 || rem.kind == 34 || rem.kind == 36 || rem.kind == 43 ? nmaps + 1 : nmaps;
+  const int nstages = rem.kind == 8 || rem.kind == 11 || rem.kind == 14 || rem.kind == 23 || rem.kind == 29 || rem.kind == 30 || rem.kind == 34 || rem.kind == 36 || rem.kind == 43 || rem.kind == 48 ? nmaps + 1 : nmaps;
   P32(b, uint32_t(nstages));
   for (int i = 0; i < nstages; ++i) {
     // Kind 20's map 3 is a detail map, sampled only (the table's stage adds it as glow).
     const uint32_t* t = tev[rem.maps[kEmissive].detail && i == kEmissive ? 2 : std::min(i, kLayeredMaps - 1)];
     const bool gain = colorUnlit && i == 1;
     const bool emissiveStage = emissiveKonst && i == kEmissive;
-    P32(b, gain ? 0x7B80Fu : emissiveStage ? 0x390Fu : t[0]);  // gain: ZERO, CPREV, KONST, ZERO, then x2; emissive: ZERO, TEXC, KONST, CPREV
+    // White ColorUnlit: the base alone (ZERO, ZERO, ZERO, TEXC), no channel colour.
+    const bool white = colorUnlit && rem.colorUnlitWhite && i == 0;
+    P32(b, gain ? 0x7B80Fu : emissiveStage ? 0x390Fu : white ? 0x43DEFu : t[0]);  // gain: ZERO, CPREV, KONST, ZERO, then x2; emissive: ZERO, TEXC, KONST, CPREV
     P32(b, i == 0 && vertexGlow ? 0x39487u : t[1]);  // ZERO, TEXA, RASA, ZERO: base x vertex alpha
     P32(b, gain ? 0x140u : 0x100u);
     P32(b, 0x100);
