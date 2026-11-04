@@ -6,21 +6,13 @@
 
 #include "vr/openxr_backend.h"
 #include "vr/openxr_runtime.h"
+#include "vr/openxr_vulkan_requirements.h"
 
 #include <cstdint>
 #include <memory>
 #include <string>
 
 namespace PortVr {
-
-struct OpenXRVulkanGraphicsRequirements {
-    // XR_MAKE_VERSION-encoded bounds reported by xrGetVulkanGraphicsRequirements2KHR.
-    XrVersion min_api_version = 0;
-    XrVersion max_api_version = 0;
-    // Which binding extension was negotiated: XR_KHR_vulkan_enable2 when the
-    // runtime offers it, otherwise the original XR_KHR_vulkan_enable.
-    bool uses_enable2 = false;
-};
 
 // Two-device Dawn/OpenXR Vulkan backend for Android (Meta Quest).
 //

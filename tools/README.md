@@ -19,6 +19,7 @@ tooling is in `decomp/`, not here.
 | `collect_licenses.sh` | Collects every licence and notice a shipped build must carry into one directory | CI (all release packages), `make_appimage.sh` |
 | `make_appimage.sh` | Packages the executable and texture replacements as an AppImage | CI `linux-release.yml` |
 | `build_ffmpeg_min.sh` | Builds the minimal ffmpeg the Windows and macOS packages carry for the Remastered movie import | CI `windows.yml`, `macos.yml` |
+| `Build-WindowsDawn.ps1` | Builds aurora's pinned Dawn with PrimedGun's patches (`quest/dawn`) for Windows x64, as a package to pass as `AURORA_DAWN_PACKAGE_URL`; PC VR on Vulkan needs it | by hand, from a VS developer prompt |
 | `make_flatpak.sh` | Builds a Flatpak bundle from `flatpak/` | by hand |
 | `android_apk.sh` | Builds and signs the Android APK through Gradle | by hand |
 | `make_android_keystore.sh` | Creates the project's Android release signing key and `android/keystore.properties` | by hand, once |

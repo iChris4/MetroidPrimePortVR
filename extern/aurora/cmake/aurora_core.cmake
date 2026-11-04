@@ -85,9 +85,16 @@ if (AURORA_ENABLE_GX)
     # The OpenXR Vulkan stereo bridge for the Quest (eyes shared through
     # AHardwareBuffers, ordered by sync fds). It compiles to stubs elsewhere.
     target_sources(aurora_core PRIVATE lib/webgpu/vulkan_interop.cpp)
-    # Direct presentation for the Quest with PrimedGun's patched Dawn (the eyes copied straight
-    # into the runtime's swapchain images on Dawn's queue). Stubs elsewhere.
+    # Direct presentation with PrimedGun's patched Dawn (the eyes copied straight into the
+    # runtime's swapchain images on Dawn's queue): the Quest, and PC VR on Vulkan where the
+    # embedding project names its Vulkan headers target in AURORA_VULKAN_DIRECT_HEADERS (on
+    # Windows the patched entry points are looked up in webgpu_dawn.dll at run time, so a stock
+    # Dawn still starts). Stubs elsewhere.
     target_sources(aurora_core PRIVATE lib/webgpu/vulkan_direct_interop.cpp)
+    if (AURORA_VULKAN_DIRECT_HEADERS AND NOT ANDROID)
+        target_link_libraries(aurora_core PRIVATE ${AURORA_VULKAN_DIRECT_HEADERS})
+        target_compile_definitions(aurora_core PRIVATE AURORA_VULKAN_DIRECT_DESKTOP=1)
+    endif ()
     # Fragment density maps for foveated eye rendering, through the same patched Dawn. Stubs elsewhere.
     target_sources(aurora_core PRIVATE lib/webgpu/fdm.cpp)
     if (ANDROID)

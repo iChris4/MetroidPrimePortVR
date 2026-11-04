@@ -12,8 +12,10 @@ extern "C" {
 #endif
 
 /**
- * Direct presentation on the Quest, the alternative to aurora/vulkan_interop.h's two-device
- * AHardwareBuffer bridge when Dawn is PrimedGun's patched build (quest/dawn).
+ * Direct presentation, when Dawn is PrimedGun's patched build (quest/dawn): on the Quest, the
+ * alternative to aurora/vulkan_interop.h's two-device AHardwareBuffer bridge, and PC VR on Vulkan.
+ * On Windows the patched entry points are looked up in webgpu_dawn.dll, so with a stock Dawn
+ * aurora_vulkan_direct_available() is false and nothing else changes.
  *
  * The OpenXR runtime creates Dawn's VkInstance and VkDevice (XR_KHR_vulkan_enable2, through
  * hooks Dawn calls while they are configured), the session is bound to Dawn's own device and

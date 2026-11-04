@@ -6,9 +6,23 @@
 #include "../stereo_overlay.hpp"
 #include "gpu.hpp"
 
-// PrimedGun's patched Dawn (quest/dawn) adds both Vulkan multiview and the entry points this
-// bridge calls (quest/dawn/aurora_vulkan_interop.inc); a stock Dawn gets the stubs below.
-#if defined(__ANDROID__) && defined(WEBGPU_DAWN) && defined(WGPU_DAWN_RENDER_PASS_MULTIVIEW_INIT)
+// PrimedGun's patched Dawn (quest/dawn) adds the entry points this bridge calls
+// (quest/dawn/aurora_vulkan_interop.inc). The Quest links its Dawn statically, built with them and
+// with Vulkan multiview. On the PC (AURORA_VULKAN_DIRECT_DESKTOP, aurora_core.cmake) they are looked
+// up in webgpu_dawn.dll at run time, so a stock Dawn still starts and only this bridge reports
+// itself unavailable. Elsewhere the stubs below.
+#if defined(WEBGPU_DAWN) && ((defined(__ANDROID__) && defined(WGPU_DAWN_RENDER_PASS_MULTIVIEW_INIT)) ||          \
+                             (defined(_WIN32) && defined(AURORA_VULKAN_DIRECT_DESKTOP)))
+
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
 
 #include <vulkan/vulkan_core.h>
 
@@ -18,8 +32,10 @@
 #include <condition_variable>
 #include <memory>
 #include <mutex>
+#include <type_traits>
 #include <vector>
 
+#if !defined(_WIN32)
 extern "C" {
 uint32_t AuroraDawnVulkanVersion();
 int AuroraDawnVulkanConfigure(const AuroraDawnVulkanHooks* hooks);
@@ -30,11 +46,54 @@ void* AuroraDawnVulkanLock(void* device);
 void AuroraDawnVulkanUnlock(void* guard);
 int AuroraDawnVulkanDrain(void* device);
 }
+#endif
 
 namespace aurora::vulkan_direct {
 namespace {
 
 Module Log("aurora::vulkan_direct");
+
+// The patched Dawn's entry points (aurora/dawn_vulkan_abi.h), all null when the Dawn in use lacks
+// any of them.
+struct DawnAbi {
+  AuroraDawnVulkanVersionFn version = nullptr;
+  AuroraDawnVulkanConfigureFn configure = nullptr;
+  AuroraDawnVulkanHandlesFn handles = nullptr;
+  AuroraDawnVulkanWrapFn wrap = nullptr;
+  AuroraDawnVulkanReleaseFn release = nullptr;
+  AuroraDawnVulkanLockFn lock = nullptr;
+  AuroraDawnVulkanUnlockFn unlock = nullptr;
+  AuroraDawnVulkanDrainFn drain = nullptr;
+};
+
+const DawnAbi& dawn() noexcept {
+  static const DawnAbi abi = [] {
+    DawnAbi entries{};
+#if defined(_WIN32)
+    const HMODULE module = GetModuleHandleW(L"webgpu_dawn.dll");
+    if (module == nullptr) {
+      return entries;
+    }
+    const auto load = [module](auto& entry, const char* name) {
+      entry = reinterpret_cast<std::remove_reference_t<decltype(entry)>>(
+          reinterpret_cast<void*>(GetProcAddress(module, name)));
+      return entry != nullptr;
+    };
+    if (!load(entries.version, "AuroraDawnVulkanVersion") || !load(entries.configure, "AuroraDawnVulkanConfigure") ||
+        !load(entries.handles, "AuroraDawnVulkanGetHandles") || !load(entries.wrap, "AuroraDawnVulkanWrap") ||
+        !load(entries.release, "AuroraDawnVulkanRelease") || !load(entries.lock, "AuroraDawnVulkanLock") ||
+        !load(entries.unlock, "AuroraDawnVulkanUnlock") || !load(entries.drain, "AuroraDawnVulkanDrain")) {
+      return DawnAbi{};
+    }
+#else
+    entries = {&AuroraDawnVulkanVersion, &AuroraDawnVulkanConfigure, &AuroraDawnVulkanGetHandles,
+               &AuroraDawnVulkanWrap,    &AuroraDawnVulkanRelease,   &AuroraDawnVulkanLock,
+               &AuroraDawnVulkanUnlock,  &AuroraDawnVulkanDrain};
+#endif
+    return entries;
+  }();
+  return abi;
+}
 
 int64_t to_vk_format(wgpu::TextureFormat format) noexcept {
   switch (format) {
@@ -225,7 +284,7 @@ fn fs_srgb(@builtin(position) position: vec4f) -> @location(0) vec4f {
 };
 
 bool abi_matches() noexcept {
-  static const bool matches = AuroraDawnVulkanVersion() == AURORA_DAWN_VULKAN_ABI;
+  static const bool matches = dawn().version != nullptr && dawn().version() == AURORA_DAWN_VULKAN_ABI;
   return matches;
 }
 
@@ -301,7 +360,7 @@ public:
       }
     }
     // Every copy into the images retires before their textures go.
-    if (!webgpu::g_device || AuroraDawnVulkanDrain(webgpu::g_device.Get()) == 0) {
+    if (!webgpu::g_device || dawn().drain(webgpu::g_device.Get()) == 0) {
       return false;
     }
     std::lock_guard lock(m_mutex);
@@ -364,7 +423,7 @@ public:
         descriptor.usage = wgpu::TextureUsage::CopyDst | wgpu::TextureUsage::RenderAttachment;
         descriptor.size = {target.width, target.height, 1};
         descriptor.format = format;
-        void* wrapped = AuroraDawnVulkanWrap(webgpu::g_device.Get(), &descriptor, target.image);
+        void* wrapped = dawn().wrap(webgpu::g_device.Get(), &descriptor, target.image);
         if (wrapped == nullptr) {
           return Decline("Dawn could not wrap a swapchain image");
         }
@@ -419,7 +478,7 @@ public:
     }
     // The colour-attachment layout OpenXR expects at xrReleaseSwapchainImage, on Dawn's queue,
     // flushed before the XR thread may release.
-    const bool success = AuroraDawnVulkanRelease(webgpu::g_device.Get(), textures.data(), m_images) != 0;
+    const bool success = dawn().release(webgpu::g_device.Get(), textures.data(), m_images) != 0;
     const uint64_t token = m_token;
     m_token = 0;
     m_encoded = false;
@@ -466,7 +525,7 @@ std::unique_ptr<Bridge> g_bridge;
 bool aurora_vulkan_direct_available() { return aurora::vulkan_direct::abi_matches(); }
 
 bool aurora_vulkan_direct_configure(const AuroraDawnVulkanHooks* hooks) {
-  return aurora::vulkan_direct::abi_matches() && AuroraDawnVulkanConfigure(hooks) != 0;
+  return aurora::vulkan_direct::abi_matches() && aurora::vulkan_direct::dawn().configure(hooks) != 0;
 }
 
 bool aurora_vulkan_direct_get_handles(AuroraDawnVulkanHandles* handles, int64_t* colorVkFormat) {
@@ -480,7 +539,7 @@ bool aurora_vulkan_direct_get_handles(AuroraDawnVulkanHandles* handles, int64_t*
       *colorVkFormat == VK_FORMAT_UNDEFINED) {
     return false;
   }
-  return AuroraDawnVulkanGetHandles(webgpu::g_device.Get(), handles) != 0;
+  return vulkan_direct::dawn().handles(webgpu::g_device.Get(), handles) != 0;
 }
 
 bool aurora_vulkan_direct_enable(AuroraVulkanDirectSubmittedCallback submitted, void* userdata) {
@@ -523,7 +582,7 @@ bool aurora_vulkan_direct_disable() {
     return true;
   }
   aurora::stereo::set_sink(nullptr, nullptr, nullptr);
-  if (aurora::webgpu::g_device && AuroraDawnVulkanDrain(aurora::webgpu::g_device.Get()) == 0) {
+  if (aurora::webgpu::g_device && dawn().drain(aurora::webgpu::g_device.Get()) == 0) {
     (void)g_bridge.release();
     return false;
   }
@@ -537,12 +596,12 @@ void* aurora_vulkan_direct_lock_queue() {
   if (!vulkan_direct::abi_matches() || !webgpu::g_device) {
     return nullptr;
   }
-  return AuroraDawnVulkanLock(webgpu::g_device.Get());
+  return vulkan_direct::dawn().lock(webgpu::g_device.Get());
 }
 
 void aurora_vulkan_direct_unlock_queue(void* guard) {
   if (guard != nullptr) {
-    AuroraDawnVulkanUnlock(guard);
+    aurora::vulkan_direct::dawn().unlock(guard);
   }
 }
 

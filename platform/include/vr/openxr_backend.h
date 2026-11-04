@@ -18,8 +18,9 @@ namespace PortVr {
 //
 // The OpenXR pacing thread in openxr_integration.cpp is written against these
 // types and the method surface documented on OpenXRD3D12Backend; each concrete
-// backend (D3D12 on Windows, Vulkan on Android) implements that same surface so
-// the pacing, retained-layer and policy logic is compiled once for both.
+// backend (D3D12 or Vulkan direct presentation on Windows, Vulkan on Android)
+// implements that same surface so the pacing, retained-layer and policy logic is
+// compiled once for all of them.
 
 enum class OpenXRFrameMode {
     ImmersiveProjection,

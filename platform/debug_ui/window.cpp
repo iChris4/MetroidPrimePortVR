@@ -345,6 +345,17 @@ static bool ApplyChangedSetting(const std::string& key, const std::string& value
   } else if (key == "msaa" || key == "anisotropy") {
     ApplySetting(key, value);
     ApplyGraphicsQuality();
+  } else if (key == "graphics_backend") {
+    // Read at window creation: kept for the next start, as the Video page's combo keeps
+    // it (sGraphicsBackendAtStart stays this run's, so the page says a restart applies
+    // it), and written back by the next save instead of the API this run started on.
+    PortDebug::EGraphicsBackend backend = sGraphicsBackend;
+    const auto choices = PortGraphicsBackend::Choices();
+    if (!PortDebug::ParseGraphicsBackend(value, backend) ||
+        std::find(choices.begin(), choices.end(), backend) == choices.end()) {
+      return false;
+    }
+    sGraphicsBackend = backend;
   } else {
     return false;
   }

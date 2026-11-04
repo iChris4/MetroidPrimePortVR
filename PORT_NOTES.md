@@ -1,3 +1,57 @@
+## VR: PC VR on Vulkan (2026-11-04)
+
+The first step towards Linux VR: the Vulkan path has to work on the desktop.
+F1 > Video > Graphics API = Vulkan now starts VR on Vulkan instead of refusing
+it ("OpenXR requires the D3D12 graphics backend"); Auto and D3D12 keep D3D12.
+It is the Quest's direct presentation, unchanged: the runtime creates Dawn's
+VkInstance and VkDevice (XR_KHR_vulkan_enable2, Vulkan 1.2 and timeline
+semaphores when offered), the session is bound to Dawn's queue, the eyes are
+drawn into the runtime's swapchain images, and Dawn's device lock guards the
+runtime's four queue-touching calls. Pipelined pacing comes with it.
+
+- `vr/openxr_windows.h`: `OpenXRWindowsBackend` holds the D3D12 backend or
+  `OpenXRVulkanDirectBackend`, chosen in `OpenXRPrepareAurora` from the
+  configured backend. The direct backend and its header now build on Windows
+  too; the AHardwareBuffer bridge and `OpenXRQuestVulkanBackend` stay
+  Android-only. `OpenXRVulkanGraphicsRequirements` moved to
+  `vr/openxr_vulkan_requirements.h`.
+- Aurora's `vulkan_direct_interop.cpp` builds its real bridge on Windows when
+  the port hands it Vulkan headers (`AURORA_VULKAN_DIRECT_HEADERS`, pinned
+  Vulkan-Headers v1.4.335 fetched by the root CMakeLists). There the patched
+  entry points are looked up in `webgpu_dawn.dll` at run time, so a build with
+  the stock Dawn still starts: Vulkan VR then logs "direct presentation needs
+  PrimedGun's patched Dawn" and the game continues flat on Vulkan.
+- `tools/Build-WindowsDawn.ps1` builds that Dawn: aurora's pinned revision,
+  `quest/dawn/apply.py`, MSVC and DXC as encounter/dawn's release workflow
+  builds dawn-windows-amd64, packed in the stock layout under `build/wd`.
+  Configure with `-DAURORA_DAWN_PACKAGE_URL=<path>` (a plain path; CMake turns
+  a `file:///C:/` URL into `/C:/` and fails) and `-DAURORA_DAWN_PACKAGE_SHA256`.
+  The GitHub archive holds Dawn's submodules as empty directories, which
+  `fetch_dawn_dependencies.py` runs git inside: the extraction must create
+  them (`quest/Build-QuestDawn.ps1` skips directories, which only works on a
+  work directory whose dependencies were fetched before).
+- Multiview stays off on the desktop (only Android requests the feature): one
+  pass per eye, as on D3D12.
+
+Desk test (PSVR2 through SteamVR on the desk, RTX 3090, scale 0.75 = 2550x2601
+eyes, 120 Hz, pipelined, Landing Site, own `MP_USER_PATH`): Vulkan 120 layers/s,
+no skipped slot after the first two seconds, render 7.4 ms, no failed
+submission over 90 s, clean quit (STOPPING, IDLE, EXITING); D3D12 with the
+patched DLL 120 layers/s, render 7.1 ms. Port tests 196/196 (one skipped).
+
+The user's headset session the same day (PSVR2, 120 Hz, 7 minutes through an
+elevator and a world change): 49824 frames in 416.3 s (119.7 FPS), the VR menu
+layer up, the render scale raised live from 0.75 to 1.00 in five steps (each
+pausing the pipeline for the pair rebuild), a clean quit; the user said Vulkan
+works. Headset removal was not tried.
+
+The launcher's Port Config tab now has Graphics API (the `graphics_backend`
+key: Auto, Direct3D 12, Vulkan, Direct3D 11 and OpenGL, the last two marked as
+starting without the headset). The game takes a change made while it runs
+(`ApplyChangedSetting`) for the next start instead of writing its own API back
+at the next save; `port_launcher_tests` checks the launcher's names against
+`PortGraphicsBackend::Choices`.
+
 ## VR: the Teleport block in the VR menu's DEBUG tab (2026-10-31)
 
 The user asked for the F1 overlay's Teleport block (Cheats page) in the headset,
