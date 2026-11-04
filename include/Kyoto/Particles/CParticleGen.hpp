@@ -81,6 +81,10 @@ public:
       SetParticleEmission(false);
     }
   }
+  // PortVr: a visor effect's generator (CHUDBillboardEffect), placed in the game camera's space,
+  // which the renderer draws between PortVr::VrBeginVisorDraw and VrEndVisorDraw (vr/vr_view.h).
+  void PortSetVisor(bool visor) { xPortVisor = visor; }
+  bool PortIsVisor() const { return xPortVisor; }
 #endif
   virtual void AddModifier(CWarp*);
   virtual uint Get4CharId() const = 0;
@@ -89,6 +93,10 @@ public:
 
 protected:
   rstl::list< CWarp* > x4_modifiersList;
+#ifdef TARGET_PC
+private:
+  bool xPortVisor = false;
+#endif
 };
 
 inline CParticleGen::~CParticleGen() {

@@ -770,7 +770,19 @@ void CCubeRenderer::RenderBucketItems(const CAreaListItem* areaListItem) {
         if (lastType != drawType) {
           SetupCGraphicsStates();
         }
+#ifdef TARGET_PC
+        CParticleGen* gen = static_cast< CParticleGen* >(drawable->GetData());
+        // PortVr: a visor effect follows the head (vr/vr_view.h).
+        if (gen->PortIsVisor()) {
+          PortVr::VrBeginVisorDraw();
+          gen->Render();
+          PortVr::VrEndVisorDraw();
+        } else {
+          gen->Render();
+        }
+#else
         static_cast< CParticleGen* >(drawable->GetData())->Render();
+#endif
         break;
       }
       case kDT_WorldSurface: {

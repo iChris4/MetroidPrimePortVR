@@ -12,6 +12,10 @@
 
 #include "rstl/math.hpp"
 
+#ifdef TARGET_PC
+#include "vr/vr_view.h"
+#endif
+
 CScriptVisorGoo::CScriptVisorGoo(TUniqueId uid, const rstl::string& name, const CEntityInfo& info,
                                  const CTransform4f& xf, CAssetId particle, CAssetId electric,
                                  float minRange, float maxRange, float chanceMinRange,
@@ -68,10 +72,12 @@ void CScriptVisorGoo::Think(float dt, CStateManager& mgr) {
         const float eyeToGooDist = eyeToGoo.Magnitude();
         if (eyeToGooDist >= GetMinRange() && eyeToGooDist <= GetMaxRange()) {
           if (GetViewCheck()) {
-            CVector3f colNorm = mgr.GetCameraManager()
-                                    ->GetCurrentCameraTransform(mgr)
-                                    .GetColumn(kDY)
-                                    .AsNormalized();
+            CTransform4f camXf = mgr.GetCameraManager()->GetCurrentCameraTransform(mgr);
+#ifdef TARGET_PC
+            // PortVr: goo lands on the visor when the head faces it, not the body.
+            camXf = PortVr::VrHeadViewTransform(camXf);
+#endif
+            CVector3f colNorm = camXf.GetColumn(kDY).AsNormalized();
             float angleThresh = 45.f;
             float angle = CMath::Rad2Rev(CMath::FastArcCosR(
                               CVector3f::Dot(eyeToGoo.AsNormalized(), colNorm))) *

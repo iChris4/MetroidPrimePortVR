@@ -191,6 +191,18 @@ inline Mat3x4<float> without_translation(const Mat3x4<float>& viewFromCenter) no
   return out;
 }
 
+// The pose with its translation scaled (AURORA_STEREO_ROUTE_VISOR, from the
+// head-locked pose: the eye's offset from the head centre). A point at depth d
+// then lands in the eye where the same direction at depth d / scale would with
+// the whole offset, while its own depth stays d: it reads that much farther.
+inline Mat3x4<float> scaled_translation(const Mat3x4<float>& viewFromCenter, float scale) noexcept {
+  Mat3x4<float> out = viewFromCenter;
+  out.m0[3] *= scale;
+  out.m1[3] *= scale;
+  out.m2[3] *= scale;
+  return out;
+}
+
 // A texture matrix that projects a vertex onto the screen: the (s, t, q) rows
 // a GX_TG_MTX3x4 texgen from GX_TG_POS applies to the object-space position,
 // with s / q and t / q the vertex's own texture coordinates in a copy of the

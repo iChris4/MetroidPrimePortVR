@@ -70,7 +70,7 @@ struct FrameRecorder {
   uint32_t drawCallCount = 0;
   // Draws recorded under each stereo route this frame (AURORA_STEREO_ROUTE_*), for the
   // diagnostics line (log_stereo_frame_stats).
-  std::array<uint32_t, 12> routeDrawCounts{};
+  std::array<uint32_t, 13> routeDrawCounts{};
   uint32_t mergedDrawCallCount = 0;
   uint32_t renderPassCount = 0;
   bool inOffscreen = false;
@@ -212,14 +212,15 @@ void log_stereo_frame_stats(const FramePacket& frame) {
   Log.info("stereo frame: {} passes ({} EFB, {} replayed per eye, {} foveated, {} eyes only, {} discarded), "
            "{} EFB copies "
            "({} taken per eye), {} draws (world {}, head-locked {}, head-locked 2D {}, screen 2D {}, fullscreen {}, "
-           "sky {}, skipped {}), eye uniforms {:.2f} ms/frame ({} draws); per frame: fifo {:.2f} ms ({} KB), game waits "
+           "sky {}, visor {}, skipped {}), eye uniforms {:.2f} ms/frame ({} draws); per frame: fifo {:.2f} ms ({} KB), game waits "
            "for fifo {:.2f} ms ({} drains), encode {:.2f} ms, submit {:.2f} ms; uploads verts {} KB, indices {} KB, "
            "uniforms {} KB, storage {} KB, textures {} KB",
            frame.renderPasses.size(), efbPasses, eyePasses, foveated, monoSkipped, discarded, copies, eyeCopies,
            g_recorder.drawCallCount, routes[AURORA_STEREO_ROUTE_WORLD], routes[AURORA_STEREO_ROUTE_HEAD_LOCKED],
            routes[AURORA_STEREO_ROUTE_HEAD_LOCKED_2D], routes[AURORA_STEREO_ROUTE_SCREEN_2D],
            routes[AURORA_STEREO_ROUTE_FULLSCREEN],
-           routes[AURORA_STEREO_ROUTE_SKY], routes[AURORA_STEREO_ROUTE_SKIP], eyeUniformMs, eyeUniformDraws, fifoMs,
+           routes[AURORA_STEREO_ROUTE_SKY], routes[AURORA_STEREO_ROUTE_VISOR], routes[AURORA_STEREO_ROUTE_SKIP],
+           eyeUniformMs, eyeUniformDraws, fifoMs,
            fifoKb, drainWaitMs, drainCalls, encodeMs, submitMs, uploads.lastVertSize / 1024,
            uploads.lastIndexSize / 1024, uploads.lastUniformSize / 1024, uploads.lastStorageSize / 1024,
            uploads.lastTextureUploadSize / 1024);
@@ -1543,6 +1544,7 @@ std::array<uint32_t, 2> stage_stereo_uniforms(const uint8_t* mono, Range monoRan
       } else {
         const Mat3x4<float> placedViewFromCenter = placed3D ? placedView(params) : params.viewFromCenter;
         const Mat3x4<float>& viewFromCenter = headLocked                            ? params.headLockedViewFromCenter
+                                              : route == AURORA_STEREO_ROUTE_VISOR ? params.visorViewFromCenter
                                               : route == AURORA_STEREO_ROUTE_SKY ? params.skyViewFromCenter
                                                                                  : placedViewFromCenter;
         clips[eye] = compose_eye_clip(stereo_replay::compose_projection(params.projection, monoProjection),
@@ -1607,10 +1609,12 @@ std::array<uint32_t, 2> stage_stereo_uniforms(const uint8_t* mono, Range monoRan
                                     .renderScaleY = renderScaleY,
                                 });
     } else {
-      // A sky draw (AURORA_STEREO_ROUTE_SKY) takes the eye's rotation only; an
+      // A sky draw (AURORA_STEREO_ROUTE_SKY) takes the eye's rotation only; a visor draw
+      // (AURORA_STEREO_ROUTE_VISOR) the eye's scaled offset from the head centre; an
       // anchored 3D draw (AURORA_STEREO_ROUTE_ANCHORED_3D) the eye's view from the held anchor.
       const Mat3x4<float> placedViewFromCenter = placed3D ? placedView(params) : params.viewFromCenter;
       const Mat3x4<float>* viewFromCenter = headLocked                            ? &params.headLockedViewFromCenter
+                                            : route == AURORA_STEREO_ROUTE_VISOR ? &params.visorViewFromCenter
                                             : route == AURORA_STEREO_ROUTE_SKY ? &params.skyViewFromCenter
                                                                                : &placedViewFromCenter;
       compose_stereo_uniform(

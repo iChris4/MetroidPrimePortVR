@@ -585,9 +585,12 @@ void CElementGen::PortRenderParticlesVfx() {
   CGraphics::SetModelMatrix(systemModelMatrix);
   CGraphics::SetDepthWriteMode(x26c_28_zTest, kE_LEqual, x26c_26_AAPH ? false : x26c_27_ZBUF);
 
-  // The camera in frame space, for the oriented quads.
-  const CVector3f camFrame = systemModelMatrix.GetInverse() *
-                           PortVr::VrHeadViewTransform(systemViewCopy).GetTranslation();
+  // The camera in frame space, for the oriented quads (the head's, unless a visor draw's camera
+  // space is already the head's).
+  const CVector3f camFrame =
+      systemModelMatrix.GetInverse() *
+      (PortVr::VrParticlesFaceHead() ? PortVr::VrHeadViewTransform(systemViewCopy) : systemViewCopy)
+          .GetTranslation();
   VrParticleBillboard billboard;
 
   const bool hasModu = x338_moduColor.GetColor_u32() != 0xFFFFFFFF;
@@ -675,7 +678,7 @@ void CElementGen::PortRenderParticlesVfx() {
     CVector3f center = vp;
     CVector3f axisU(1.f, 0.f, 0.f), axisW(0.f, 0.f, 1.f);
     float vec[3] = {0.f, 0.f, -1.f}; // [I] view-space quad normal, depth component in z
-    if (vfx.vorn == 0 && PortVr::VrImmersive()) {
+    if (vfx.vorn == 0 && PortVr::VrParticlesFaceHead()) {
       axisU = billboard.Vertex(center, center + axisU) - center;
       axisW = billboard.Vertex(center, center + axisW) - center;
       const CVector3f nw = systemModelMatrix.Rotate(CVector3f::Cross(axisU, axisW));

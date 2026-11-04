@@ -1,3 +1,32 @@
+## VR: visor effects follow the head (2026-11-04)
+
+User report: water drops, splashes and similar effects on Samus's visor did not
+follow where the headset looked, and looked distorted or vanished. They are
+CHUDBillboardEffect generators (WaterSheets on leaving water, VisorRainSplashes,
+VisorGoo, FrostExplosion, projectile and electric hits on the visor), drawn
+0.01 units past the first-person near plane (0.2). Nobbie's billboard change
+placed them ahead of a CPU head pose (VrHeadViewTransform: upright, no roll) and
+drew them as world geometry, so: they lagged the eyes' own pose, ignored head
+roll, a few millimetres of head movement pushed them behind the near plane, and
+at some 14 cm from the eyes their disparity (~25 degrees) cannot be fused. The
+refracting (TIND) drops were also culled by the body camera's near plane once
+the head turned more than ~18 degrees.
+
+Now the effect stays in the game camera's space as on the TV, the generator is
+marked (CParticleGen::PortSetVisor) and the renderer's sorted list, or
+CHUDBillboardEffect::Render, draws it between PortVr::VrBeginVisorDraw and
+VrEndVisorDraw on the new aurora route AURORA_STEREO_ROUTE_VISOR (12): head-locked
+like the HUD but without its scales, the eye offset scaled by
+aurora_set_stereo_visor (0.21 / (20 units x vr_metroid_hud_distance), so the
+effects read at the HUD's distance while their depth stays in front of the
+world). Inside a visor draw VrParticlesFaceHead() is false, so
+VrParticleBillboard and the ORNT/VFX paths keep the TV's camera-facing quads.
+Spawns spread over the eyes' field of view (VrEyeTangents) instead of the game
+camera's 4:3 frame. VisorGoo's 45-degree view check uses the head, as the rain
+splash rate already did. Regression: port_vr_stereo "visor draw" cases. Desk
+run (PSVR2, Landing Site rain): "visor 1" draw per immersive frame, no errors.
+The user confirmed in the headset that it works.
+
 ## VR: PC VR on Vulkan (2026-11-04)
 
 The first step towards Linux VR: the Vulkan path has to work on the desktop.

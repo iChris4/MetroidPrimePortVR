@@ -16,7 +16,9 @@ public:
     VrParticleBillboard() {
 #ifdef TARGET_PC
         CVector3f direction;
-        active_ = PortVr::VrHeadGaze(CGraphics::GetViewMatrix(), viewer_, direction);
+        // Not in a visor draw: its camera space is already the head's (vr_view.h).
+        active_ = PortVr::VrParticlesFaceHead() &&
+                  PortVr::VrHeadGaze(CGraphics::GetViewMatrix(), viewer_, direction);
 #endif
     }
     CVector3f Vertex(const CVector3f& center, const CVector3f& vertex) {

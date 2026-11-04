@@ -43,6 +43,9 @@ struct StereoEyeParams {
   // from the head centre (half the IPD), for draws that stay in front of the
   // head (AURORA_STEREO_ROUTE_HEAD_LOCKED).
   Mat3x4<float> headLockedViewFromCenter{};
+  // headLockedViewFromCenter with its offset scaled by aurora_set_stereo_visor's
+  // factor, for draws on the helmet's visor (AURORA_STEREO_ROUTE_VISOR).
+  Mat3x4<float> visorViewFromCenter{};
   // viewFromCenter without its translation: the head's rotation and this
   // eye's cant, the eye at the camera's centre, for draws that stand for
   // infinity (AURORA_STEREO_ROUTE_SKY).
