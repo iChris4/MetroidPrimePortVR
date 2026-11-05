@@ -272,6 +272,8 @@ private:
     bool EnumerateViewConfiguration();
     bool SelectEnvironmentBlendMode();
     bool CreateReferenceSpaces();
+    void UseLevelSpaceIfLocalIsTilted(XrReferenceSpaceCreateInfo& app_info);
+    void LogPlayAreaState();
     bool EnumerateSwapchainFormats();
     bool HandleSessionStateChanged(const XrEventDataSessionStateChanged& event);
     bool IsFrameTokenCurrent(const OpenXRFrame& frame, FramePhase expected) const;

@@ -5,12 +5,22 @@
 // include the public OpenXR headers must use the same feature guard.
 #if defined(MP_ENABLE_OPENXR)
 
+#if defined(_WIN32)
+#if !defined(NOMINMAX)
+#define NOMINMAX
+#endif
+#include <windows.h> // LARGE_INTEGER, QueryPerformanceCounter
+#else
+#include <time.h>
+#endif
+
 #include "vr/openxr_runtime.h"
 #include "vr/openxr_diagnostics.h"
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <limits>
 #include <sstream>
@@ -36,6 +46,71 @@ void CopyOpenXRName(char* destination, size_t destination_size, std::string_view
 
 XrPosef IdentityPose() {
     return {{0.0f, 0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 0.0f}};
+}
+
+// The runtime's time for "now", so spaces can be located before the first
+// frame hands out a display time. 0 when the runtime offers no clock conversion.
+XrTime CurrentRuntimeTime(XrInstance instance, const std::vector<std::string>& extensions) {
+    PFN_xrVoidFunction function = nullptr;
+    XrTime now = 0;
+#if defined(_WIN32)
+    using Convert = XrResult(XRAPI_PTR*)(XrInstance, const LARGE_INTEGER*, XrTime*);
+    LARGE_INTEGER counter{};
+    if (Contains(extensions, std::string("XR_KHR_win32_convert_performance_counter_time")) &&
+        XR_SUCCEEDED(xrGetInstanceProcAddr(instance, "xrConvertWin32PerformanceCounterToTimeKHR", &function)) &&
+        function != nullptr && QueryPerformanceCounter(&counter) != 0 &&
+        XR_SUCCEEDED(reinterpret_cast<Convert>(function)(instance, &counter, &now))) {
+        return now;
+    }
+#else
+    using Convert = XrResult(XRAPI_PTR*)(XrInstance, const struct timespec*, XrTime*);
+    timespec spec{};
+    if (Contains(extensions, std::string("XR_KHR_convert_timespec_time")) &&
+        XR_SUCCEEDED(xrGetInstanceProcAddr(instance, "xrConvertTimespecTimeToTimeKHR", &function)) &&
+        function != nullptr && clock_gettime(CLOCK_MONOTONIC, &spec) == 0 &&
+        XR_SUCCEEDED(reinterpret_cast<Convert>(function)(instance, &spec, &now))) {
+        return now;
+    }
+#endif
+    return 0;
+}
+
+// OpenXR requires LOCAL to be gravity-aligned, but SteamVR without a seated
+// calibration (a headset whose room setup was never run; seen with a PS VR2 on
+// Linux) reports it rolled 180 degrees about the forward axis, with valid flags.
+// The game takes its horizon from the reference space, so the world then
+// renders upside down while head-locked content (the HUD) stays upright. STAGE
+// comes from the tracking system itself, so a LOCAL whose up axis leans away
+// from STAGE's is the runtime's error. Returns true, with the replacement for
+// LOCAL expressed in STAGE (LOCAL's origin and heading, without the tilt), when
+// LOCAL leans more than 10 degrees.
+bool TiltedLocalReplacement(XrSpace local, XrSpace stage, XrTime time, XrPosef& replacement,
+                            float& tilt_degrees) noexcept {
+    XrSpaceLocation location{XR_TYPE_SPACE_LOCATION};
+    if (XR_FAILED(xrLocateSpace(local, stage, time, &location)) ||
+        (location.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) == 0) {
+        return false;
+    }
+    const XrQuaternionf& q = location.pose.orientation;
+    // LOCAL's +Y and -Z axes, in STAGE.
+    const float up_y = 1.0f - 2.0f * (q.x * q.x + q.z * q.z);
+    constexpr float kCosTiltTolerance = 0.98480775f; // cos(10 degrees)
+    if (!(up_y < kCosTiltTolerance)) {
+        return false;
+    }
+    tilt_degrees = std::acos(std::clamp(up_y, -1.0f, 1.0f)) * 57.29578f;
+    const float forward_x = -2.0f * (q.x * q.z + q.w * q.y);
+    const float forward_z = -(1.0f - 2.0f * (q.x * q.x + q.y * q.y));
+    float yaw = 0.0f;
+    if (forward_x * forward_x + forward_z * forward_z > 1.0e-6f) {
+        // The rotation about +Y that turns -Z to LOCAL's level forward.
+        yaw = std::atan2(-forward_x, -forward_z);
+    }
+    replacement.orientation = {0.0f, std::sin(0.5f * yaw), 0.0f, std::cos(0.5f * yaw)};
+    replacement.position = (location.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) != 0
+                               ? location.pose.position
+                               : XrVector3f{0.0f, 0.0f, 0.0f};
+    return true;
 }
 
 bool IsFinitePositive(float value) noexcept {
@@ -454,8 +529,74 @@ bool OpenXRRuntime::CreateReferenceSpaces() {
     XrReferenceSpaceCreateInfo app_info{XR_TYPE_REFERENCE_SPACE_CREATE_INFO};
     app_info.referenceSpaceType = m_app_space_type;
     app_info.poseInReferenceSpace = IdentityPose();
+    if (m_app_space_type == XR_REFERENCE_SPACE_TYPE_LOCAL &&
+        Contains(m_supported_reference_spaces, XR_REFERENCE_SPACE_TYPE_STAGE)) {
+        UseLevelSpaceIfLocalIsTilted(app_info);
+    }
     return Check(xrCreateReferenceSpace(m_session, &app_info, &m_app_space),
                  "xrCreateReferenceSpace(application)");
+}
+
+// Decided once, before the application space exists, so no frame or controller
+// pose is ever located against the tilted LOCAL. Everything that follows (view
+// and controller poses, the projection layers, reference-space change events)
+// then uses the STAGE-based replacement, as it would a STAGE fallback.
+void OpenXRRuntime::UseLevelSpaceIfLocalIsTilted(XrReferenceSpaceCreateInfo& app_info) {
+    const XrTime now = CurrentRuntimeTime(m_instance, m_enabled_extensions);
+    if (now <= 0) {
+        return;
+    }
+    XrReferenceSpaceCreateInfo info{XR_TYPE_REFERENCE_SPACE_CREATE_INFO};
+    info.poseInReferenceSpace = IdentityPose();
+    XrSpace local = XR_NULL_HANDLE;
+    XrSpace stage = XR_NULL_HANDLE;
+    info.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL;
+    if (XR_SUCCEEDED(xrCreateReferenceSpace(m_session, &info, &local))) {
+        info.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_STAGE;
+        if (XR_SUCCEEDED(xrCreateReferenceSpace(m_session, &info, &stage))) {
+            XrPosef replacement = IdentityPose();
+            float tilt_degrees = 0.0f;
+            if (TiltedLocalReplacement(local, stage, now, replacement, tilt_degrees)) {
+                m_app_space_type = XR_REFERENCE_SPACE_TYPE_STAGE;
+                app_info.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_STAGE;
+                app_info.poseInReferenceSpace = replacement;
+                char message[256];
+                std::snprintf(message, sizeof(message),
+                              "the runtime's LOCAL space leans %.0f degrees from STAGE (SteamVR does this "
+                              "until its room setup has been run); using a level space on STAGE with "
+                              "LOCAL's origin and heading instead",
+                              tilt_degrees);
+                Log(OpenXRLogLevel::Warning, message);
+            }
+            xrDestroySpace(stage);
+        }
+        xrDestroySpace(local);
+    }
+}
+
+// A hint for the log only: STAGE without bounds means the runtime has no play
+// area, which on SteamVR is what leaves LOCAL unreliable (see above). Nothing
+// depends on it; a standing-only setup legitimately has no bounds either.
+// Asked once the session runs, when the runtime has tracking to answer from.
+void OpenXRRuntime::LogPlayAreaState() {
+    if (!Contains(m_supported_reference_spaces, XR_REFERENCE_SPACE_TYPE_STAGE)) {
+        return;
+    }
+    XrExtent2Df bounds{};
+    const XrResult result =
+        xrGetReferenceSpaceBoundsRect(m_session, XR_REFERENCE_SPACE_TYPE_STAGE, &bounds);
+    char message[320];
+    if (result == XR_SPACE_BOUNDS_UNAVAILABLE) {
+        std::snprintf(message, sizeof(message),
+                      "the runtime reports no play area (STAGE has no bounds); fine for a standing-only "
+                      "setup, but if the world looks tilted or tracking misbehaves, run the runtime's "
+                      "room setup (SteamVR: Room Setup)");
+    } else if (XR_SUCCEEDED(result)) {
+        std::snprintf(message, sizeof(message), "play area %.1f x %.1f m", bounds.width, bounds.height);
+    } else {
+        return;
+    }
+    Log(OpenXRLogLevel::Info, message);
 }
 
 bool OpenXRRuntime::EnumerateSwapchainFormats() {
@@ -625,6 +766,7 @@ bool OpenXRRuntime::HandleSessionStateChanged(
         if (++m_session_run_serial == 0) {
             ++m_session_run_serial;
         }
+        LogPlayAreaState();
         return true;
     }
     case XR_SESSION_STATE_STOPPING: {

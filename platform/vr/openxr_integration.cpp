@@ -26,6 +26,7 @@
 #include <cmath>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
@@ -1108,6 +1109,7 @@ private:
             NoteEyeSize(frame);
 
             UpdateFrameTiming(frame.xr_frame);
+            WatchHeadOrientation(frame.xr_frame);
             if (diagnostics::Enabled()) {
                 NoteFrameDiagnostics(frame, immersive);
             }
@@ -1403,6 +1405,7 @@ private:
             return false;
         }
         UpdateFrameTiming(frame.xr_frame);
+        WatchHeadOrientation(frame.xr_frame);
         if (diagnostics::Enabled()) {
             NoteFrameDiagnostics(frame, immersive);
         }
@@ -1617,6 +1620,7 @@ private:
             return false;
         }
         UpdateFrameTiming(frame.xr_frame);
+        WatchHeadOrientation(frame.xr_frame);
         if (diagnostics::Enabled()) {
             NoteFrameDiagnostics(frame, immersive);
         }
@@ -2003,6 +2007,49 @@ private:
         }
     }
 
+    // A worn headset is upright, so a head that stays upside down in the
+    // application space for seconds points at a tracking space the runtime has
+    // tilted (OpenXRRuntime::UseLevelSpaceIfLocalIsTilted corrects the case seen
+    // so far, SteamVR's LOCAL before its room setup). This only writes to the log,
+    // once per episode: a headset left upside down on a desk, or a player lying
+    // down, must never change the view.
+    void WatchHeadOrientation(const OpenXRFrame& frame) noexcept {
+        constexpr XrDuration kUpsideDownHoldNs = 5'000'000'000;
+        constexpr float kUpsideDownUpY = -0.5f; // the head's up axis more than 120 degrees from +Y
+        constexpr float kUprightAgainUpY = 0.5f;
+        if (!frame.views_valid) { // also false when the runtime gave no valid orientation
+            upside_down_since_ = 0;
+            return;
+        }
+        const XrQuaternionf& q = frame.views[0].pose.orientation;
+        const float up_y = 1.0f - 2.0f * (q.x * q.x + q.z * q.z);
+        if (up_y > kUpsideDownUpY) {
+            upside_down_since_ = 0;
+            if (up_y > kUprightAgainUpY) {
+                upside_down_reported_ = false;
+            }
+            return;
+        }
+        if (upside_down_since_ == 0) {
+            upside_down_since_ = frame.predicted_display_time;
+            return;
+        }
+        if (upside_down_reported_ || frame.predicted_display_time - upside_down_since_ < kUpsideDownHoldNs) {
+            return;
+        }
+        upside_down_reported_ = true;
+        char message[400];
+        std::snprintf(message, sizeof(message),
+                      "the head has pointed upside down in the %s tracking space for 5 s (up y %+.2f); nothing "
+                      "was changed. If the world looks upside down while the HUD stays upright, the "
+                      "runtime's tracking space is tilted: run its room setup (SteamVR: Room Setup) and "
+                      "report this log",
+                      DiagnosticSpaceName(runtime_->AppSpaceType()), up_y);
+        if (logger_) {
+            logger_(OpenXRLogLevel::Warning, message);
+        }
+    }
+
     // Pacing thread, only while diagnostics are on.
     void NoteFrameDiagnostics(const OpenXRBackendFrame& frame, bool immersive) {
         const XrViewStateFlags flags = frame.xr_frame.view_state_flags;
@@ -2127,6 +2174,9 @@ private:
     }
 
     OpenXRLogCallback logger_;
+    // WatchHeadOrientation, on the thread that locates the frames.
+    XrTime upside_down_since_ = 0;
+    bool upside_down_reported_ = false;
     std::unique_ptr<OpenXRRuntime> runtime_;
     std::unique_ptr<GraphicsBackend> backend_;
 #if defined(__ANDROID__)
