@@ -201,7 +201,7 @@ inline constexpr int kPreviousButtonX = 52;
 inline constexpr int kNextButtonX = 52 + 920 - kPageButtonWidth; // right-aligned with the rows
 // Where the frame rate starts, beside the title.
 inline constexpr int kFpsX = 488;
-inline constexpr uint32_t kMovementItems = 11;
+inline constexpr uint32_t kMovementItems = 12;
 inline constexpr uint32_t kCannonSlotCount = 6; // DEFAULT, SLOT 1-4, CUSTOM
 inline constexpr uint32_t kStateActionRows = 4;
 // PortSaveState's slots 1..8 (PrimedGun's Dolphin had ten).
@@ -1073,6 +1073,7 @@ inline std::vector<Row> BuildRows(const State& s, const PortVrSettings& v, const
         rows.push_back({"LOOK YAW SENSITIVITY", FloatText(v.look_yaw_sensitivity, 2)});
         rows.push_back({"SNAP TURN", OnOff(v.snap_turn_enabled)});
         rows.push_back({"SNAP TURN ANGLE", std::to_string(v.snap_turn_degrees)});
+        rows.push_back({"SCAN DASH CARRY", OnOff(v.directional_movement_dash_carry)});
         rows.push_back({"RESET MOVEMENT", ConfirmText(s, kResetMovement)});
         break;
     case kTexturesTab: {
@@ -1371,7 +1372,7 @@ inline uint32_t ResetActionForSelection(const State& s, const View& view) {
     if (s.tab == kControlTab && ControlActualIndex(s, s.selected) == 15) {
         return kResetController;
     }
-    if (s.tab == kMovementTab && s.selected == 10) {
+    if (s.tab == kMovementTab && s.selected == 11) {
         return kResetMovement;
     }
     if (s.tab == kPortConfigTab && PortItemAt(s, view, s.selected) == PortItem::Reset) {
@@ -1454,6 +1455,7 @@ inline void ResetMovement(PortVrSettings& v) {
     v.directional_movement_speed = 14.0f;
     v.directional_movement_accel = 45.0f;
     v.directional_movement_air_accel = 8.0f;
+    v.directional_movement_dash_carry = true;
     v.look_yaw_sensitivity = 1.0f;
     v.snap_turn_enabled = false;
     v.snap_turn_degrees = 45;
@@ -1848,6 +1850,9 @@ inline void Activate(State& s, PortVrSettings& v, const View& view, double now, 
             v.snap_turn_enabled = !v.snap_turn_enabled;
             break;
         case 10:
+            v.directional_movement_dash_carry = !v.directional_movement_dash_carry;
+            break;
+        case 11:
             if (ConfirmReset(s, reset_action, now)) {
                 ResetMovement(v);
             }

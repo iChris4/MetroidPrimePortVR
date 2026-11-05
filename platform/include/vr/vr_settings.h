@@ -212,6 +212,9 @@ struct PortVrSettings {
     float directional_movement_speed = 14.0f;
     float directional_movement_accel = 45.0f;
     float directional_movement_air_accel = 8.0f;
+    // After a lock-on in the air (a scan dash), the rest of that jump moves as on the GameCube
+    // instead of by directional movement, so the dash keeps its speed (CPlayer::ComputeMovement).
+    bool directional_movement_dash_carry = true;
     float look_yaw_sensitivity = 1.0f;
     bool snap_turn_enabled = false;
     int snap_turn_degrees = 45;
