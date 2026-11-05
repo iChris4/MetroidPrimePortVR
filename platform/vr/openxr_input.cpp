@@ -37,6 +37,8 @@
 
 #if defined(__ANDROID__)
 #include <sys/system_properties.h>
+#endif
+#if !defined(_WIN32)
 #include <time.h>
 #endif
 
@@ -270,6 +272,9 @@ bool Injected(const char*) { return false; }
 
 #if defined(_WIN32)
 using ConvertNowToXrTime = XrResult(XRAPI_PTR*)(XrInstance, const LARGE_INTEGER*, XrTime*);
+#else
+// Linux: XR_KHR_convert_timespec_time, as on the Quest.
+using ConvertNowToXrTime = XrResult(XRAPI_PTR*)(XrInstance, const struct timespec*, XrTime*);
 #endif
 #endif
 
@@ -675,12 +680,10 @@ void OpenXRInput::LoadInputClock() {
     if (enabled("XR_KHR_win32_convert_performance_counter_time")) {
         m_runtime->GetInstanceProcAddress("xrConvertWin32PerformanceCounterToTimeKHR", &function);
     }
-#elif defined(__ANDROID__)
+#else
     if (enabled("XR_KHR_convert_timespec_time")) {
         m_runtime->GetInstanceProcAddress("xrConvertTimespecTimeToTimeKHR", &function);
     }
-#else
-    (void)enabled;
 #endif
     m_convert_now_to_xr_time = function;
     if (m_convert_now_to_xr_time == nullptr) {
@@ -701,7 +704,7 @@ XrTime OpenXRInput::InputSampleTime(XrTime predicted_display_time) const {
                                                                                   &counter, &now))) {
         return predicted_display_time;
     }
-#elif defined(__ANDROID__)
+#else
     timespec spec{};
     if (clock_gettime(CLOCK_MONOTONIC, &spec) != 0 ||
         XR_FAILED(reinterpret_cast<ConvertNowToXrTime>(m_convert_now_to_xr_time)(m_runtime->Instance(),

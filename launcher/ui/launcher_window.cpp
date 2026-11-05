@@ -12,7 +12,12 @@
 #include "style.h"
 #include "tabs.h"
 
+// Qt's `slots` keyword is an empty macro, which would erase port_save_convert.h's
+// `std::array<Slot, 3> slots;` member (reached through port_gci.h).
+#pragma push_macro("slots")
+#undef slots
 #include "port_gci.h"
+#pragma pop_macro("slots")
 
 #include <QCloseEvent>
 #include <QDateTime>
@@ -787,7 +792,7 @@ void LauncherWindow::SetRunning(bool running) {
     }
   } else if (!haveGame) {
     m_runStatus->setObjectName(QStringLiteral("PrimedGunBad"));
-    m_runStatus->setText(tr("metroid_prime_port.exe was not found next to the launcher."));
+    m_runStatus->setText(tr("%1 was not found next to the launcher.").arg(QFileInfo(m_paths.gameExe).fileName()));
   } else {
     m_runStatus->setObjectName(QStringLiteral("PrimedGunMuted"));
     m_runStatus->setText(QString());

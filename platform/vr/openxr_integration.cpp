@@ -53,6 +53,13 @@
 #define XR_USE_TIMESPEC
 #include <openxr/openxr_platform.h>
 #define MP_OPENXR_GRAPHICS_BACKEND 1
+#elif defined(__linux__)
+// Linux PC VR: Vulkan through direct presentation, the only binding Linux runtimes offer.
+#include "vr/openxr_vulkan_direct.h"
+#include <time.h>
+#define XR_USE_TIMESPEC
+#include <openxr/openxr_platform.h>
+#define MP_OPENXR_GRAPHICS_BACKEND 1
 #else
 #define MP_OPENXR_GRAPHICS_BACKEND 0
 #endif
@@ -89,11 +96,18 @@ void ConfigurePolicy(bool enabled) noexcept {
 using GraphicsBackend = OpenXRWindowsBackend;
 inline constexpr const char* kFallbackNote = "; continuing on the mirror output";
 
-#else
+#elif defined(__ANDROID__)
 // Direct presentation when Aurora's Dawn offers it, else the AHardwareBuffer bridge.
 using GraphicsBackend = OpenXRQuestVulkanBackend;
 // A standalone headset has no mirror window to fall back to (see OnRuntimeExitRequested).
 inline constexpr const char* kFallbackNote = "";
+inline constexpr const char* kGraphicsBackendName = "Vulkan";
+
+#else
+// Linux: Vulkan through direct presentation on Dawn's own device (PrimedGun's patched Dawn,
+// tools/build-linux-dawn.sh). The desktop window keeps mirroring if the headset stops.
+using GraphicsBackend = OpenXRVulkanDirectBackend;
+inline constexpr const char* kFallbackNote = "; continuing on the mirror output";
 inline constexpr const char* kGraphicsBackendName = "Vulkan";
 #endif
 
@@ -375,6 +389,11 @@ public:
         config.required_extensions = {kRequiredAuroraBackend == BACKEND_VULKAN ? "XR_KHR_vulkan_enable2" : "XR_KHR_D3D12_enable"};
         config.optional_extensions = {"XR_KHR_win32_convert_performance_counter_time",
                                       "XR_FB_display_refresh_rate", "XR_EXT_performance_settings"};
+#elif !defined(__ANDROID__)
+        // Linux (SteamVR, Monado, WiVRn): direct presentation binds with enable2 only.
+        config.required_extensions = {"XR_KHR_vulkan_enable2"};
+        config.optional_extensions = {"XR_KHR_convert_timespec_time", "XR_FB_display_refresh_rate",
+                                      "XR_EXT_performance_settings"};
 #else
         // Either Vulkan binding extension is acceptable; the backend picks
         // whichever the runtime enabled, preferring enable2.

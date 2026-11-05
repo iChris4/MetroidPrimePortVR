@@ -89,6 +89,7 @@ void BuildPortConfigTab(TabContext& ctx, QTabWidget* tabs) {
 
   ctx.Separator(layout);
   layout->addWidget(ctx.Section(QObject::tr("Display")));
+#if defined(Q_OS_WIN)
   ctx.Combo(layout, QObject::tr("Graphics API"), "graphics_backend",
             {{QObject::tr("Auto (Direct3D 12)"), QStringLiteral("auto")},
              {QObject::tr("Direct3D 12"), QStringLiteral("d3d12")},
@@ -98,6 +99,16 @@ void BuildPortConfigTab(TabContext& ctx, QTabWidget* tabs) {
       ->setToolTip(QObject::tr("The renderer the game starts on; takes effect at the next start. VR runs on "
                                "Direct3D 12 (Auto picks it) or Vulkan; Direct3D 11 and OpenGL start the game "
                                "on the desktop only. The first start after a change compiles its shaders again."));
+#else
+  // Linux VR runs on Vulkan only (the one binding its OpenXR runtimes offer).
+  ctx.Combo(layout, QObject::tr("Graphics API"), "graphics_backend",
+            {{QObject::tr("Auto (Vulkan)"), QStringLiteral("auto")},
+             {QObject::tr("Vulkan"), QStringLiteral("vulkan")},
+             {QObject::tr("OpenGL (no VR)"), QStringLiteral("opengl")}})
+      ->setToolTip(QObject::tr("The renderer the game starts on; takes effect at the next start. VR runs on "
+                               "Vulkan (Auto picks it); OpenGL starts the game on the desktop only. The first "
+                               "start after a change compiles its shaders again."));
+#endif
   ctx.Check(layout, QObject::tr("Fullscreen"), "fullscreen");
   ctx.Check(layout, QObject::tr("VSync"), "vsync",
             QObject::tr("Holds frames to the display's refresh rate. "

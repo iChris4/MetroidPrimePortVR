@@ -2,7 +2,7 @@
 
 #pragma once
 
-#if defined(MP_ENABLE_OPENXR) && (defined(__ANDROID__) || defined(_WIN32))
+#if defined(MP_ENABLE_OPENXR) && (defined(__ANDROID__) || defined(_WIN32) || defined(__linux__))
 
 #include "vr/openxr_backend.h"
 #include "vr/openxr_runtime.h"
@@ -18,8 +18,9 @@
 namespace PortVr {
 
 // Same-device Dawn/OpenXR Vulkan backend (direct presentation), after Wiicompiled_VR's Windows
-// Vulkan backend: the Quest's, and PC VR's on Vulkan (openxr_windows.h). It needs PrimedGun's
-// patched Dawn (quest/dawn; built by quest/Build-QuestDawn.ps1 and tools/Build-WindowsDawn.ps1).
+// Vulkan backend: the Quest's, PC VR's on Vulkan (openxr_windows.h), and Linux PC VR's. It needs
+// PrimedGun's patched Dawn (quest/dawn; built by quest/Build-QuestDawn.ps1,
+// tools/Build-WindowsDawn.ps1 and tools/build-linux-dawn.sh).
 //
 // QueryGraphicsRequirements() runs after OpenXRRuntime::Initialize() and before
 // aurora_initialize(): it installs the hooks through which Dawn creates its Vulkan instance and

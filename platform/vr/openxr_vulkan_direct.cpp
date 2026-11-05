@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-#if defined(MP_ENABLE_OPENXR) && (defined(__ANDROID__) || defined(_WIN32))
+#if defined(MP_ENABLE_OPENXR) && (defined(__ANDROID__) || defined(_WIN32) || defined(__linux__))
 
 // OpenXR's Vulkan structures are selected when openxr_platform.h is parsed. The Vulkan binding
 // itself needs no window-system types, so the PC defines none.
@@ -90,8 +90,10 @@ uint32_t PresentationTargetCount(const OpenXRPresentation& presentation) noexcep
 const OpenXRVulkanGraphicsRequirements kNoRequirements{};
 const std::string kNoBackend = "the Quest's OpenXR Vulkan backend was not set up";
 constexpr const char* kPatchedDawnScript = "quest/Build-QuestDawn.ps1";
-#else
+#elif defined(_WIN32)
 constexpr const char* kPatchedDawnScript = "tools/Build-WindowsDawn.ps1";
+#else
+constexpr const char* kPatchedDawnScript = "tools/build-linux-dawn.sh";
 #endif
 
 } // namespace

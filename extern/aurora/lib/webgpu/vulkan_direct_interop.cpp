@@ -8,11 +8,13 @@
 
 // PrimedGun's patched Dawn (quest/dawn) adds the entry points this bridge calls
 // (quest/dawn/aurora_vulkan_interop.inc). The Quest links its Dawn statically, built with them and
-// with Vulkan multiview. On the PC (AURORA_VULKAN_DIRECT_DESKTOP, aurora_core.cmake) they are looked
-// up in webgpu_dawn.dll at run time, so a stock Dawn still starts and only this bridge reports
-// itself unavailable. Elsewhere the stubs below.
+// with Vulkan multiview. On the PC (AURORA_VULKAN_DIRECT_DESKTOP, aurora_core.cmake) a stock Dawn
+// must still start, with only this bridge reporting itself unavailable: Windows looks them up in
+// webgpu_dawn.dll at run time, and Linux, whose Dawn is a static libwebgpu_dawn.a, refers to them
+// weakly (they live in VulkanBackend.cpp's object, which the Vulkan backend links in anyway).
+// Elsewhere the stubs below.
 #if defined(WEBGPU_DAWN) && ((defined(__ANDROID__) && defined(WGPU_DAWN_RENDER_PASS_MULTIVIEW_INIT)) ||          \
-                             (defined(_WIN32) && defined(AURORA_VULKAN_DIRECT_DESKTOP)))
+                             ((defined(_WIN32) || defined(__linux__)) && defined(AURORA_VULKAN_DIRECT_DESKTOP)))
 
 #if defined(_WIN32)
 #ifndef NOMINMAX
@@ -36,16 +38,23 @@
 #include <vector>
 
 #if !defined(_WIN32)
+#if defined(__ANDROID__)
+#define AURORA_DAWN_VULKAN_IMPORT
+#else
+// Null when the Dawn linked in is a stock one (see above).
+#define AURORA_DAWN_VULKAN_IMPORT __attribute__((weak))
+#endif
 extern "C" {
-uint32_t AuroraDawnVulkanVersion();
-int AuroraDawnVulkanConfigure(const AuroraDawnVulkanHooks* hooks);
-int AuroraDawnVulkanGetHandles(void* device, AuroraDawnVulkanHandles* out);
-void* AuroraDawnVulkanWrap(void* device, const void* textureDescriptor, uint64_t image);
-int AuroraDawnVulkanRelease(void* device, void* const* textures, uint32_t count);
-void* AuroraDawnVulkanLock(void* device);
-void AuroraDawnVulkanUnlock(void* guard);
-int AuroraDawnVulkanDrain(void* device);
+AURORA_DAWN_VULKAN_IMPORT uint32_t AuroraDawnVulkanVersion();
+AURORA_DAWN_VULKAN_IMPORT int AuroraDawnVulkanConfigure(const AuroraDawnVulkanHooks* hooks);
+AURORA_DAWN_VULKAN_IMPORT int AuroraDawnVulkanGetHandles(void* device, AuroraDawnVulkanHandles* out);
+AURORA_DAWN_VULKAN_IMPORT void* AuroraDawnVulkanWrap(void* device, const void* textureDescriptor, uint64_t image);
+AURORA_DAWN_VULKAN_IMPORT int AuroraDawnVulkanRelease(void* device, void* const* textures, uint32_t count);
+AURORA_DAWN_VULKAN_IMPORT void* AuroraDawnVulkanLock(void* device);
+AURORA_DAWN_VULKAN_IMPORT void AuroraDawnVulkanUnlock(void* guard);
+AURORA_DAWN_VULKAN_IMPORT int AuroraDawnVulkanDrain(void* device);
 }
+#undef AURORA_DAWN_VULKAN_IMPORT
 #endif
 
 namespace aurora::vulkan_direct {
@@ -89,6 +98,11 @@ const DawnAbi& dawn() noexcept {
     entries = {&AuroraDawnVulkanVersion, &AuroraDawnVulkanConfigure, &AuroraDawnVulkanGetHandles,
                &AuroraDawnVulkanWrap,    &AuroraDawnVulkanRelease,   &AuroraDawnVulkanLock,
                &AuroraDawnVulkanUnlock,  &AuroraDawnVulkanDrain};
+    // A weak reference a stock Dawn leaves unresolved: all or nothing, as on Windows.
+    if (!entries.version || !entries.configure || !entries.handles || !entries.wrap || !entries.release ||
+        !entries.lock || !entries.unlock || !entries.drain) {
+      return DawnAbi{};
+    }
 #endif
     return entries;
   }();

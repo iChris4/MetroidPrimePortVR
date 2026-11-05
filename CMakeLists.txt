@@ -49,11 +49,11 @@ else()
 endif()
 option(MP_EMBED_RESOURCES "Build the controller glyph textures and the pipeline cache seed into the executable (desktop)" ${_mp_embed_default})
 option(MP_ENABLE_SMOKE_DRIVER "Enable the opt-in real-disc lifecycle test driver" OFF)
-# OpenXR VR (PrimedGun v2): Windows D3D12 or Vulkan, and the Meta Quest (Android
-# Vulkan) build in quest/. Only Windows defaults to carrying the loader; the Quest build
-# asks for it, so upstream's phone APK (android/) stays without.
+# OpenXR VR (PrimedGun v2): Windows D3D12 or Vulkan, Linux Vulkan, and the Meta Quest
+# (Android Vulkan) build in quest/. The desktops default to carrying the loader; the Quest
+# build asks for it, so upstream's phone APK (android/) stays without.
 set(MP_ENABLE_OPENXR_DEFAULT OFF)
-if(WIN32)
+if(WIN32 OR (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT ANDROID))
     set(MP_ENABLE_OPENXR_DEFAULT ON)
 endif()
 option(MP_ENABLE_OPENXR "Build OpenXR VR support" ${MP_ENABLE_OPENXR_DEFAULT})
@@ -131,9 +131,9 @@ endif()
 
 # PC VR on Vulkan (platform/vr/openxr_vulkan_direct.cpp and Aurora's direct bridge,
 # lib/webgpu/vulkan_direct_interop.cpp) compiles against the pinned Vulkan-Headers; the
-# Quest build has the NDK's. It needs PrimedGun's patched Dawn at run time
-# (tools/Build-WindowsDawn.ps1); with the stock one only Vulkan VR reports it unavailable.
-if(MP_ENABLE_OPENXR AND WIN32)
+# Quest build has the NDK's. It needs PrimedGun's patched Dawn (tools/Build-WindowsDawn.ps1,
+# tools/build-linux-dawn.sh); with the stock one only Vulkan VR reports it unavailable.
+if(MP_ENABLE_OPENXR AND (WIN32 OR (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT ANDROID)))
     include(FetchContent)
     # Vulkan-Headers' optional C++20 module needs `import std`; nothing here uses it.
     set(VULKAN_HEADERS_ENABLE_MODULE OFF CACHE BOOL "" FORCE)
@@ -231,8 +231,8 @@ endif()
 # fetched at configure time (static loader), as Wiicompiled VR does.
 set(MP_OPENXR_TARGET "")
 if(MP_ENABLE_OPENXR)
-    if(NOT WIN32 AND NOT ANDROID)
-        message(WARNING "OpenXR is only wired for Windows and Android (Quest) in this port; disabling MP_ENABLE_OPENXR")
+    if(NOT WIN32 AND NOT ANDROID AND NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        message(WARNING "OpenXR is only wired for Windows, Linux and Android (Quest) in this port; disabling MP_ENABLE_OPENXR")
         set(MP_ENABLE_OPENXR OFF)
     else()
         if(NOT MP_OPENXR_SDK_DIR AND NOT FETCHCONTENT_SOURCE_DIR_OPENXR)
@@ -601,6 +601,14 @@ if(MP_ENABLE_OPENXR)
             platform/vr/openxr_vulkan.cpp
             platform/vr/openxr_vulkan_direct.cpp)
         target_link_libraries(metroid_prime_port PRIVATE android log vulkan)
+    else()
+        # Linux: Vulkan through direct presentation on Dawn's own device, the one binding
+        # Linux runtimes (SteamVR, Monado, WiVRn) and PrimedGun's patched Dawn share
+        # (tools/build-linux-dawn.sh). As on Windows, Vulkan is reached through the
+        # runtime's and Dawn's loaders, so only the headers are needed.
+        target_sources(metroid_prime_port PRIVATE
+            platform/vr/openxr_vulkan_direct.cpp)
+        target_link_libraries(metroid_prime_port PRIVATE Vulkan::Headers)
     endif()
     target_link_libraries(metroid_prime_port PRIVATE ${MP_OPENXR_TARGET})
 endif()
