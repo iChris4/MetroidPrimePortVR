@@ -8,6 +8,8 @@
 #include "Kyoto/CDvdRequest.hpp"
 #include "port_ap_world.h"
 #include "port_custom_res.h"
+#include "port_cannon_repair.h"
+#include "vr/vr_settings.h"
 #include "port_disc.h"
 #include "port_log.h"
 #include "port_mods.h"
@@ -34,6 +36,8 @@ static inline int align_size(const int size) { return (size + 31) & ~31; }
 
 #ifdef TARGET_PC
 namespace {
+thread_local bool sReadingOriginalCannon = false;
+bool sCannonMirrorReported = false;
 // A custom resource is already in memory, so its "read" is done at once.
 class CPortReadyDvdRequest : public CDvdRequest {
 public:
@@ -131,6 +135,8 @@ const std::map< uint, PortDiscResource >& PortDiscIndex() {
 // changes them: what was read or indexed before may be gone (a Remastered effect's child, once
 // Remastered is off) or moved.
 void PortForgetDiscReads() {
+  PortCannonRepair::Reset();
+  sCannonMirrorReported = false;
   {
     std::lock_guard< std::mutex > lock(sDiscIndexMutex);
     sDiscIndex.clear();
@@ -163,6 +169,32 @@ bool PortReadDisc(uint id, std::vector< uint8_t >& out, uint* type = nullptr) {
 } // namespace
 
 const PortCustomRes::Resource* CResLoader::PortCustomResource(const CAssetId asset, const bool load) {
+  if (!sReadingOriginalCannon && PortCannonRepair::IsResource(asset) &&
+      PortVr::GetVrSettings().enabled) {
+    // Read the currently selected PAK resources, not an assumed vanilla disc copy.
+    // Build checks all three fingerprints, so Remastered/custom skins remain untouched.
+    struct SourceReadScope {
+      SourceReadScope() { sReadingOriginalCannon = true; }
+      ~SourceReadScope() { sReadingOriginalCannon = false; }
+    } sourceRead;
+    if (const auto* repaired = PortCannonRepair::Find(asset, [this](uint32_t id, std::vector<uint8_t>& out) {
+          if (!PortPakResourceExists(id)) return PortReadDisc(id, out);
+          const auto* info = x50_cachedResInfo;
+          const bool compressed = info->IsCompressed();
+          const auto type = info->GetType();
+          char* buf = nullptr; int len = 0;
+          LoadMemResourceSync(SObjectTag(type, id), &buf, &len);
+          const bool ok = PortInflate(buf, len, compressed, out);
+          delete[] buf;
+          return ok;
+        })) {
+      if (!sCannonMirrorReported) {
+        PortLog::Write("VR cannon: replaced incomplete half, mirrored paired bones, welded centre seam\n");
+        sCannonMirrorReported = true;
+      }
+      return repaired;
+    }
+  }
   const bool custom = PortCustomRes::IsCustomId(asset);
   if ((!custom && !load && !PortSkipCutscenes::IsPickupDependency(asset) &&
        !PortApWorld::IsDoorDependency(asset)) ||

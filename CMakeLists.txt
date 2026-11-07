@@ -358,6 +358,7 @@ set(MP_PORT_SOURCES
     platform/port_map_side_paths.cpp
     platform/port_map_pickups_index.cpp
     platform/port_viewmodel.cpp
+    platform/port_cannon_repair.cpp
     platform/port_actor_shadow.cpp
     platform/port_projected_decal.cpp
     platform/port_freecam.cpp
@@ -920,6 +921,9 @@ endif()
 
 if(MP_BUILD_TESTS)
     include(cmake/PortTests.cmake)
+    mp_port_test(port_cannon_repair_tests
+        SOURCES tests/port_cannon_repair.cpp platform/port_cannon_repair.cpp
+        INCLUDES platform/include)
     mp_port_test(port_vr_visibility_tests
         SOURCES tests/port_vr_visibility.cpp
             src/Kyoto/Math/CFrustumPlanes.cpp src/Kyoto/Math/CAABox.cpp

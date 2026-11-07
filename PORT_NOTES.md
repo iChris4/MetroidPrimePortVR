@@ -1,3 +1,32 @@
+## VR: original cannon full half-mirror (2026-11-07)
+
+Supersedes the experimental 199-triangle draw-time underside patch. The entire
+incomplete +X half of retail CMDL 19AE626C is replaced by the good -X half.
+Triangles crossing X=0 are clipped with interpolated normals, UVs and skin
+weights. Reflected faces reverse winding; matching left/right bones (nozzle,
+g2..g11, base and panel pairs) are remapped in a rebuilt CSKR 7281CDBA. No bones
+or animation IDs change. Centreline positions/normals are welded independently
+of UVs and share symmetric weights, so the halves stay joined during animation.
+Internal faces lying wholly on the mirror plane are discarded.
+
+All five original beams share the mesh and retain byte-identical material sets.
+The generated model has 2,228 triangles, 2,148 skinned vertices and 124 shared
+centreline vertices. A local independent verifier checks mirrored winding,
+normals and bone weights, valid indices and the shared seam under an asymmetric
+synthetic pose. This does not replace a live animation/headset test.
+
+CResLoader builds a coherent mesh/skin pair from the user's currently selected
+disc/mod resources when VR is enabled. All three original mesh/skin/skeleton
+fingerprints must match, so replacements remain untouched. Mods reload clears
+the pair; either load order is tested. No game geometry is bundled or written
+back to the disc. The separate hologram model is unchanged.
+
+IMPORTANT for future merges: this is a bind-pose mesh and CSKR conversion, not
+a render-matrix reflection. Preserve paired-bone remapping, shared seam weights,
+both resource interception paths and cache reset. It needs no changes to VR eye
+matrices, stereo flags or left-hand culling. Windows build and 27 focused checks
+pass; charge, fire, beam switching and left-handed play still need headset testing.
+
 ## VR: upstream 0.42 local testing merge (2026-11-07)
 
 Merged 254 Prime 1 upstream commits from d57a819a2 through 34b66b083
