@@ -160,6 +160,10 @@ with tarfile.open(archive, "r|gz") as tar:
         parts = Path(member.name).parts[1:]
         if not parts:
             continue
+        # The release build disables Tint tests. Its shader-input corpus contains
+        # tens of thousands of tiny files, needlessly expensive to extract on Windows.
+        if len(parts) >= 2 and parts[0] == "test" and parts[1] == "tint":
+            continue
         target = source.joinpath(*parts)
         assert ".." not in parts and os.path.normcase(os.path.normpath(target)).startswith(for_check), \
             "Archive path escapes Dawn source"
