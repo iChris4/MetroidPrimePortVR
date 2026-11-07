@@ -114,7 +114,7 @@ $patchFiles = @(Get-ChildItem -LiteralPath $patchDir -File | Sort-Object Name | 
 $patchHash = Get-TextSha256 (($patchFiles | ForEach-Object {
     (Split-Path -Leaf $_) + "`n" + [IO.File]::ReadAllText($_).Replace("`r`n", "`n")
 }) -join "`n")
-$cacheKey = Get-TextSha256 "$revision|$archiveHash|$patchHash|$compiler|$sdkVersion|$($flags -join ' ')"
+$cacheKey = Get-TextSha256 "$revision|$archiveHash|$patchHash|$compiler|$sdkVersion|$($flags -join ' ')|shader-model-enums-v1"
 
 # The package is named after its content, so a native build's FetchContent extracts it again when
 # it changes (the URL changes with it).
@@ -193,6 +193,25 @@ with tarfile.open(archive, "r|gz") as tar:
     [IO.File]::WriteAllText($patchMarker, $sourceKey)
 }
 
+# SDK 22621 stops at SM 6.7. The driver feature query still accepts newer enum
+# values, returning E_INVALIDARG when unsupported, exactly as with newer headers.
+# Keep Dawn's descending fallback list rather than requiring an SDK installation.
+$sdkCompat = @'
+from pathlib import Path
+import sys
+p = Path(sys.argv[1]) / "src/dawn/native/d3d12/D3D12Info.cpp"
+text = p.read_text(encoding="utf-8")
+old = "{D3D_SHADER_MODEL_6_9},  {D3D_SHADER_MODEL_6_8}"
+new = "{static_cast<D3D_SHADER_MODEL>(0x69)}, {static_cast<D3D_SHADER_MODEL>(0x68)}"
+if new not in text:
+    assert text.count(old) == 1, "Dawn shader-model SDK compatibility anchor changed"
+    p.write_text(text.replace(old, new), encoding="utf-8")
+'@
+$sdkCompatScript = Join-Path $WorkDirectory 'sdk-compat.py'
+[IO.File]::WriteAllText($sdkCompatScript, $sdkCompat)
+& $pythonPath $sdkCompatScript $source
+if ($LASTEXITCODE -ne 0) { throw 'Applying Windows SDK compatibility failed.' }
+
 $build = Join-Path $WorkDirectory 'b'
 $install = Join-Path $WorkDirectory 'p'
 $ciCache = Join-Path $source '.github\workflows\dawn-ci.cmake'
@@ -246,6 +265,7 @@ $manifestJson = [ordered]@{
     WindowsSdk = $sdkVersion
     Flags = ($flags -join ' ')
     CacheKey = $cacheKey
+    WindowsSdkCompatibility = 'shader-model-enums-v1'
     PackageFile = $packageFile
     PackageSha256 = $packageHash
 } | ConvertTo-Json
