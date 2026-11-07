@@ -82,6 +82,7 @@ uint64_t sRegionOrder = 0;
 int sVolFog = -1;
 // Console `roomenv fogregions on|off`: drop the fog regions to see what they add.
 bool sFogRegions = true;
+uint64_t sFogRegionsHidden = 0; // the view area's, by index (debug)
 bool sPlayerFluid = false;
 bool sCameraWater = false;
 uint8_t sExposureSwap = 1;
@@ -933,6 +934,35 @@ const std::vector<IceDarkener>* IceDarkeners(uint32_t mrea) {
   return it == sAreas.end() ? nullptr : &it->second.file.iceDarkeners;
 }
 
+namespace {
+float sDominantLight[3] = {0.f, 0.f, -1.f}; // skDownVector, retail's -Z
+} // namespace
+
+void UpdateLightHints() {
+  // Areas in the order they loaded, as their entities came in.
+  std::vector<Area*> order;
+  for (auto& [mrea, area] : sAreas) {
+    if (area.hasFile && !area.file.lightHints.empty()) {
+      order.push_back(&area);
+    }
+  }
+  std::sort(order.begin(), order.end(), [](const Area* a, const Area* b) { return a->loadSeq < b->loadSeq; });
+  for (Area* area : order) {
+    const std::vector<LightHint>& hints = area->file.lightHints;
+    area->lightHints.resize(hints.size(), 0);
+    for (size_t i = 0; i < hints.size(); ++i) {
+      const LightHint& h = hints[i];
+      const bool on = h.on && (h.layer < 0 || h.layer >= 64 || ((area->layers >> h.layer) & 1) != 0);
+      if (on && area->lightHints[i] == 0) {
+        std::copy(h.dir, h.dir + 3, sDominantLight);
+      }
+      area->lightHints[i] = on ? 1 : 0;
+    }
+  }
+}
+
+void DominantLight(float out[3]) { std::copy(sDominantLight, sDominantLight + 3, out); }
+
 float EnvFxIntensity() {
   const auto view = sAreas.find(sViewArea);
   return view == sAreas.end() ? 1.f : view->second.file.envFxIntensity;
@@ -1337,10 +1367,12 @@ LightNow EvalLight(const PointLight& l, const Area::Light& state) {
 namespace {
 // The walk both RoomLights forms take: a light that is active, on an active layer and not black, with its
 // timeline evaluated. `fn(l, n)` gets the file's light and its state now (n.color is colour x intensity).
+// A light's proxy lives in its area's scene proxy (CLightDynamicGOC::RebuildLightProxy 0x78a748,
+// NGOCUtils::get_render_scene 0x47c0e0), which is inactive while the area is occluded.
 template <typename F>
 void ForEachRoomLight(F&& fn) {
   for (const auto& [mrea, area] : sAreas) {
-    if (!area.hasFile) {
+    if (!area.hasFile || !area.visible) {
       continue;
     }
     for (size_t i = 0; i < area.lights.size() && i < area.file.lights.size(); ++i) {
@@ -1582,6 +1614,11 @@ bool FogOwnsRoom() {
 }
 
 void SetFogRegionsEnabled(bool on) { sFogRegions = on; }
+void SetFogRegionEnabled(uint32_t index, bool on) {
+  if (index < 64) {
+    sFogRegionsHidden = on ? sFogRegionsHidden & ~(uint64_t(1) << index) : sFogRegionsHidden | uint64_t(1) << index;
+  }
+}
 
 void UpdateFog(LayerActive layerActive, void* context, float dt) {
   FogFade& f = sFog;
@@ -1679,20 +1716,27 @@ void FogRegions(std::vector<const FogRegion*>& out) {
   }
   // The proxies' add order: the areas in the order they loaded, each in file order.
   std::vector<const Area*> areas;
+  const Area* view = nullptr;
   for (const auto& [mrea, area] : sAreas) {
     if (area.hasFile && !area.live.empty()) {
       areas.push_back(&area);
+      view = mrea == sViewArea ? &area : view;
     }
   }
   std::sort(areas.begin(), areas.end(), [](const Area* a, const Area* b) { return a->serial < b->serial; });
   for (const Area* area : areas) {
+    // ShouldRegionBeActive's area gate: the area's scene proxy is active.
+    if (!area->visible) {
+      continue;
+    }
     for (size_t i = 0; i < area->live.size(); ++i) {
       const FogRegion& region = area->live[i];
       const bool on = i < area->regions.size() ? area->regions[i].on : region.on;
       const bool layer = region.layer < 0 || region.layer >= 64 || (area->layers >> region.layer & 1) != 0;
       // UpdateRenderState's fluid gate.
       const bool fluid = region.fluid == 1 ? sCameraWater : region.fluid == 2 ? !sCameraWater : true;
-      if (on && layer && fluid) {
+      const bool hidden = area == view && i < 64 && (sFogRegionsHidden >> i & 1) != 0;
+      if (on && layer && fluid && !hidden) {
         out.push_back(&region);
       }
     }
@@ -1801,6 +1845,21 @@ std::string FogInfo() {
   }
   std::snprintf(line, sizeof(line), "regions on in loaded areas: %zu\n", on.size());
   out += line;
+  for (const auto& [mrea, other] : sAreas) {
+    if (mrea == sViewArea) {
+      continue;
+    }
+    for (size_t i = 0; i < other.live.size(); ++i) {
+      const FogRegion& r = other.live[i];
+      if (std::find(on.begin(), on.end(), &r) == on.end()) {
+        continue;
+      }
+      std::snprintf(line, sizeof(line), "%08X region %zu: on layer %d fluid %d density %g box %g %g %g .. %g %g %g\n",
+                    mrea, i, int(r.layer), int(r.fluid), r.density, r.box[0], r.box[1], r.box[2], r.box[3], r.box[4],
+                    r.box[5]);
+      out += line;
+    }
+  }
   if (!sWorldVolumes.empty()) {
     std::snprintf(line, sizeof(line), "world volumes: %zu, camera %.1f %.1f %.1f\n", sWorldVolumes.size(),
                   sCameraPoint[0], sCameraPoint[1], sCameraPoint[2]);
@@ -2362,6 +2421,13 @@ void SetAreaLayers(uint32_t mrea, uint64_t active) {
   }
 }
 
+void SetAreaVisible(uint32_t mrea, bool visible) {
+  const auto found = sAreas.find(mrea);
+  if (found != sAreas.end()) {
+    found->second.visible = visible;
+  }
+}
+
 namespace {
 
 // Where a model's cube, volume and ambient come from, before any exposure: what the point
@@ -2743,13 +2809,14 @@ void Stats(int& areas, int& probes, int& cubes, int& grids) {
 
 std::string Info(const float pos[3]) {
   std::string out;
-  char line[320];
+  char line[400];
   if (sFrame.started) {
     const FrameState& f = sFrame;
     std::snprintf(line, sizeof(line),
-                  "frame: EV %g towards %g (L %g, %s), exposure %g, sigma %g, measurement %u%s, tone EV %g mid %g "
-                  "contrast %g toe %g shoulder %g, static EV %g (glow x%g)\n",
-                  f.ev, f.targetEv, sAverage.L, sAverage.created ? "Gaussian" : "tonemap EV", f.exposure,
+                  "frame: EV %g towards %g (L %g of %g %g %g, %s), exposure %g, sigma %g, measurement %u%s, tone EV "
+                  "%g mid %g contrast %g toe %g shoulder %g, static EV %g (glow x%g)\n",
+                  f.ev, f.targetEv, sAverage.L, sAverage.rgb[0], sAverage.rgb[1], sAverage.rgb[2],
+                  sAverage.created ? "Gaussian" : "tonemap EV", f.exposure,
                   sAverage.sigma, sAverage.serial,
                   f.measuring ? " (measuring)" : "", f.shown[0], f.shown[1], f.shown[2], f.shown[3], f.shown[4],
                   f.shown[5], GlowScale());

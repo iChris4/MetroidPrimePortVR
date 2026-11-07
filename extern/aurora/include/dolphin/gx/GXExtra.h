@@ -240,9 +240,13 @@ void GXSetPBRShield(const f32 rows[8][4]);
 // Aurora extension: the following PBR draws light with this in place of the GX light's colour,
 // position and attenuation: a linear colour (no gamma, not clamped), a view-space position,
 // and a falloff from full at r0 to none at r1 (0 none, 1 linear, 2 quadratic, 3 1 - smoothstep,
-// as Remastered's particle lights). Non-PBR draws keep the GX light. r1 <= 0 (or a null colour)
-// turns it off.
-void GXSetPBRLightHdr(GXLightID light, const f32 color[3], const f32 viewPos[3], f32 r0, f32 r1, u32 falloff);
+// as Remastered's particle lights). `widen` (the light's LSPS) raises the roughness of its
+// specular lobe to r + (1 - r) * widen. A spot passes `toLight`, the view-space unit way back
+// along its axis, and its cone: the light is scaled by clamp(dot(L, toLight) * coneScale +
+// coneBias, 0, 1); a null `toLight` is a point light. Non-PBR draws keep the GX light. r1 <= 0
+// (or a null colour) turns it off.
+void GXSetPBRLightHdr(GXLightID light, const f32 color[3], const f32 viewPos[3], f32 r0, f32 r1, u32 falloff,
+                      f32 widen, const f32 toLight[3], f32 coneScale, f32 coneBias);
 // Aurora extension: the following PBR draws multiply the diffuse colour (before the lights and
 // the ambient) and F0 (before the direct Fresnel and the environment BRDF) by these; nothing
 // else is scaled. 1, 1 is neutral, and it is what a caller sets for every material that has no
@@ -265,6 +269,12 @@ void GXSetPBRModelModulation(const f32 diffuse[4], const f32 incan[4], f32 cover
 // alpha is 1, or base.a^2 * vertex alpha where `blended` (a material drawn with a blend, not alpha
 // tested). Stays in effect until turned off; off is neutral.
 void GXSetPBRThermal(GXBool on, f32 x, f32 y, GXBool blended);
+// Port extension: the following draws' colour goes through `rows` (rgb' = rows * rgb) where their
+// shading leaves it, before fog, the HDR conversion and the blend; the alpha is unchanged. Both GX
+// draws and aurora::gfx::vfx draws take it. Null turns it off, which is neutral. Depth-only passes,
+// the actor shadow decal and the silhouette shell ignore it. With glowOnly the matrix acts on a PBR
+// draw's glow term alone (its emissive and incandescence) and leaves every other draw unchanged.
+void GXSetColorMatrix(const f32 rows[3][3], GXBool glowOnly);
 
 // Port extension: Remastered's bloom and colour grade at the end of the HDR scene (GXPortSceneHdr;
 // see lib/gfx/bloom.cpp). Light above `threshold` (exposed luminance) blooms, tints 0 to 3 weight
@@ -291,6 +301,11 @@ void GXPortPostCompositeAdd(const f32 rgba[4]);
 // [0, 1], and out.rgb = clamp(frame) * clamp(c2).rgb + v.rgb * v.a, out.a = frame.a * clamp(c2).a.
 // Taken by that post and cleared; any NULL clears it.
 void GXPortPostCompositeRadial(const f32 c0[4], const f32 c1[4], const f32 c2[4]);
+// Port extension: a fullscreen Multiply camera filter (Remastered draws them after UberPost onto
+// its sRGB output) for the next GXPortPostProcessScene's composite, after the add and radial terms:
+// out.rgb = clamp(frame) * clamp(rgb), in linear light before the encode. Taken by that post and
+// cleared; NULL clears it.
+void GXPortPostCompositeMultiply(const f32 rgb[3]);
 // Port extension: Remastered's volumetric fog over the EFB as drawn so far: a froxel grid
 // (16x16 pixels by 64 slices out to `fog[0]`) of height and noise shaped density, lit by the
 // ambient volume's mean light, integrated front to back and applied to every pixel at the

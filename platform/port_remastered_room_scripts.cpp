@@ -83,8 +83,6 @@ struct Pass {
   uint8_t retailType;
   uint32_t actions[2];
 };
-// A TimerMP1's wait, in seconds.
-constexpr uint32_t kPropTimerDelay = 0xfb2a2cf0;
 constexpr Pass kPasses[] = {
     {0x15, {0x379d362e, 0x379d362e}},  // Relay
     {kRetailTimer, {0xd63b8f04, 0x55193b90}},  // Timer
@@ -105,7 +103,6 @@ int RetailType(uint32_t type) {
   return it == table.end() ? -1 : it->second;
 }
 
-// The retail state a component type's event stands for, -1 when unknown.
 int RetailState(uint32_t type, uint32_t event) {
   static const std::map<std::pair<uint32_t, uint32_t>, int> table = [] {
     std::map<std::pair<uint32_t, uint32_t>, int> t;
@@ -129,6 +126,99 @@ uint8_t LinkAct(uint32_t action) {
              ? PortRoomGeo::kHide
          : action == kActionToggleActive ? PortRoomGeo::kToggle
                                          : 0;
+}
+
+namespace {
+bool IsSpecialFunction(const Room& room, const Component& c, uint32_t function) {
+  if (c.type != kSpecialFunction) {
+    return false;
+  }
+  const auto f = room.Flat(c);
+  const auto type = f.find(kPropSpecialFunctionType);
+  return type != f.end() && type->second.size == 4 && ReadLE32(room.Bytes(type->second)) == function;
+}
+}  // namespace
+
+bool IsFollowLocator(const Room& room, const Component& c) {
+  return IsSpecialFunction(room, c, kSpecialFunctionFollowLocator);
+}
+
+SpecialFunctionSend SpecialFunctionSends(const Room& room, const Component& c, uint32_t event, bool matched) {
+  if (event == kEventSpecialFunctionZero && IsSpecialFunction(room, c, kSpecialFunctionCinematicSkip)) {
+    return matched ? SpecialFunctionSend::kRetail : SpecialFunctionSend::kNever;
+  }
+  if (IsSpecialFunction(room, c, kSpecialFunctionSaveStation)) {
+    if (event == kEventSpecialFunctionClosed) {
+      return SpecialFunctionSend::kNever;
+    }
+    if (matched && (event == kEventSpecialFunctionZero || event == kEventSpecialFunctionMaxReached)) {
+      return SpecialFunctionSend::kRetail;
+    }
+  }
+  return SpecialFunctionSend::kUnknown;
+}
+
+uint32_t FollowMessage(uint32_t target, uint32_t action) {
+  // The targets' TranslateScriptActionToMessage, for the actions ObjectFollowLocators send.
+  constexpr uint32_t kGunTurretMP1 = 0x1704c1f0, kPlatformMP1 = 0xa12967fb, kOmegaPirateMP1 = 0x7f2845c7;
+  if (action == kActionEntityActivate) {
+    return 1;
+  }
+  if (action == kActionEntityDeactivate) {
+    return 4;
+  }
+  switch (target) {
+  case kGunTurretMP1:
+    return action == 0x30986885 ? 1 : 0;
+  case kPlatformMP1:
+    return action == 0x2302215c ? 1 : 0;
+  case kActorMP1:
+    return action == kActionActivate ? 1 : action == kActionDeactivate ? 4 : 0;
+  case kOmegaPirateMP1:
+    return action == 0xfdc33da7 ? 1 : 0;
+  case kEffectMP1:
+    return action == kActionEffectDeactivate ? 4 : 0;
+  default:
+    return 0;
+  }
+}
+
+// The retail message a TimerMP1's action is (CScriptTimerMP1's 0xf36b10, and IMP1EntityBaseGOC's
+// 'ACTV' and 'ICTV'), as kLinkMessage | message; 0 for one with no retail message.
+uint8_t TimerAct(uint32_t action) {
+  const uint32_t message = action == kActionTimerActivate || action == kActionEntityActivate       ? 1u    // Activate
+                           : action == kActionTimerDeactivate || action == kActionEntityDeactivate ? 4u    // Deactivate
+                           : action == kActionTimerReset                                         ? 10u   // Reset
+                           : action == kActionTimerStart[0]                                      ? 11u   // ResetAndStart
+                           : action == kActionTimerStart[1]                                      ? 14u   // Start
+                           : action == kActionTimerStop                                          ? 15u   // Stop
+                           : action == kActionTimerStopAndReset                                  ? 16u   // StopAndReset
+                           : action == kActionTimerToggle                                        ? 17u   // ToggleActive
+                                                                                                 : 0u;
+  return message != 0 ? uint8_t(kLinkMessage | message) : 0;
+}
+
+// The retail message a TriggerMP1's action is (CTriggerMP1GOC's table), as kLinkMessage | message;
+// 0 for one with no retail message. Its 'ACTV' and 'ICTV' reach OnActivationStateChange (0xf3f35c),
+// which does nothing (0xc51ab0), so they have none.
+uint8_t TriggerAct(uint32_t action) {
+  const uint32_t message = action == kActionTriggerActivate     ? 1u    // Activate
+                           : action == kActionTriggerDeactivate ? 4u    // Deactivate
+                           : action == kActionTriggerToggle     ? 17u   // ToggleActive
+                                                                : 0u;
+  return message != 0 ? uint8_t(kLinkMessage | message) : 0;
+}
+
+// The retail message a ScriptRelayMP1's action is (CScriptRelayMP1GOC's 0xf5e094), as
+// kLinkMessage | message; 0 for the others, which go to IMP1EntityBaseGOC (0xc51ea4) and are not
+// followed.
+uint8_t RelayAct(uint32_t action) {
+  const uint32_t message = action == kActionScriptRelayFire         ? 13u   // SetToZero
+                           : action == kActionScriptRelayActivate   ? 1u    // Activate
+                           : action == kActionScriptRelayDeactivate ? 4u    // Deactivate
+                           : action == kActionScriptRelayToggle     ? 17u   // ToggleActive
+                                                                    : 0u;
+  return message != 0 ? uint8_t(kLinkMessage | message) : 0;
 }
 
 bool IsPass(int retailType) {
@@ -207,6 +297,34 @@ uint32_t FluidSender(const Room& room, const std::map<int, std::vector<const Con
   }
   state = up ? 0 : 1;
   return PortRoomEnv::kSenderCameraWater;
+}
+
+// The fluid senders (FluidSender) that fire the Relay `relay`, directly or through more Relays,
+// as links acting `act`: a room's own copy of a master's water fog chain (the Reflecting Pool's
+// CameraWaterStateProxy -> InventoryActivator -> Relay -> fog hint), walked as MasterScripts does.
+static void FluidRelayLinks(const Room& room, const std::map<int, std::vector<const Connection*>>& incoming,
+                            int relay, uint8_t act, std::vector<int>& seen, std::vector<PortRoomGeo::Link>& links) {
+  const std::vector<Component>& comps = room.Components();
+  const auto in = incoming.find(relay);
+  if (in == incoming.end()) {
+    return;
+  }
+  for (const Connection* c : in->second) {
+    if (c->action != kActionRelayFire) {
+      continue;
+    }
+    const Component& sender = comps[c->sender];
+    int state = 0;
+    const uint32_t fluid = FluidSender(room, incoming, *c, state);
+    if (fluid != 0) {
+      links.push_back({fluid, uint8_t(state), act});
+    } else if (sender.type == kRelay && c->event == kEventRelayFired && sender.entity >= 0 && seen.size() < 6 &&
+               std::find(seen.begin(), seen.end(), sender.entity) == seen.end()) {
+      seen.push_back(sender.entity);
+      FluidRelayLinks(room, incoming, sender.entity, act, seen, links);
+      seen.pop_back();
+    }
+  }
 }
 
 // A TriggerMP1's box: centred on the entity, `scale` across, turned Rz * Ry * Rx, in GameCube
@@ -418,11 +536,12 @@ std::vector<PortRoomEnv::EnvVar> ReadEnvVars(const Room& room) {
   return out;
 }
 
-// A component's typed links, after its connections in its id data: u16 count, then per link
-// u32 link id, the target entity's guid, u32, u8, u8, and a guid (42 bytes). The linked
-// components (-1 for a guid the room lacks), in order.
-std::vector<std::pair<uint32_t, int>> ReadEntityLinkIds(const Room& room, size_t i) {
-  std::vector<std::pair<uint32_t, int>> out;
+// A component's links, after its connections in its id data: u16 count, then per link u32 link
+// id, the target entity's guid, u32 data type, and for a nonzero type u16 size, that many bytes
+// of data and u32 size and that many more, then u8, u8 and a guid (42 bytes when untyped). The
+// linked components (-1 for a guid the room lacks), in order; none when they do not read.
+std::vector<EntityLink> ReadEntityLinkData(const Room& room, size_t i) {
+  std::vector<EntityLink> out;
   std::vector<Connection> conns;
   size_t o = 0;
   if (!ReadComponentConnections(room, i, conns, o)) {
@@ -436,13 +555,42 @@ std::vector<std::pair<uint32_t, int>> ReadEntityLinkIds(const Room& room, size_t
   }
   const size_t count = ReadLE16(b + o);
   o += 2;
-  if ((n - o) / 42 < count) {
-    return out;
-  }
-  for (size_t k = 0; k < count; ++k, o += 42) {
+  for (size_t k = 0; k < count; ++k) {
+    if (n - o < 24) {
+      return {};
+    }
+    EntityLink l;
+    l.id = ReadLE32(b + o);
     Id16 target;
     std::memcpy(target.data(), b + o + 4, 16);
-    out.emplace_back(ReadLE32(b + o), room.ByGuid(target));
+    l.target = room.ByGuid(target);
+    l.type = ReadLE32(b + o + 20);
+    o += 24;
+    if (l.type != 0) {
+      if (n - o < 2 || n - o - 2 < ReadLE16(b + o)) {
+        return {};
+      }
+      const size_t size = ReadLE16(b + o);
+      l.payload = {idta.start + o + 2, size};
+      o += 2 + size;
+      if (n - o < 4 || n - o - 4 < ReadLE32(b + o)) {
+        return {};
+      }
+      o += 4 + size_t(ReadLE32(b + o));
+    }
+    if (n - o < 18) {
+      return {};
+    }
+    o += 18;
+    out.push_back(l);
+  }
+  return out;
+}
+
+std::vector<std::pair<uint32_t, int>> ReadEntityLinkIds(const Room& room, size_t i) {
+  std::vector<std::pair<uint32_t, int>> out;
+  for (const EntityLink& l : ReadEntityLinkData(room, i)) {
+    out.emplace_back(l.id, l.target);
   }
   return out;
 }
@@ -632,7 +780,7 @@ std::vector<IceDarkenerAtLoad> IceDarkeners(const Room& room, std::vector<std::s
             const uint32_t type = comps[s].type;
             float wait = 0.f;
             if (type == kTimerMP1) {
-              wait = floatOf(s, kPropTimerDelay, 0.f);
+              wait = floatOf(s, kPropTimerDelay, kTimerDefaultDelay);
               if (!std::isfinite(wait) || wait < 0.f) {
                 wait = 0.f;
               }
@@ -853,6 +1001,130 @@ SceneryScripts MatchScripts(const Room& room, const Area& area) {
     ents.push_back(e);
   }
   result.entities = ents.size();
+  std::set<int> effectEntities;  // the EffectMP1 actors, whatever component comes first
+  for (const Component* c : room.Of(kEffectMP1)) {
+    if (c->entity >= 0) {
+      effectEntities.insert(c->entity);
+    }
+  }
+  std::set<int> generatorEntities;  // the GeneratorMP1s
+  for (const Component* c : room.Of(kGeneratorMP1)) {
+    if (c->entity >= 0) {
+      generatorEntities.insert(c->entity);
+    }
+  }
+  std::map<int, const Component*> timerComps;  // the TimerMP1s, by entity
+  for (const Component* c : room.Of(kTimerMP1)) {
+    if (c->entity >= 0) {
+      timerComps.emplace(c->entity, c);
+    }
+  }
+  // A TimerMP1 as a retail CScriptTimer (CScriptTimerMP1::Create 0xf373c8, ApplyTime 0xf37654):
+  // none where its restart flag is set without autostart, which retail cannot do.
+  const auto timerOf = [&](const Component& c) -> std::optional<SceneryScripts::Timer> {
+    const auto f = room.Flat(c);
+    const auto flag = [&](uint32_t id) {
+      const auto it = f.find(id);
+      return it != f.end() && it->second.size >= 1 && room.Bytes(it->second)[0] != 0;
+    };
+    const auto time = [&](uint32_t id, float absent) {
+      const auto it = f.find(id);
+      const float v = it != f.end() && it->second.size == 4 ? ReadLEFloat(room.Bytes(it->second)) : absent;
+      return std::isfinite(v) ? std::clamp(v, 0.f, 600.f) : 0.f;
+    };
+    SceneryScripts::Timer t;
+    t.delay = time(kPropTimerDelay, kTimerDefaultDelay);
+    t.random = time(kPropTimerRandom, 0.f);
+    t.autoStart = flag(kPropTimerAutostart);
+    const bool restart = flag(kPropTimerRestart);
+    if (restart && !t.autoStart) {
+      return std::nullopt;
+    }
+    t.loop = restart || flag(kPropTimerLoop);
+    t.active = room.Active(c);
+    t.baseLayer = c.baseLayer;
+    return t;
+  };
+  std::map<int, const Component*> relayComps;  // the ScriptRelayMP1s, by entity
+  for (const Component* c : room.Of(kScriptRelayMP1)) {
+    if (c->entity >= 0) {
+      relayComps.emplace(c->entity, c);
+    }
+  }
+  const auto relayOf = [&](const Component& c) {
+    SceneryScripts::Relay r;
+    r.active = room.Active(c);
+    r.baseLayer = c.baseLayer;
+    return r;
+  };
+  std::map<int, const Component*> triggerComps;  // the TriggerMP1s, by entity
+  for (const Component* c : room.Of(kTriggerMP1)) {
+    if (c->entity >= 0) {
+      triggerComps.emplace(c->entity, c);
+    }
+  }
+  // A TriggerMP1 as a retail CScriptTrigger (SLdrTriggerMP1::Load 0xf3e95c, CTriggerMP1GOC::Create
+  // 0xf3f230): its box is the scale through the area's rotation (GetAreaTransformedScale 0xd1e2d0),
+  // the entity's own rotation left out. None with a force, contact damage, KillOnEnter, camera
+  // detection or boolean intersection, which the add-on does not carry.
+  const auto triggerOf = [&](const Component& c) -> std::optional<SceneryScripts::Trigger> {
+    Vec3 pos, rot, scale;
+    if (!room.Xform(c, pos, rot, scale)) {
+      return std::nullopt;
+    }
+    const auto zero = [&](const Span& s) {
+      const uint8_t* b = room.Bytes(s);
+      return std::all_of(b, b + s.size, [](uint8_t v) { return v == 0; });
+    };
+    Span sp;
+    if (room.Nested(c, {kPropTriggerForce}, sp) && !zero(sp)) {
+      return std::nullopt;
+    }
+    if (room.Nested(c, {kPropTriggerDamageAmount[0]}, sp)) {
+      std::vector<Prop> damage;
+      if (!PropList(room.Bytes(sp), sp.size, &damage)) {
+        return std::nullopt;
+      }
+      for (const Prop& p : damage) {
+        const Span v{sp.start + p.data.start, p.data.size};
+        if (p.id == kPropTriggerDamageAmount[1] ? !zero(v) : p.id != kPropDamageWeaponType) {
+          return std::nullopt;
+        }
+      }
+    }
+    const auto f = room.Flat(c);
+    const auto flag = [&](uint32_t id) {
+      const auto it = f.find(id);
+      return it != f.end() && it->second.size >= 1 && room.Bytes(it->second)[0] != 0;
+    };
+    SceneryScripts::Trigger t;
+    const auto flags = f.find(kPropTriggerFlags);
+    if (flags != f.end() && flags->second.size == 4) {
+      t.flags = ReadLE32(room.Bytes(flags->second));
+    }
+    if ((t.flags & (0x800u | kTriggerDetectCamera | 0x8000u)) != 0) {
+      return std::nullopt;
+    }
+    const Vec3 w = Apply(area.xf, MulR2G(pos));
+    const Vec3 s = MulR2G(scale);
+    for (size_t i = 0; i < 3; ++i) {
+      double extent = 0.;
+      for (size_t j = 0; j < 3; ++j) {
+        extent += std::fabs(area.xf[i][j]) * std::fabs(double(s[j]));
+      }
+      t.pos[i] = float(w[i]);
+      t.extent[i] = float(extent);
+      if (!std::isfinite(t.pos[i]) || !std::isfinite(t.extent[i]) || std::fabs(t.pos[i]) >= 1e5f ||
+          t.extent[i] >= 1e5f) {
+        return std::nullopt;
+      }
+    }
+    t.active = room.Active(c);
+    t.deactivateOnEntered = flag(kPropTriggerDeactivateOnEntered);
+    t.deactivateOnExited = flag(kPropTriggerDeactivateOnExited);
+    t.baseLayer = c.baseLayer;
+    return t;
+  };
   auto valid = [](const ScriptObject& o) {
     return o.hasPos && std::isfinite(o.pos[0]) && std::isfinite(o.pos[1]) && std::isfinite(o.pos[2]) &&
            std::fabs(o.pos[0]) < 1e5 && std::fabs(o.pos[1]) < 1e5 && std::fabs(o.pos[2]) < 1e5;
@@ -1046,6 +1318,132 @@ SceneryScripts MatchScripts(const Room& room, const Area& area) {
       break;
     }
   }
+  // An effect no other way matched, by what reaches it: the one unused retail Effect whose
+  // senders and states are its matched senders' and states, every connection into it traced.
+  // Remastered moved some 2 to 37 units (past kMatchNear) and they send nothing, so without
+  // this both the retail object and Remastered's copy of it drew (38 effects).
+  {
+    constexpr uint8_t kRetailEffectType = 7;
+    constexpr uint8_t kRetailGeneratorType = 0x0A;
+    constexpr uint32_t kRetailZeroState = 9;
+    using Sig = std::vector<std::pair<uint32_t, uint32_t>>;  // (sender editor id, state)
+    std::map<uint32_t, Sig> retailIn;                         // by target editor id, layer bits off
+    for (const ScriptObject& o : objects) {
+      for (const ScriptObject::Link& l : o.links) {
+        retailIn[l.target & 0x03FFFFFF].push_back({o.id, l.state});
+      }
+    }
+    std::map<int, Sig> remasteredIn;  // by entity index
+    std::set<int> untraced;
+    for (const Connection& c : conns) {
+      const int ti = room.ByGuid(c.target);
+      if (ti < 0) {
+        continue;
+      }
+      // To an Entity is to that entity, to another component to the entity holding it.
+      const int ec = comps[size_t(ti)].type == kEntity ? ti : comps[size_t(ti)].entity;
+      const auto ei = entIndex.find(ec);
+      const int t = ei == entIndex.end() ? -1 : int(ei->second);
+      if (t < 0 || match[size_t(t)] >= 0 || effectEntities.count(ents[size_t(t)].entity) == 0) {
+        continue;
+      }
+      const int s = entityOf(int(c.sender));
+      // An unmatched ObjectFollowLocator's Play only names the effect it moves and sends it
+      // nothing (0xd951a8): the effects import writes it as a follow.
+      if ((s < 0 || match[size_t(s)] < 0) && c.event == kEventSpecialFunctionPlay &&
+          IsFollowLocator(room, comps[c.sender])) {
+        remasteredIn[t];
+        continue;
+      }
+      // Nor does a SpecialFunction's event that never fires.
+      if (SpecialFunctionSends(room, comps[c.sender], c.event, s >= 0 && match[size_t(s)] >= 0) ==
+          SpecialFunctionSend::kNever) {
+        remasteredIn[t];
+        continue;
+      }
+      // Nor an unmatched sender's event that is never sent (a matched one's names it as retail's
+      // link on Default does, which tells which retail Effect it is).
+      if ((s < 0 || match[size_t(s)] < 0) && NeverSent(comps[c.sender].type, c.event)) {
+        continue;
+      }
+      const int state = RetailState(comps[c.sender].type, c.event);
+      if (s < 0 || match[size_t(s)] < 0 || state < 0) {
+        untraced.insert(t);
+        continue;
+      }
+      remasteredIn[t].push_back({objects[size_t(match[size_t(s)])].id, uint32_t(state)});
+    }
+    std::map<Sig, std::vector<size_t>> bySig;  // unused retail Effects by their incoming set
+    for (size_t j = 0; j < objects.size(); ++j) {
+      const auto it = retailIn.find(objects[j].id & 0x03FFFFFF);
+      if (used[j] || objects[j].type != kRetailEffectType || it == retailIn.end()) {
+        continue;
+      }
+      Sig s = it->second;
+      std::sort(s.begin(), s.end());
+      s.erase(std::unique(s.begin(), s.end()), s.end());
+      bySig[s].push_back(j);
+    }
+    std::map<size_t, std::vector<int>> claims;
+    for (auto& [t, s] : remasteredIn) {
+      std::sort(s.begin(), s.end());
+      s.erase(std::unique(s.begin(), s.end()), s.end());
+      if (untraced.count(t) != 0 || s.empty()) {
+        continue;
+      }
+      const auto it = bySig.find(s);
+      if (it != bySig.end()) {
+        if (it->second.size() == 1) {
+          claims[it->second[0]].push_back(t);
+        }
+        continue;
+      }
+      // Remastered dropped some links into it: Mines turrets' explosions lost the parts
+      // generator's Zero -> Activate and keep the turret's Dead. Then the one unused retail
+      // Effect whose links include all of its own.
+      std::vector<size_t> wider;
+      for (const auto& [rs, js] : bySig) {
+        if (std::includes(rs.begin(), rs.end(), s.begin(), s.end())) {
+          wider.insert(wider.end(), js.begin(), js.end());
+        }
+      }
+      if (wider.size() == 1) {
+        claims[wider[0]].push_back(t);
+        continue;
+      }
+      // Or Remastered linked the generator's sender straight to it: a Frigate turret's
+      // (05_Zoo) Dead activates the explosion that retail's parts Generator, on that
+      // Dead, activated on Zero. Then the one unused retail Effect whose links, a Generator
+      // with one link into it read as that link, are its own.
+      std::vector<size_t> through;
+      for (const auto& [rs, js] : bySig) {
+        Sig c;
+        for (const auto& [sender, state] : rs) {
+          const auto gi = objIndex.find(sender);
+          const auto gin = retailIn.find(sender & 0x03FFFFFF);
+          if (gi != objIndex.end() && objects[gi->second].type == kRetailGeneratorType &&
+              state == kRetailZeroState && gin != retailIn.end() && gin->second.size() == 1) {
+            c.push_back(gin->second[0]);
+          } else {
+            c.push_back({sender, state});
+          }
+        }
+        std::sort(c.begin(), c.end());
+        c.erase(std::unique(c.begin(), c.end()), c.end());
+        if (c == s) {
+          through.insert(through.end(), js.begin(), js.end());
+        }
+      }
+      if (through.size() == 1) {
+        claims[through[0]].push_back(t);
+      }
+    }
+    for (const auto& [j, ks] : claims) {
+      if (ks.size() == 1) {
+        take(size_t(ks[0]), j);
+      }
+    }
+  }
   // A Remastered layer is drawn on the retail layer most of its matched entities are on.
   // Remastered's base layer is always loaded, whatever its entities' retail layers (in
   // Phendrana Shorelines its vote picked a 15-object layer), so it is on no layer.
@@ -1079,6 +1477,17 @@ SceneryScripts MatchScripts(const Room& room, const Area& area) {
       incoming[t].push_back(&c);
     }
   }
+  // The walk folds a ScriptRelayMP1 into the drive where that is exact: active from the start, and
+  // nothing but SetToZero reaching it (then each SetToZero is one Zero).
+  const auto relayFolds = [&](const Component& c) {
+    if (!room.Active(c)) {
+      return false;
+    }
+    const auto in = incoming.find(c.entity);
+    return in == incoming.end() || std::all_of(in->second.begin(), in->second.end(), [](const Connection* f) {
+             return f->action == kActionScriptRelayFire;
+           });
+  };
   // The entities that are Remastered's own script objects, and the component of each that
   // says what it is.
   std::map<int, std::pair<uint8_t, size_t>> scriptObject;  // by entity: node kind, component
@@ -1403,8 +1812,8 @@ SceneryScripts MatchScripts(const Room& room, const Area& area) {
         const bool unmatched = ms < 0 || match[size_t(ms)] < 0;
         const bool nostate = RetailState(sender.type, c.event) < 0;
         char key[160];
-        std::snprintf(key, sizeof key, "%s%s%s (target %08X, sender %08X event %08X action %08X, depth %d)",
-                      unmatched ? "unmatched " : "", nostate ? "nostate " : "",
+        std::snprintf(key, sizeof key, "%s%s%s%s (target %08X, sender %08X event %08X action %08X, depth %d)",
+                      effectEntities.count(e.entity) != 0 ? "effect " : "", unmatched ? "unmatched " : "", nostate ? "nostate " : "",
                       !unmatched && !nostate ? (depth >= 6 ? "depth " : "other ") : "", e.type, sender.type, c.event, first,
                       depth);
         auto& stat = result.missStats[key];
@@ -1435,7 +1844,43 @@ SceneryScripts MatchScripts(const Room& room, const Area& area) {
     const bool driverStart = driverStarts.count(e.entity) != 0;
     // The show and hide of an actor a driver fades come through the script's longest chains.
     const int maxDepth = driverStart || result.drivers.count(e.entity) != 0 ? 8 : 6;
+    // An EffectMP1 is driven only where every connection into it is traced: its own actions
+    // too (CEffectMP1GOC::TranslateScriptActionToMessage 0xd9c9e4), and none left out.
+    const bool isEffect = effectEntities.count(e.entity) != 0;
+    // A generator that copies effects is traced as strictly, with its own actions only.
+    const bool generator = generatorEntities.count(e.entity) != 0;
+    // So is a TimerMP1 no retail object matched, which may become a timer add-on: its actions are
+    // retail messages.
+    const bool isTimer = timerComps.count(e.entity) != 0 && match[size_t(&e - ents.data())] < 0;
+    // And a TriggerMP1 no retail object matched, which may become a trigger add-on.
+    const bool isTrigger = triggerComps.count(e.entity) != 0 && match[size_t(&e - ents.data())] < 0 &&
+                           triggerOf(*triggerComps.at(e.entity)).has_value();
+    // And a ScriptRelayMP1 no retail object matched, which may become a relay add-on.
+    const bool isRelay = relayComps.count(e.entity) != 0 && match[size_t(&e - ents.data())] < 0;
+    const bool effect = isEffect || generator || isTimer || isTrigger || isRelay;
     const auto act = [&](uint32_t action) -> uint8_t {
+      if (isTimer) {
+        return TimerAct(action);
+      }
+      if (isTrigger) {
+        return TriggerAct(action);
+      }
+      if (isRelay) {
+        return RelayAct(action);
+      }
+      if (generator) {
+        return action == kActionGeneratorSetToZero                                       ? PortRoomGeo::kGenerate
+               : action == kActionGeneratorActivate || action == kActionEntityActivate     ? PortRoomGeo::kShow
+               : action == kActionGeneratorDeactivate || action == kActionEntityDeactivate ? PortRoomGeo::kHide
+               : action == kActionGeneratorToggle                                         ? PortRoomGeo::kToggle
+                                                                                          : 0;
+      }
+      if (isEffect) {
+        const uint8_t effectAct = EffectAct(action);
+        if (effectAct != 0) {
+          return effectAct;
+        }
+      }
       if (driverStart && action == kActionDriverStart) {
         return PortRoomGeo::kShow;
       }
@@ -1454,6 +1899,51 @@ SceneryScripts MatchScripts(const Room& room, const Area& area) {
       }
       for (const Connection* c : in->second) {
         const Component& sender = comps[c->sender];
+        // A generator's Zero -> Generate names the effect as a template: the generator's own
+        // links drive it (CScriptGeneratorMP1 0xf44128), never this connection.
+        if (isEffect && depth == 0 && sender.type == kGeneratorMP1 && c->event == kEventGeneratorZero &&
+            c->action == kActionGenerate && sender.entity >= 0) {
+          auto& by = result.generatedBy[e.entity];
+          if (std::find(by.begin(), by.end(), sender.entity) == by.end()) {
+            by.push_back(sender.entity);
+          }
+          continue;
+        }
+        // An unmatched ObjectFollowLocator's Play names the effect as the actor it moves; the
+        // function reads it and never sends it (0xd951a8). The effects import writes it as a follow.
+        // A matched one is retail's, which moves the retail object only: the effect is left out,
+        // unless the effect is that retail object (its Play -> Deactivate names it), which then
+        // carries Remastered's effect where retail's function moves it.
+        if (isEffect && depth == 0 && c->event == kEventSpecialFunctionPlay && sender.entity >= 0 &&
+            IsFollowLocator(room, sender)) {
+          const int fs = entityOf(int(c->sender));
+          if (fs >= 0 && match[size_t(fs)] >= 0) {
+            const int self = match[size_t(&e - ents.data())];
+            const auto& retailLinks = objects[size_t(match[size_t(fs)])].links;
+            if (self < 0 || std::none_of(retailLinks.begin(), retailLinks.end(), [&](const ScriptObject::Link& l) {
+                  return l.state == uint32_t(kStatePlay) && l.message == 4 /* kSM_Deactivate */ &&
+                         l.target == objects[size_t(self)].id;
+                })) {
+              miss(sender, *c, c->action, depth);
+            }
+            continue;
+          }
+          auto& by = result.followedBy[e.entity];
+          if (std::find(by.begin(), by.end(), sender.entity) == by.end()) {
+            by.push_back(sender.entity);
+          }
+          continue;
+        }
+        // One addressed to another component of an effect's entity (a Boolean's c53a2e78 to its
+        // AmbientParticleEffect) with an action neither CEffectMP1GOC nor IMP1EntityBaseGOC
+        // translates (0xd9c9e4, 0xc51ea4: 0xffff, no message) never reaches the effect.
+        if (isEffect && depth == 0) {
+          const int t = room.ByGuid(c->target);
+          if (t >= 0 && comps[size_t(t)].type != kEntity && comps[size_t(t)].type != kEffectMP1 &&
+              EffectAct(c->action) == 0 && !IsEntityBaseAction(c->action)) {
+            continue;
+          }
+        }
         int fluidState = 0;
         const uint32_t fluid =
             depth == 0 && hintEntities.count(entity) != 0 ? fluidSender(*c, fluidState) : 0;
@@ -1470,6 +1960,20 @@ SceneryScripts MatchScripts(const Room& room, const Area& area) {
             miss(sender, *c, c->action, depth);
           }
           continue;
+        }
+        // A Relay of Remastered's own that the camera water fires (FluidRelayLinks); one that
+        // nothing fluid fires is the script's, below.
+        if (depth == 0 && hintEntities.count(entity) != 0 && !transition && sender.type == kRelay &&
+            c->event == kEventRelayFired && sender.entity >= 0) {
+          const uint8_t relayAct = act(c->action);
+          const size_t before = links.size();
+          std::vector<int> relaySeen{entity, sender.entity};
+          if (relayAct != 0) {
+            FluidRelayLinks(room, incoming, sender.entity, relayAct, relaySeen, links);
+          }
+          if (links.size() != before) {
+            continue;
+          }
         }
         // A light that switches itself off as a backward play reaches its start (PointLightData::offAtStart).
         if (light && depth == 0 && sender.entity == e.entity && c->event == kEventLightReachedStart) {
@@ -1492,16 +1996,90 @@ SceneryScripts MatchScripts(const Room& room, const Area& area) {
             }
           }
         }
+        // A SpecialFunction's event that never fires in the port (a skip it never offers, say).
+        if (sender.type == kSpecialFunction) {
+          const int ss = entityOf(int(c->sender));
+          if (SpecialFunctionSends(room, sender, c->event, ss >= 0 && match[size_t(ss)] >= 0) ==
+              SpecialFunctionSend::kNever) {
+            continue;
+          }
+        }
+        // Nor does Default, which is never sent (NeverSent).
+        if (effect && NeverSent(sender.type, c->event)) {
+          continue;
+        }
         // Remastered's own objects, and keyframes, are followed by the script (below).
         if (sender.type == kTemplateManager || sender.type == kDebugOptions || isScriptObject(c->sender) ||
             (sender.type == kActorKeyframeMP1 && IsKeyframePlay(c->action)) ||
             (depth > 0 && !PassFires(via, c->action))) {
+          if (effect && sender.type != kDebugOptions) {
+            miss(sender, *c, depth > 0 ? action : c->action, depth);
+          }
           continue;
         }
         const int s = entityOf(int(c->sender));
         const int state = RetailState(sender.type, c->event);
         const uint32_t first = depth > 0 ? action : c->action;
         const int type = RetailType(sender.type);
+        // An unmatched TimerMP1 the walk cannot fold into a delay becomes a timer add-on, the
+        // drive's sender, where it is exact.
+        const auto viaTimer = [&]() {
+          if (!effect || sender.type != kTimerMP1 || sender.entity < 0 || (s >= 0 && match[size_t(s)] >= 0) ||
+              state < 0 || state >= 256) {
+            return false;
+          }
+          const uint8_t timerAct = act(first);
+          std::optional<SceneryScripts::Timer> t = timerOf(sender);
+          if (timerAct == 0 || !t) {
+            return false;
+          }
+          result.timers.try_emplace(sender.entity, std::move(*t));
+          links.push_back({kSenderTimer | uint32_t(sender.entity), uint8_t(state), timerAct, delay, depth > 0});
+          return true;
+        };
+        // So does an unmatched TriggerMP1's Entered or Exited (retail Entered/Exited), as a trigger add-on.
+        const auto viaTrigger = [&]() {
+          if (!effect || sender.type != kTriggerMP1 || sender.entity < 0 || (s >= 0 && match[size_t(s)] >= 0) ||
+              (c->event != kEventEntered && c->event != kEventExited) || state < 0 || state >= 256) {
+            return false;
+          }
+          const uint8_t triggerAct = act(first);
+          std::optional<SceneryScripts::Trigger> t = triggerOf(sender);
+          if (triggerAct == 0 || !t) {
+            return false;
+          }
+          result.triggers.try_emplace(sender.entity, std::move(*t));
+          links.push_back({kSenderTrigger | uint32_t(sender.entity), uint8_t(state), triggerAct, delay, depth > 0});
+          return true;
+        };
+        // And an unmatched ScriptRelayMP1's Zero the walk cannot fold (relayFolds), as a relay add-on.
+        const auto viaRelay = [&]() {
+          if (!effect || sender.type != kScriptRelayMP1 || sender.entity < 0 || (s >= 0 && match[size_t(s)] >= 0) ||
+              state != kStateZero) {
+            return false;
+          }
+          const uint8_t relayAct = act(first);
+          if (relayAct == 0) {
+            return false;
+          }
+          result.relays.try_emplace(sender.entity, relayOf(sender));
+          links.push_back({kSenderRelay | uint32_t(sender.entity), uint8_t(state), relayAct, delay, depth > 0});
+          return true;
+        };
+        // And an unmatched EffectMP1's Active or Inactive (CEntityMP1::AcceptScriptMsg 0xc43a94
+        // sends them as CEntity does), from the effect it is added as.
+        const auto viaEffect = [&]() {
+          if (!effect || sender.type != kEffectMP1 || sender.entity < 0 || (s >= 0 && match[size_t(s)] >= 0) ||
+              (state != kStateActive && state != kStateInactive)) {
+            return false;
+          }
+          const uint8_t effectAct = act(first);
+          if (effectAct == 0) {
+            return false;
+          }
+          links.push_back({kSenderEffect | uint32_t(sender.entity), uint8_t(state), effectAct, delay, depth > 0});
+          return true;
+        };
         if (s >= 0 && match[size_t(s)] >= 0 && state >= 0) {
           // A DamageableTrigger reads its own MaxReached -> Activate connections and never
           // sends them, so only a direct one counts.
@@ -1509,20 +2087,62 @@ SceneryScripts MatchScripts(const Room& room, const Area& area) {
                                first == kActionActivate;
           const uint8_t linkAct = follows ? static_cast<uint8_t>(PortRoomGeo::kFollow) : act(first);
           if (linkAct != 0 && state < 256) {
-            links.push_back({objects[size_t(match[size_t(s)])].id, uint8_t(state), linkAct, delay});
+            links.push_back({objects[size_t(match[size_t(s)])].id, uint8_t(state), linkAct, delay, depth > 0});
+          } else if (effect) {
+            miss(sender, *c, first, depth);
           }
         } else if (IsPass(type) && sender.entity >= 0 && depth < maxDepth &&
                    std::find(seen.begin(), seen.end(), sender.entity) == seen.end()) {
-          seen.push_back(sender.entity);
           float wait = 0.f;
+          if (effect && sender.type == kScriptRelayMP1 && !relayFolds(sender)) {
+            if (!viaRelay()) {
+              miss(sender, *c, first, depth);
+            }
+            continue;
+          }
+          // A Timer (SLdrTimer::Load 0x86401c) keeps its fields under other ids (duration
+          // 651d6dfd, random 800e060e, +0x11 3459bf46, +0x12 77d0eae3 set by default, +0x10
+          // 72c7f9f4), and what its actions do is unread: only a TimerMP1 passes a message on.
+          if (effect && type == kRetailTimer && sender.type != kTimerMP1) {
+            miss(sender, *c, first, depth);
+            continue;
+          }
           if (type == kRetailTimer) {
             const auto f = room.Flat(sender);
             const auto prop = f.find(kPropTimerDelay);
+            wait = kTimerDefaultDelay;
             if (prop != f.end() && prop->second.size == 4) {
               wait = ReadLEFloat(room.Bytes(prop->second));
               wait = std::isfinite(wait) ? std::clamp(wait, 0.f, 600.f) : 0.f;
             }
+            // An effect's drive waits as one restarting delay per link: exact only for a timer
+            // that ResetAndStart alone drives (SLdrTimerMP1::Load 0xf36d14), once, with no random
+            // add (35c8fdd3), no loop (+0x12) and no autostart (+0x11), that starts active: its
+            // actions become retail messages (0xf36b10), and an inactive CScriptTimer drops
+            // ResetAndStart. Its reset-on-expiry (+0x10) changes nothing then, as each start
+            // resets it anyway.
+            if (effect) {
+              const auto flag = [&](uint32_t id) {
+                const auto it = f.find(id);
+                return it != f.end() && it->second.size >= 1 && room.Bytes(it->second)[0] != 0;
+              };
+              const auto random = f.find(kPropTimerRandom);
+              const bool randomAdd = random != f.end() && random->second.size == 4 &&
+                                     ReadLEFloat(room.Bytes(random->second)) != 0.f;
+              const auto feeds = incoming.find(sender.entity);
+              const bool onlyResetAndStart =
+                  feeds != incoming.end() && feeds->second.size() == 1 &&
+                  feeds->second[0]->action == kActionTimerStart[0];
+              if (!room.Active(sender) || flag(kPropTimerAutostart) || flag(kPropTimerRestart) || randomAdd ||
+                  !onlyResetAndStart) {
+                if (!viaTimer()) {
+                  miss(sender, *c, first, depth);
+                }
+                continue;
+              }
+            }
           }
+          seen.push_back(sender.entity);
           walk(sender.entity, first, depth + 1, type, delay + wait);
           seen.pop_back();
         } else if (const ScriptObject* counter = hintEntities.count(e.entity) != 0 && sender.type == kCounterMP1 &&
@@ -1535,12 +2155,33 @@ SceneryScripts MatchScripts(const Room& room, const Area& area) {
           } else {
             miss(sender, *c, first, depth);
           }
-        } else {
+        } else if (!viaTimer() && !viaTrigger() && !viaRelay() && !viaEffect()) {
           miss(sender, *c, first, depth);
         }
       }
     };
     walk(e.entity, 0, 0, -1, 0.f);
+    if (isTimer) {
+      // Kept apart: only the effects import reads a timer's links, and only for the timers it needs.
+      if (std::optional<SceneryScripts::Timer> t = timerOf(*timerComps.at(e.entity))) {
+        t->links = std::move(links);
+        result.timers[e.entity] = std::move(*t);
+      }
+      links.clear();
+    } else if (isTrigger) {
+      // The same for a trigger's.
+      if (std::optional<SceneryScripts::Trigger> t = triggerOf(*triggerComps.at(e.entity))) {
+        t->links = std::move(links);
+        result.triggers[e.entity] = std::move(*t);
+      }
+      links.clear();
+    } else if (isRelay) {
+      // And a relay's.
+      SceneryScripts::Relay r = relayOf(*relayComps.at(e.entity));
+      r.links = std::move(links);
+      result.relays[e.entity] = std::move(r);
+      links.clear();
+    }
     if (!links.empty()) {
       result.links[e.entity] = std::move(links);
     }

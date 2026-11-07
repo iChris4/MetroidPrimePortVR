@@ -53,7 +53,10 @@ inline CVector3f DefaultParticleVelocity(uint8_t version) {
 // constant NDC depth shift, applied by replacing the projection's m22 with m22 - shift.
 // m22, m23, m32, m33 are the GX/retro projection elements (clip z = m22 * -d + m23, w = m33 - m32 * d);
 // ComputeNdcDepthFromRetroDepth 0x12e234 is (m23 - m22 * d) / (m33 - m32 * d).
-inline float DepthBiasedProjM22(float m22, float m23, float m32, float m33, float depth, float bias) {
+// The shift is multiplied by `rangeSpan` (0x22a690..0x22a6a0): the device depth range's far - near
+// when the description's DBSO bit is set, else 1 (RemasteredDepthRangeSpan).
+inline float DepthBiasedProjM22(float m22, float m23, float m32, float m33, float depth, float bias,
+                                float rangeSpan = 1.f) {
   constexpr float kEps = 1.1920929e-07f;
   const auto ndc = [&](float d) {
     float w = m33 - m32 * d;
@@ -65,12 +68,27 @@ inline float DepthBiasedProjM22(float m22, float m23, float m32, float m33, floa
   if (depth - kEps < 0.f) {
     depth = kEps;
   }
-  const float shift = ndc(depth + bias) - ndc(depth);
+  const float shift = (ndc(depth + bias) - ndc(depth)) * rangeSpan;
   const float biased = m22 - shift;
   if (std::fabs(biased) >= 1e-5f) {
     return biased;
   }
   return m22 - shift >= 0.f ? kEps : -kEps;
+}
+
+// The span of the device depth range Remastered has where the port draws with retail's
+// [near, far]: the game pass sets the world range (0.0390625, 1) (SGameRenderDepthRanges
+// 0x1d2d7dc, CGameRenderJob::RenderGamePass 0xb30324) and gun draws take flag bit 8's
+// (0.0097656, 0.0386719) (NCustomRender::construct_depth_range_from_flags 0xb40e20). Other
+// ranges have no known counterpart and keep retail's span.
+inline float RemasteredDepthRangeSpan(float near, float far) {
+  if (near == 0.125f && far == 1.f) {
+    return 1.f - 0.0390625f;
+  }
+  if (near == 1.f / 64.f && far == 1.f / 32.f) {
+    return 0.038671873509883881f - 0.0097656231373548508f;
+  }
+  return far - near;
 }
 
 // XFMD3 particles already carry the emitter's global orientation in their positions.
@@ -406,6 +424,23 @@ inline bool RotationFromAxisZY(const CVector3f& first, const CVector3f& second, 
   const float s = InvSqrtF(squared);
   z = CVector3f(s * first.GetX(), s * first.GetY(), s * first.GetZ());
   return NormalizedCross(second, z, x) && NormalizedCross(z, x, y);
+}
+
+// RAYZ (the same GetValue as GetRotationElement 0x25e068 builds it: axis pair 1, normalised row 1,
+// second pair 2): Y = the first vector normalised, X = normalize(Y x second), Z = normalize(X x Y).
+inline bool RotationFromAxisYZ(const CVector3f& first, const CVector3f& second, CVector3f& x,
+                               CVector3f& y, CVector3f& z) {
+  const float xx = first.GetX() * first.GetX();
+  const float yy = first.GetY() * first.GetY();
+  const float zz = first.GetZ() * first.GetZ();
+  const float xy = xx + yy;
+  const float squared = xy + zz;
+  if (squared < kMinNormalizableMagSqd) {
+    return false;
+  }
+  const float s = InvSqrtF(squared);
+  y = CVector3f(s * first.GetX(), s * first.GetY(), s * first.GetZ());
+  return NormalizedCross(y, second, x) && NormalizedCross(x, y, z);
 }
 
 // CPSS (CVECameraPositionInSystemSpace::GetValue 0x2a24fc): the camera position in the system's
@@ -945,14 +980,7 @@ inline CVector3f ConePoint(const ConeFrame& frame, const CVector3f& p, float x, 
 // ANCM (CVEAngleConeMinMax::GetValue 0x29f304): the cosine c between cos(A) and cos(B) by the
 // first draw, s = x * e (x = 1 - c*c) with e one FRSQRTS step from FRSQRTE (0 when x <= 0), the
 // azimuth phi by the second, the direction (s cos phi, s sin phi, c) turned by q and scaled.
-inline CVector3f AngleConeMinMax(const Quat& q, float aDegrees, float bDegrees, float magnitude,
-                                 float u0, float u1) {
-  const float deg = BitsFloat(0x3c8efa35);
-  const float cA = FastCosR(aDegrees * deg);
-  const float cB = FastCosR(bDegrees * deg);
-  const float diff = cB - cA;
-  const float scaled = diff * u0;
-  const float c = cA + scaled;
+inline CVector3f ConeMinMaxDirection(const Quat& q, float c, float phi, float magnitude) {
   const float cc = c * c;
   const float x = 1.f - cc;
   const float e0 = ReciprocalSqrtEstimate(x);
@@ -962,13 +990,50 @@ inline CVector3f AngleConeMinMax(const Quat& q, float aDegrees, float bDegrees, 
     e1 = 0.f;
   }
   const float s = x * e1;
-  const float turn = u1 * BitsFloat(0x40c90fdb);
-  const float phi = turn + -BitsFloat(0x40490fdb);
   const float halfPi = BitsFloat(0x3fc90fdb);
   const float cosPhi = ParabolicSin(WrapAngle(phi + halfPi));
   const float sinPhi = ParabolicSin(phi);
   const CVector3f d = QuatTransform(q, CVector3f(s * cosPhi, s * sinPhi, c));
   return CVector3f(d.GetX() * magnitude, d.GetY() * magnitude, d.GetZ() * magnitude);
+}
+
+inline CVector3f AngleConeMinMax(const Quat& q, float aDegrees, float bDegrees, float magnitude,
+                                 float u0, float u1) {
+  const float deg = BitsFloat(0x3c8efa35);
+  const float cA = FastCosR(aDegrees * deg);
+  const float cB = FastCosR(bDegrees * deg);
+  const float diff = cB - cA;
+  const float scaled = diff * u0;
+  const float c = cA + scaled;
+  const float turn = u1 * BitsFloat(0x40c90fdb);
+  const float phi = turn + -BitsFloat(0x40490fdb);
+  return ConeMinMaxDirection(q, c, phi, magnitude);
+}
+
+// ANCV (CVEAngleConeMinMaxWithVariance::GetValue 0x29f5c0): ANCM's cone cut into nP polar bands
+// (between cos(A) and cos(B)) and nA azimuth sectors, both at least 1. Cell `index` (iA = index /
+// nP, iP = index % nP) is jittered within pv of its band's half width by the first draw and av of
+// its sector's by the second, in the shipped order; then ANCM's tail from 0x29f478.
+inline CVector3f AngleConeMinMaxVariance(const Quat& q, float aDegrees, float bDegrees, float magnitude,
+                                         int polarCount, float polarVariance, int azimuthCount,
+                                         float azimuthVariance, int index, float u0, float u1) {
+  const int iA = index / polarCount;
+  const int iP = index % polarCount;
+  const float deg = BitsFloat(0x3c8efa35);
+  const float cA = FastCosR(aDegrees * deg);
+  const float cB = FastCosR(bDegrees * deg);
+  const float d = (cB - cA) / float(polarCount);
+  const float halfD = d * 0.5f;
+  const float band = halfD + (cA + d * float(iP));
+  const float pv = polarVariance * halfD;
+  const float c = band + ((pv + pv) * u0 - pv);
+  const float sector = BitsFloat(0x40c90fdb) / float(azimuthCount);
+  const float halfSector = sector * 0.5f;
+  const float av = azimuthVariance * halfSector;
+  const float centre = sector * float(iA) + halfSector;
+  const float jitter = (av + av) * u1 - av;
+  const float phi = (centre + jitter) + -BitsFloat(0x40490fdb);
+  return ConeMinMaxDirection(q, c, phi, magnitude);
 }
 
 // CRCV (CVECircleWithVariance ctor 0x2a0988): the unit axis's two in-plane vectors. u is

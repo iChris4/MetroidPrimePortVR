@@ -34,7 +34,8 @@
 //   (RECIPES.md) also writes VMAT (the shader's features, textures and uniform
 //   sources), VTMT (TMTR's UV transforms), VPMT (PMTR) and VSMT (SMTR's CCH0
 //   uniforms), SSZE, VORN (ORNT), ITEN and SCTR (as VMAT's sprite centre). A
-//   shader with no recipe writes none and is listed in `approximated`.
+//   shader with no recipe writes none and is listed in `approximated`. A sprite
+//   drawing its header MTRL also writes VTRS (its TEXR's TRST).
 // - Port-only (build/mpr/vfx/RESOLVED-xfmd.md): XFMD 3 and 4 (particles that
 //   follow the emitter) are written as they are; SMVR is read only as XFMD 4's
 //   mover.
@@ -92,9 +93,15 @@ struct EffectConvertIO {
   // A texture a VMAT slot draws, imported as a TXTR the import writes: a single texture comes
   // back with cols = rows = frames = 1, an array packed as by `flipbook`. Id 0: it cannot be.
   std::function<FlipbookAtlas(const EffectGuid& texture)> vfxTexture;
+  // A Remastered TXTR's full (top mip) size, which an ATEX's tile rects divide by. Left empty,
+  // a header sprite's ATEX is refused.
+  std::function<bool(const EffectGuid& texture, uint32_t& width, uint32_t& height)> textureSize;
   // The VMSH blob of a converted model (one the import wrote under this retail CMDL id), or
   // empty for one that is not (a disc model). Left empty, no VMSH is written.
   std::function<std::vector<uint8_t>(uint32_t model)> modelMesh;
+  // Whether the Remastered model an effect names (its stored id) has an ANUV program: false
+  // when it cannot be read. Left empty, a PMPH is refused.
+  std::function<bool(const EffectGuid& model, bool& animatesUv)> modelAnimatesUv;
 };
 
 struct ConvertedPart {
@@ -122,6 +129,18 @@ uint32_t EffectRetailType(uint32_t form);
 // The root and every embedded child that converts, root first. `data` is the
 // GENP the effect was parsed from (keyframe blocks are copied out of it).
 std::vector<ConvertedPart> ConvertEffect(const EffectNode& effect, const uint8_t* data, const EffectConvertIO& io);
+
+// A Remastered decal (DPSM) as the disc's DPSC `disc` extended with port-only fields
+// (CDecalDataFactory reads them): PRDC (CNST 1, the decal is Remastered's), MSTL (int: the
+// lifetime), MSTR, MSTW, MSTH, DUL1, DUL2 (reals: rotation in degrees, extents, the two
+// material slots' fades) and per MTIN a PMTI (CNST, slot, the retail id of the MATI's first
+// texture or 0, the MATI's 16-byte id as the DPSM stores it, its size and bytes). The disc's
+// quad fields are kept. False with `error` for a decal that is left retail (a model decal, an
+// element that does not convert, a missing MATI); `dropped` lists the DPSM properties that are
+// not written.
+bool ConvertDecal(const EffectNode& dpsm, const uint8_t* data, const std::vector<uint8_t>& disc,
+                  const EffectConvertIO& io, std::vector<uint8_t>& out, std::vector<std::string>& dropped,
+                  std::string& error);
 
 // One property of a retail PART: its FourCC and its value's bytes.
 struct RetailPartProperty {

@@ -209,6 +209,12 @@ enum EPortOption {
   kPO_OriginalExperience,
   kPO_PhotoMode,
   kPO_AimLockOn,
+  kPO_SpiderToggle,
+  kPO_GrappleShoot,
+  kPO_GrappleToggle,
+  kPO_GunFollowsFov,
+  kPO_GunFov,
+  kPO_ScanShoot,
 };
 #define PORT_OPTION(opt) static_cast< EGameOption >(opt)
 
@@ -245,6 +251,8 @@ static const SGameOption skPortDisplayOptions[] = {
     {PORT_OPTION(kPO_WidescreenHUD), -1, 0.f, 1.f, 1.f, kOT_DoubleEnum},
     {PORT_OPTION(kPO_HudScale), -1, PortDebug::kHudScaleMin, PortDebug::kHudScaleMax, 5.f, kOT_Float},
     {PORT_OPTION(kPO_Fov), -1, PortDebug::kFovMin, PortDebug::kFovMax, 1.f, kOT_Float},
+    {PORT_OPTION(kPO_GunFollowsFov), -1, 0.f, 1.f, 1.f, kOT_DoubleEnum},
+    {PORT_OPTION(kPO_GunFov), -1, PortDebug::kFovMin, PortDebug::kFovMax, 1.f, kOT_Float},
     {PORT_OPTION(kPO_AntiAliasing), -1, 0.f, 1.f, 1.f, kOT_DoubleEnum},
     {PORT_OPTION(kPO_SpeedrunTimer), -1, 0.f, 1.f, 1.f, kOT_DoubleEnum},
     {PORT_OPTION(kPO_PhotoMode), -1, 0.f, 1.f, 1.f, kOT_DoubleEnum},
@@ -259,13 +267,18 @@ static const SGameOption skPortControllerOptions[] = {
     {PORT_OPTION(kPO_CrosshairSize), -1, PortDebug::kCrosshairSizeMin,
      PortDebug::kCrosshairSizeMax, 5.f, kOT_Float},
     {PORT_OPTION(kPO_FastMorph), -1, 0.f, 1.f, 1.f, kOT_DoubleEnum},
+    {PORT_OPTION(kPO_SpiderToggle), -1, 0.f, 1.f, 1.f, kOT_DoubleEnum},
     {PORT_OPTION(kPO_LockOnToggle), -1, 0.f, 1.f, 1.f, kOT_DoubleEnum},
+    {PORT_OPTION(kPO_GrappleToggle), -1, 0.f, 1.f, 1.f, kOT_DoubleEnum},
+    {PORT_OPTION(kPO_GrappleShoot), -1, 0.f, 1.f, 1.f, kOT_DoubleEnum},
+    {PORT_OPTION(kPO_ScanShoot), -1, 0.f, 1.f, 1.f, kOT_DoubleEnum},
     {PORT_OPTION(kPO_AimLockOn), -1, 0.f, 1.f, 1.f, kOT_DoubleEnum},
     {PORT_OPTION(kPO_StickyCharge), -1, 0.f, 1.f, 1.f, kOT_DoubleEnum},
     {PORT_OPTION(kPO_RapidCharge), -1, 0.f, 1.f, 1.f, kOT_DoubleEnum},
     {kGO_RestoreDefaults, 35, 0.f, 1.f, 1.f, kOT_RestoreDefaults},
 };
-// The same without Stick Aim Speed, which only shows while Twin Stick is on.
+// The same without Stick Aim Speed, which only shows while Twin Stick is on
+// (and Flick Stick, which has no speed, off).
 static const SGameOption skPortControllerOptionsNoAim[] = {
     {kGO_ReverseYAxis, 32, 0.f, 1.f, 1.f, kOT_DoubleEnum},
     {kGO_Rumble, 33, 0.f, 1.f, 1.f, kOT_DoubleEnum},
@@ -274,16 +287,23 @@ static const SGameOption skPortControllerOptionsNoAim[] = {
     {PORT_OPTION(kPO_CrosshairSize), -1, PortDebug::kCrosshairSizeMin,
      PortDebug::kCrosshairSizeMax, 5.f, kOT_Float},
     {PORT_OPTION(kPO_FastMorph), -1, 0.f, 1.f, 1.f, kOT_DoubleEnum},
+    {PORT_OPTION(kPO_SpiderToggle), -1, 0.f, 1.f, 1.f, kOT_DoubleEnum},
     {PORT_OPTION(kPO_LockOnToggle), -1, 0.f, 1.f, 1.f, kOT_DoubleEnum},
+    {PORT_OPTION(kPO_GrappleToggle), -1, 0.f, 1.f, 1.f, kOT_DoubleEnum},
+    {PORT_OPTION(kPO_GrappleShoot), -1, 0.f, 1.f, 1.f, kOT_DoubleEnum},
+    {PORT_OPTION(kPO_ScanShoot), -1, 0.f, 1.f, 1.f, kOT_DoubleEnum},
     {PORT_OPTION(kPO_AimLockOn), -1, 0.f, 1.f, 1.f, kOT_DoubleEnum},
     {PORT_OPTION(kPO_StickyCharge), -1, 0.f, 1.f, 1.f, kOT_DoubleEnum},
     {PORT_OPTION(kPO_RapidCharge), -1, 0.f, 1.f, 1.f, kOT_DoubleEnum},
     {kGO_RestoreDefaults, 35, 0.f, 1.f, 1.f, kOT_RestoreDefaults},
 };
-static const SOptionCategory skPortControllerCategoryNoAim = {11, skPortControllerOptionsNoAim};
+static const SOptionCategory skPortControllerCategoryNoAim = {ARRAY_SIZE(skPortControllerOptionsNoAim), skPortControllerOptionsNoAim};
 static SOptionCategory skPauseOptions[] = {
-    {11, skPortVisorOptions},     {12, skPortDisplayOptions}, {4, skSoundOptions},
-    {12, skPortControllerOptions}, {0, nullptr},
+    {ARRAY_SIZE(skPortVisorOptions), skPortVisorOptions},
+    {ARRAY_SIZE(skPortDisplayOptions), skPortDisplayOptions},
+    {4, skSoundOptions},
+    {ARRAY_SIZE(skPortControllerOptions), skPortControllerOptions},
+    {0, nullptr},
 };
 
 static bool IsPortOption(EGameOption option) { return option > kGO_RestoreDefaults; }
@@ -302,6 +322,14 @@ static const wchar_t* PortOptionTitle(EGameOption option) {
     return L"Fast Morph";
   case kPO_LockOnToggle:
     return L"Toggle Lock-On";
+  case kPO_GrappleShoot:
+    return L"Shoot While Grappling";
+  case kPO_ScanShoot:
+    return L"Shoot in Scan Visor";
+  case kPO_GrappleToggle:
+    return L"Toggle Grapple";
+  case kPO_SpiderToggle:
+    return L"Toggle Spider Ball";
   case kPO_AimLockOn:
     return L"Aim Lock-On";
   case kPO_StickyCharge:
@@ -310,6 +338,10 @@ static const wchar_t* PortOptionTitle(EGameOption option) {
     return L"Remastered Charge";
   case kPO_Fov:
     return L"Field of View";
+  case kPO_GunFollowsFov:
+    return L"Arm Cannon Follows FOV";
+  case kPO_GunFov:
+    return L"Arm Cannon FOV";
   case kPO_AntiAliasing:
     return L"Anti-Aliasing";
   case kPO_HudScale:
@@ -353,6 +385,14 @@ static int GetPortOption(EGameOption option) {
     return PortDebug::FastMorph() ? 1 : 0;
   case kPO_LockOnToggle:
     return PortDebug::LockOnToggle() ? 1 : 0;
+  case kPO_GrappleShoot:
+    return PortDebug::GrappleShoot() ? 1 : 0;
+  case kPO_ScanShoot:
+    return PortDebug::ScanShoot() ? 1 : 0;
+  case kPO_GrappleToggle:
+    return PortDebug::GrappleToggle() ? 1 : 0;
+  case kPO_SpiderToggle:
+    return PortDebug::SpiderToggle() ? 1 : 0;
   case kPO_AimLockOn:
     return PortDebug::AimLockOn() ? 1 : 0;
   case kPO_StickyCharge:
@@ -361,6 +401,10 @@ static int GetPortOption(EGameOption option) {
     return PortDebug::RapidCharge() ? 1 : 0;
   case kPO_Fov:
     return static_cast< int >(PortDebug::FirstPersonFov() + 0.5f);
+  case kPO_GunFollowsFov:
+    return PortDebug::GunFollowsFov() ? 1 : 0;
+  case kPO_GunFov:
+    return static_cast< int >(PortDebug::GunFov() + 0.5f);
   case kPO_AntiAliasing:
     return PortDebug::Msaa() > 1 ? 1 : 0;
   case kPO_HudScale:
@@ -409,10 +453,16 @@ static bool IsOriginalLocked(EGameOption option) {
   case kPO_WidescreenHUD:
   case kPO_FastMorph:
   case kPO_LockOnToggle:
+  case kPO_GrappleShoot:
+  case kPO_ScanShoot:
+  case kPO_GrappleToggle:
+  case kPO_SpiderToggle:
   case kPO_AimLockOn:
   case kPO_StickyCharge:
   case kPO_RapidCharge:
   case kPO_Fov:
+  case kPO_GunFollowsFov:
+  case kPO_GunFov:
   case kPO_AntiAliasing:
   case kPO_HudScale:
   case kPO_HideHelmet:
@@ -451,6 +501,18 @@ static void SetPortOption(EGameOption option, int value) {
   case kPO_LockOnToggle:
     PortDebug::SetLockOnToggle(value > 0);
     break;
+  case kPO_GrappleShoot:
+    PortDebug::SetGrappleShoot(value > 0);
+    break;
+  case kPO_ScanShoot:
+    PortDebug::SetScanShoot(value > 0);
+    break;
+  case kPO_GrappleToggle:
+    PortDebug::SetGrappleToggle(value > 0);
+    break;
+  case kPO_SpiderToggle:
+    PortDebug::SetSpiderToggle(value > 0);
+    break;
   case kPO_AimLockOn:
     PortDebug::SetAimLockOn(value > 0);
     break;
@@ -462,6 +524,12 @@ static void SetPortOption(EGameOption option, int value) {
     break;
   case kPO_Fov:
     PortDebug::SetFirstPersonFov(static_cast< float >(value));
+    break;
+  case kPO_GunFollowsFov:
+    PortDebug::SetGunFollowsFov(value > 0);
+    break;
+  case kPO_GunFov:
+    PortDebug::SetGunFov(static_cast< float >(value));
     break;
   case kPO_AntiAliasing:
     PortDebug::SetMsaa(value > 0 ? 4 : 1);
@@ -516,7 +584,7 @@ static const SOptionCategory& GetOptionCategory(int category, bool frontEnd) {
   if (frontEnd) {
     return skGameOptions[category];
   }
-  if (category == 3 && !PortDebug::PadTwinStick()) {
+  if (category == 3 && (!PortDebug::PadTwinStick() || PortDebug::FlickStick())) {
     return skPortControllerCategoryNoAim;
   }
   return skPauseOptions[category];
@@ -680,6 +748,8 @@ void CGameOptions::TryRestoreDefaults(const CFinalInput& input, int category, in
         PortDebug::SetAspectMode(PortDebug::kAspect_4_3);
         PortDebug::SetHudWide(false);
         PortDebug::SetFirstPersonFov(PortDebug::kFovRetail);
+        PortDebug::SetGunFollowsFov(false);
+        PortDebug::SetGunFov(PortDebug::kFovRetail);
         PortDebug::SetMsaa(1);
         PortDebug::SetHudScale(PortDebug::kHudScaleMax);
         PortDebug::SetSpeedrunTimer(false);
@@ -691,6 +761,10 @@ void CGameOptions::TryRestoreDefaults(const CFinalInput& input, int category, in
         PortDebug::SetCrosshairSize(PortDebug::kCrosshairSizeDefault);
         PortDebug::SetFastMorph(false);
         PortDebug::SetLockOnToggle(false);
+        PortDebug::SetSpiderToggle(false);
+        PortDebug::SetGrappleShoot(true);
+        PortDebug::SetScanShoot(false);
+        PortDebug::SetGrappleToggle(false);
         PortDebug::SetAimLockOn(false);
         PortDebug::SetStickyCharge(false);
         PortDebug::SetRapidCharge(false);

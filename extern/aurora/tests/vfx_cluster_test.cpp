@@ -127,10 +127,10 @@ TEST(VfxCluster, BlockAndMaskAreDeclaredForTheLitFeature) {
   config.features = IceChargeCollisionLit;
   const std::string source = pipeline_source(config);
   // The block: 14 vec4f after the pre-block fields. lit0..lit6 (AMBS, the probe's mean/lobe/lobes and
-  // BLCM) take the first seven, the rest is padding, then 163 vec4f of cluster, which is
+  // BLCM) take the first seven, misc3 (the colour map's alpha gamma) the eighth, cm0..cm2 (GXSetColorMatrix's rows) the next three, the rest is padding, then 163 vec4f of cluster, which is
   // ClusterBlockFloats / 4 — the layout vfx.cpp's static_asserts pin to the C++ struct.
   EXPECT_NE(source.find("cluster: array<vec4f, 163>"), std::string::npos);
-  EXPECT_NE(source.find("lit6: vec4f,\n  padCluster: array<vec4f, 7>"), std::string::npos);
+  EXPECT_NE(source.find("lit6: vec4f,\n  misc3: vec4f,\n  cm0: vec4f,\n  cm1: vec4f,\n  cm2: vec4f,\n  padCluster: array<vec4f, 3>"), std::string::npos);
   // The mask, at its own binding, R32Uint (texture_2d<u32>).
   EXPECT_NE(source.find("@binding(12) var clusterMask: texture_2d<u32>"), std::string::npos);
   EXPECT_NE(source.find("textureLoad(clusterMask"), std::string::npos);
@@ -169,8 +169,13 @@ TEST(VfxCluster, ParticleLitScalesTheRecipeColourByTheLight) {
   PipelineConfig config{};
   config.features = ColorTex | OpacityTex | DepthSoften | ParticleLit;
   const std::string source = pipeline_source(config);
-  EXPECT_NE(source.find("if ((FEAT & 67108864u) != 0u) {"), std::string::npos);
+  EXPECT_NE(source.find("if ((FEAT & 67108864u) != 0u && u.misc3.y < 0.5) {"), std::string::npos);
   EXPECT_NE(source.find("rgb = rgb * lighting * u.lit6.rgb * 0.3183098862;"), std::string::npos);
+  // 52d26efe's per-vertex form (VS 040_1, misc3.y): the vertex colour x [(probe midpoint + AMBS) x
+  // BLCM + the group-0 lights without N.L] / pi.
+  EXPECT_NE(source.find("if ((FEAT & 67108864u) != 0u && u.misc3.y > 0.5) {"), std::string::npos);
+  EXPECT_NE(source.find("let lighting = (u.lit0.xyz + u.lit1.xyz) * u.lit6.rgb + cluster_sum("), std::string::npos);
+  EXPECT_NE(source.find("out.color = vec4f(in.color.rgb * lighting * 0.3183098862, in.color.w);"), std::string::npos);
   EXPECT_NE(source.find("let i = 3u + bit * 5u;"), std::string::npos);
   EXPECT_NE(source.find("@binding(12) var clusterMask: texture_2d<u32>"), std::string::npos);
   // Not a shader-side exposure policy: the feature word's AlreadyExposed stays off the pipeline key.

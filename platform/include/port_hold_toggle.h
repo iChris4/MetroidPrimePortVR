@@ -13,8 +13,9 @@ struct Output {
   bool pressed; // the press edge (CFinalInput's P* flags)
 };
 
-// Toggle lock-on: a press that locks on (or scans, or grapples) latches L as
-// held until the next press, so those work without holding the trigger. A press
+// Toggle lock-on: a press that locks on (or scans) latches L as held until the
+// next press, so those work without holding the trigger. Grapples are left to
+// GrappleKey (Toggle Grapple). A press
 // with nothing to lock on is a plain hold (strafe while held), and only latches
 // if a lock comes during that hold. The latch also lets go by itself when its
 // lock ends (target killed or out of range), since a latched L would otherwise
@@ -136,6 +137,60 @@ private:
   bool mLatched = false;
   bool mSwallow = false;
   float mHeldTime = 0.f;
+};
+
+// Keeps a condition true for kGrace after it ends, so a one-tick drop (a spider
+// ball crossing a seam in its track) doesn't count as the end.
+class Grace {
+public:
+  static constexpr float kGrace = 0.15f;
+
+  bool Update(bool on, float dt) {
+    mLeft = on ? kGrace : (mLeft > dt ? mLeft - dt : 0.f);
+    return on || mLeft > 0.f;
+  }
+  void Reset() { mLeft = 0.f; }
+
+private:
+  float mLeft = 0.f;
+};
+
+// The Grapple key, always a toggle: a press while a grapple point is the
+// lock-on target (or while grappling) is taken as L and held until the next
+// press of the key or of jump. A press with no grapple point does nothing, so
+// the key never strafes or locks onto an enemy. A take that loses its grapple
+// point (out of range, the grapple broken) lets go after Grace::kGrace. Toggle
+// Grapple feeds it L presses at a grapple point too.
+class GrappleKey {
+public:
+  // pressed: a press of the key. jump: a press of jump. atPoint: a grapple point
+  // is the next or current lock-on target. grappling: the player is grappling.
+  bool Update(bool active, bool pressed, bool jump, bool atPoint, bool grappling, float dt) {
+    if (!active) {
+      Reset();
+      return false;
+    }
+    if (mTaken) {
+      if (pressed || jump || !mGrace.Update(atPoint || grappling, dt)) {
+        Reset();
+      }
+      return mTaken;
+    }
+    if (pressed && (atPoint || grappling)) {
+      mTaken = true;
+      mGrace.Update(true, dt);
+    }
+    return mTaken;
+  }
+  void Reset() {
+    mTaken = false;
+    mGrace.Reset();
+  }
+  bool Taken() const { return mTaken; }
+
+private:
+  Grace mGrace;
+  bool mTaken = false;
 };
 
 } // namespace PortHoldToggle

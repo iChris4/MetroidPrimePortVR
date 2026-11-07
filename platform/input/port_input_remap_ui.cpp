@@ -64,44 +64,28 @@ constexpr SContextInfo kContexts[] = {
     {PortInput::kCtxMap, "Map"},           {PortInput::kCtxMenu, "Menus"},
     {PortInput::kCtxScan, "Scan Visor"},   {PortInput::kCtxLayer1, "Layer 1"},
     {PortInput::kCtxLayer2, "Layer 2"},    {PortInput::kCtxLayer3, "Layer 3"},
-    {PortInput::kCtxLayer4, "Layer 4"},
+    {PortInput::kCtxLayer4, "Layer 4"},    {PortInput::kCtxLockOn, "Locked on"},
 };
 
 constexpr const char* kFamilies[] = {"Keyboard & mouse", "Controller", "Touch"};
 
 // The touch controls Record can't reach (the overlay hides while F1 is open), as
 // "touch:" names and the editor's labels. The sticks, D-pad and menu button
-// aren't remappable, so they're left out.
+// aren't remappable, nor are the face buttons, pills and minimap tap
+// (PortInput::kTouchStockControls: fixed GameCube actions), so they're left out.
 struct STouchInfo {
   const char* name;
   const char* label;
 };
 constexpr STouchInfo kTouchControls[] = {
-    {"a", "A"},
-    {"b", "B"},
-    {"x", "X"},
-    {"y", "Y"},
-    {"l", "L"},
-    {"r", "R"},
-    {"z", "Z"},
     {"visor", "Visor"},
     {"beam", "Beam"},
-    {"start", "Start"},
     {"map", "Map"},
     {"eye", "Hide controls"},
     {"turbo", "Turbo"},
-    {"jump", "Twin stick: Jump"},
-    {"fire", "Twin stick: Fire"},
-    {"morph", "Twin stick: Morph"},
     {"missile", "Twin stick: Missile"},
-    {"lt", "Twin stick: LT Lock"},
-    {"lb", "Twin stick: LB Jump"},
-    {"rt", "Twin stick: RT Fire"},
-    {"rb", "Twin stick: RB Missile"},
-    {"tz", "Twin stick: Map (Z)"},
     {"tturbo", "Twin stick: Turbo"},
     {"beam_shift", "Twin stick: Beam (held)"},
-    {"map_tap", "Minimap tap"},
     {"bbomb", "Morph Ball: Bomb"},
     {"bboost", "Morph Ball: Boost"},
     {"bpbomb", "Morph Ball: Power Bomb"},
@@ -783,6 +767,14 @@ void DrawAdvancedEditor(const Binding& parsed, bool inputsOk) {
     ImGui::TextDisabled("Works only in Morph Ball, where its inputs do nothing else.");
     return;
   }
+  if (PortInput::FindMapRow(sDraft.action) != nullptr) {
+    ImGui::TextDisabled("Works only on the map screen, where its inputs do nothing else.");
+    return;
+  }
+  if (PortInput::IsTargetRow(sDraft.action)) {
+    ImGui::TextDisabled("Works only while locked on, where its inputs do nothing else.");
+    return;
+  }
   bool everywhere = sDraft.contexts == PortInput::kCtxAll;
   if (ImGui::Checkbox("Works everywhere", &everywhere)) {
     sDraft.contexts = everywhere ? PortInput::kCtxAll : PortInput::kCtxGameplay;
@@ -1299,7 +1291,8 @@ const std::vector<SGroup>& Groups() {
         // The C-stick is the right stick: twin-stick aim, classic beam picks, map panning.
         {"Move and aim",
          {Action::MainUp, Action::MainDown, Action::MainLeft, Action::MainRight, Action::CUp, Action::CDown,
-          Action::CLeft, Action::CRight, Action::Dodge},
+          Action::CLeft, Action::CRight, Action::Dodge, Action::Grapple, Action::TargetNext,
+          Action::TargetPrev},
          true},
         // Direct picks work in every scheme; the GameCube inputs behind them are listed above.
         {"Beams",
@@ -1321,6 +1314,11 @@ const std::vector<SGroup>& Groups() {
          {Action::MenuA, Action::MenuB, Action::MenuX, Action::MenuY, Action::MenuL, Action::MenuR,
           Action::MenuLAnalog, Action::MenuRAnalog, Action::MenuUp, Action::MenuDown, Action::MenuLeft,
           Action::MenuRight},
+         true},
+        // The map's own stick directions; an input on one does only that on the map.
+        {"Map",
+         {Action::MapRotateUp, Action::MapRotateDown, Action::MapRotateLeft, Action::MapRotateRight,
+          Action::MapPanUp, Action::MapPanDown, Action::MapPanLeft, Action::MapPanRight},
          true},
         {"Port", {Action::PortMenu, Action::SaveState, Action::LoadState, Action::Screenshot, Action::ToggleOriginal,
           Action::ToggleRemastered, Action::ToggleTexturePack, Action::PhotoMode}, true},
@@ -1383,6 +1381,14 @@ const char* GameHint(Action a) {
   case Action::MenuDown:
   case Action::MenuLeft:
   case Action::MenuRight: return "Navigate";
+  case Action::MapRotateUp:
+  case Action::MapRotateDown:
+  case Action::MapRotateLeft:
+  case Action::MapRotateRight: return "Control stick when unset";
+  case Action::MapPanUp:
+  case Action::MapPanDown:
+  case Action::MapPanLeft:
+  case Action::MapPanRight: return "C-stick when unset";
   default: break;
   }
   const PortInput::BallRow* ball = PortInput::FindBallRow(a);
@@ -2135,6 +2141,11 @@ void Draw() {
   ImGui::EndDisabled();
   ImGui::SetItemTooltip("On: on the map one finger pans and two fingers rotate. Off: one finger rotates and two "
                         "fingers pan. Twist and pinch are unchanged; the mouse is not affected.");
+  ImGui::SameLine();
+  bool menuExit = PortDebug::MenuExit();
+  if (ImGui::Checkbox("Exit Game on the main menu", &menuExit)) PortDebug::SetMenuExit(menuExit);
+  ImGui::SetItemTooltip("On: the main menu shows \"Exit Game\" under its Select legend. Holding Z, or a finger\n"
+                        "or mouse button on it, for 1.5 seconds quits the game.");
   ImGui::Separator();
 
   const bool editorOnTop = sEditing != kEditNone && !sEditRowShown;

@@ -341,11 +341,21 @@ std::vector<uint8_t> Write(const File& file) {
   PutLE32(out, kFileMagic);
   const bool placements = std::any_of(file.overrides.begin(), file.overrides.end(),
                                     [](const Override& o) { return o.hasPlacement; });
-  const bool actorSlots = !file.actorSlots.empty();
+  const bool fishClouds = !file.fishClouds.empty();
+  const bool hidden = fishClouds || !file.hidden.empty();
+  const bool ambients = hidden || !file.ambients.empty();
+  const bool relays = ambients || !file.relays.empty();
+  const bool triggers = relays || !file.triggers.empty();
+  const bool follows = triggers || !file.follows.empty();
+  const bool timers = follows || !file.timers.empty();
+  const bool generators = timers || !file.generators.empty() ||
+                          std::any_of(file.drives.begin(), file.drives.end(), [](const Drive& d) { return d.flags != 0; });
+  const bool drives = generators || !file.drives.empty();
+  const bool actorSlots = drives || !file.actorSlots.empty();
   const bool steams = actorSlots || !file.steams.empty();
   const bool patches = steams || !file.patches.empty();
   const bool patterned = patches || !file.patterned.empty();
-  PutLE32(out, actorSlots ? 9 : steams ? 8 : patches ? 7 : patterned ? 6 : placements ? 5 : 4);
+  PutLE32(out, fishClouds ? 18 : hidden ? 17 : ambients ? 16 : relays ? 15 : triggers ? 14 : follows ? 13 : timers ? 12 : generators ? 11 : drives ? 10 : actorSlots ? 9 : steams ? 8 : patches ? 7 : patterned ? 6 : placements ? 5 : 4);
   PutLE32(out, uint32_t(file.skips.size()));
   for (uint32_t id : file.skips) {
     PutLE32(out, id);
@@ -451,6 +461,108 @@ std::vector<uint8_t> Write(const File& file) {
       PutLE32(out, a.id);
       PutLE32(out, a.slot);
       PutLE32(out, a.part);
+    }
+  }
+  if (drives) {
+    PutLE32(out, uint32_t(file.drives.size()));
+    for (const Drive& d : file.drives) {
+      PutLE32(out, d.target);
+      PutLE32(out, d.sender);
+      PutLE32(out, d.state);
+      PutLE32(out, d.message);
+      PutLEFloat(out, d.delay);
+      if (generators) {
+        PutLE32(out, d.flags);
+      }
+    }
+  }
+  if (generators) {
+    PutLE32(out, uint32_t(file.generators.size()));
+    for (const Generator& g : file.generators) {
+      PutLE32(out, g.flags);
+      for (float f : g.offset) PutLEFloat(out, f);
+      PutLE32(out, uint32_t(g.templates.size()));
+      for (uint32_t id : g.templates) PutLE32(out, id);
+    }
+  }
+  if (timers) {
+    PutLE32(out, uint32_t(file.timers.size()));
+    for (const Timer& t : file.timers) {
+      PutLE32(out, t.id);
+      PutLEFloat(out, t.startTime);
+      PutLEFloat(out, t.maxRandDelay);
+      PutLE32(out, t.flags);
+    }
+  }
+  if (follows) {
+    PutLE32(out, uint32_t(file.follows.size()));
+    for (const Follow& f : file.follows) {
+      PutLE32(out, f.id);
+      PutLE32(out, f.followed);
+      PutLE32(out, f.follower);
+      PutLE32(out, f.flags);
+      PutLE32(out, uint32_t(f.locator.size()));
+      out.insert(out.end(), f.locator.begin(), f.locator.end());
+    }
+  }
+  if (triggers) {
+    PutLE32(out, uint32_t(file.triggers.size()));
+    for (const Trigger& t : file.triggers) {
+      PutLE32(out, t.id);
+      for (float v : t.pos) PutLEFloat(out, v);
+      for (float v : t.extent) PutLEFloat(out, v);
+      PutLE32(out, t.triggerFlags);
+      PutLE32(out, t.flags);
+    }
+  }
+  if (relays) {
+    PutLE32(out, uint32_t(file.relays.size()));
+    for (const Relay& r : file.relays) {
+      PutLE32(out, r.id);
+      PutLE32(out, r.flags);
+    }
+  }
+  if (ambients) {
+    PutLE32(out, uint32_t(file.ambients.size()));
+    for (const Ambient& a : file.ambients) {
+      PutLEFloat(out, a.rate);
+      PutLE32(out, a.owner);
+      for (float v : a.offset) PutLEFloat(out, v);
+      PutLEFloat(out, a.radius);
+      PutLE32(out, uint32_t(a.weights.size()));
+      for (int32_t w : a.weights) PutLE32(out, uint32_t(w));
+      PutLE32(out, uint32_t(a.emitters.size()));
+      for (const AmbientEmitter& e : a.emitters) {
+        PutLE32(out, e.index);
+        PutLE32(out, e.id);
+      }
+      PutLE32(out, uint32_t(a.shapes.size()));
+      for (const AmbientShape& s : a.shapes) {
+        PutLE32(out, s.type);
+        for (float v : s.center) PutLEFloat(out, v);
+        for (const auto& row : s.axes) {
+          for (float v : row) PutLEFloat(out, v);
+        }
+        for (float v : s.half) PutLEFloat(out, v);
+      }
+    }
+  }
+  if (hidden) {
+    PutLE32(out, uint32_t(file.hidden.size()));
+    for (uint32_t id : file.hidden) {
+      PutLE32(out, id);
+    }
+  }
+  if (fishClouds) {
+    PutLE32(out, uint32_t(file.fishClouds.size()));
+    for (const FishCloud& f : file.fishClouds) {
+      PutLE32(out, f.id);
+      for (float v : {f.speedVariance, f.turn[0], f.turn[1], f.slowAngle[0], f.slowAngle[1], f.dartInterval[0],
+                      f.dartInterval[1], f.minSpeed, f.speedDecay, f.dartCone, f.wobblePivot, f.wobbleAngle,
+                      f.wobbleLength}) {
+        PutLEFloat(out, v);
+      }
+      PutLE32(out, f.flags);
     }
   }
   return out;
@@ -753,6 +865,325 @@ bool Parse(const std::vector<uint8_t>& data, File& out, std::string& error) {
         return false;
       }
       file.actorSlots.push_back(a);
+    }
+  }
+  if (version >= 10) {
+    const size_t record = version >= 11 ? 24 : 20;
+    uint32_t count = 0;
+    if (!ReadLE32(data, at, count) || count > (data.size() - at) / record) {
+      error = "truncated drive list";
+      return false;
+    }
+    for (uint32_t i = 0; i < count; ++i) {
+      Drive d;
+      uint32_t bits = 0;
+      ReadLE32(data, at, d.target);
+      ReadLE32(data, at, d.sender);
+      ReadLE32(data, at, d.state);
+      ReadLE32(data, at, d.message);
+      ReadLE32(data, at, bits);
+      std::memcpy(&d.delay, &bits, 4);
+      if (version >= 11) {
+        ReadLE32(data, at, d.flags);
+      }
+      file.drives.push_back(d);
+    }
+  }
+  if (version >= 11) {
+    uint32_t count = 0;
+    if (!ReadLE32(data, at, count) || count > (data.size() - at) / 24) {
+      error = "truncated generator list";
+      return false;
+    }
+    for (uint32_t i = 0; i < count; ++i) {
+      Generator g;
+      uint32_t n = 0;
+      ReadLE32(data, at, g.flags);
+      for (float& f : g.offset) {
+        uint32_t bits = 0;
+        ReadLE32(data, at, bits);
+        std::memcpy(&f, &bits, 4);
+      }
+      ReadLE32(data, at, n);
+      if (n == 0 || n > kMaxGeneratorTemplates || n > (data.size() - at) / 4 ||
+          (g.flags & ~(kGeneratorActive | kGeneratorNoInheritXf)) != 0 ||
+          !std::all_of(std::begin(g.offset), std::end(g.offset), [](float f) { return std::isfinite(f); })) {
+        error = "invalid generator " + std::to_string(i);
+        return false;
+      }
+      g.templates.resize(n);
+      for (uint32_t& id : g.templates) {
+        ReadLE32(data, at, id);
+        if (std::none_of(objects.begin(), objects.end(), [&](const LayerObject& o) { return o.id == id; })) {
+          error = "generator " + std::to_string(i) + " names an unknown template";
+          return false;
+        }
+      }
+      file.generators.push_back(std::move(g));
+    }
+  }
+  auto isObject = [&](uint32_t id) {
+    return std::any_of(objects.begin(), objects.end(), [&](const LayerObject& o) { return o.id == id; });
+  };
+  // An ambient's effect: one of this file's add-ons, or a retail effect it matched.
+  auto isEffect = [&](uint32_t id) { return !IsAddOnId(id) || isObject(id); };
+  auto isTimer = [&](uint32_t id) {
+    return std::any_of(file.timers.begin(), file.timers.end(), [&](const Timer& t) { return t.id == id; });
+  };
+  if (version >= 12) {
+    uint32_t count = 0;
+    if (!ReadLE32(data, at, count) || count > (data.size() - at) / 16) {
+      error = "truncated timer list";
+      return false;
+    }
+    if (total + count > kMaxAddOns) {
+      error = "too many objects";
+      return false;
+    }
+    for (uint32_t i = 0; i < count; ++i) {
+      Timer t;
+      uint32_t bits = 0;
+      ReadLE32(data, at, t.id);
+      ReadLE32(data, at, bits);
+      std::memcpy(&t.startTime, &bits, 4);
+      ReadLE32(data, at, bits);
+      std::memcpy(&t.maxRandDelay, &bits, 4);
+      ReadLE32(data, at, t.flags);
+      // A drive names a timer by its whole id, so no add-on may share it, layer bits or not.
+      const auto same = [&](uint32_t id) { return NormalizedId(id) == NormalizedId(t.id); };
+      if (!IsAddOnId(t.id) ||
+          std::any_of(objects.begin(), objects.end(), [&](const LayerObject& o) { return same(o.id); }) ||
+          std::any_of(file.timers.begin(), file.timers.end(), [&](const Timer& o) { return same(o.id); }) ||
+          !(t.startTime >= 0.f && t.startTime <= kMaxTimerTime) ||
+          !(t.maxRandDelay >= 0.f && t.maxRandDelay <= kMaxTimerTime) ||
+          (t.flags & ~(kTimerLoop | kTimerAutoStart | kTimerActive)) != 0) {
+        error = "invalid timer " + std::to_string(i);
+        return false;
+      }
+      file.timers.push_back(t);
+    }
+  }
+  if (version >= 13) {
+    uint32_t count = 0;
+    if (!ReadLE32(data, at, count) || count > (data.size() - at) / 20) {
+      error = "truncated follow list";
+      return false;
+    }
+    if (total + file.timers.size() + count > kMaxAddOns) {
+      error = "too many objects";
+      return false;
+    }
+    for (uint32_t i = 0; i < count; ++i) {
+      Follow f;
+      uint32_t length = 0;
+      ReadLE32(data, at, f.id);
+      ReadLE32(data, at, f.followed);
+      ReadLE32(data, at, f.follower);
+      ReadLE32(data, at, f.flags);
+      ReadLE32(data, at, length);
+      const bool named = length != 0 && length <= kMaxLocatorName && length <= data.size() - at;
+      if (named) {
+        f.locator.assign(reinterpret_cast<const char*>(data.data()) + at, length);
+        at += length;
+      }
+      const auto same = [&](uint32_t id) { return NormalizedId(id) == NormalizedId(f.id); };
+      // It follows a retail actor (an add-on has no animation); what it moves is a retail
+      // object or one of this file's effects.
+      if (!named || std::any_of(f.locator.begin(), f.locator.end(), [](char c) { return c < 0x21 || c > 0x7e; }) ||
+          !IsAddOnId(f.id) || IsAddOnId(f.followed) || f.followed == f.follower ||
+          (IsAddOnId(f.follower) && !isObject(f.follower)) ||
+          std::any_of(objects.begin(), objects.end(), [&](const LayerObject& o) { return same(o.id); }) ||
+          std::any_of(file.timers.begin(), file.timers.end(), [&](const Timer& o) { return same(o.id); }) ||
+          std::any_of(file.follows.begin(), file.follows.end(), [&](const Follow& o) { return same(o.id); }) ||
+          (f.flags & ~kFollowActive) != 0) {
+        error = "invalid follow " + std::to_string(i);
+        return false;
+      }
+      file.follows.push_back(std::move(f));
+    }
+  }
+  if (version >= 14) {
+    uint32_t count = 0;
+    if (!ReadLE32(data, at, count) || count > (data.size() - at) / 36) {
+      error = "truncated trigger list";
+      return false;
+    }
+    if (total + file.timers.size() + file.follows.size() + count > kMaxAddOns) {
+      error = "too many objects";
+      return false;
+    }
+    for (uint32_t i = 0; i < count; ++i) {
+      Trigger t;
+      ReadLE32(data, at, t.id);
+      for (float* v : {t.pos, t.extent}) {
+        for (int k = 0; k < 3; ++k) {
+          uint32_t bits = 0;
+          ReadLE32(data, at, bits);
+          std::memcpy(&v[k], &bits, 4);
+        }
+      }
+      ReadLE32(data, at, t.triggerFlags);
+      ReadLE32(data, at, t.flags);
+      const auto same = [&](uint32_t id) { return NormalizedId(id) == NormalizedId(t.id); };
+      if (!IsAddOnId(t.id) ||
+          std::any_of(objects.begin(), objects.end(), [&](const LayerObject& o) { return same(o.id); }) ||
+          std::any_of(file.timers.begin(), file.timers.end(), [&](const Timer& o) { return same(o.id); }) ||
+          std::any_of(file.follows.begin(), file.follows.end(), [&](const Follow& o) { return same(o.id); }) ||
+          std::any_of(file.triggers.begin(), file.triggers.end(), [&](const Trigger& o) { return same(o.id); }) ||
+          !std::all_of(std::begin(t.pos), std::end(t.pos), [](float f) { return std::fabs(f) < 1e5f; }) ||
+          !std::all_of(std::begin(t.extent), std::end(t.extent), [](float f) { return f >= 0.f && f < 1e5f; }) ||
+          (t.triggerFlags & kTriggerRejectedFlags) != 0 ||
+          (t.flags & ~(kTriggerActive | kTriggerDeactivateOnEntered | kTriggerDeactivateOnExited)) != 0) {
+        error = "invalid trigger " + std::to_string(i);
+        return false;
+      }
+      file.triggers.push_back(t);
+    }
+  }
+  if (version >= 15) {
+    uint32_t count = 0;
+    if (!ReadLE32(data, at, count) || count > (data.size() - at) / 8) {
+      error = "truncated relay list";
+      return false;
+    }
+    if (total + file.timers.size() + file.follows.size() + file.triggers.size() + count > kMaxAddOns) {
+      error = "too many objects";
+      return false;
+    }
+    for (uint32_t i = 0; i < count; ++i) {
+      Relay r;
+      ReadLE32(data, at, r.id);
+      ReadLE32(data, at, r.flags);
+      const auto same = [&](uint32_t id) { return NormalizedId(id) == NormalizedId(r.id); };
+      if (!IsAddOnId(r.id) ||
+          std::any_of(objects.begin(), objects.end(), [&](const LayerObject& o) { return same(o.id); }) ||
+          std::any_of(file.timers.begin(), file.timers.end(), [&](const Timer& o) { return same(o.id); }) ||
+          std::any_of(file.follows.begin(), file.follows.end(), [&](const Follow& o) { return same(o.id); }) ||
+          std::any_of(file.triggers.begin(), file.triggers.end(), [&](const Trigger& o) { return same(o.id); }) ||
+          std::any_of(file.relays.begin(), file.relays.end(), [&](const Relay& o) { return same(o.id); }) ||
+          (r.flags & ~kRelayActive) != 0) {
+        error = "invalid relay " + std::to_string(i);
+        return false;
+      }
+      file.relays.push_back(r);
+    }
+  }
+  if (version >= 16) {
+    uint32_t count = 0;
+    if (!ReadLE32(data, at, count) || count > (data.size() - at) / 36) {
+      error = "truncated ambient list";
+      return false;
+    }
+    auto readFloat = [&](float& f) {
+      uint32_t bits = 0;
+      const bool ok = ReadLE32(data, at, bits);
+      std::memcpy(&f, &bits, 4);
+      return ok && std::isfinite(f) && std::fabs(f) < 1e5f;
+    };
+    for (uint32_t i = 0; i < count; ++i) {
+      Ambient a;
+      bool ok = readFloat(a.rate) && a.rate >= 0.f && a.rate <= kMaxAmbientRate && ReadLE32(data, at, a.owner) &&
+                isEffect(a.owner);
+      for (float& v : a.offset) ok = ok && readFloat(v);
+      ok = ok && readFloat(a.radius) && a.radius > 0.f;
+      uint32_t n = 0;
+      ok = ok && ReadLE32(data, at, n) && n <= kMaxAmbientWeights && n <= (data.size() - at) / 4;
+      for (uint32_t k = 0; ok && k < n; ++k) {
+        uint32_t w = 0;
+        ok = ReadLE32(data, at, w);
+        a.weights.push_back(int32_t(w));
+      }
+      ok = ok && ReadLE32(data, at, n) && n <= kMaxAmbientEmitters && n <= (data.size() - at) / 8;
+      for (uint32_t k = 0; ok && k < n; ++k) {
+        AmbientEmitter e;
+        ok = ReadLE32(data, at, e.index) && ReadLE32(data, at, e.id) && e.index < a.weights.size() &&
+             isEffect(e.id);
+        a.emitters.push_back(e);
+      }
+      ok = ok && ReadLE32(data, at, n) && n <= kMaxAmbientShapes && n <= (data.size() - at) / 64;
+      for (uint32_t k = 0; ok && k < n; ++k) {
+        AmbientShape s;
+        ok = ReadLE32(data, at, s.type) && s.type <= kAmbientSphere;
+        for (float& v : s.center) ok = ok && readFloat(v);
+        for (auto& row : s.axes) {
+          for (float& v : row) ok = ok && readFloat(v);
+        }
+        for (float& v : s.half) ok = ok && readFloat(v) && v >= 0.f;
+        a.shapes.push_back(s);
+      }
+      if (!ok || a.emitters.empty()) {
+        error = "invalid ambient " + std::to_string(i);
+        return false;
+      }
+      file.ambients.push_back(std::move(a));
+    }
+  }
+  if (version >= 17) {
+    uint32_t count = 0;
+    if (!ReadLE32(data, at, count) || count > (data.size() - at) / 4) {
+      error = "truncated hidden list";
+      return false;
+    }
+    for (uint32_t i = 0; i < count; ++i) {
+      uint32_t id = 0;
+      ReadLE32(data, at, id);
+      if (IsAddOnId(id)) {
+        error = "hidden add-on " + std::to_string(i);
+        return false;
+      }
+      file.hidden.push_back(id);
+    }
+  }
+  if (version >= 18) {
+    constexpr size_t kFishCloudBytes = 4 * (1 + 13 + 1);
+    uint32_t count = 0;
+    if (!ReadLE32(data, at, count) || count > (data.size() - at) / kFishCloudBytes) {
+      error = "truncated fish clouds";
+      return false;
+    }
+    for (uint32_t i = 0; i < count; ++i) {
+      FishCloud f;
+      ReadLE32(data, at, f.id);
+      bool finite = true;
+      for (float* v : {&f.speedVariance, &f.turn[0], &f.turn[1], &f.slowAngle[0], &f.slowAngle[1],
+                       &f.dartInterval[0], &f.dartInterval[1], &f.minSpeed, &f.speedDecay, &f.dartCone,
+                       &f.wobblePivot, &f.wobbleAngle, &f.wobbleLength}) {
+        uint32_t bits = 0;
+        ReadLE32(data, at, bits);
+        std::memcpy(v, &bits, 4);
+        finite = finite && std::isfinite(*v);
+      }
+      ReadLE32(data, at, f.flags);
+      if (IsAddOnId(f.id) || !finite || (f.flags & ~kFishCloudFlags) != 0) {
+        error = "invalid fish cloud " + std::to_string(i);
+        return false;
+      }
+      file.fishClouds.push_back(f);
+    }
+  }
+  auto isTrigger = [&](uint32_t id) {
+    return std::any_of(file.triggers.begin(), file.triggers.end(), [&](const Trigger& t) { return t.id == id; });
+  };
+  auto isRelay = [&](uint32_t id) {
+    return std::any_of(file.relays.begin(), file.relays.end(), [&](const Relay& r) { return r.id == id; });
+  };
+  // Only the add-ons, timers, triggers, relays and generators this file has, and only what
+  // CScriptEffect, the generator, CScriptTimer, CScriptTrigger or CScriptRelay takes from a connection.
+  for (size_t i = 0; i < file.drives.size(); ++i) {
+    const Drive& d = file.drives[i];
+    const bool toGenerator = (d.flags & kDriveToGenerator) != 0;
+    const bool toTimer = !toGenerator && isTimer(d.target);
+    const bool toRelay = !toGenerator && isRelay(d.target);
+    const bool known = toGenerator ? d.target < file.generators.size()
+                                   : toTimer || toRelay || isTrigger(d.target) || isObject(d.target);
+    const bool timerMessage = d.message == 10 || d.message == 11 || d.message == 14 || d.message == 15 ||
+                              d.message == 16;
+    if (!known || d.state > 0xff || (d.flags & ~(kDriveToGenerator | kDriveRelayed)) != 0 ||
+        (d.message != 1 && d.message != 4 && d.message != 17 && !((toGenerator || toRelay) && d.message == 13) &&
+         !(toTimer && timerMessage)) ||
+        !(d.delay >= 0.f && d.delay <= kMaxDriveDelay)) {
+      error = "invalid drive " + std::to_string(i);
+      return false;
     }
   }
   if (at != data.size()) {

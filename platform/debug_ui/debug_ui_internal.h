@@ -90,14 +90,21 @@ extern float sDynScale;
 extern PortDebug::EAspectMode sAspectMode;
 extern bool sHudWide;
 extern bool sCinemaBars;
+extern bool sBallBars;
 extern bool sPhazonShell;
 extern bool sSharpScanWindow;
 extern bool sGeneratedBallLooks;
 extern bool sAutoAim;
 extern int sScanSpeed;
 extern int sHintDelay;
+extern int sMusicBoost;
+extern int sSfxBoost;
+// Hands both boosts (percent / 100) to the mixers: the MusyX voices in hw_pc.c and the AI DMA
+// stream's own gain. Called once the file and environment are read, and by the Audio rows.
+void ApplyVolumeBoosts();
 extern bool sSecondaryCrosshairs;
 extern bool sMenuStandardButtons;
+extern bool sMenuExit;
 extern std::atomic< int > sPromptGlyphs; // index into kPromptGlyphs
 inline constexpr const char* kPromptGlyphs[] = {"auto",   "xbox",     "playstation",
                                                 "switch", "gamecube", "keyboard"};
@@ -109,6 +116,8 @@ extern int sHudOpacity[PortDebug::kHudOpacityPartCount]; // indexed by PortDebug
 extern int sCrosshairOpacity;
 extern PortDebug::ECrosshairStyle sCrosshairStyle;
 extern bool sCrosshairCustomColor;
+extern bool sCrosshairXRay;
+extern bool sCrosshairThermal;
 extern float sCrosshairColor[3];
 extern bool sHideHelmet;
 extern bool sHideVisorEffects;
@@ -124,6 +133,9 @@ extern bool sCheats;
 extern bool sSkippableCutscenes;
 extern bool sBeamDoorsStayUnlocked;
 extern bool sStackBeams;
+extern int sBeamSwitchSpeed;
+extern bool sSeamlessPickups;
+extern bool sWalkSpeedEnabled;
 extern int sWalkSpeed;
 extern bool sRevision100Compatibility;
 extern std::string sTextLanguage;
@@ -142,6 +154,8 @@ extern bool sLogFile;
 extern std::mutex sRandoMutex;
 extern PortRandoGen::Settings sRandoSettings;
 extern float sFirstPersonFov;
+extern bool sGunFollowsFov;
+extern float sGunFov;
 extern float sGunOffset[3];
 extern int sMsaa;
 extern int sAnisotropy;
@@ -155,6 +169,8 @@ extern PortDebug::EGraphicsBackend sGraphicsBackendAtStart;
 extern std::string sGpuDriver;
 extern std::string sGpuDriverAtStart;
 extern bool sUnlockHardMode;
+extern float sDamageTakenMult;
+extern float sDamageDealtMult;
 extern int sStorageClamp;
 extern int sStorageClampAtStart;
 extern bool sStorageClampEnvFromSetting;
@@ -324,6 +340,9 @@ extern bool sSettingsLogged;
 using namespace DebugUi;
 
 namespace PortDebug {
+// Flick Stick's turn this tick (radians, right positive) for the right stick at
+// (x, y); false when the stick aims as usual instead (input.cpp).
+bool FlickStickTurn(float x, float y, float dt, float& yaw);
 
 // Pages and sections, each drawn by the file it is named after.
 struct DebugPage {
@@ -423,6 +442,9 @@ inline constexpr int kDreadPick = 4;
 // opens again, so the Remastered panel's own descriptor stays open (Android).
 inline constexpr int kDreadKeysSlot = 5;
 extern std::string sDreadPick;
+// Which 6 of the same picker: the Metroid Prime 2: Echoes GameCube image for the Echoes suits import.
+inline constexpr int kEchoesPick = 6;
+extern std::string sEchoesPick;
 std::string RemasteredPickFile(int which);
 void TakeRemasteredPickFiles();
 void OpenRemasteredDialog(int which);
@@ -467,12 +489,14 @@ void DrawDiscReadFailedAlert();
 void DrawImportKeys();
 void DrawRemasteredImport();
 void DrawDreadSamusImport();
+void DrawEchoesSuitsImport();
 void DrawMods();
 // remastered.cpp: the Mods page's built-in mods (Remastered's models, Dread's Samus).
 void DrawBuiltinMods();
 
 // game_sections.cpp
 void DrawCutscenesSection();
+void DrawDifficultySection();
 void DrawUnlocksSection();
 void DrawSpeedrunSection();
 void DrawDiscordSection();

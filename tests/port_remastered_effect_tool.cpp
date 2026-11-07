@@ -212,7 +212,7 @@ int Kssm(const std::string& path) {
 }
 
 // One line per generator with a material instance: file, form, the MTIN's
-// MATI (pak order), whether it has a TEXR, PBDM, then PMTR's items as
+// MATI (pak order; else "mtrl:" and the GPSM header's base material), whether it has a TEXR, PBDM, then PMTR's items as
 // group/slot=value (a constant vec4 as its four reals, else the element's
 // FourCC) and SMTR's item count. For joining with `re.sh mtrls`.
 void MaterialLines(const std::string& file, const PortRemastered::EffectNode& node, const uint8_t* data,
@@ -264,6 +264,10 @@ void MaterialLines(const std::string& file, const PortRemastered::EffectNode& no
         pmtr += (pmtr.empty() ? "" : " ") + text.str();
       }
     }
+  }
+  // No MTIN: the GPSM header's base material (ctor 0x28bfc4), marked "mtrl:".
+  if (mati.empty() && node.form == EffectFourCC("GPSM") && node.baseMaterial != EffectGuid{}) {
+    mati = "mtrl:" + EffectGuidString(node.baseMaterial);
   }
   if (!mati.empty()) {
     std::cout << file << "\t" << EffectFourCCString(node.form) << "\t" << mati << "\t" << (texr ? "TEXR" : "-") << "\t"
@@ -1141,6 +1145,18 @@ int VmatSummary(const std::string& genpPath, const std::string& matiDir) {
     }
     return FlipbookAtlas{hash, 1, 1, 1};
   };
+  // The top mip's size from <dir>/<uuid>.TXTR, as the importer's.
+  io.textureSize = [&](const EffectGuid& texture, uint32_t& width, uint32_t& height) {
+    const std::vector<uint8_t> raw = ReadFile(std::filesystem::path(matiDir) / (IdToString(PakId(texture)) + ".TXTR"));
+    TxtrImage info;
+    std::string ignored;
+    if (raw.empty() || !ReadTxtrInfo(raw.data(), raw.size(), info, ignored)) {
+      return false;
+    }
+    width = info.width;
+    height = info.height;
+    return true;
+  };
   auto be32 = [](const uint8_t* p) { return uint32_t(p[0]) << 24 | uint32_t(p[1]) << 16 | uint32_t(p[2]) << 8 | p[3]; };
   auto real = [&](const uint8_t* p) {
     const uint32_t bits = be32(p);
@@ -1163,7 +1179,12 @@ int VmatSummary(const std::string& genpPath, const std::string& matiDir) {
   for (const ConvertedPart& part : ConvertEffect(effect, data.data(), io)) {
     ++index;
     std::vector<RetailPartProperty> properties;
-    std::cout << "generator " << index << (part.root ? " (root)" : "") << " " << EffectFourCCString(part.type) << "\n";
+    std::cout << "generator " << index << (part.root ? " (root)" : "") << " " << EffectFourCCString(part.type);
+    if (index <= nodes.size()) {
+      std::cout << " primitive " << nodes[index - 1]->primitiveType << " header MTRL "
+                << (nodes[index - 1]->baseMaterial == EffectGuid{} ? "nil" : "set");
+    }
+    std::cout << "\n";
     if (!SplitRetailEffect(part.type, part.part.data(), part.part.size(), properties, error)) {
       std::cout << "  does not read: " << error << "\n";
       continue;
@@ -1221,7 +1242,8 @@ int VmatSummary(const std::string& genpPath, const std::string& matiDir) {
         std::cout << "  VTMT " << be32(b + 4) << " UV sets\n";
       } else if (name == "VORN" || name == "XFMD" || name == "PIRN") {
         std::cout << "  " << name << " " << be32(b + 4) << "\n";
-      } else if (name == "SSZE" || name == "ITEN") {
+      } else if (name == "SSZE" || name == "ITEN" || name == "VTRS" || name == "VATX" || name == "VAT2" ||
+                 name == "VATF" || name == "VTP2") {
         std::cout << "  " << name << " " << property.value.size() << " bytes\n";
       }
     }

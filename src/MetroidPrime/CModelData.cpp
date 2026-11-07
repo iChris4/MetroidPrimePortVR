@@ -559,10 +559,18 @@ const TLockedToken< CModel >& CModelData::PickStaticModel(EWhichModel which) con
   switch (which) {
   case kWM_Thermal:
   case kWM_ThermalHot:
+#ifdef TARGET_PC
+    if (PortInfraHidden())
+      break;
+#endif
     if (x3c_infraModel)
       return *x3c_infraModel;
     break;
   case kWM_XRay:
+#ifdef TARGET_PC
+    if (PortXRayHidden())
+      break;
+#endif
     if (x2c_xrayModel)
       return *x2c_xrayModel;
     break;
@@ -577,9 +585,17 @@ CSkinnedModel& CModelData::PickAnimatedModel(EWhichModel which) const {
   switch (which) {
   case kWM_Thermal:
   case kWM_ThermalHot:
+#ifdef TARGET_PC
+    if (PortInfraHidden())
+      break;
+#endif
     model = xc_animData->GetInfraModel();
     break;
   case kWM_XRay:
+#ifdef TARGET_PC
+    if (PortXRayHidden())
+      break;
+#endif
     model = xc_animData->GetXRayModel();
     break;
   default:
@@ -609,9 +625,17 @@ bool CModelData::HasModel(EWhichModel which) const {
     case kWM_Normal:
       return true;
     case kWM_XRay:
+#ifdef TARGET_PC
+      if (PortXRayHidden())
+        return false;
+#endif
       return xc_animData->GetXRayModel() != nullptr;
     case kWM_Thermal:
     case kWM_ThermalHot:
+#ifdef TARGET_PC
+      if (PortInfraHidden())
+        return false;
+#endif
       return xc_animData->GetInfraModel() != nullptr;
     default:
       return false;
@@ -621,9 +645,17 @@ bool CModelData::HasModel(EWhichModel which) const {
   case kWM_Normal:
     return x1c_normalModel;
   case kWM_XRay:
+#ifdef TARGET_PC
+    if (PortXRayHidden())
+      return false;
+#endif
     return x2c_xrayModel;
   case kWM_Thermal:
   case kWM_ThermalHot:
+#ifdef TARGET_PC
+    if (PortInfraHidden())
+      return false;
+#endif
     return x3c_infraModel;
   default:
     return false;
@@ -636,22 +668,32 @@ void CModelData::Render(const CStateManager& mgr, const CTransform4f& xf,
 }
 
 bool CModelData::IsLoaded(int shaderIdx) const {
+#ifdef TARGET_PC
+  // A Remastered X-ray or heat model (one retail lacks) loads when it is first drawn, like
+  // retail's own visor models; waiting for it here would hold the arm cannon back until the
+  // visor shows it (CGunWeapon::Update needs the suit arm loaded before it draws the gun).
+  const bool checkXRay = !xPortXRayHdrOnly;
+  const bool checkInfra = !xPortInfraHdrOnly;
+#else
+  const bool checkXRay = true;
+  const bool checkInfra = true;
+#endif
   if (HasAnimation()) {
     const CAnimData& animData = *xc_animData;
     if (!animData.GetModelData()->GetModel()->IsLoaded(shaderIdx))
       return false;
     CSkinnedModel* xrayModel = animData.GetXRayModel();
     CSkinnedModel* infraModel = animData.GetInfraModel();
-    if (xrayModel != nullptr && !xrayModel->GetModel()->IsLoaded(shaderIdx))
+    if (checkXRay && xrayModel != nullptr && !xrayModel->GetModel()->IsLoaded(shaderIdx))
       return false;
-    if (infraModel != nullptr && !infraModel->GetModel()->IsLoaded(shaderIdx))
+    if (checkInfra && infraModel != nullptr && !infraModel->GetModel()->IsLoaded(shaderIdx))
       return false;
   }
   if (x1c_normalModel && !(*x1c_normalModel)->IsLoaded(shaderIdx))
     return false;
-  if (x2c_xrayModel && !(*x2c_xrayModel)->IsLoaded(shaderIdx))
+  if (checkXRay && x2c_xrayModel && !(*x2c_xrayModel)->IsLoaded(shaderIdx))
     return false;
-  if (x3c_infraModel && !(*x3c_infraModel)->IsLoaded(shaderIdx))
+  if (checkInfra && x3c_infraModel && !(*x3c_infraModel)->IsLoaded(shaderIdx))
     return false;
   return true;
 }
@@ -665,13 +707,16 @@ int CModelData::GetNumMaterialSets() const {
 }
 
 #ifdef TARGET_PC
+bool CModelData::PortInfraHidden() const { return xPortInfraHdrOnly && !CCubeMaterial::sPortSceneHdr; }
+bool CModelData::PortXRayHidden() const { return xPortXRayHdrOnly && !CCubeMaterial::sPortSceneHdr; }
+
 int CModelData::PortSlot(EWhichModel which) const {
   switch (which) {
   case kWM_Thermal:
   case kWM_ThermalHot:
-    return x3c_infraModel ? 2 : 0;
+    return x3c_infraModel && !PortInfraHidden() ? 2 : 0;
   case kWM_XRay:
-    return x2c_xrayModel ? 1 : 0;
+    return x2c_xrayModel && !PortXRayHidden() ? 1 : 0;
   default:
     return 0;
   }
@@ -689,6 +734,28 @@ void CModelData::PortPlace(uint mrea, uint editorId) {
                                   xPortCorrection[i]))
       xPortCorrected |= uchar(1 << i);
   }
+}
+
+unsigned CModelData::sPortThermalColdNodes = 0;
+
+void CModelData::PortDrawThermalColdNode(const CTransform4f& xf, const CActorLights* lights,
+                                         const CModelFlags& flags) const {
+  // RenderUnsortedParts' own gate: these queue no node.
+  if (x14_25_sortThermal || HasAnimation() || !x1c_normalModel ||
+      flags.GetTrans() > CModelFlags::kT_Four) {
+    return;
+  }
+  gpRender->SetModelMatrix(PortScaledXf(kWM_ThermalHot, xf));
+  if (lights != nullptr) {
+    lights->ActivateLights();
+  } else {
+    CGraphics::DisableAllLights();
+    gpRender->SetAmbientColor(x18_ambientColor);
+  }
+  PickStaticModel(kWM_ThermalHot)->DrawUnsortedParts(flags);
+  gpRender->SetAmbientColor(CColor::White());
+  CGraphics::DisableAllLights();
+  ++sPortThermalColdNodes;
 }
 
 CTransform4f CModelData::PortScaledXf(EWhichModel which, const CTransform4f& xf) const {

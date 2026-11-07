@@ -14,6 +14,7 @@
 #include "port_config_reset.h"
 #include "port_input_devices.h"
 #include "port_savestate.h"
+#include "port_flick_stick.h"
 #include "port_mouse.h"
 
 #include "MetroidPrime/Cameras/CCameraManager.hpp"
@@ -52,6 +53,10 @@ std::atomic<int> sBeamRequest{-1};
 std::atomic<uint64_t> sBeamRequestUntilNs{0};
 std::atomic<uint64_t> sSpringRequestUntilNs{0};
 std::atomic<uint64_t> sDodgeRequestUntilNs{0};
+std::atomic<uint64_t> sTargetCycleUntilNs{0};
+std::atomic<int> sTargetCycleDir{0};
+std::atomic<bool> sGrappleHeld{false};
+std::atomic<uint64_t> sGrappleHoldUntilNs{0};
 constexpr uint64_t kWheelRequestNs = 120'000'000;
 std::mutex sMinimapMutex;
 bool sMinimapValid = false;
@@ -91,6 +96,8 @@ PortMouse::PointerAim sPointerAim;
 bool sPointerAimFree = false;
 // The last update left the pointer free under a lock (lock-on free aim).
 bool sPointerAimLocked = false;
+// That lock had no target (UpdateMouseAim's pointerStays): its end leaves the pointer put.
+bool sPointerAimLockStays = false;
 // The last update held the pointer still under a lock (UpdateMouseAim's pointerHold).
 bool sPointerAimHeld = false;
 // A locked update this tick moved the pointer (TickAim's job for the pointer under a lock).
@@ -500,6 +507,7 @@ void ResetMouseAim() {
   sPointerAim.Center();
   sPointerAimFree = false;
   sPointerAimLocked = false;
+  sPointerAimLockStays = false;
   sPointerAimHeld = false;
   sMouseGameplayActive = false;
   sMouseButtonGate.Reset();
@@ -566,6 +574,10 @@ bool LockOnFreeAim() {
   EnsureInitialized();
   return sInput.lockOnFreeAim && DirectAim() && !sOriginalExperience;
 }
+bool HandOnCannon() {
+  EnsureInitialized();
+  return sInput.handOnCannon && DirectAim() && !sOriginalExperience;
+}
 void SetPointerAimPosition(float x, float y) {
   sPointerAim.Center();
   sPointerAim.Move(x, y);
@@ -624,22 +636,24 @@ void ClearMouseButtons() { sMouseHeldButtons.Clear(); }
 unsigned MouseHeldButtons() { return sMouseHeldButtons.Held(); }
 
 bool UpdateMouseAim(bool active, bool locked, float x, float y, float z, bool pointerLock,
-                    bool pointerHold) {
+                    bool pointerHold, bool pointerStays) {
   SetMouseGameplayActive(active);
   const PortMouse::AimState lastAim = sMouseAimState;
   const PortMouse::PointerAim lastPointer = sPointerAim;
   // Lock-on free aim: the lock owns the view and a pointer moves over it, pointer aim's
   // or, without pointer aim, one for the lock only. It starts and ends a lock at the
-  // centre, where the target is.
-  const bool lockFree = active && locked && pointerLock && LockOnFreeAim();
+  // centre, where the target is. Under pointer aim an empty lock frees it too (CPlayer
+  // decides which locks through pointerLock); having no target, it leaves the pointer put.
+  const bool lockFree = active && locked && pointerLock && (LockOnFreeAim() || PointerAim());
   const bool pointer = PointerAim() || lockFree;
   // A held pointer stays where the lock found it, and neither moves nor turns the view.
   const bool held = active && locked && !lockFree && pointerHold && PointerAim();
   sPointerAimHeld = held;
   if (lockFree != sPointerAimLocked) {
-    sPointerAim.Center();
+    if (!(lockFree ? pointerStays : sPointerAimLockStays)) sPointerAim.Center();
     sPointerAimLocked = lockFree;
   }
+  sPointerAimLockStays = lockFree && pointerStays;
   // Reset aim: under pointer aim recentre the pointer, otherwise look level
   // (pitch 0; yaw stays). reset_aim_both does both either way.
   if (sResetAimRequested.exchange(false, std::memory_order_acq_rel)) {
@@ -718,6 +732,22 @@ bool UpdateMouseAim(bool active, bool locked, float x, float y, float z, bool po
   sAimAppliedLastTick = applied;
   return applied;
 }
+bool FlickStickTurn(float x, float y, float dt, float& yaw) {
+  static PortFlickStick::State sFlick;
+  // On from the start: the first tick that reads a pad (it may come tilted) flicks.
+  static bool sFlickOn = true;
+  // Under pointer aim the stick moves the pointer unless the gyro drives the aim; a radial
+  // menu or a lock with free aim takes the stick's travel as it is.
+  const bool on = FlickStick() && !Visible() && !PortRadial::Capturing() && !sPointerAimLocked &&
+                  (!PointerAim() || sGyroDrivesAim);
+  // Off and back on, a stick still tilted must be let go before it flicks.
+  if (on != sFlickOn) sFlick.Reset();
+  sFlickOn = on;
+  if (!on) return false;
+  yaw = sFlick.Update(x, y, dt);
+  return true;
+}
+
 void SynchronizeMouseAim(float x, float y, float z) { sMouseAimState.Synchronize(x, y, z); }
 void TurnMouseAim(float dyaw) { sMouseAimState.Turn(dyaw, 0.f); }
 
@@ -919,6 +949,27 @@ void RequestDodge() { sDodgeRequestUntilNs.store(SDL_GetTicksNS() + kWheelReques
 bool TakeDodgeRequest() {
   const uint64_t until = sDodgeRequestUntilNs.exchange(0);
   return SDL_GetTicksNS() < until && !OriginalExperience();
+}
+
+void RequestTargetCycle(int dir) {
+  sTargetCycleDir.store(dir > 0 ? 1 : -1);
+  sTargetCycleUntilNs.store(SDL_GetTicksNS() + kWheelRequestNs);
+}
+
+int TakeTargetCycle() {
+  const uint64_t until = sTargetCycleUntilNs.exchange(0);
+  if (SDL_GetTicksNS() >= until || OriginalExperience()) return 0;
+  return sTargetCycleDir.load();
+}
+
+void SetGrappleHeld(bool held) { sGrappleHeld.store(held, std::memory_order_relaxed); }
+
+void HoldGrapple(float seconds) {
+  sGrappleHoldUntilNs.store(SDL_GetTicksNS() + static_cast<uint64_t>(seconds * 1e9f));
+}
+
+bool GrappleHeld() {
+  return sGrappleHeld.load(std::memory_order_relaxed) || SDL_GetTicksNS() < sGrappleHoldUntilNs.load();
 }
 
 void RequestSaveStateHotkey(int which) {

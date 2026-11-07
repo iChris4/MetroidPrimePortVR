@@ -113,7 +113,11 @@ namespace ImportStage {
 // 89: 353d6547 draws as kind 29; 74c655e4 as kind 43 with the CCH1 tint and dual-source output.
 // 90: 54b4021f (Crystal) draws as kind 48.
 // 91: the skinned twins f07e9761 (of 98f0556d) and 3ef54cc4, 35acebd7 (of 4bc890c1) route to their family.
-inline constexpr int kConverter = 91;
+// 92: LambertFx lights with the baked probe x BLCM like VFX_Model_Base, not the flat (zero) ambient.
+// 93: cc3e88af (the Omega fight's healing nodules) is kShaderPhazon's skinned twin and draws as kind 21.
+// 94: 9b752e5e (Research Lab Hydra's ForceField_DX11) is 6c1a4768's twin and draws as kind 14.
+// 95: cd033236 (the skies' flow-map clouds) draws as kind 49, its flow mask TCH0 in slot 3.
+inline constexpr int kConverter = 95;
 // What a converted texture holds: port_remastered_image/txtr/dds/astc, and Converter's Get and
 // Cube. Each converted texture is kept across imports under its tag and this number, so a
 // kConverter bump re-imports the models without converting their textures again.
@@ -155,7 +159,23 @@ inline constexpr int kTextures = 5;
 // 29: the Puffer (E7CDBAF2) is paired with its CHPR's plain skin 5a42cd1b, not Metal.Skin 36d02b0c.
 // 30: the Puffer's Metal.Skin is imported as variant 1 of its ANCS (8DC8052E), for the Tower of
 //     Light's puffers.
-inline constexpr int kModels = 30;
+// 31: retail CMDL E4C4F3CA (the Omega fight's Phazon healing nodule, ANCS 7C26C9EE) is in the
+//     table, paired with dfa19c72, the skinned model of its CHPR.
+// 32: retail CMDL 607C35E7 (the rubble mounds of Mine Security Station) leaves the table: its
+//     partner 05a716b1 is the stations' white AreaLight dome; the room names the carried-over
+//     10000000-...-607c35e7 instead, which then places per object.
+// 33: so do 7E9028D7 (Frigate hologram grids), DDA8738A (00p_ice_connect), FC49F290 and 95413951
+//     (model particles): Remastered's rooms and GENPs name their carried-over models, and the
+//     partners are other rooms' models.
+// 34: the arm cannon's thermal models (MDL_ThermalHeatMask, kind 50) are imported as look 3 of the
+//     Power, Wave, Plasma and Phazon beams' ANCSs, and the suit arms' <Suit>Arm_Thermal (its
+//     static twin 1826e69d; PowerArm_Thermal is plain PBR) as look 3 of the retail arm CMDLs.
+// 35: so are the grapple arm's: grappleArm.CHPR's Thermal subcharacter as look 3 of the grapple
+//     ANCS (rebinding Varia's pair), GrappleGear/GrapNoz1/GrapNoz2_Thermal of the retail CMDLs.
+// 36: and their GrappleGear/GrapNoz1/GrapNoz2_XRAY as look 4 (PortModelVariant::kXRayLook).
+// 37: the arm cannon's X-ray models (9d82dc5e, Phazon's 998992d7) as look 4 of the five beams' ANCSs,
+//     and <Suit>Arm_XRay as look 4 of the retail arms.
+inline constexpr int kModels = 37;
 // 63: ELPS reads its CNST surface flag; the system tween is 0 only at a 0x1000000 lifetime.
 // 62: NEGT, CRCV, SPEV, ELPS, ROTV, PNCV, KEYF, SLTW, CRLN octaves, KESP, one-stop GRAD, PAP0/9,
 //     ADV9 and IAV0..3 are converted; PLNV counts come from MAXP.
@@ -224,7 +244,46 @@ inline constexpr int kModels = 30;
 // 136: GunTurret particle properties (room GENPs).
 // 137: GunTurret visor effects (room ELC2s).
 // 138: Drone laser and scanner particles (room GENPs).
-inline constexpr int kEffects = 139;   // Queen barrier shield/glow models back-cull (MATI cull byte)
+// 139: Queen barrier shield/glow models back-cull (MATI cull byte).
+// 141: effect generators, strict timers (roomfx v11). 142: strict timers start active.
+// 143: event states from the GOCs' TranslateScriptEventToState. 144: moved effects match by senders.
+// 145: TimerMP1s retail lacks become retail Timers (roomfx v12). 146: WSTP becomes the port-only PWST.
+// 147: ObjectFollowLocators retail lacks become follows (roomfx v13).
+// 148: retail positions after a type's leading field (GunTurret, flavors, Dock).
+// 152: ambient particle spawners (roomfx v16).
+// 153: ambients into matched retail effects. 157: recipes 90ce7873, 03ac7d53, d47ffcc3; a swoosh VMAT's PMTR life.
+// 163: header planar squares (shaders 4ba0aadc, c38294d2). 164: VMAT slots bind Remastered's sRGB textures.
+// 182: a vector SMTR (DOML, CNST) sets a CCH row's xyz; DOML reads the LightHints' direction (PDML).
+// 183: a vector PSAn reads the system's SVVn (PSYV). 184: a swoosh's SEED and child seed (PSED, PGID).
+// 185: a swoosh's TXUP (PTXU). 186: a light TickSystem_Light does not update is built once (PLON).
+// 190: SSZE, a per-particle value without a VMAT too (PSSZ).
+// 195: a swoosh's LWQD (PLWQ).
+// 196: a swoosh's INTR (PSIR).
+// 197: FRMD (PFRM). 198: a swoosh's SNRD/SNRA (PSRD/PSRA). 199: OVEC on a planar square or model consumed. 200: ANCV (PANV).
+// 204: a part's EMVR under XFMD 4 (PEMR).
+// 205: SLDS (PSLD), the sleep distance. 206: an ELC2's visor effect data (PVSD..PVDT).
+// 207: a swoosh's PSCL (PSSC).
+// 208: a swoosh's zero SYSR under XFMD 2 (XFMD 1).
+// 209: DFCP and DFCS take two reals only (an ARRY of their colours read across them).
+// 210: an int RAND of parent reads (SPAI/DPVI/TPVI never fold) is PRAN, not a drop.
+// 211: SPWT/SPWR/SPWS/SPCL on a generator with no child system are inert, not a drop.
+// 212: a nested spot light (LTYP 3) is an HDR light with its LIAN/LOAN cone (PLIA/PLOA).
+// 213: IEVM, the cap on the delta ISVF scales, is the port-only PIEV.
+// 214: a generator's SYST/TEMT force transform mode 1 (PSYT/PTMT, XFMD 1).
+// 215: a swoosh's RAZY PROT under XFMD 3 is its zero-REUL fallback (PROZ).
+// 216: a generator's SPWS beside a child system is the port-only PSWS, the children's scale;
+//      a swoosh's PSWT 0 is consumed.
+// 217: TRSS is six reals, so a SLCT in a TMTR keeps its ARRY (VTMT written).
+// 218: an int PSAn is the system's SVIn, the port-only PSYI (LTM2/TMTR PSA0).
+// 219: an int KPIN is a PKPR latch; SELT is GEMT (8dad9f3d TMTR).
+// 220: a constant true KILL is the port-only PKIL (7f71e94b light); a false one is consumed.
+// 221: ELC2 SSWH swooshes written standalone.
+// 222: CRLN 2d slices are PCRS.
+// 227: PIRN marks every converted electric.
+// 228: a model Remastered keeps under a carried-over id converts as the effect's own (drain debris).
+// 229: Remastered decals (DPSM) written over their paired DPSCs, with their material (shader, blend,
+//      texture wrap, parameter defaults), SMTR and TMTR.
+inline constexpr int kEffects = 229;
 // 20: two rooms matching one area write only the closer match's files, not the later room's.
 // 21: roomenv version 22, the world master's hints driven by its camera volumes (the table in every roomenv).
 // 22: a master's InventoryActivator fired by the camera going under water drives its hints (kSenderCameraWaterItem).
@@ -274,7 +333,28 @@ inline constexpr int kEffects = 139;   // Queen barrier shield/glow models back-
 // 72: animated platforms are left to retail's Platform (they looped as scenery, without collision).
 // 74: a platform's model is drawn only riding its retail Platform; unbound or animated, retail draws it.
 // 75: the grid is the LTPB the ROOM's BLIT names, found in the master pak too (25 rooms had none).
-inline constexpr int kRooms = 75;
+// 76: script event -> state rows of MP1 types from their GOCs' TranslateScriptEventToState.
+// 77: an effect Remastered moved over 2 units matches its retail one by senders and states.
+// 78: retail objects whose position follows a component, flavor or active field match (turrets);
+// an effect Remastered dropped links into matches the one retail Effect with all of its links,
+// or whose parts Generator's one incoming link Remastered sends it directly.
+// 79: roomenv version 34, LightHints (the dominant light direction DOML reads).
+// 80: layers whose units never load (NeverLoadedUnits: debug skips) are left out.
+// 81: a volley of unmatched retail effects one sender activates, paired one to one with the added
+// ones one Remastered link activates, is replaced (the Reactor's Smoke'n'Sparks drew twice).
+// 82: roomfx v17, retail effects Remastered dropped are hidden.
+// 83: retail Generator templates Remastered's GeneratorMP1 dropped are skipped.
+// 84: roomfx v18, FishCloudMP1's swim properties (speed variance, turning, darting, wobble).
+// 85: an actor with the room's own model on a retail Actor whose model the table carries over
+// stands in for it (Research Lab Hydra's force field).
+// 86: a room's fog hints its own Relays switch from the camera water (FluidRelayLinks) get those
+// links (the Reflecting Pool's water fogs were dropped as unlinked).
+// 87: a retail model's objects in an area whose entity count differs pair with the entity standing
+// where they do, and a per-instance model some of whose objects stay unpaired converts in model space
+// too (1131 placements of 24 models drew the retail model; 21 placements of 2 models still do).
+// 88: the stage record keeps each retail placement's animated flag (a reused rooms stage lost it,
+// and the retail models stage converted animation sets' models).
+inline constexpr int kRooms = 88;
 inline constexpr int kRoomModels = 1;  // the rooms' own models and their levels of detail
 // kText: port_remastered_text, and the font (port_remastered_font).
 // 2: text/.disc, the disc the tables were merged from (kTextDiscName).
@@ -283,7 +363,7 @@ inline constexpr int kText = 2;
 // 10: shell.bin, the silhouette-shell textures (port_shell_file.h).
 // 18: hud/.disc, the disc the frames were rebuilt from (kHudDiscName).
 // 19: icy.bin, the frozen-enemy material (port_icy_file.h).
-inline constexpr int kHud = 19;        // port_remastered_hud, port_remastered_map, envfx.bin, shell.bin, icy.bin
+inline constexpr int kHud = 20;        // port_remastered_hud, port_remastered_map, envfx.bin, shell.bin, icy.bin
 inline constexpr int kMovies = 0;      // port_remastered_movie
 inline constexpr int kGallery = 0;     // the gallery pictures (port_gallery)
 }  // namespace ImportStage
@@ -769,5 +849,12 @@ int RunImportFromCommandLine(const std::string& nspPath, const std::string& keys
 bool StartDreadSamusImport(const std::string& nspPath, const std::string& keysPath);
 // `--import-dread-samus <nsp> [keys]`, as RunImportFromCommandLine. Returns the exit code.
 int RunDreadSamusImportFromCommandLine(const std::string& nspPath, const std::string& keysPath);
+
+// The Echoes suits import (port_echoes_suits.h): Varia, Gravity and Phazon bodies from the user's
+// own Metroid Prime 2: Echoes GameCube or Metroid Prime Trilogy image into <mods>/echoes-suits, with the disc open. Shares
+// this import's state, cancelling and thread like StartDreadSamusImport.
+bool StartEchoesSuitsImport(const std::string& imagePath);
+// `--import-echoes-suits <image>`, as RunImportFromCommandLine. Returns the exit code.
+int RunEchoesSuitsImportFromCommandLine(const std::string& imagePath);
 
 }  // namespace PortRemastered

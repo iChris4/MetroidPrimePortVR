@@ -64,6 +64,11 @@ final class TouchControlsView extends View {
     // A button added in the layout editor: its action is a touch: binding the
     // native side makes from the layout, so it sends no GameCube button itself.
     private static final int CUSTOM_BUTTON = -4;
+    // The menus' back arrow: the native TOUCH_MENU_BACK code, which the port binds
+    // to B in menus and the map under any pad preset (the virtual pad's East is B
+    // only under the GameCube one).
+    private static final int MENU_BACK = -5;
+    private static final int TOUCH_MENU_BACK = 35;
     // Axis-held controls are tracked with ids above this, to share one press map.
     private static final int AXIS_ID_BASE = 100;
 
@@ -472,12 +477,15 @@ final class TouchControlsView extends View {
     // A drag on the free area aims (mouse-style, or the classic turn and look
     // up/down). Always on unless the classic layout turns it off.
     private boolean aim;
-    // Beam and visor wheels replace the D-pad. F1 settings, re-read every draw.
+    // The stock Visor and Beam wheel buttons (the default layout's, in place of the
+    // D-pad); any layout can add wheels as buttons. Re-read every draw.
     private boolean wheels;
     private boolean visorTapScan;
     private int lastWheelMask;
-    // The open wheel (the WHEEL target's pointer), else -1.
+    // The open wheel (the WHEEL target's pointer), else -1, and the button that
+    // opened it (C_VISOR, C_BEAM or an added wheel's control).
     private int wheelPointer = -1;
+    private int wheelControl = -1;
     private float wheelCx;
     private float wheelCy;
     // Tap the minimap to open the map; replaces the GameCube layout's Z pill. An
@@ -512,7 +520,8 @@ final class TouchControlsView extends View {
             if (nativeTouchControlsEnabled() != controlsOnNow ||
                 (controlsOnNow &&
                  ((mapTap && mapButtonState(getWidth(), getHeight()) != mapButtonShown) ||
-                  (wheels && ((nativeWheelOwned() & WHEEL_VALID_BIT) != 0) != wheelButtonsShown) ||
+                  (anyWheelButton() &&
+                   ((nativeWheelOwned() & WHEEL_VALID_BIT) != 0) != wheelButtonsShown) ||
                   rHidden() != rHiddenNow)) ||
                 nativePointerMenuActive() != pointerMenuNow) {
                 invalidate();
@@ -564,6 +573,7 @@ final class TouchControlsView extends View {
     // A quick swipe up on the aim drag (trackSwipe): the Spring Ball, if F1 allows it.
     private static native void nativeTouchSpringSwipe();
     private static native boolean nativeTouchWheelsEnabled();
+    private static native void nativeRetireTouchWheels();
     private static native boolean nativeTouchVisorTapScan();
     // Bits 0-3 visors owned, 4-7 beams owned, 8-9 current visor, 10-11 current
     // beam, 12 valid (0 = no player: wheels disabled).
@@ -604,6 +614,8 @@ final class TouchControlsView extends View {
     private static native String nativeTouchBallLabel(int control);
     // The actions an added button can take: key, label, key, label...
     private static native String[] nativeTouchButtonActions();
+    // Changes when that list may have.
+    private static native long nativeTouchButtonActionsVersion();
     // The twin layout's Beam button is held: the D-pad picks beams, not visors.
     private static native void nativeTouchBeamShift(boolean held);
     // The Turbo button is held: the game acts as if Fire were mashed.
@@ -663,7 +675,7 @@ final class TouchControlsView extends View {
             // The overlay can open without this view hearing of it (a pad, or
             // MENU while the first frames are slow enough that a one-off
             // redraw ran before the toggle landed), so redraw on any change.
-            if (wheels) {
+            if (anyWheelButton()) {
                 final int mask = nativeWheelOwned();
                 if (mask != lastWheelMask) {
                     lastWheelMask = mask;
@@ -813,6 +825,50 @@ final class TouchControlsView extends View {
         }
     }
 
+    // The retired wheels setting put the stock Visor and Beam buttons in the classic
+    // and twin layouts in place of the D-pad. Once, in such a layout, they become
+    // added wheel buttons where they were drawn and the D-pad goes, so the layout
+    // plays as before; the stock pair goes too, or the default layout (which shares
+    // the saved layout) would show both. touch_overlay.cpp does the same.
+    private void migrateLegacyWheels(float width, float height) {
+        if (editing || width <= 0f || height <= 0f || !nativeTouchWheelsEnabled()) {
+            return;
+        }
+        if (!wheels) {
+            final float u = layoutU(height);
+            int slot = 0;
+            for (int wheel = 0; wheel < 2; ++wheel) {
+                final int stock = C_VISOR + wheel;
+                if (removed(stock)) {
+                    continue;
+                }
+                while (slot < CUSTOM_SLOTS && customAction[slot] != null) {
+                    ++slot;
+                }
+                if (slot == CUSTOM_SLOTS) {
+                    break;
+                }
+                final int control = C_CUSTOM + slot;
+                customAction[slot] = wheel == 0 ? "visor_wheel" : "beam_wheel";
+                customPage[slot] = PAGE_PLAY;
+                ovDx[control] = Math.max(-MAX_OFFSET, Math.min(MAX_OFFSET,
+                    (wheelButtonX(wheel, width, height) - width / 2f) / u));
+                ovDy[control] = Math.max(-MAX_OFFSET, Math.min(MAX_OFFSET,
+                    (wheelButtonY(wheel, height) - height / 2f) / u));
+                ovScale[control] = Math.max(MIN_SCALE, Math.min(MAX_SCALE,
+                    wheelButtonRadius(wheel, height) / (CUSTOM_RADIUS * u)));
+                ovAlpha[control] = ovAlpha[stock];
+                ovHidden[control] = ovHidden[stock];
+                resetControl(stock);
+                ovRemoved[stock] = true;
+            }
+            ovRemoved[C_DPAD] = true;
+            layoutText = serializeLayout();
+            nativeSetTouchLayout(layoutText);
+        }
+        nativeRetireTouchWheels();
+    }
+
     // The gameplay controls and the layout editor, without the pointer menu's own
     // buttons, which onDraw draws before this (outside the opacity layer).
     private void drawControls(Canvas canvas, float width, float height, boolean classic) {
@@ -834,9 +890,11 @@ final class TouchControlsView extends View {
         }
         cStick = classic || twin;
         aim = !classic || nativeTouchAimEnabled();
-        // The wheels are the default layout's only beam and visor control; classic and
-        // twin stick have the D-pad (twin: Beam held + D-pad) and the setting.
-        wheels = (!classic && !twin) || nativeTouchWheelsEnabled();
+        // The stock wheels are the default layout's beam and visor control; classic and
+        // twin stick have the D-pad (twin: Beam held + D-pad), and either takes wheels
+        // as added buttons.
+        wheels = !classic && !twin;
+        migrateLegacyWheels(width, height);
         visorTapScan = nativeTouchVisorTapScan();
         mapTap = nativeTouchMapTapEnabled();
         if (!editing) {
@@ -922,7 +980,7 @@ final class TouchControlsView extends View {
         drawCustomButtons(canvas, width, height);
         removeCallbacks(mapButtonPoll);
         postDelayed(mapButtonPoll, MAP_BUTTON_POLL_MS);
-        if (wheels && wheelPointer != -1) {
+        if (wheelPointer != -1) {
             drawWheel(canvas);
         }
         if (editing) {
@@ -1055,7 +1113,7 @@ final class TouchControlsView extends View {
         final float cx = backButtonRect.centerX();
         final float cy = backButtonRect.centerY();
         final float radius = backButtonRect.width() * 0.5f;
-        fillPaint.setColor(held.containsKey(BTN_EAST) ? 0xCC3A5A70 : 0x99081218);
+        fillPaint.setColor(held.containsKey(MENU_BACK) ? 0xCC3A5A70 : 0x99081218);
         strokePaint.setColor(0xBBFFFFFF);
         canvas.drawCircle(cx, cy, radius, fillPaint);
         canvas.drawCircle(cx, cy, radius, strokePaint);
@@ -1193,7 +1251,7 @@ final class TouchControlsView extends View {
             float y = event.getY(actionIndex);
             if (menu) {
                 // Only the back and cog buttons get here (toGame took the rest).
-                final int id = onCogButton(x, y) ? TOGGLE_DEBUG_OVERLAY : BTN_EAST;
+                final int id = onCogButton(x, y) ? TOGGLE_DEBUG_OVERLAY : MENU_BACK;
                 targets.put(pointerId, new TouchTarget(BUTTON, id));
                 pressControl(id);
                 invalidate();
@@ -1421,10 +1479,19 @@ final class TouchControlsView extends View {
             if (customAction[control - C_CUSTOM] == null || ctrlHidden(control)) {
                 continue;
             }
+            // A hidden (unusable) wheel button lets the touch through.
+            final int wheel = customWheel(control);
+            if (wheel != -1 && (nativeWheelOwned() & WHEEL_VALID_BIT) == 0) {
+                continue;
+            }
             customGeometry(control, width, height, faceGeo);
             final float dx = x - faceGeo[0];
             final float dy = y - faceGeo[1];
             if (dx * dx + dy * dy <= faceGeo[2] * faceGeo[2]) {
+                if (wheel != -1) {
+                    openWheel(pointerId, wheel, control, x, y, faceGeo[0], faceGeo[1], width, height);
+                    return;
+                }
                 final TouchTarget target = TouchTarget.begin(BUTTON, CUSTOM_BUTTON, x, y);
                 targets.put(pointerId, target);
                 pressTarget(target, control, true);
@@ -1462,19 +1529,9 @@ final class TouchControlsView extends View {
         if (wheels && (nativeWheelOwned() & WHEEL_VALID_BIT) != 0) {
             final int wheel = wheelButtonAt(x, y, width, height);
             if (wheel != -1) {
-                // Not while the map is open (the overlay is handled before this).
-                if (wheelPointer == -1 && !nativeMapScreenOpen()) {
-                    TouchTarget target = TouchTarget.begin(WHEEL, wheel, x, y);
-                    target.startMs = SystemClock.uptimeMillis();
-                    // A moved button must still open its wheel on screen.
-                    final float reach = dp(WHEEL_RADIUS_DP);
-                    wheelCx = Math.max(reach, Math.min(width - reach,
-                                                       wheelButtonX(wheel, width, height)));
-                    wheelCy = Math.max(reach, Math.min(height - reach,
-                                                       wheelButtonY(wheel, height)));
-                    wheelPointer = pointerId;
-                    targets.put(pointerId, target);
-                }
+                openWheel(pointerId, wheel, C_VISOR + wheel, x, y,
+                          wheelButtonX(wheel, width, height), wheelButtonY(wheel, height),
+                          width, height);
                 return;
             }
         }
@@ -1968,6 +2025,8 @@ final class TouchControlsView extends View {
                 nativeTouchBeamShift(true);
             } else if (id == TURBO_FIRE) {
                 nativeTouchTurboFire(true);
+            } else if (id == MENU_BACK) {
+                nativeTouchControl(TOUCH_MENU_BACK, true);
             } else if (id >= AXIS_ID_BASE) {
                 nativeVirtualAxis(id - AXIS_ID_BASE, 1f);
             } else {
@@ -2016,6 +2075,8 @@ final class TouchControlsView extends View {
                 nativeTouchBeamShift(false);
             } else if (id == TURBO_FIRE) {
                 nativeTouchTurboFire(false);
+            } else if (id == MENU_BACK) {
+                nativeTouchControl(TOUCH_MENU_BACK, false);
             } else if (id >= AXIS_ID_BASE) {
                 // Triggers are axes, and SDL's joystick axes run -32768..32767
                 // with a trigger resting at the minimum: releasing with 0 left
@@ -2783,6 +2844,15 @@ final class TouchControlsView extends View {
             if (key == null) {
                 continue;
             }
+            // A wheel button hides like the stock ones while the wheels are unusable.
+            final int wheel = customWheel(control);
+            final int mask = wheel != -1 ? nativeWheelOwned() : 0;
+            if (wheel != -1) {
+                wheelButtonsShown = (mask & WHEEL_VALID_BIT) != 0 || editing;
+                if (!wheelButtonsShown) {
+                    continue;
+                }
+            }
             customGeometry(control, width, height, faceGeo);
             final float x = faceGeo[0];
             final float y = faceGeo[1];
@@ -2792,11 +2862,23 @@ final class TouchControlsView extends View {
             if (layer == LAYER_SKIP) {
                 continue;
             }
-            final boolean active = touchHeld[control] > 0;
+            final boolean active = touchHeld[control] > 0 ||
+                                   (wheelPointer != -1 && wheelControl == control);
             fillPaint.setColor(active ? 0xCC48C8E8 : 0x77081218);
             strokePaint.setColor(active ? 0xFFE1F8FF : 0xBBFFFFFF);
             canvas.drawCircle(x, y, radius, fillPaint);
             canvas.drawCircle(x, y, radius, strokePaint);
+            if (wheel != -1) {
+                // The wheel's current item, like the stock buttons.
+                refreshWheelIcons();
+                final int current = wheel == 0 ? (mask >> 8) & 3 : (mask >> 10) & 3;
+                if (!drawWheelIcon(canvas, wheel, current, x, y, radius * 1.3f, 255)) {
+                    drawFittedLabel(canvas, WHEEL_BUTTON_LABELS[wheel], x, y,
+                                    dp(14) * ovScale[control], radius * 1.7f);
+                }
+                popLayer(canvas, layer);
+                continue;
+            }
             final int icon = actionIcon(key);
             if (icon >= 0) {
                 refreshWheelIcons();
@@ -2838,6 +2920,7 @@ final class TouchControlsView extends View {
             case "visor_prev": return "Visor −";
             case "spring_ball": return "Spring";
             case "dodge": return "Dodge";
+            case "grapple": return "Grapple";
             case "port_menu": return "Menu";
             case "save_state": return "Save";
             case "load_state": return "Load";
@@ -2871,13 +2954,16 @@ final class TouchControlsView extends View {
         drawCenteredLabel(canvas, label, x, y, w > maxWidth ? size * maxWidth / w : size);
     }
 
-    // nativeTouchButtonActions(), read once.
+    // nativeTouchButtonActions(), read again when controls.toml (the player's own actions) changes.
     private static String[] buttonActions;
+    private static long buttonActionsVersion;
 
     private static String[] buttonActions() {
-        if (buttonActions == null) {
+        final long version = nativeTouchButtonActionsVersion();
+        if (buttonActions == null || version != buttonActionsVersion) {
             final String[] list = nativeTouchButtonActions();
             buttonActions = list != null ? list : new String[0];
+            buttonActionsVersion = version;
         }
         return buttonActions;
     }
@@ -2918,8 +3004,7 @@ final class TouchControlsView extends View {
             if (layer == LAYER_SKIP) {
                 continue;
             }
-            final boolean active = wheelPointer != -1 && wheelTarget() != null &&
-                                   wheelTarget().id == wheel;
+            final boolean active = wheelPointer != -1 && wheelControl == C_VISOR + wheel;
             fillPaint.setColor(active ? 0xCC48C8E8 : 0x77081218);
             strokePaint.setColor(active ? 0xFFE1F8FF : 0xBBFFFFFF);
             canvas.drawCircle(cx, cy, radius, fillPaint);
@@ -2931,6 +3016,50 @@ final class TouchControlsView extends View {
             }
             popLayer(canvas, layer);
         }
+    }
+
+    // Opens wheel (0 Visor, 1 Beam) under pointerId for the button control centred
+    // at (cx, cy). Not over an open wheel or while the map is open (the overlay is
+    // handled before this).
+    private void openWheel(int pointerId, int wheel, int control, float x, float y, float cx,
+                           float cy, float width, float height) {
+        if (wheelPointer != -1 || nativeMapScreenOpen()) {
+            return;
+        }
+        final TouchTarget target = TouchTarget.begin(WHEEL, wheel, x, y);
+        target.startMs = SystemClock.uptimeMillis();
+        // A moved button must still open its wheel on screen.
+        final float reach = dp(WHEEL_RADIUS_DP);
+        wheelCx = Math.max(reach, Math.min(width - reach, cx));
+        wheelCy = Math.max(reach, Math.min(height - reach, cy));
+        wheelPointer = pointerId;
+        wheelControl = control;
+        targets.put(pointerId, target);
+    }
+
+    // The wheel an added button opens (0 Visor, 1 Beam), or -1.
+    private int customWheel(int control) {
+        if (control < C_CUSTOM || control >= ALL_CONTROLS) {
+            return -1;
+        }
+        final String key = customAction[control - C_CUSTOM];
+        if ("visor_wheel".equals(key)) {
+            return 0;
+        }
+        return "beam_wheel".equals(key) ? 1 : -1;
+    }
+
+    // Whether this layout draws a wheel button (stock or added), for the polls.
+    private boolean anyWheelButton() {
+        if (wheels) {
+            return true;
+        }
+        for (int control = C_CUSTOM; control < ALL_CONTROLS; ++control) {
+            if (customWheel(control) != -1) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private TouchTarget wheelTarget() {

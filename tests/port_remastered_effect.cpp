@@ -467,6 +467,46 @@ void TestVarianceEmitters() {
   }
 }
 
+// DFCP and DFCS read two reals (GetRealElement 0x260de4). With a third allowed, an ARRY of two
+// colours CNST(r, g, b, MULT(DFCP(a, b), c)) also read as CNST(r, g, b) and MULT(DFCP(a, b, c), CNST(...)).
+void TestDistanceBlendArity() {
+  std::vector<uint8_t> out(0x3c, 0);
+  std::memcpy(out.data(), "RFRM", 4);
+  std::memcpy(out.data() + 0x14, "GENP", 4);
+  PutGenerator(out, false);
+  PutProperty(out, "COLR", 3);
+  PutFourCC(out, "SLCT");
+  PutFourCC(out, "IRND");
+  PutIntConstant(out, 0);
+  PutIntConstant(out, 1);
+  PutFourCC(out, "ARRY");
+  Put32(out, 2);
+  for (int i = 0; i < 2; ++i) {
+    PutFourCC(out, "CNST");
+    PutConstant(out, 1.0f);
+    PutConstant(out, 0.5f);
+    PutConstant(out, 0.25f);
+    PutFourCC(out, "MULT");
+    PutFourCC(out, "DFCP");
+    PutConstant(out, 4.0f);
+    PutConstant(out, 2.0f);
+    PutConstant(out, 1.0f);
+  }
+  PutProperty(out, "_END", 4);
+  EffectNode effect;
+  std::string error;
+  CHECK_MSG(ParseEffect(out.data(), out.size(), effect, error), "ARRY of DFCP colours parses");
+  const std::string dump = DumpEffect(effect, out.data());
+  const char* want =
+      "GPSM\n"
+      "  COLR 03 SLCT(IRND(CNST(0), CNST(1)), ARRY(CNST(CNST(1f), CNST(0.5f), CNST(0.25f), MULT(DFCP(CNST(4f), "
+      "CNST(2f)), CNST(1f))), CNST(CNST(1f), CNST(0.5f), CNST(0.25f), MULT(DFCP(CNST(4f), CNST(2f)), CNST(1f)))))\n";
+  CHECK_MSG(dump == want, "DFCP takes two reals");
+  if (dump != want) {
+    std::fprintf(stderr, "%s", dump.c_str());
+  }
+}
+
 // BNPS(SLCT(RAND, ARRY(BNID(name, flag)...))) as a SEMR's position: the bone name is a string
 // constant, so the ARRY's entries are not read across it. ATFB: an id, an int as a real, a flag.
 void PutBone(std::vector<uint8_t>& out, const char* name) {
@@ -526,16 +566,78 @@ void TestBoneAndFlipbook() {
             "ATFB has an id and two arguments");
 }
 
+// A TMTR (u8 0, u8 count, the TRSS) whose TRSS hold SLCT over an ARRY, as 2fab93e3's: TRSS is
+// six reals, so a SLCT keeps its ARRY (untyped, the first SLCT took one argument and the list
+// read TRSS, ITRL, TRSS).
+void TestTrssSelect() {
+  std::vector<uint8_t> out(0x3c, 0);
+  std::memcpy(out.data(), "RFRM", 4);
+  std::memcpy(out.data() + 0x14, "GENP", 4);
+  PutGenerator(out, true);
+  PutProperty(out, "TMTR", 3);
+  out.push_back(0);
+  out.push_back(3);
+  auto trss = [&out](bool select, bool random, float offset) {
+    PutFourCC(out, "TRSS");
+    PutConstant(out, 0.0f);
+    PutConstant(out, 0.0f);
+    if (select) {
+      PutFourCC(out, "SLCT");
+      if (random) {
+        PutFourCC(out, "IRND");
+        PutIntConstant(out, 0);
+        PutIntConstant(out, 1);
+      } else {
+        PutIntConstant(out, 0);
+      }
+      PutFourCC(out, "ARRY");
+      Put32(out, 2);
+      PutConstant(out, -offset);
+      PutConstant(out, offset);
+    } else {
+      PutConstant(out, 1.0f);
+    }
+    PutConstant(out, select ? -offset : 1.0f);
+    PutConstant(out, 0.0f);
+    PutFourCC(out, "ITRL");
+    PutIntConstant(out, 0);
+    PutConstant(out, 1.0f);
+  };
+  trss(true, false, 1.0f);
+  trss(true, true, 2.0f);
+  trss(false, false, 0.0f);
+  PutProperty(out, "_END", 4);
+  Put32(out, 0);
+  out.insert(out.end(), {'F', 'O', 'O', 'T'});
+  EffectNode effect;
+  std::string error;
+  CHECK_MSG(ParseEffect(out.data(), out.size(), effect, error), "TMTR with SLCT parses");
+  bool ok = effect.properties.size() == 1 && effect.properties[0].value.size() == 3;
+  for (size_t i = 0; ok && i < 3; ++i) {
+    const EffectValue& trss = effect.properties[0].value[i];
+    ok = trss.fourcc == EffectFourCC("TRSS") && trss.args.size() == 6 &&
+         trss.args[5].fourcc == EffectFourCC("ITRL") &&
+         (i == 2 || (trss.args[2].fourcc == EffectFourCC("SLCT") && trss.args[2].args.size() == 2 &&
+                     trss.args[2].args[1].fourcc == EffectFourCC("ARRY")));
+  }
+  CHECK_MSG(ok, "TMTR is three TRSS, each SLCT over its ARRY");
+  if (!ok) {
+    std::fprintf(stderr, "%s", DumpEffect(effect, out.data()).c_str());
+  }
+}
+
 int main() {
   TestParse();
   TestFailure();
   TestTypedNesting();
+  TestDistanceBlendArity();
   TestFlaggedChild();
   TestTextureElements();
   TestGeneratorFlags();
   TestDeepNesting();
   TestVarianceEmitters();
   TestBoneAndFlipbook();
+  TestTrssSelect();
   if (port_test::Failures() == 0) {
     std::printf("port_remastered_effect: ok\n");
   }

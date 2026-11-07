@@ -56,6 +56,8 @@ public:
     CVector3f mVelocity;
 #ifdef TARGET_PC
     SPortKeep mPortKeep{}; // KPIN values latched at the point's birth (CREPortKeep)
+    // PSCL (point+0x40): the ring's local scale, skOneVector until evaluated (0x27c8d0)
+    CVector3f mPortScale{1.f, 1.f, 1.f};
 #endif
   };
   CParticleSwoosh(TToken< CSwooshDescription > desc, int i);
@@ -96,6 +98,7 @@ public:
 #ifdef TARGET_PC
   void ShutdownEffect() override;
   void PortDoShutdownBehavior(u32 mode) override;
+  u32 PortOwnShutdownMode() const override;
   void PortSetSpawnSpread(const CVector3f& spread, const CVector3f& origin) override;
   uint PortFxAsset() const override;
   bool PortIsRemastered() const;
@@ -193,6 +196,13 @@ private:
   CColor x20c_moduColor;
 
 #ifdef TARGET_PC
+public:
+  // The seed a Remastered parent gives the converted swoosh it constructs next; consumed by
+  // that ctor (CElementGen::PortSeedSwooshChild).
+  static uint sPortChildSeed;
+  static bool sPortChildSeedSet;
+
+private:
   CPortVarMemory xPortVars; // PVRT variables, initialised from the description's defaults
   CVector3f xPortSpawnSpread{1.f, 1.f, 1.f}; // PortSetSpawnSpread
   CVector3f xPortSpawnOrigin{0.f, 0.f, 0.f};
@@ -226,11 +236,39 @@ private:
   std::vector< SPortVfxPoint > xPortVfxPts;
   // Remastered's EMRV (CVEVelocityCalc 0x2a288c): the translation one step back, for PRAZ.
   CVector3f xPortRazyPrev = CVector3f(0.f, 0.f, 0.f);
+  // Remastered's +0x17c: points created since construction or the last DestroyParticles (TXUP).
+  int xPortCreated = 0;
+  int xPortShutdownCountdown = -1; // SHTT: ticks to the delayed shutdown, -1 = not counting
+  // CAddVarSystem::Init has run in the first Update (the CParticleGen +0xa0 0x1000 flag).
+  bool xPortSysInit = false;
+  // An ELC2's per-bolt swoosh (Remastered's +0x188 bit 5, HACK_InitForElectric 0x27ebfc): each
+  // point keeps the age it was created with (the live count less one), points never die, and
+  // with emission off a step neither advances the ring nor retires a point.
+  bool xPortElectric = false;
+  void PortEvalSys(bool init);
+
+public:
+  void PortInitForElectric();
+  void PortReInitForElectric();
+
+private:
+  // The per-point variables' values (the buffer at Remastered's this+0x158), kPortPartValues a
+  // point in ring order; empty without a PPVR.
+  static constexpr int kPortPartValues = 13;
+  std::vector< float > xPortPartValues;
+  float* PortPartValues(int index);
+  float PortTexUScroll() const;
   CTransform4f PortRazyOrientation(const CVector3f& motion) const;
   CTransform4f PortRotZOrientation() const;
+  CTransform4f PortIntOrientation(const CTransform4f& external) const;
+  // The external orientation (Remastered's var at desc+0x28), which EXTR reads apart from INTR
+  CTransform4f xPortExtOrientation = CTransform4f::Identity();
+  // XFMD 1: the external translation, which only MPT_GetTranslation 0x27fb54 reads there
+  CVector3f xPortExtTranslation = CVector3f(0.f, 0.f, 0.f);
   bool PortVfxSwoosh() const;
   void PortRenderVfx();
   int PortSplineRef(int curIdx, int j);
+  int PortSplineSteps(int curIdx, int prevIdx) const;
 #endif
 
   static uint mSwooshAliveCount;

@@ -487,9 +487,21 @@ The light reaches the shader through `GXSetPBRLightHdr` (Aurora command
 `GX_AURORA_SET_PBR_LIGHT_HDR`). That call gives a GX light slot its own linear
 colour, view position and falloff (none, linear, quadratic, 1 - smoothstep;
 r1 0 = off) in PBR draws, in place of the GX light's colour and attenuation.
+It also carries a specular widen (Remastered's CLight+0x74, SCachedLight +0xc):
+that light's GGX lobe takes roughness `r + (1 - r) * widen`. Only particle
+lights set it, from their constant LSPS (port-only `PLSP`,
+`CLight::SetPortHdrWiden`); the ball light and room lights keep 0.
 `CLight::SetPortHdr` carries these values, and `CGraphics::LoadLight` sends
 them, or "off", for every light it loads. Retail-material draws keep the
 retail light.
+
+Remastered builds a generator's light once, in its constructor, and only
+`TickSystem_Light` updates it: a primitive-3 generator that makes no
+particles (no LTME, a constant LTME 0, or no GRTE). Every other lit
+generator, the beam impact lights among them, keeps its frame-0 colour,
+intensity and radii; only the position follows the system. The converter
+marks those with port-only `PLON 1`, and `CElementGen::UpdateLightParameters`
+then evaluates the light once. Without it a RAND LINT flickers every frame.
 
 `MP_REMASTERED_BALL_LIGHT=0` keeps retail's light, and
 `MP_REMASTERED_BALL_LIGHT_SCALE=<x>` scales the intensity. The console's

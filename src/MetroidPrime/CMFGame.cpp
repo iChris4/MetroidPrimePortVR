@@ -39,6 +39,7 @@
 #include <cstdio>
 #include "MetroidPrime/CScriptLayerManager.hpp"
 #include "port_room_env.h"
+#include "port_savestate.h"
 #include "MetroidPrime/HUD/CSamusHud.hpp"
 #include <dolphin/gx/GXExtra.h>
 
@@ -321,17 +322,12 @@ void CMFGame::Draw() const {
 #ifdef TARGET_PC
     {
       // Remastered's character backlight hint of the camera's room, before the models draw.
-      struct Layers {
-        CScriptLayerManager* layers;
-        TAreaId area;
-      } layers{mStateManager->WorldLayerState().GetPtr(), mStateManager->GetNextAreaId()};
       PortRoomEnv::UpdateBacklight(
           [](int32_t layer, void* context) {
-            const Layers& l = *static_cast< const Layers* >(context);
-            return l.layers == nullptr || l.area == kInvalidAreaId ||
-                   l.layers->IsLayerActive(l.area, TLayerId(layer));
+            const CStateManager& mgr = *static_cast< const CStateManager* >(context);
+            return mgr.PortLayerLoaded(mgr.GetNextAreaId(), layer);
           },
-          &layers);
+          mStateManager.GetPtr());
     }
 #endif
 #ifdef TARGET_PC
@@ -350,21 +346,16 @@ void CMFGame::Draw() const {
         const bool toned = PortRoomEnv::Tone(tone);
         // X-ray's render context sets flag 0x400, which drops the bloom; thermal keeps it.
         const bool bloom = visor != CPlayerState::kPV_XRay && toned && PortRoomEnv::Bloom(threshold, tints);
-        struct Layers {
-          CScriptLayerManager* layers;
-          TAreaId area;
-        } layers{mStateManager->WorldLayerState().GetPtr(), mStateManager->GetNextAreaId()};
         uint32_t gradeA = 0;
         uint32_t gradeB = 0;
         float gradeWeight = 0.f;
         if (normalVisor) {
           PortRoomEnv::ColorGrade(
               [](int32_t layer, void* context) {
-                const Layers& l = *static_cast< const Layers* >(context);
-                return l.layers == nullptr || l.area == kInvalidAreaId ||
-                       l.layers->IsLayerActive(l.area, TLayerId(layer));
+                const CStateManager& mgr = *static_cast< const CStateManager* >(context);
+                return mgr.PortLayerLoaded(mgr.GetNextAreaId(), layer);
               },
-              &layers, gradeA, gradeB, gradeWeight);
+              mStateManager.GetPtr(), gradeA, gradeB, gradeWeight);
         }
         // Remastered folds the HUD's damage Add filter into this composite (kept off the free
         // camera, whose frame has no HUD). Only the main post carries it.
@@ -382,18 +373,31 @@ void CMFGame::Draw() const {
         if (mainPost) {
           CSamusHud::PortSetTintFolded(folded);
         }
-        // The frame is measured at the opaque/sorted boundary (CStateManager::DrawWorld).
-        GXPortPostProcessScene(bloom, threshold, tints, tone, gradeA, gradeB, gradeWeight, 0.f);
-        CCubeMaterial::sPortSceneHdr = false;
         // Remastered RenderAfterPostFX (0xf9fa6c): priority-2 camera filters
-        // (0xc6273c), including the underwater multiply, follow tone/grade.
+        // (0xc6273c), including the underwater multiply, follow tone/grade, blended
+        // onto its sRGB output. The display EFB is unorm, so a leading fullscreen
+        // multiply is folded into the composite, which multiplies in linear light.
+        float multiply[3];
+        int foldedFilter = mStateManager->PortCameraFilterMultiply(multiply);
+        if (foldedFilter >= 0) {
+          GXPortPostCompositeMultiply(multiply);
+        }
+        // The frame is measured at the opaque/sorted boundary (CStateManager::DrawWorld).
+        if (!GXPortPostProcessScene(bloom, threshold, tints, tone, gradeA, gradeB, gradeWeight, 0.f)) {
+          foldedFilter = -1;
+        }
+        CCubeMaterial::sPortSceneHdr = false;
         // These GX filters replace the perspective with an ortho projection.
         // Their old DrawWorld call was followed by ResetViewAfterDraw; retain
         // that boundary before targeting/visor draws (including scan zoom).
         const CViewport filterViewport = CGraphics::GetViewport();
         const CTransform4f filterView = CGraphics::GetViewMatrix();
-        mStateManager->DrawCameraFilters();
+        mStateManager->PortDrawCameraFilters(foldedFilter);
         mStateManager->ResetViewAfterDraw(filterViewport, filterView);
+        // RenderVisorEffects follows the filters, in the main frame only.
+        if (mainPost) {
+          mStateManager->PortDrawVisorEffects();
+        }
       }
     };
     const auto drawWorld = [this]() {
@@ -534,8 +538,11 @@ CMFGameLoader::CMFGameLoader()
     }
   }
   CAssetId worldId = gpGameState->CurrentWorldAssetId();
+  // PC: not for a state load into the hangar, which would show the new game's
+  // "Unidentified distress beacon" text on every reload there.
   if (worldId == skDefaultWorld.GetId() &&
-      gpGameState->GetCurrentWorldState().GetCurrentArea() == TAreaId(0)) {
+      gpGameState->GetCurrentWorldState().GetCurrentArea() == TAreaId(0) &&
+      !PortSaveState::LoadPlacing()) {
     const SObjectTag* tag = gpResourceFactory->GetResourceIdByName("STRG_IntroLevelLoad");
     if (tag) {
       CWorldTransManager& trans = *gpGameState->WorldTransitionManager();

@@ -16,6 +16,7 @@
 #include "Kyoto/TToken.hpp"
 
 class CGenDescription;
+class CSwooshDescription;
 class CModVectorElement;
 
 #pragma cpp_extensions on
@@ -80,6 +81,7 @@ public:
     float xPortVpmt[4][4]; // VPMT rows
     CVector3f xPortLaunchDir; // unit launch velocity (zero if it launched at rest), for VORN 1
     SPortKeep xPortKeep;      // KPIN values latched at birth (CREPortKeep)
+    CVector3f xPortOvec;      // POVC's value (the quad's vector orientation axis), port space
 #endif
 
     CParticle()
@@ -95,6 +97,7 @@ public:
     , xPortVpmt{}
     , xPortLaunchDir(CVector3f::Zero())
     , xPortKeep{}
+    , xPortOvec(CVector3f::Zero())
 #endif
     {}
   };
@@ -123,12 +126,17 @@ public:
   virtual void SetParticleEmission(const bool emission) override;
 #ifdef TARGET_PC
   // SHTM/SHTT (PSHM/PSHT). ShutdownEffect starts the countdown if the description has one, else
-  // acts at once; PortDoShutdownBehavior(0xff) uses the description's mode.
+  // acts at once; PortDoShutdownBehavior(0xff) uses the live mode (PortShutdownMode).
   void ShutdownEffect() override;
   void PortDoShutdownBehavior(u32 mode) override;
+  u32 PortOwnShutdownMode() const override;
+  // OSDM: a child this system constructs takes its live shutdown mode.
+  void PortInheritShutdownMode(CParticleGen* child) const;
   void PortSetSpawnSpread(const CVector3f& spread, const CVector3f& origin) override;
   // SDTR: the countdown's remaining over its total, 1 when none is running.
   float PortShutdownTimeRemaining() const;
+  void PortVisibilityQuery();
+  float PortVisibility() const { return xPortVisibility; }
 #endif
   virtual void SetModulationColor(const CColor& col) override;
   virtual void SetGeneratorRate(float rate) override;
@@ -286,6 +294,14 @@ public:
   CQuaternion PortSystemRotation() const {
     return CQuaternion::FromMatrix(x22c_globalOrientation * x1d8_orientation);
   }
+  // The system rotation var as INTR/RLCL and OVEC read it: XFMD 4's EMVR rotation (Q_l, defined
+  // into +0x38 at 0x289a60) while it runs, else PortSystemRotation.
+  CQuaternion PortSystemRotationVar() const {
+    if (xPortEmvr.kssm != nullptr) {
+      return xPortEmvr.hasRot ? xPortEmvr.rotQuat : CQuaternion::NoRotation();
+    }
+    return PortSystemRotation();
+  }
   CVector3f PortExternalScale() const {
     return CVector3f(xPortExternalScale.GetX() * x16c_localScale.GetX(),
                      xPortExternalScale.GetY() * x16c_localScale.GetY(),
@@ -295,6 +311,8 @@ public:
   // XFMD mode: 2 = zero/identity/external scale, 3 = the external T/Q/S, 4 = the mover's
   // position and rotation (the external T/Q for the identity SMVR the converter drops) at unit scale.
   void PortGlobalFrame(CVector3f& t, CQuaternion& q, CVector3f& s) const;
+  // A nested particle light's world position and spot axis (zero when degenerate).
+  void PortNestedLightFrame(CVector3f& pos, CVector3f& axis) const;
   // True for a converted Remastered PART (its PIRN marker).
   bool PortIsRemastered() const;
   // Remastered _CreateNewParticlesAtPositions / ...IncludingChildren (0x24c0dc / 0x24bfd0): n
@@ -346,6 +364,14 @@ private:
   TLockedToken< CGenDescription > x1c_genDesc;
   CGenDescription* x28_loadedGenDesc;
   EModelOrientationType x2c_orientType;
+  // x50_parentMatrices holds each particle's birth orientation: retail's kMOT_One, or PBOR.
+  bool PortParentMatrices() const {
+#ifdef TARGET_PC
+    return x2c_orientType == kMOT_One || x28_loadedGenDesc->xPortBirthOrientation;
+#else
+    return x2c_orientType == kMOT_One;
+#endif
+  }
   rstl::vector< CParticle > x30_particles;
   rstl::vector< CVector3f > x40;
   rstl::vector< CMatrix3f > x50_parentMatrices;
@@ -411,6 +437,11 @@ private:
   bool xPortVelocityGlobal[4] = {}; // packed alongside x280_VELSources, as Fixup 0x292ed4
   int xPortShutdownCountdown = -1; // ticks to the delayed shutdown, -1 = not counting
   int xPortShutdownTotal = 0;
+  // VISQ's value (render state +0xa0): the depth-tested over untested sample ratio of the
+  // occlusion queries UpdateOcclusionQueries 0x2b0dd0 issues each frame (PortVisibilityQuery).
+  float xPortVisibility = 1.f;
+  uint32_t xPortVisibilityId = 0;
+  int xPortVisibilityFrame = -1; // CGraphics::GetFrameCounter of the last issue
 #endif
   rstl::vector< CParticleGen* > x290_activePartChildren;
   int x2a0_CSSD;
@@ -476,13 +507,34 @@ private:
   float xPortNestedHdrColor[4];
   float xPortNestedHdrInnerRadius, xPortNestedHdrOuterRadius;
   bool xPortNestedHdrRadiiValid;
+  // The light parameters were evaluated once; a PLON light keeps them (UpdateLightParameters).
+  bool xPortLightEvaluated;
   // A converted Remastered system keeps its seed as 32 bits (x94 is 16): the SEED value, else the
   // seed it was built with (sPortChildSeed for a Remastered child, else sSeed).
   uint xPortSeed;
   // The seed a Remastered parent gives the child it constructs next; consumed by that ctor.
   static uint sPortChildSeed;
   static bool sPortChildSeedSet;
-  uint PortChildSeed(const CGenDescription& child) const;
+  uint PortChildSeed(u32 childGuidWord) const {
+    return PortChildSeed(childGuidWord, x290_activePartChildren.size());
+  }
+  uint PortChildSeed(u32 childGuidWord, uint siblings) const;
+  // Remastered's per-particle child systems (PSPS; gen+0x1a8, capacity gen+0x1a4): each follows
+  // its particle until the particle dies (index -1), then lives on where it is. Kept apart from
+  // x290 because the transform setters (MPT_Set*) never reach them.
+  struct PortPspsChild {
+    int particle;
+    CParticleGen* sys;
+  };
+  std::vector< PortPspsChild > xPortPsps;
+  int xPortPspsCap = 0;
+  bool xPortPspsTrim = false;
+  void PortPspsSpawn(int index, const CVector3f& pos);
+  void PortPspsUpdate(double dt);
+  void PortPspsTrim();
+  void PortPspsRemoved(int removed, int countBefore);
+  // Hands a converted swoosh child its seed (CParticleSwoosh::sPortChildSeed).
+  void PortSeedSwooshChild(TToken< CSwooshDescription > child) const;
   // Remastered's CElementGen::SpawnChildSystems (0x249bd8) for a converted effect, and its
   // spawn tables (PKSM); xPortKssmPeriods are the tables' period slots (their CVars).
   std::vector< int > xPortKssmPeriods;
@@ -520,6 +572,23 @@ private:
   // Update, stepped at the start of each tick. Its pos/rot are T_g/Q_g.
   PortKssmChild xPortMover;
   bool xPortMoverInit = false;
+  // SLDS sleep (+0x208 bit 0x40 clear): the camera was at or past the sleep distance at the last
+  // Update, which then ran nothing; Render draws nothing. Remastered also turns off the light and
+  // sleeps the children; no shipped SLDS system has either (and a port child updates and renders
+  // through its parent).
+  bool xPortAsleep = false;
+  // PKIL (Remastered KILL) fired: +0xa0 bit 0, deletable whatever the system still holds.
+  bool xPortKilled = false;
+  // +0xa0 bit 1, set with bit 0 here: Update does nothing until a forced creation clears it.
+  bool xPortFrozen = false;
+  float PortSleepDistanceSq() const;
+  // XFMD 4's EMVR (CGenDescription::xPortEmvr), initialised and stepped with the mover. Its pos/rot
+  // are vec 0x12 and Q_l, baked into each particle at spawn (PortSpawnFrame), and the system
+  // translation and rotation.
+  PortKssmChild xPortEmvr;
+  void PortInitKssmMover(PortKssmChild& state, const CGenDescription::PortKssm* kssm);
+  // The frame a new particle is born in: PortEmitterFrame, then the EMVR's when there is one.
+  CTransform4f PortSpawnFrame() const;
 public:
   // PLNV's index shufflers, one per element (CIndexShuffler's bitset lives in the generator's
   // variable memory); created zeroed on first use.
@@ -542,6 +611,8 @@ public:
   const CVector3f& PortEmitterVelocity() const { return xPortPemvDelta; }
   // PZTS (Remastered ZTES 0): the depth test passes everywhere (static render state compare 1 = ALWAYS)
   bool PortNoZTest() const { return x28_loadedGenDesc->xPortNoZTest; }
+  u8 PortWaterSort() const { return x28_loadedGenDesc->xPortWaterSort; }
+  float PortSortBias() const { return x28_loadedGenDesc->xPortSortBias; }
 
 private:
   bool PortHasMover() const;
@@ -551,6 +622,7 @@ private:
   // The system scale: INTS (PINS) evaluated when authored, else the external scale.
   CVector3f PortSystemScale();
   void PortSetSystemScale(const CVector3f& scale);
+  CVector3f PortChildScale() const;
   // The scale the owner (or parent) set, which EXTS reads; x100_globalScale is the system's.
   CVector3f xPortExternalScale{1.f, 1.f, 1.f};
   // The system orientation and translation: INTR (PINR) and INTT (PINT) evaluated, applied as
@@ -568,10 +640,20 @@ private:
   CVector3f xPortExtTranslation{0.f, 0.f, 0.f};
   CVector3f xPortIntEuler{0.f, 0.f, 0.f};
   CVector3f xPortIntTranslation{0.f, 0.f, 0.f};
+  // XFMD 1: SYST (PSYT) and TEMT (PTMT) evaluated, T_g in world space and the birth offset.
+  void PortApplySystemFrame();
+  CVector3f xPortSysTranslation{0.f, 0.f, 0.f};
+  CVector3f xPortTemTranslation{0.f, 0.f, 0.f};
   void PortVfxUpdateSystem();
-  // XFMD 3/4: the spawn-baked part of the emitter's transform, and moving the live particles from
-  // one such frame to the next.
+  // XFMD 1/3/4: the spawn-baked part of the emitter's transform, and moving the live particles
+  // from one such frame to the next.
   bool PortFollowsEmitter() const;
+  // XFMD 1 and 4 with a mover: that frame is held in world space, not turned with the owner's.
+  bool PortFrameInWorld() const;
+  bool PortUnitScale() const {
+    return x28_loadedGenDesc->xPortXfmd == kPortXfmdFollowUnscaled ||
+           x28_loadedGenDesc->xPortXfmd == kPortXfmdSystem;
+  }
   CTransform4f PortEmitterFrame() const;
   void PortFollowEmitter(const CTransform4f& before);
   void PortRenderParticlesVfx();

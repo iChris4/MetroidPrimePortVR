@@ -5,6 +5,7 @@
 
 #include "port_env.h"
 #include "port_debug.h"
+#include "port_dread_samus_mod.h"
 #include "port_third_person.h"
 #include "port_graphics_backend.h"
 #include "port_gyro_motion.h"
@@ -20,6 +21,7 @@
 #include "port_gpu_driver.h"
 #include "port_mods.h"
 #include "port_savestate.h"
+#include "port_beam_colours.h"
 #include "port_suit_colours.h"
 
 #include "MetroidPrime/Cameras/CCameraManager.hpp"
@@ -75,6 +77,11 @@ void DrawVideoDisplay() {
   }
   ImGui::SetItemTooltip("Off: cutscenes narrower than 16:9 fill the screen with the full shot.\n"
                         "On: the original 16:9 letterbox.");
+  if (ImGui::Checkbox("Morph ball black bars", &sBallBars)) {
+    MarkDirty();
+  }
+  ImGui::SetItemTooltip("Off: the world fills the screen in morph ball.\n"
+                        "On: the original narrowed ball view.");
 
   if (ImGui::Checkbox("Sharp scan window", &sSharpScanWindow)) {
     MarkDirty();
@@ -97,9 +104,18 @@ void DrawVideoDisplay() {
   ImGui::SeparatorText("Suit colours");
   {
     static int sSuitColoursSuit = 0;
+    // The Dread suits only while the Dread Samus import is on.
+    const auto& mods = PortMods::CurrentStatus().mods;
+    const bool dread = std::any_of(mods.begin(), mods.end(), [](const PortMods::ModInfo& mod) {
+      return mod.enabled && mod.name == PortDreadSamus::kModName;
+    });
+    const int suitCount = dread ? PortSuitColours::kSuitCount : PortSuitColours::kDreadFirst;
+    if (sSuitColoursSuit >= suitCount) {
+      sSuitColoursSuit = 0;
+    }
     const PortSuitColours::Suit& suit = PortSuitColours::SuitInfo(sSuitColoursSuit);
     if (ImGui::BeginCombo("Suit", suit.name)) {
-      for (int i = 0; i < PortSuitColours::kSuitCount; ++i) {
+      for (int i = 0; i < suitCount; ++i) {
         const bool custom = !PortSuitColours::PicksKey(i).empty();
         const std::string label = std::string(PortSuitColours::SuitInfo(i).name) + (custom ? " *" : "");
         if (ImGui::Selectable(label.c_str(), i == sSuitColoursSuit)) {
@@ -111,7 +127,8 @@ void DrawVideoDisplay() {
     ImGui::SetItemTooltip(
         "Each suit's colours, saved per suit (* = changed). Recoloured from your disc, so\n"
         "the change shows everywhere: cutscenes, pause screen, arm cannon, morph ball.\nA mod's "
-        "own suit textures (the Remastered import) are left alone.");
+        "own suit textures (the Remastered import) are left alone; the (Dread) suits recolour\n"
+        "the Dread Samus import's own.");
     for (int slot = 0; slot < suit.slots; ++slot) {
       ImGui::PushID(slot);
       const std::optional< uint32_t > picked = PortSuitColours::Colour(sSuitColoursSuit, slot);
@@ -128,6 +145,8 @@ void DrawVideoDisplay() {
       }
       if (sSuitColoursSuit == 3) {
         ImGui::SetItemTooltip("The Phazon Suit's body is nearly black: only its glow and accent change.");
+      } else if (suit.base && slot == suit.slots - 1) {
+        ImGui::SetItemTooltip("The white plates: the light, unsaturated parts, which keep their shading.");
       }
       ImGui::SameLine();
       ImGui::BeginDisabled(!picked);
@@ -154,6 +173,38 @@ void DrawVideoDisplay() {
         "Rebuilds the recoloured textures and reloads the mods (a moment; the game\n"
         "carries on). Original experience uses the original colours.");
   }
+
+  ImGui::SeparatorText("Beam colours");
+  // Its own ID scope: the suit colours' rows above push the same slot numbers.
+  ImGui::PushID("beam colours");
+  for (int beam = 0; beam < PortBeamColours::kBeamCount; ++beam) {
+    ImGui::PushID(beam);
+    const std::optional< uint32_t > picked = PortBeamColours::Colour(beam);
+    const uint32_t shown = picked ? *picked : PortBeamColours::DefaultColour(beam);
+    float rgb[3] = {float((shown >> 16) & 255) / 255.f, float((shown >> 8) & 255) / 255.f,
+                    float(shown & 255) / 255.f};
+    if (ImGui::ColorEdit3(PortBeamColours::Name(beam), rgb, ImGuiColorEditFlags_NoInputs)) {
+      uint32_t value = 0;
+      for (const float c : rgb) {
+        value = (value << 8) | uint32_t(std::clamp(std::lround(c * 255.f), 0l, 255l));
+      }
+      PortBeamColours::SetColour(beam, value);
+      MarkDirty();
+    }
+    ImGui::SetItemTooltip(
+        "The beam's shots, charge and muzzle effects, their light and the arm cannon's glow\n"
+        "take this colour at once; the cannon's body keeps its own. Whites stay white.\nThe "
+        "thermal visor and Original experience show the original colours.");
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!picked);
+    if (ImGui::SmallButton("Reset")) {
+      PortBeamColours::SetColour(beam, std::nullopt);
+      MarkDirty();
+    }
+    ImGui::EndDisabled();
+    ImGui::PopID();
+  }
+  ImGui::PopID();
 
   ImGui::SeparatorText("HUD and view");
   bool hudWide = sHudWide;
@@ -234,6 +285,16 @@ void DrawVideoDisplay() {
     MarkDirty();
   }
   ImGui::EndDisabled();
+  if (ImGui::Checkbox("Crosshair in X-Ray", &sCrosshairXRay)) {
+    MarkDirty();
+  }
+  ImGui::SetItemTooltip("Off hides the aiming crosshair in the X-Ray Visor.");
+  ImGui::SameLine();
+  if (ImGui::Checkbox("Crosshair in Thermal", &sCrosshairThermal)) {
+    MarkDirty();
+  }
+  ImGui::SetItemTooltip("Off hides the aiming crosshair in the Thermal Visor, whose HUD\n"
+                        "otherwise all moves with the visor. On under Original experience.");
   if (ImGui::Checkbox("Secondary crosshairs", &sSecondaryCrosshairs)) {
     MarkDirty();
   }
@@ -281,9 +342,30 @@ void DrawVideoDisplay() {
                        0.017453292f;
     ImGui::SetItemTooltip("Back to the retail 55 deg.");
     ImGui::TextDisabled("About %.0f deg horizontal at this aspect.", hfov);
-    ImGui::SetItemTooltip("First-person vertical FOV (retail 55). The arm cannon stays at the retail\n"
-                          "FOV; morph ball and cutscene cameras are unchanged.");
+    ImGui::SetItemTooltip("First-person vertical FOV (retail 55). Morph ball and cutscene cameras\n"
+                          "are unchanged.");
   }
+  bool gunFollowsFov = sGunFollowsFov;
+  if (ImGui::Checkbox("Arm cannon follows FOV", &gunFollowsFov)) {
+    SetGunFollowsFov(gunFollowsFov);
+  }
+  ImGui::SetItemTooltip("Off: the arm cannon is drawn at its own FOV (below) whatever the field\n"
+                        "of view, so it keeps its size and place. On: it shares the world's\n"
+                        "perspective, so a wider FOV draws it smaller and further into the corner.");
+  ImGui::BeginDisabled(sGunFollowsFov);
+  float gunFov = sGunFov;
+  if (ImGui::SliderFloat("Arm cannon FOV", &gunFov, kFovMin, kFovMax, "%.0f deg")) {
+    SetGunFov(std::round(gunFov));
+  }
+  ImGui::SetItemTooltip("The FOV the arm cannon is drawn at (retail 55), apart from the world's:\n"
+                        "higher draws it smaller and further into the corner. Unused while it\n"
+                        "follows the FOV.");
+  ImGui::SameLine();
+  if (ImGui::Button("Retail##gunfov")) {
+    SetGunFov(kFovRetail);
+  }
+  ImGui::SetItemTooltip("Back to the retail 55 deg.");
+  ImGui::EndDisabled();
   {
     // Issue #72: PrimeHack-style arm cannon placement.
     float offset[3] = {sGunOffset[0], sGunOffset[1], sGunOffset[2]};

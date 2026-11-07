@@ -16,8 +16,10 @@
 #include "port_input_devices.h"
 #include "port_gci.h"
 #include "port_discord.h"
+#include "port_beam_colours.h"
 #include "port_suit_colours.h"
 #include "port_dread_samus_mod.h"
+#include "port_echoes_suits_mod.h"
 #include "port_textures.h"
 
 #include <dolphin/gx/GXExtra.h>
@@ -96,6 +98,17 @@ void WriteSuitColours(std::ostream& out) {
   out << PortSuitColours::PicksKey(Suit);
 }
 
+// beam_colour_<beam>: "RRGGBB", or empty for the beam's own.
+template < int Beam >
+void ReadBeamColour(const std::string& value) {
+  PortBeamColours::SetColour(Beam, PortSuitColours::ParseColour(value));
+}
+
+template < int Beam >
+void WriteBeamColour(std::ostream& out) {
+  out << PortSuitColours::FormatColour(PortBeamColours::Colour(Beam));
+}
+
 // A key that is one bool: read with ParseBool, written as 1 or 0, sampled with both.
 template < bool* Flag >
 constexpr SettingKey BoolKey(const char* key) {
@@ -122,6 +135,7 @@ const SettingKey kSettingKeys[] = {
      false, "16:9", "window"},
     BoolKey< &sHudWide >("hud_wide"),
     BoolKey< &sCinemaBars >("cinema_bars"),
+    BoolKey< &sBallBars >("ball_bars"),
     BoolKey< &sPhazonShell >("phazon_shell"),
     BoolKey< &sSharpScanWindow >("sharp_scan_window"),
     BoolKey< &sGeneratedBallLooks >("power_spider_ball"),
@@ -133,6 +147,16 @@ const SettingKey kSettingKeys[] = {
     {"suit_colour_fusion_gravity", &ReadSuitColours< 5 >, &WriteSuitColours< 5 >, true, "FF4000,-,-", "-,-,2050FF"},
     {"suit_colour_fusion_varia", &ReadSuitColours< 6 >, &WriteSuitColours< 6 >, true, "FF4000,-,-", "-,-,2050FF"},
     {"suit_colour_fusion_phazon", &ReadSuitColours< 7 >, &WriteSuitColours< 7 >, true, "FF4000,-,-", "-,-,2050FF"},
+    {"suit_colour_dread_power", &ReadSuitColours< 8 >, &WriteSuitColours< 8 >, true, "FF4000,-,-", "-,2050FF,FFE0C0"},
+    {"suit_colour_dread_gravity", &ReadSuitColours< 9 >, &WriteSuitColours< 9 >, true, "FF4000,-,-,-",
+     "-,-,2050FF,FFE0C0"},
+    {"suit_colour_dread_varia", &ReadSuitColours< 10 >, &WriteSuitColours< 10 >, true, "FF4000,-,-", "-,2050FF,FFE0C0"},
+    {"suit_colour_dread_phazon", &ReadSuitColours< 11 >, &WriteSuitColours< 11 >, true, "FF4000,-", "-,2050FF"},
+    {"beam_colour_power", &ReadBeamColour< 0 >, &WriteBeamColour< 0 >, true, "33FF66", "FF00FF"},
+    {"beam_colour_ice", &ReadBeamColour< 1 >, &WriteBeamColour< 1 >, true, "33FF66", "FF00FF"},
+    {"beam_colour_wave", &ReadBeamColour< 2 >, &WriteBeamColour< 2 >, true, "33FF66", "FF00FF"},
+    {"beam_colour_plasma", &ReadBeamColour< 3 >, &WriteBeamColour< 3 >, true, "33FF66", "FF00FF"},
+    {"beam_colour_phazon", &ReadBeamColour< 4 >, &WriteBeamColour< 4 >, true, "33FF66", "FF00FF"},
     BoolKey< &sAutoAim >("auto_aim"),
     {"scan_speed",
      [](const std::string& value) {
@@ -142,6 +166,23 @@ const SettingKey kSettingKeys[] = {
        }
      },
      [](std::ostream& out) { out << sScanSpeed; }, false, "100", "500"},
+    // The F1 Game > Audio rows' part above 100 percent; EnsureInitialized hands it to the mixers.
+    {"music_boost",
+     [](const std::string& value) {
+       const int b = std::atoi(value.c_str());
+       if (b >= PortDebug::kVolumeBoostMin && b <= PortDebug::kVolumeBoostMax) {
+         sMusicBoost = b;
+       }
+     },
+     [](std::ostream& out) { out << sMusicBoost; }, false, "100", "200"},
+    {"sfx_boost",
+     [](const std::string& value) {
+       const int b = std::atoi(value.c_str());
+       if (b >= PortDebug::kVolumeBoostMin && b <= PortDebug::kVolumeBoostMax) {
+         sSfxBoost = b;
+       }
+     },
+     [](std::ostream& out) { out << sSfxBoost; }, false, "100", "200"},
     {"hint_delay",
      [](const std::string& value) {
        const int m = std::atoi(value.c_str());
@@ -151,7 +192,10 @@ const SettingKey kSettingKeys[] = {
      },
      [](std::ostream& out) { out << sHintDelay; }, false, "0", "30"},
     BoolKey< &sSecondaryCrosshairs >("secondary_crosshairs"),
+    BoolKey< &sCrosshairXRay >("crosshair_xray"),
+    BoolKey< &sCrosshairThermal >("crosshair_thermal"),
     BoolKey< &sMenuStandardButtons >("menu_standard_buttons"),
+    BoolKey< &sMenuExit >("menu_exit"),
     {"pointer_menus", [](const std::string& value) { PortPointer::SetEnabled(ParseBool(value)); },
      [](std::ostream& out) { WriteBool(out, PortPointer::Enabled()); }, false, "1", "0"},
     {"map_swap_fingers", [](const std::string& value) { PortPointer::SetMapSwapFingers(ParseBool(value)); },
@@ -247,12 +291,12 @@ const SettingKey kSettingKeys[] = {
      [](std::ostream& out) { out << PortThirdPerson::GetParams().distance; }, false, "2.5", "4"},
     {"third_person_shoulder",
      // Every save writes every key, so files written before 69b52d4a3 hold the old defaults
-     // (shoulder 0.5, height 0.1), which put the crosshair on her pad: those move to the new ones.
+     // (shoulder 0.6, height 0.1), which put the crosshair on her pad: those move to the new ones.
      [](const std::string& value) {
        const float shoulder = std::strtof(value.c_str(), nullptr);
-       PortThirdPerson::SetShoulder(shoulder == 0.5f ? PortThirdPerson::Params{}.shoulder : shoulder);
+       PortThirdPerson::SetShoulder(shoulder == 0.6f ? PortThirdPerson::Params{}.shoulder : shoulder);
      },
-     [](std::ostream& out) { out << PortThirdPerson::GetParams().shoulder; }, false, "0.6", "-0.5"},
+     [](std::ostream& out) { out << PortThirdPerson::GetParams().shoulder; }, false, "0.7", "-0.5"},
     {"third_person_height",
      [](const std::string& value) {
        const float height = std::strtof(value.c_str(), nullptr);
@@ -287,6 +331,16 @@ const SettingKey kSettingKeys[] = {
     BoolKey< &sSkippableCutscenes >("skippable_cutscenes"),
     BoolKey< &sBeamDoorsStayUnlocked >("beam_doors_stay_unlocked"),
     BoolKey< &sStackBeams >("stack_beams"),
+    {"beam_switch_speed",
+     [](const std::string& value) {
+       const int s = std::atoi(value.c_str());
+       if (s >= PortDebug::kBeamSwitchSpeedMin && s <= PortDebug::kBeamSwitchSpeedMax) {
+         sBeamSwitchSpeed = s;
+       }
+     },
+     [](std::ostream& out) { out << sBeamSwitchSpeed; }, false, "100", "400"},
+    BoolKey< &sSeamlessPickups >("seamless_pickups"),
+    BoolKey< &sWalkSpeedEnabled >("walk_speed_enabled"),
     {"walk_speed",
      [](const std::string& value) {
        const int s = std::atoi(value.c_str());
@@ -333,6 +387,15 @@ const SettingKey kSettingKeys[] = {
        }
      },
      [](std::ostream& out) { out << sFirstPersonFov; }, false, "45", "72.5"},
+    BoolKey< &sGunFollowsFov >("gun_follows_fov"),
+    {"gun_fov",
+     [](const std::string& value) {
+       const float f = static_cast< float >(std::atof(value.c_str()));
+       if (std::isfinite(f) && f >= PortDebug::kFovMin && f <= PortDebug::kFovMax) {
+         sGunFov = f;
+       }
+     },
+     [](std::ostream& out) { out << sGunFov; }, false, "45", "72.5"},
     {"gun_offset",
      [](const std::string& value) {
        float v[3] = {};
@@ -383,6 +446,22 @@ const SettingKey kSettingKeys[] = {
     BoolKey< &sSunShadows >("sun_shadows"),
     BoolKey< &sProjectedShadows >("projected_shadows"),
     BoolKey< &sUnlockHardMode >("unlock_hard_mode"),
+    {"damage_taken",
+     [](const std::string& value) {
+       const float f = std::strtof(value.c_str(), nullptr);
+       if (std::isfinite(f) && f >= PortDebug::kDamageMultMin && f <= PortDebug::kDamageMultMax) {
+         sDamageTakenMult = f;
+       }
+     },
+     [](std::ostream& out) { out << sDamageTakenMult; }, false, "0.5", "3"},
+    {"damage_dealt",
+     [](const std::string& value) {
+       const float f = std::strtof(value.c_str(), nullptr);
+       if (std::isfinite(f) && f >= PortDebug::kDamageMultMin && f <= PortDebug::kDamageMultMax) {
+         sDamageDealtMult = f;
+       }
+     },
+     [](std::ostream& out) { out << sDamageDealtMult; }, false, "0.5", "3"},
     BoolKey< &sUnlockFusionSuit >("unlock_fusion_suit"),
     BoolKey< &sUnlockGalleries >("unlock_galleries"),
     {"storage_clamp",
@@ -427,6 +506,11 @@ const SettingKey kSettingKeys[] = {
     {"dread_first_person_cannon",
      [](const std::string& value) { PortDreadSamus::SetFirstPersonCannonShown(ParseBool(value)); },
      [](std::ostream& out) { WriteBool(out, PortDreadSamus::FirstPersonCannonShown()); }, false, "0", "1"},
+    {"echoes_first_person_cannon",
+     [](const std::string& value) { PortEchoesSuits::SetFirstPersonCannonShown(ParseBool(value)); },
+     [](std::ostream& out) { WriteBool(out, PortEchoesSuits::FirstPersonCannonShown()); }, false, "0", "1"},
+    {"echoes_dark_samus", [](const std::string& value) { PortEchoesSuits::SetPlayAsDarkSamus(ParseBool(value)); },
+     [](std::ostream& out) { WriteBool(out, PortEchoesSuits::PlayAsDarkSamus()); }, false, "0", "1"},
     BoolKey< &sVsyncEnabled >("vsync"),
     BoolKey< &sFullscreen >("fullscreen"),
     BoolKey< &sOverlayWindowed >("overlay_windowed"),

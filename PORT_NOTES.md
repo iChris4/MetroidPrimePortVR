@@ -1,3 +1,28 @@
+## VR: upstream 0.42 local testing merge (2026-11-07)
+
+Merged 254 Prime 1 upstream commits from d57a819a2 through 34b66b083
+(native port 0.42.0) onto 2428c6eb7 on codex/testing-upstream-20261107.
+This is a local Windows test merge; do not push without user approval.
+Product version remains beta.7.
+
+PipelineConfig remains 2788 bytes: this VR fork already carried upstream's
+polygon-offset floats. ShaderConfig retains the 16-byte header, including VR
+flags in byte 13; upstream colorMatrix shares byte 11 with actorDecal.
+Cache layout epoch 4 invalidates old GX rows after the uniform/key changes.
+The 3173-row VR seed retains its exact config bytes and stereo/native/map
+flags and twins, with only its cache epoch updated.
+Upstream's fog, alpha-reference and texgen matrix state now live in uniforms;
+retain eye uniform reconstruction and explicit screen-projection matrix slots.
+
+Particle VISQ queries are mono custom draws. In immersive VR they return full
+visibility until there is a stereo query implementation, so they cannot fade
+an effect visible to a turned headset based on the simulation camera alone.
+Desktop queries retain upstream behavior. MorphCameraPosition must return
+false in immersive VR, including the unmorph failsafe path. Keep tracked gun
+transforms, left-hand mirroring, cannon lock-on, wrist visor selection, spring
+ball default, the PrimedGun updater, resume prompt, per-eye fog/depth copies,
+HMD water culling and the confirmed retail X-ray UV orientation/blur toggle.
+
 ## VR: retail X-ray orientation and blur correction (2026-11-01)
 
 The user confirmed depth in the first test but reported its image upside down

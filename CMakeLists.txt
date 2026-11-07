@@ -342,6 +342,7 @@ set(MP_PORT_SOURCES
     platform/port_map_pickups_index.cpp
     platform/port_viewmodel.cpp
     platform/port_actor_shadow.cpp
+    platform/port_projected_decal.cpp
     platform/port_freecam.cpp
     platform/port_third_person.cpp
     platform/port_third_person_body.cpp
@@ -353,6 +354,7 @@ set(MP_PORT_SOURCES
     platform/port_crash.cpp
     platform/port_memory_log.cpp
     platform/port_watchdog.cpp
+    platform/port_motion_watch.cpp
     platform/port_savestate.cpp
     platform/port_savestate_format.cpp
     platform/port_dynamic_res.cpp
@@ -444,6 +446,8 @@ set(MP_PORT_SOURCES
     platform/port_remastered_import_remastered.cpp
     platform/port_dread_samus_import.cpp
     platform/port_dread_samus.cpp
+    platform/port_echoes_suits_import.cpp
+    platform/port_echoes_suits.cpp
     platform/port_dread_pkg.cpp
     platform/port_dread_bcmdl.cpp
     platform/port_dread_bsmat.cpp
@@ -463,6 +467,7 @@ set(MP_PORT_SOURCES
     platform/port_ball_looks.cpp
     platform/port_ball_looks_disc.cpp
     platform/port_disc_reader.cpp
+    platform/port_beam_colours.cpp
     platform/port_suit_colours.cpp
     platform/port_suit_colours_disc.cpp
     platform/port_hints.cpp
@@ -608,6 +613,16 @@ if(NOT ANDROID)
     target_compile_definitions(remastered_effect_tool PRIVATE TARGET_PC VERSION=0)
     target_link_libraries(remastered_effect_tool PRIVATE astcenc ${CMAKE_THREAD_LIBS_INIT})
     set_target_properties(remastered_effect_tool PROPERTIES EXCLUDE_FROM_ALL ON)
+endif()
+# Which GX pipeline-cache key fields never change the pipeline, and the seed rewrite
+# (tools/pipeline_key_audit.cpp). Not built by default: --target pipeline_key_audit.
+if(NOT ANDROID AND NOT IOS)
+    add_executable(pipeline_key_audit EXCLUDE_FROM_ALL tools/pipeline_key_audit.cpp)
+    target_include_directories(pipeline_key_audit PRIVATE extern/aurora/lib)
+    target_compile_definitions(pipeline_key_audit PRIVATE WEBGPU_DAWN)
+    target_link_libraries(pipeline_key_audit PRIVATE aurora::core aurora::gx aurora::gd aurora::si aurora::vi
+        aurora::pad aurora::mtx aurora::os aurora::dvd aurora::card absl::btree absl::flat_hash_map sqlite3
+        Tracy::TracyClient PNG::PNG)
 endif()
 if(NOT ANDROID)
     # Developer tool too: flattens real models' ANUV programs (tools/anuv_check.py).
@@ -1039,6 +1054,8 @@ if(MP_BUILD_TESTS)
         INCLUDES platform/include
         LIBRARIES ZLIB::ZLIB)
     mp_port_test(port_mouse_tests SOURCES tests/port_mouse.cpp INCLUDES platform/include)
+    # Header-only (port_flick_stick.h): Flick Stick's flicks, rotation and smoothing.
+    mp_port_test(port_flick_stick_tests SOURCES tests/port_flick_stick.cpp INCLUDES platform/include)
     # Header-only (port_input_gate.h): pad 0's neutral-while-F1-is-open gate.
     mp_port_test(port_input_gate_tests SOURCES tests/port_input_gate.cpp INCLUDES platform/include)
     # Drives a real SDL virtual gamepad through the touch overlay's own code.
@@ -1448,6 +1465,7 @@ if(MP_BUILD_TESTS)
             platform/port_remastered_tegra_swizzle.cpp platform/port_remastered_bcdec.cpp
             platform/port_remastered_astc_decode.cpp
             platform/port_room_env_tiles.cpp platform/port_room_geo_file.cpp
+            platform/port_remastered_table.cpp
         INCLUDES platform/include include extern/aurora/include
         DEFINITIONS TARGET_PC VERSION=0
         LIBRARIES mp_test_remastered_convert)
@@ -1475,6 +1493,8 @@ if(MP_BUILD_TESTS)
         LIBRARIES mp_test_remastered_convert)
     mp_port_test(port_remastered_astc_tests
         SOURCES tests/port_remastered_astc.cpp platform/port_remastered_image.cpp
+            platform/port_remastered_txtr.cpp platform/port_remastered_tegra_swizzle.cpp
+            platform/port_remastered_bcdec.cpp platform/port_remastered_astc_decode.cpp
         INCLUDES platform/include
         LIBRARIES astcenc)
     mp_port_test(port_remastered_image_tests
@@ -1563,6 +1583,7 @@ if(MP_BUILD_TESTS)
         INCLUDES include extern/aurora/include
         DEFINITIONS TARGET_PC VERSION=0)
     mp_port_test(port_actor_shadow_tests SOURCES tests/port_actor_shadow.cpp INCLUDES platform/include)
+    mp_port_test(port_projected_decal_tests SOURCES tests/port_projected_decal.cpp INCLUDES platform/include)
     mp_port_test(port_visor_mesh_tests SOURCES tests/port_visor_mesh.cpp INCLUDES platform/include)
     mp_port_test(port_hold_toggle_tests SOURCES tests/port_hold_toggle.cpp INCLUDES platform/include)
     mp_port_test(port_pointer_tests SOURCES tests/port_pointer.cpp INCLUDES platform/include)
@@ -1698,6 +1719,10 @@ if(MP_BUILD_TESTS)
         INCLUDES include extern/aurora/include
         DEFINITIONS TARGET_PC VERSION=0
         GC_SECTIONS)
+    mp_port_test(port_face_reflection_tests
+        SOURCES tests/port_face_reflection_tests.cpp
+        INCLUDES include extern/aurora/include
+        DEFINITIONS TARGET_PC VERSION=0)
     # --- Dread readers A (PKG, BCTEX, title check) ---
     # CRC-64, .pkg table, .bctex (gzip, block-linear, BC1/3/5) and the opened image's title id,
     # over synthetic files; real-data checks are opt-in (PORT_DREAD_ROMFS, PORT_DREAD_NSP).
@@ -1763,6 +1788,12 @@ if(MP_BUILD_TESTS)
         LIBRARIES mp_test_remastered_convert ZLIB::ZLIB ${CMAKE_THREAD_LIBS_INIT}
         TIMEOUT 600)
     # --- end Dread Samus import ---
+    # The Echoes suits conversion: LZO, PAK segments, CINF and skin joint mapping on hand-built data.
+    mp_port_test(port_echoes_suits_tests
+        SOURCES tests/port_echoes_suits.cpp platform/port_echoes_suits.cpp platform/port_dread_reskin.cpp
+            platform/port_dread_bcmdl.cpp
+        INCLUDES platform/include
+        LIBRARIES ZLIB::ZLIB)
     # Every port_settings.ini key reads back as written (platform/debug_ui/settings.cpp,
     # kSettingKeys); the game binary checks itself and exits before starting.
     add_test(NAME port_settings_roundtrip COMMAND metroid_prime_port --settings-selftest)

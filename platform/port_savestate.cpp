@@ -28,6 +28,7 @@
 #include "MetroidPrime/Player/CWorldTransManager.hpp"
 #include "MetroidPrime/Player/CWorldState.hpp"
 
+#include "port_disc.h"
 #include "port_discord.h"
 
 #include <SDL3/SDL_events.h>
@@ -174,6 +175,13 @@ bool Loadable(const Header& header, const std::vector< uint8_t >& blob) {
   return false;
 }
 
+const char* CurrentDiscName() { return PortDisc::Name(PortDisc::Current()); }
+
+// A state made with another disc (PAL, Trilogy, another USA revision): its
+// blob is laid out from that disc's world save data, so this one misreads it.
+bool OtherDisc(const Header& header) { return !header.disc.empty() && header.disc != CurrentDiscName(); }
+
+// Reads a state made with another disc too: the caller checks OtherDisc.
 bool ReadSlot(int slot, Header& header, std::vector< uint8_t >& blob) {
   const fs::path path = SlotPath(slot);
   if (path.empty())
@@ -297,6 +305,7 @@ bool Capture(CStateManager& mgr, Header& header, std::vector< uint8_t >& blob) {
   header.savedAt = static_cast< int64_t >(std::time(nullptr));
   header.world = WorldName(world.IGetWorldAssetId());
   header.room = RoomName(mgr, area.Value());
+  header.disc = CurrentDiscName();
   if (PortDebug::SaveStateRoomState())
     CaptureRoomState(mgr, header.roomState);
   return true;
@@ -363,6 +372,11 @@ bool DoLoad(CStateManager& mgr, int slot) {
   std::vector< uint8_t > blob;
   if (!ReadSlot(slot, header, blob)) {
     SetMessage(SlotName(slot) + " is empty or unreadable");
+    return false;
+  }
+  if (OtherDisc(header)) {
+    SetMessage("Can't load " + SlotName(slot) + ": it was made with the " + header.disc + " disc (this one is " +
+               CurrentDiscName() + ")");
     return false;
   }
   std::string why;
@@ -554,7 +568,7 @@ void TickRoomState(CStateManager& mgr) {
     return;
   const bool late = sRoomStats.late > 0;
   PortLog::Write("[savestate] room state: %d applied, %d generated, %d removed, %d unmatched, "
-                 "%d areas skipped, %d script messages replayed, %d enemy fields set%s\n",
+                 "%d areas skipped, %d script messages replayed, %d fields changed%s\n",
                  sRoomStats.applied, sRoomStats.generated, sRoomStats.removed, sRoomStats.unmatched,
                  sRoomStats.skipped, sRoomStats.replayed, sRoomStats.fields,
                  late ? ", neighbour areas still streaming" : "");
@@ -650,7 +664,8 @@ bool ReadResume(ResumeMeta& meta, Header& header, std::vector< uint8_t >& blob) 
     return false;
   const std::string data = port::ReadAllText(file);
   std::string state;
-  return DecodeResume(data, meta, state) && Decode(state, header, blob) && Loadable(header, blob);
+  return DecodeResume(data, meta, state) && Decode(state, header, blob) && Loadable(header, blob) &&
+         !OtherDisc(header);
 }
 
 ResumeContext GatherResumeContext() {
@@ -731,7 +746,7 @@ Info SlotInfo(int slot) {
     return info;
   info.exists = true;
   info.world = header.world;
-  info.room = header.room;
+  info.room = OtherDisc(header) ? header.room + " (" + header.disc + " disc)" : header.room;
   info.playTime = header.playTime;
   info.savedAt = header.savedAt;
   info.morphed = header.morphed;
@@ -936,6 +951,8 @@ void InstallPending() {
     ArmSpawnLayers(sPendingHeader.roomState, sPendingHeader.worldId);
   sPlacePending = true;
 }
+
+bool LoadPlacing() { return sPlacePending; }
 
 namespace {
 

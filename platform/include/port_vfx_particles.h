@@ -1,7 +1,7 @@
 #pragma once
 
 // Runtime half of the native Remastered particle material (VMAT). The draw itself is
-// aurora::gfx::vfx::draw_quads; this file evaluates the per-particle properties (SSZE, ITEN, VPMT)
+// aurora::gfx::vfx::draw_quads; this file evaluates the per-particle properties (ITEN, VPMT)
 // and the per-frame VSMT, and expands the quads. Contract: docs/REMASTERED_VFX.md.
 // A PART without VMAT never reaches any of it.
 
@@ -17,15 +17,20 @@
 
 // True when the description carries a VMAT this runtime understands (version 2 or 3).
 inline bool PortVfxActive(const CGenDescription& desc) {
-  return desc.xPortVfx != nullptr && (desc.xPortVfx->mat.version == 2 || desc.xPortVfx->mat.version == 3);
+  return desc.xPortVfx != nullptr && desc.xPortVfx->mat.Supported();
 }
 
-// Evaluates SSZE (default: the particle's SIZE), ITEN (default 1) and the VPMT rows into the
+// Evaluates ITEN (default 1) and the VPMT rows into the
 // particle. The caller has set CParticleGlobals' particle context for `frame`.
 void PortVfxEvalParticle(const CGenDescription& desc, CElementGen::CParticle& particle, int frame);
 
 // Stores the unit launch direction (zero when the particle launched at rest); for VORN 1.
 void PortVfxSetLaunchDir(CElementGen::CParticle& particle);
+// Evaluates POVC (Remastered's OVEC) at birth, after the launch direction; ORNT 1 replaces it with
+// that direction (the system rotation's forward at rest). The caller has set CParticleGlobals'
+// particle context for frame 0.
+void PortVfxInitOvec(const CGenDescription& desc, CElementGen::CParticle& particle,
+                     const CQuaternion& systemRotation);
 float PortVfxExposureGain(const CGenDescription& desc, bool model = false);
 // Explicit inverse-exposed transparent models snapshot the matching forward frame exposure.
 std::optional<float> PortVfxModelExposureOverride(const CGenDescription& desc);
@@ -127,15 +132,19 @@ inline bool PortVfxIceReady(const CPortVfxData& vfx) {
 // apart from the instance colour), both pattern maps (TCH0 through the colour slot, TCH1 through the
 // indirect slot) and CCH0. Without them the PART keeps the retail model path rather than draw the
 // recipe with a mesh colour or a map it does not have.
+// The exterior shield (both bits, is_barrier_exterior) reads its one map through the colour slot, as
+// the glow does.
 inline bool PortVfxBarrierReady(const CPortVfxData& vfx) {
   return (vfx.mat.features & aurora::gfx::vfx::BarrierShield) == 0 ||
          (vfx.meshStride == 16 && (vfx.meshFlags & 2) == 2 && vfx.mat.colorSlot >= 0 &&
-          vfx.mat.indirectSlot >= 0 && vfx.paramCount >= 1);
+          (vfx.mat.indirectSlot >= 0 || aurora::gfx::vfx::is_barrier_exterior(vfx.mat.features)) &&
+          vfx.paramCount >= 1);
 }
 
 // VFX_BarrierGlow's feed is BarrierShield's without the second map (this perm reads TCH0 alone, three
 // times) and without the scene copy: it needs the mesh's own vertex colour (VMSH v2, flags bit 1), the
 // pattern map through the colour slot and CCH0. Without them the PART keeps the retail model path.
+// The exterior shield's needs are the same.
 inline bool PortVfxBarrierGlowReady(const CPortVfxData& vfx) {
   return (vfx.mat.features & aurora::gfx::vfx::BarrierGlow) == 0 ||
          (vfx.meshStride == 16 && (vfx.meshFlags & 2) == 2 && vfx.mat.colorSlot >= 0 && vfx.paramCount >= 1);

@@ -168,8 +168,9 @@ uncounted report, for a restore that hands over late (Metroid Prime's exo comes 
 The cinematic cameras, waypoints and sounds always show
 position warnings: they are moved by scripts the restore does not replay; ignore them.
 
-Enemies (every `CPatterned`) and generated pickups save their schema fields in the room record's `kTagFields` block
-(`platform/port_savestate_fields.cpp`; the load log's "N enemy fields set"). For a baseline without it,
+Every placed script object (except doors, docks, timers, Metroid Prime's relay and a few
+audio/teleport objects) and generated pickups save their schema fields in the room record's `kTagFields` block
+(`platform/port_savestate_fields.cpp`; the load log's "N fields changed"). For a baseline without it,
 start the game with `--start-arg=--env --start-arg=MP_SAVESTATE_FIELDS=0`. Expected leftovers in the
 "schema fields" section: `x254_` and other members the constructor never sets, `xPort*`, render and
 physics bookkeeping (`x9c_renderBounds`, `xc8_drawnToken`, `xfc_constantForce`), and what the AI state
@@ -382,6 +383,21 @@ by one compile of a fresh case's pipeline (~300 ms) however busy the compile que
 
 A FAIL names the feature. Results land a frame or two after the request. Game rendering is unaffected: the
 run uses its own targets and the game's GX state is reset afterwards. Code: `extern/aurora/lib/gfx/selftest.cpp`.
+
+## Motion watch (`[motion]` log lines)
+
+`platform/port_motion_watch.cpp` keeps the player's last 20 `CGameCollision::MovePlayer`
+ticks and writes them to the port log (stderr, `metroid_prime_port.log`) when Samus moves more
+than 2 units in one tick, ends a tick faster than 60 units/s, or starts a tick more than 2 units
+from where the previous one ended (a jump outside the mover). A dump is a header line
+(`[motion] <reason>: tick N moved … speed … gap …`) then one `[motion]` line per tick: sim tick,
+area id, mover (`rmGround`, `rmAir`, `groundNew`, `groundOld`, `ball`, `air`), movement state
+(`ms`), morph state (`mb`), the retained Remastered object state (`ret`, `!` = invalid),
+non-player colliders, position and velocity before and after, the impulse fed to the mover,
+`gap`, `warp`/`cine` tags and `kb=` knockbacks (`Class#uid`, direction, power) received since the
+previous tick. At most one dump per 2 s and 20 per run. `CPlayer::Teleport` (console `tp`/`goto`,
+save-state load, room warps) sets the `warp` tag and is not dumped; a rebuilt player or a
+rewound sim clock restarts the ring. Normal play writes nothing.
 
 ## Limits
 

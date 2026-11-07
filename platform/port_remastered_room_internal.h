@@ -25,6 +25,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 
 #include "port_maya_spline.h"
@@ -65,6 +66,7 @@ constexpr uint32_t kDoorMP1 = 0x564a1641;
 constexpr uint32_t kModCon = 0x451740eb;
 constexpr uint32_t kActorMP1 = 0xb6200be6;
 constexpr uint32_t kLightDynamic = 0x9ee5541d;
+constexpr uint32_t kLightHint = 0x56cf02a6; // CLightHintGOC, no properties
 
 // Property ids.
 constexpr uint32_t kPropRoomId = 0x30a4d63d;
@@ -447,10 +449,24 @@ struct Blit {
   bool HasLightmap() const { return present && (flags & 1) != 0 && lightmap != Id16{}; }
 };
 
+// One layer unit of a room (HEAD/LUNT/LUHD): a layer loads while its unit's variable is set.
+struct LoadUnit {
+  Id16 unit{};
+  Id16 var{};                 // the unit's term, the unit itself without one (EvaluateLoadUnits 0x3fb2d8)
+  bool startsLoaded = false;  // the variable's default: bit 0 of the unit's flags
+};
+
 class Room {
 public:
-  // `data` must outlive the Room.
-  bool Parse(const std::vector<uint8_t>& data, std::string& error);
+  // `data` must outlive the Room. A layer whose units all `neverLoads` (NeverLoadedUnits) is left
+  // out: Remastered never creates its components.
+  bool Parse(const std::vector<uint8_t>& data, std::string& error,
+             const std::function<bool(const Id16& unit)>& neverLoads = {});
+  // The room's layer units, the base layer's (flags 0xffff) left out.
+  const std::vector<LoadUnit>& LoadUnits() const { return m_units; }
+  // The components' property data (SDTA/SDEN), and the string pool.
+  const std::vector<Span>& PropertyData() const { return m_sden; }
+  const Span& StringPool() const { return m_strings; }
 
   const std::vector<Component>& Components() const { return m_comps; }
   const Blit& Lighting() const { return m_blit; }
@@ -545,6 +561,8 @@ private:
   Span m_meta;
   std::vector<size_t> m_listed;
   Blit m_blit;
+  std::vector<LoadUnit> m_units;
+  std::vector<Span> m_sden;
 };
 
 bool PropList(const uint8_t* b, size_t len, std::vector<Prop>* out);
@@ -568,7 +586,7 @@ struct ScriptObject {
   uint32_t propCount = 0;
   std::vector<uint32_t> targets;  // of its connections
   std::vector<Link> links;        // the same connections, with their state and message
-  bool hasPos = false;            // the three floats after its name, for any type
+  bool hasPos = false;            // the three floats after its name (and PositionLead), for any type
   Vec3 pos{};
   // The six floats after those: an editor transform's rotation (degrees) and scale for the
   // types that start with one, anything for the others.
@@ -595,7 +613,10 @@ constexpr uint32_t kTemplateManager = 0xd645278a;
 constexpr uint8_t kRetailPlatform = 0x08;
 constexpr int kStatePlay = 18;  // EScriptObjectState kSS_Play
 constexpr int kRetailDamageableTrigger = 0x1a;
+constexpr int kStateActive = 0;
+constexpr int kStateInactive = 5;
 constexpr int kStateMaxReached = 7;
+constexpr int kStateZero = 9;
 constexpr uint8_t kRetailCounter = 0x06;
 constexpr uint8_t kRetailTimer = 0x05;
 // A retail Counter as Remastered remade it; the ones it added match no retail object.
@@ -628,6 +649,15 @@ constexpr uint32_t kPropMaterialVariable[2] = {0x0238c7cb, 0x4c107e13};
 constexpr uint32_t kDebugOptions = 0xef2184e8;  // answers the debug menu only
 constexpr uint32_t kPropTriggerFlags = 0x7ad69562;
 constexpr uint32_t kTriggerDetectCamera = 0x4000;
+// SLdrTriggerMP1::Load 0xf3e95c: the force (SLdrVector_MP1Typedef, +0x08), the contact damage
+// (SLdrContactDamage_MP1Typedef, +0x14; its amount 0xd1f418), and the bools at +0x44..+0x47 the
+// CScriptTriggerMP1 ctor (0xd089d8) keeps as bits 0x40, 0x80, 0x04 (deactivate on Entered) and
+// 0x08 (deactivate on Exited); the first two only change how a force is applied.
+constexpr uint32_t kPropTriggerForce = 0xf00155e9;
+constexpr uint32_t kPropTriggerDamageAmount[2] = {0x3360e95e, 0xfb168838};
+constexpr uint32_t kPropDamageWeaponType = 0x6e9e14b9;  // ContactDamage +0x10 (ctor 0xd1f3d0)
+constexpr uint32_t kPropTriggerDeactivateOnEntered = 0x9598280a;
+constexpr uint32_t kPropTriggerDeactivateOnExited = 0x6b3ae137;
 constexpr uint32_t kPropCounterMax = 0xce73c1a7;
 constexpr uint32_t kEventEntered = 0xcba5a77b;
 constexpr uint32_t kEventExited = 0x8e8dd42d;
@@ -656,13 +686,31 @@ constexpr uint32_t kPropIceDarkeningFactor = 0x160e1c00;
 constexpr uint32_t kPropIceDarkenEveryFrame = 0x35a2afcb;
 constexpr uint32_t kTimerMP1 = 0x25c6d2a3;
 constexpr uint32_t kPropTimerAutostart = 0xd0ecc8ea;
-constexpr uint32_t kActionTimerStart[2] = {0xd63b8f04, 0x55193b90};
+constexpr uint32_t kActionTimerStart[2] = {0xd63b8f04, 0x55193b90};  // ResetAndStart, Start
+// CScriptTimerMP1 (Create 0xf373c8, ApplyTime 0xf37654): +0x10 is retail CScriptTimer's loop,
+// +0x11 its autostart; +0x12 (Remastered's own) resets and keeps timing on expiry, whatever the
+// other two say.
+constexpr uint32_t kPropTimerLoop = 0x79f25d24;                       // boolean +0x10
+constexpr uint32_t kPropTimerRestart = 0x75ce4b13;                    // boolean +0x12
+constexpr uint32_t kPropTimerDelay = 0xfb2a2cf0;
+// A timer without kPropTimerDelay keeps its ctor's duration: 5 s for TimerMP1 (0xf36ccc) and
+// Timer (0x863fcc) alike.
+constexpr float kTimerDefaultDelay = 5.f;
+constexpr uint32_t kPropTimerRandom = 0x35c8fdd3;  // f32 random add
+// A TimerMP1's actions (TranslateScriptActionToMessage 0xf36b10), as retail messages.
+constexpr uint32_t kActionTimerActivate = 0xbbdb3ee1;
+constexpr uint32_t kActionTimerDeactivate = 0xa4beef34;
+constexpr uint32_t kActionTimerToggle = 0x3c6fe8b5;
+constexpr uint32_t kActionTimerReset = 0x43d48cf5;
+constexpr uint32_t kActionTimerStop = 0xef52cf9d;
+constexpr uint32_t kActionTimerStopAndReset = 0x79259fe8;
 constexpr uint32_t kScriptRelayMP1 = 0x1b78f9a4;
 constexpr uint32_t kActionScriptRelayFire = 0x379d362e;
 // A trigger's own Activate / Deactivate (CTriggerMP1GOC::TranslateScriptActionToMessage 0xf3e434:
 // msg 1 / msg 4; kb topic/triggermp1-active-state.md).
 constexpr uint32_t kActionTriggerActivate = 0xb5dd4543;
 constexpr uint32_t kActionTriggerDeactivate = 0x3067f115;
+constexpr uint32_t kActionTriggerToggle = 0xda363167;
 // An ActorKeyframe's Play (retail kSS_Play) tells its actor to play the keyframe's
 // animation (property kPropKeyframeAnim, a name in STRP; kPropKeyframeLoop: it loops).
 constexpr uint32_t kActorKeyframeMP1 = 0x3ce6630a;
@@ -713,6 +761,36 @@ constexpr uint32_t kPropSpecialFunctionItem = 0x04fc7524;
 constexpr uint32_t kSpecialFunctionInventoryActivator = 5;
 constexpr uint32_t kEventSpecialFunctionZero = 0x58951d90;
 constexpr uint32_t kEventSpecialFunctionMaxReached = 0x52583665;
+// Function 3 (ObjectFollowLocator, 0xd951a8): its Play connections are references it reads (the
+// actor it follows, the one it moves to that actor's locator, property kPropSpecialFunctionLocator),
+// never sent.
+constexpr uint32_t kSpecialFunctionFollowLocator = 3;
+constexpr uint32_t kEventSpecialFunctionPlay = 0x6b565a4c;
+constexpr uint32_t kPropSpecialFunctionLocator = 0x1f300597;  // a string: STRP offset, size
+bool IsFollowLocator(const Room& room, const Component& c);
+// Function 15 (CinematicSkip, 0xd98530): it sends Zero only when the player skips its cutscene,
+// as retail's does (CScriptSpecialFunction.cpp:446), so a matched one's Zero is retail's Zero. One
+// retail lacks (09_Intro_Ridley_Chamber) is skippable only after beating the game, which the port
+// does not do (CinematicSkipSF Increment 0xd968c8): its Zero never fires.
+constexpr uint32_t kSpecialFunctionCinematicSkip = 15;
+// Function 7 (SaveStation): ThinkSaveStation (0xd95834) sends Zero or MaxReached as retail's
+// does; Closed, retail's no-card answer, is never sent (AcceptScriptMsg 0xd96458 sends only Zero).
+constexpr uint32_t kSpecialFunctionSaveStation = 7;
+constexpr uint32_t kEventSpecialFunctionClosed = 0x290f7c1f;
+// What a SpecialFunctionMP1's event does to the effects it reaches: kRetail when the matched retail
+// object sends the same state, kNever when it never fires in the port, kUnknown otherwise.
+enum class SpecialFunctionSend { kUnknown, kRetail, kNever };
+SpecialFunctionSend SpecialFunctionSends(const Room& room, const Component& c, uint32_t event, bool matched);
+// The retail state a component type's event stands for, -1 when unknown.
+int RetailState(uint32_t type, uint32_t event);
+// Default (30) is never sent: in Remastered it is only read, by CActorMP1's InitializedInArea
+// (0xc4d854) for the draw parent, as retail's CActor reads it for xc6_nextDrawNode (CActor.cpp:748).
+// A connection on it neither connects nor drives what it names.
+constexpr int kStateDefault = 30;
+inline bool NeverSent(uint32_t type, uint32_t event) { return RetailState(type, event) == kStateDefault; }
+// The retail message (1 Activate, 4 Deactivate) a follow locator's Play action is to a target
+// of this GOC type; 0 for one it does not translate or that is not known.
+uint32_t FollowMessage(uint32_t target, uint32_t action);
 constexpr double kMatchTolerance = 0.02;
 constexpr double kMatchNear = 2.0;
 // A model carried over from retail, in a room's byte order (EffectRetailId); the last
@@ -791,6 +869,15 @@ std::vector<Connection> ReadConnections(const Room& room);
 std::vector<int> ReadEntityLinks(const Room& room, size_t i);
 // The same links with their link ids: (u32 id, linked component or -1).
 std::vector<std::pair<uint32_t, int>> ReadEntityLinkIds(const Room& room, size_t i);
+// The same links with their link data: a typed one carries its type and payload (span in the
+// room), an untyped one type 0 and an empty payload.
+struct EntityLink {
+  uint32_t id = 0;
+  int target = -1;
+  uint32_t type = 0;
+  Span payload;
+};
+std::vector<EntityLink> ReadEntityLinkData(const Room& room, size_t i);
 // The EnvironmentFX colour intensity the room sets when it loads: the density controller (kEnvFxDensityController)
 // that a RelayAutoFire reaches, through Relays, with kActionEnvFxApply, else 1. A controller
 // nothing reaches at load (fired by a trigger, or by nothing) is left out, and noted in `notes`.
@@ -807,11 +894,74 @@ struct IceDarkenerAtLoad {
 std::vector<IceDarkenerAtLoad> IceDarkeners(const Room& room, std::vector<std::string>& notes);
 double MaxAbs(const Vec3& a, const Vec3& b);
 
+// A link into a Remastered timer (SceneryScripts::Timer): its action is kLinkMessage | the
+// retail message (Activate, ResetAndStart, ...), not a PortRoomGeo::LinkAction.
+constexpr uint8_t kLinkMessage = 0x80;
+// A link's sender that is a Remastered TimerMP1 no retail object stands for: kSenderTimer | its
+// entity. Only the effects import reads these (as its timer add-ons); nothing else sends them.
+constexpr uint32_t kSenderTimer = 0xFC000000;
+constexpr bool IsTimerSender(uint32_t sender) { return (sender & 0xFF000000) == kSenderTimer; }
+// The same for a Remastered TriggerMP1 no retail object stands for: kSenderTrigger | its entity.
+constexpr uint32_t kSenderTrigger = 0xFB000000;
+constexpr bool IsTriggerSender(uint32_t sender) { return (sender & 0xFF000000) == kSenderTrigger; }
+// And for a Remastered ScriptRelayMP1 no retail object stands for: kSenderRelay | its entity.
+constexpr uint32_t kSenderRelay = 0xFA000000;
+constexpr bool IsRelaySender(uint32_t sender) { return (sender & 0xFF000000) == kSenderRelay; }
+// And for a Remastered EffectMP1 no retail object stands for, whose Active or Inactive drives
+// another effect: kSenderEffect | its entity. It sends them only as the effect it is added as.
+constexpr uint32_t kSenderEffect = 0xF9000000;
+constexpr bool IsEffectSender(uint32_t sender) { return (sender & 0xFF000000) == kSenderEffect; }
+// A ScriptRelayMP1's actions (CScriptRelayMP1GOC::TranslateScriptActionToMessage 0xf5e094), besides
+// kActionScriptRelayFire (SetToZero): Activate, Deactivate, ToggleActive.
+constexpr uint32_t kActionScriptRelayActivate = 0x4cb37153;
+constexpr uint32_t kActionScriptRelayDeactivate = 0xe10034c6;
+constexpr uint32_t kActionScriptRelayToggle = 0x01c4c127;
+
 // What drives the scenery actors of a room.
 struct SceneryScripts {
+  // A TimerMP1 no retail object matched whose Zero drives an effect, a generator or another such
+  // timer (as kSenderTimer | entity), as a retail CScriptTimer: exact where Remastered's restart
+  // flag (kPropTimerRestart) is clear, or set with autostart (then it is retail's loop and
+  // autostart). Its links are what drives it, traced like an effect's (`unresolved` counts the
+  // others, under its entity).
+  struct Timer {
+    float delay = 0.f, random = 0.f;
+    bool loop = false, autoStart = false, active = true, baseLayer = false;
+    std::vector<PortRoomGeo::Link> links;
+  };
+  std::map<int, Timer> timers;  // by entity
+  // A TriggerMP1 no retail object matched whose Entered or Exited drives an effect, a generator,
+  // a timer or another such trigger (as kSenderTrigger | entity), as a retail CScriptTrigger:
+  // exact where it does no damage and applies no force (CTriggerMP1GOC::Create 0xf3f230, the
+  // CScriptTriggerMP1 ctor 0xd089d8). Its box is axis-aligned, `extent` across (the area's
+  // rotation applied to its scale, NScriptLoaderUtils::GetAreaTransformedScale 0xd1e2d0). Its
+  // links are what switches it, traced like a timer's.
+  struct Trigger {
+    float pos[3] = {0, 0, 0};     // GameCube world space
+    float extent[3] = {0, 0, 0};  // GameCube axes
+    uint32_t flags = 1;           // ETriggerFlags (Remastered's are retail's)
+    bool active = true, deactivateOnEntered = false, deactivateOnExited = false, baseLayer = false;
+    std::vector<PortRoomGeo::Link> links;
+  };
+  std::map<int, Trigger> triggers;  // by entity
+  // A ScriptRelayMP1 no retail object matched whose Zero drives an effect, a generator or another
+  // add-on (as kSenderRelay | entity), where the walk cannot fold it (it starts inactive, or more
+  // than SetToZero reaches it), as a retail CScriptRelay: CScriptRelayMP1::AcceptScriptMsg 0xf5e728
+  // and Think 0xf5e864 are retail's (SetToZero only while active, one Zero per queued count). Its
+  // links are what drives it, traced like a timer's.
+  struct Relay {
+    bool active = true, baseLayer = false;
+    std::vector<PortRoomGeo::Link> links;
+  };
+  std::map<int, Relay> relays;  // by entity
   std::map<int, uint8_t> layer;  // by entity: the retail layer it is drawn on
   std::map<int, std::vector<PortRoomGeo::Link>> links;  // by entity
   std::map<int, size_t> unresolved;                      // by entity: connections not traced
+  // By EffectMP1 entity: the GeneratorMP1 entities whose Zero -> Generate copies it (each once).
+  std::map<int, std::vector<int>> generatedBy;
+  // By EffectMP1 entity: the SpecialFunctionMP1 entities no retail object matched whose
+  // ObjectFollowLocator moves it (IsFollowLocator); the effects import writes them as follows.
+  std::map<int, std::vector<int>> followedBy;
   std::map<int, std::string> unresolvedHow;              // a grade hint's: sender type/event/action
   std::map<std::string, std::pair<size_t, std::set<int>>> missStats;  // MP_REMASTERED_MISS: class -> connections, entities
   std::map<int, const ScriptObject*> platform;           // by entity: the platform carrying it
@@ -848,15 +998,50 @@ struct SceneryScripts {
 
 // Remastered's own particle effect actors (port_remastered_room_effects.cpp).
 constexpr uint32_t kEffectMP1 = 0xb421cdcb;
+constexpr uint32_t kActionEffectActivate = 0xdbe5cb30;
+constexpr uint32_t kActionEffectDeactivate = 0x7dcfa087;
+constexpr uint32_t kActionEffectToggle = 0xda662fc8;
+// EffectMP1's own actions (CEffectMP1GOC::TranslateScriptActionToMessage 0xd9c9e4): retail
+// Activate, Deactivate and ToggleActive.
+inline uint8_t EffectAct(uint32_t action) {
+  return action == kActionEffectActivate     ? PortRoomGeo::kShow
+         : action == kActionEffectDeactivate ? PortRoomGeo::kHide
+         : action == kActionEffectToggle     ? PortRoomGeo::kToggle
+                                             : 0;
+}
+// The actions every MP1 entity takes (IMP1EntityBaseGOC::TranslateScriptActionToMessage
+// 0xc51ea4): 'ACMP', 'ACTV', 'ICMP', 'ICTV' and 'XDEL'.
+inline bool IsEntityBaseAction(uint32_t action) {
+  return action == 0x41434d50 || action == kActionEntityActivate || action == 0x49434d50 ||
+         action == kActionEntityDeactivate || action == kActionHintDelete;
+}
+// CScriptGeneratorMP1 (0xf44128): retail CScriptGenerator. Its Zero -> Generate connections name
+// the templates, Zero -> Follow the follows; SetToZero (99ea1c2c) generates, Activate (799391e0),
+// Deactivate (15494612) and Toggle (ab440330) switch it.
+constexpr uint32_t kGeneratorMP1 = 0x8ee5d87e;
+constexpr uint32_t kEventGeneratorZero = 0xd276253a;
+constexpr uint32_t kActionGenerate = 0x47524e4c;
+constexpr uint32_t kActionGeneratorFollow = 0x5d191757;
+constexpr uint32_t kActionGeneratorSetToZero = 0x99ea1c2c;
+constexpr uint32_t kActionGeneratorActivate = 0x799391e0;
+constexpr uint32_t kActionGeneratorDeactivate = 0x15494612;
+constexpr uint32_t kActionGeneratorToggle = 0xab440330;
+constexpr uint32_t kPropGeneratorCount = 0x47119176;
+constexpr uint32_t kPropGeneratorNoInheritXf = 0xf142120d;
+constexpr uint32_t kPropGeneratorOffset = 0x93a36614;
+constexpr uint32_t kSoundMP1 = 0x46787ddd;
 // The room's EffectMP1 actors the disc has no object for, as "<MREA id>.roomfx"
 // (port_room_effects.h); a line for the log, empty when there is nothing to say.
 std::string WriteRoomEffects(const std::string& name, const Room& room, uint32_t mrea, const Area& area,
                              const SceneryScripts& scripts, const RoomIO& io);
-// The GENPs (in a pak's byte order) those actors are for: the room's unconnected ones, and the
-// barrier's ten when its graph validates.
+// The GENPs (in a pak's byte order) those actors are for: the room's unconnected ones, the
+// connected ones that may be driven, and the barrier's ten when its graph validates.
 std::vector<std::array<uint8_t, 16>> RoomEffectGenpsOf(const Room& room);
 // The entities (their Entity components) that some connection in the room reaches.
 std::set<int> ConnectedEntities(const Room& room);
+// Those of them no SpecialFunctionMP1 connects to: what such a function sends is its own
+// (the barrier controller runs its rings itself), so only these get their links as drives.
+std::set<int> DrivableEntities(const Room& room);
 
 // The Parasite Queen barrier's Remastered graph, which the import validates as a whole before
 // it treats the ten effects as anything but connected actors (port_queen_barrier_assets.h has

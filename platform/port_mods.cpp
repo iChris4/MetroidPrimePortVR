@@ -18,6 +18,7 @@
 #include "port_log.h"
 #include "port_remastered_import.h"
 #include "port_dread_samus_mod.h"
+#include "port_echoes_suits_mod.h"
 #include "port_room_env.h"
 #include "port_room_geo.h"
 #include "port_room_effects.h"
@@ -81,6 +82,16 @@ std::set<uint32_t> sDreadLowBalls;
 std::set<uint32_t> sDreadCannons;  // first-person cannon variants (PortDreadSamus::FirstPersonCannon)
 // The Dread-proportioned CINFs it serves (PortDreadSamus::Skeleton).
 std::set<uint32_t> sDreadSkeletons;
+// The CMDLs the echoes-suits mod serves (PortDreadSamus::Replaces too: its bodies carry their boots
+// and visor, though not the suits' cannon).
+std::set<uint32_t> sEchoesBodies;
+// Of those, the ones Dark Samus stands in for: her body carries her cannon (PortDreadSamus::HasOwnCannon).
+std::set<uint32_t> sDarkSamusBodies;
+// The beam ANCS whose Echoes cannon variant it serves (PortEchoesSuits::GunAncs).
+std::set<uint32_t> sEchoesGuns;
+// Whether it serves Dark Samus in place of the suit bodies (PortEchoesSuits::DarkSamusServed).
+bool sDarkSamusServed = false;
+bool sPlayAsDarkSamus = false;  // the setting echoes_dark_samus
 // thermal.lut: the thermal visor's heat gradient (port_thermal.h).
 std::string sThermalLut;
 // envfx.bin: Remastered's EnvironmentFX textures (port_envfx_assets.h).
@@ -445,7 +456,15 @@ bool HasNativeTexture(uint32_t id) { return sNativeTextures.count(id) != 0; }
 
 }  // namespace PortMods
 
-bool PortDreadSamus::Replaces(uint32_t bodyCmdl) { return bodyCmdl != 0 && PortMods::sDreadBodies.count(bodyCmdl) != 0; }
+bool PortDreadSamus::Replaces(uint32_t bodyCmdl) {
+  return bodyCmdl != 0 && (PortMods::sDreadBodies.count(bodyCmdl) != 0 || PortMods::sEchoesBodies.count(bodyCmdl) != 0);
+}
+bool PortDreadSamus::ReplacesWithDread(uint32_t bodyCmdl) {
+  return bodyCmdl != 0 && PortMods::sDreadBodies.count(bodyCmdl) != 0;
+}
+bool PortDreadSamus::HasOwnCannon(uint32_t bodyCmdl) {
+  return ReplacesWithDread(bodyCmdl) || (bodyCmdl != 0 && PortMods::sDarkSamusBodies.count(bodyCmdl) != 0);
+}
 bool PortDreadSamus::ReplacesBall(int suit, bool spider) {
   return PortMods::sDreadBalls.count(BallModel(suit, spider)) != 0;
 }
@@ -461,10 +480,21 @@ bool PortDreadSamus::ReplacesFirstPersonCannon(int suit) {
   const uint32_t id = FirstPersonCannon(suit);
   return sDreadCannonShown && id != 0 && PortMods::sDreadCannons.count(id) != 0;
 }
+namespace {
+bool sEchoesCannonShown = true;
+}
+void PortEchoesSuits::SetFirstPersonCannonShown(bool shown) { sEchoesCannonShown = shown; }
+void PortEchoesSuits::SetPlayAsDarkSamus(bool on) { PortMods::sPlayAsDarkSamus = on; }
+bool PortEchoesSuits::PlayAsDarkSamus() { return PortMods::sPlayAsDarkSamus; }
+bool PortEchoesSuits::DarkSamusServed() { return PortMods::sDarkSamusServed; }
+bool PortEchoesSuits::FirstPersonCannonShown() { return sEchoesCannonShown; }
+uint32_t PortEchoesSuits::GunAncs(uint32_t ancs) {
+  return sEchoesCannonShown && PortMods::sEchoesGuns.count(ancs) != 0 ? Cannon(ancs) : ancs;
+}
 
 uint32_t PortDreadSamus::Skeleton(uint32_t bodyCmdl) {
   const uint32_t cinf = DreadCinf(bodyCmdl);
-  return cinf != 0 && Replaces(bodyCmdl) && PortMods::sDreadSkeletons.count(cinf) != 0 ? cinf : 0;
+  return cinf != 0 && ReplacesWithDread(bodyCmdl) && PortMods::sDreadSkeletons.count(cinf) != 0 ? cinf : 0;
 }
 
 namespace PortMods {
@@ -632,6 +662,10 @@ void Initialize() {
   sDreadCannons.clear();
   sDreadLowBalls.clear();
   sDreadSkeletons.clear();
+  sEchoesBodies.clear();
+  sDarkSamusBodies.clear();
+  sEchoesGuns.clear();
+  sDarkSamusServed = false;
   {
     std::lock_guard<std::mutex> lock(sEffectIdsMutex);
     sEffectIdMapPath.clear();
@@ -663,6 +697,7 @@ void Initialize() {
   std::map<std::string, std::pair<std::string, Replacement>> addedMovies; // by lower-case disc path
   std::map<std::pair<uint32_t, uint32_t>, LooseResource> loose;
   std::map<std::pair<uint32_t, uint32_t>, size_t> looseMod;
+  std::string dreadDir;  // the Dread Samus import's folder, when it is on
   for (const fs::path& modDir : modDirs) {
     ModInfo& info = sStatus.mods.emplace_back();
     info.name = PathString(modDir.filename());
@@ -684,6 +719,13 @@ void Initialize() {
           Message(info.name + " was imported by an older version; import the Dread Samus models again");
         }
       }
+      if (info.name == PortEchoesSuits::kModName) {
+        std::ifstream echoesStamp(modDir / PortEchoesSuits::kStampName);
+        if (ImportStampStale(echoesStamp.is_open() ? port::ReadAllText(echoesStamp) : std::string(),
+                             PortEchoesSuits::kVersion)) {
+          Message(info.name + " was imported by an older version; import the Echoes suits again");
+        }
+      }
       if (info.importStale && sStatus.staleImport.empty()) {
         sStatus.staleImport = info.name;
         Message(info.name + " was imported by an older version; re-import Remastered to get the latest fixes");
@@ -691,6 +733,9 @@ void Initialize() {
     }
     if (!info.enabled) {
       continue;
+    }
+    if (info.name == PortDreadSamus::kModName) {
+      dreadDir = PathString(modDir);
     }
     const size_t modIndex = sStatus.mods.size() - 1;
     // An import's text tables are copies of the disc it was made from (kTextDiscName): on
@@ -918,6 +963,40 @@ void Initialize() {
     }
   }
 
+  // Dark Samus (PortEchoesSuits::kDarkBodies): the Echoes import's fit for each skeleton under
+  // every suit body of it, over whichever mod served that body, when the setting is on.
+  if (sPlayAsDarkSamus) {
+    const auto echoes = [&](uint32_t type, uint32_t id) -> const LooseResource* {
+      const auto it = loose.find({type, id});
+      return it != loose.end() && it->second.mod == PortEchoesSuits::kModName ? &it->second : nullptr;
+    };
+    size_t served = 0;
+    for (const auto& body : PortEchoesSuits::kDarkBodies) {
+      const LooseResource* cmdl = echoes(0x434D444Cu, PortEchoesSuits::DarkSamusId(body.cinf));      // 'CMDL'
+      const LooseResource* cskr = echoes(0x43534B52u, PortEchoesSuits::DarkSamusSkinId(body.cinf));  // 'CSKR'
+      if (cmdl == nullptr || cskr == nullptr) continue;
+      for (const auto& [from, to] : {std::pair{cmdl, body.cmdl}, std::pair{cskr, body.cskr}}) {
+        if (to == 0) continue;
+        LooseResource resource = *from;
+        resource.id = to;
+        loose[{resource.type, to}] = std::move(resource);
+        if (const auto provider = sResourceProviders.find({from->type, from->id}); provider != sResourceProviders.end()) {
+          sResourceProviders[{from->type, to}] = provider->second;
+        }
+      }
+      // Her own boots, visor and cannon: PortDreadSamus::Replaces, HasOwnCannon.
+      if (body.cmdl != 0) {
+        sEchoesBodies.insert(body.cmdl);
+        sDarkSamusBodies.insert(body.cmdl);
+        ++served;
+      }
+    }
+    sDarkSamusServed = served != 0;
+    if (sDarkSamusServed) {
+      PortLog::Write("mods: %s serves Dark Samus as %zu Samus body model(s)\n", PortEchoesSuits::kModName, served);
+    }
+  }
+
   // The generated ball looks (port_ball_looks.h): with mods on or off, under
   // every mod. A mod with a look of its own of a ball (the Remastered import)
   // keeps all of it; the other looks are still made.
@@ -952,6 +1031,23 @@ void Initialize() {
         // when nothing could be made, so Apply does not stay pending.
         const PortSuitColours::Picks picks = PortSuitColours::SuitPicks(suit);
         served[suit] = PortSuitColours::PicksKey(suit, picks);
+        if (suit >= PortSuitColours::kDreadFirst) {
+          if (dreadDir.empty()) {
+            continue;
+          }
+          // Only the import's own images: a later mod's stays.
+          const auto source = [&](uint32_t id) {
+            const auto found = sNativeTextures.find(id);
+            return found != sNativeTextures.end() &&
+                           PathString(PathFromString(found->second).parent_path()) == dreadDir
+                       ? found->second
+                       : std::string();
+          };
+          for (auto& [id, path] : PortSuitColours::CollectDread(suit, picks, dreadDir, source)) {
+            sNativeTextures[id] = std::move(path);
+          }
+          continue;
+        }
         std::vector<LooseResource> made = PortSuitColours::Collect(suit, picks, loose, &HasNativeTexture);
         for (LooseResource& resource : made) {
           loose[{resource.type, resource.id}] = std::move(resource);
@@ -996,6 +1092,34 @@ void Initialize() {
     if (!sDreadBodies.empty()) {
       PortLog::Write("mods: %s serves %zu Samus body model(s):%s\n", PortDreadSamus::kModName, sDreadBodies.size(),
                      ids.c_str());
+    }
+    ids.clear();
+    for (const auto& [key, resource] : loose) {
+      if (key.first == 0x434D444C && resource.mod == PortEchoesSuits::kModName && PortEchoesSuits::IsBody(key.second)) {
+        sEchoesBodies.insert(key.second);
+        char text[12];
+        std::snprintf(text, sizeof(text), " %08X", key.second);
+        ids += text;
+      }
+    }
+    if (!sEchoesBodies.empty()) {
+      PortLog::Write("mods: %s serves %zu Samus body model(s):%s\n", PortEchoesSuits::kModName, sEchoesBodies.size(),
+                     ids.c_str());
+    }
+    // A beam's cannon variant: its ANCS and both models it names, all the mod's.
+    const auto echoes = [&](uint32_t type, uint32_t id) {
+      const auto it = loose.find({type, id});
+      return it != loose.end() && it->second.mod == PortEchoesSuits::kModName;
+    };
+    bool gunModels = true;
+    for (const auto& gun : PortEchoesSuits::kGuns) {
+      gunModels = gunModels && echoes(0x434D444Cu, PortEchoesSuits::Cannon(gun.cmdl));  // 'CMDL'
+    }
+    for (const uint32_t ancs : PortEchoesSuits::kBeamAncs) {
+      if (gunModels && echoes(0x414E4353u, PortEchoesSuits::Cannon(ancs))) sEchoesGuns.insert(ancs);  // 'ANCS'
+    }
+    if (!sEchoesGuns.empty()) {
+      PortLog::Write("mods: %s serves the arm cannon of %zu beam(s)\n", PortEchoesSuits::kModName, sEchoesGuns.size());
     }
   }
 

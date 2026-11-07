@@ -117,7 +117,8 @@ enum : uint32_t { kNoGroup = 0xffffffff };
 // at the trigger's puddle alpha while it is active, hidden once it goes inactive.
 // Version 14: kActorTransform binds model-local `transform` to the complete transform
 // of sender (not a translation-only slave). State and delay are unused.
-enum LinkAction : uint8_t { kShow = 1, kHide = 2, kToggle = 3, kFollow = 4, kActorTransform = 5 };
+// kGenerate: a Remastered GeneratorMP1's SetToZero (the importer's own; never written to a file).
+enum LinkAction : uint8_t { kShow = 1, kHide = 2, kToggle = 3, kFollow = 4, kActorTransform = 5, kGenerate = 6 };
 
 struct Link {
   uint32_t sender; // retail editor id, layer bits included
@@ -126,6 +127,8 @@ struct Link {
   // Seconds from the state to the action: the Remastered timers the link was traced through,
   // retail having none of them. Sent again before then, the wait starts over. Instances only.
   float delay = 0.f;
+  // Traced through Remastered relays or timers rather than straight from the sender (importer only).
+  bool relayed = false;
 };
 
 struct Instance {
@@ -287,6 +290,10 @@ void DrawSorted(const void* drawable);
 // the ones whose bounds meet the box in the caller's decal state.
 void ClearShadowReceivers();
 void DrawShadowReceivers(const float lo[3], const float hi[3]);
+// The same receivers whose bounds meet the box, each with its model-to-world transform: what a
+// projected decal clips (port_projected_decal.h).
+void ForEachShadowReceiver(const float lo[3], const float hi[3],
+                           void (*fn)(void* ctx, const CModel& model, const CTransform4f& xf), void* ctx);
 // Set around the renderer's sorted pass for an area Draw stood in for, so that pass
 // draws the actors and leaves the area's own surfaces out.
 extern bool sReplacingArea;

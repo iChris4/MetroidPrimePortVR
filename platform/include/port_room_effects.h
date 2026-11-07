@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 class CStateManager;
@@ -18,8 +19,9 @@ struct SPortExternalVar;  // Kyoto/Particles/CPortParticleVars.hpp
 // objects the file names are not created (the effects Remastered replaced).
 //
 // The add-ons live outside the area's layer buffers, so nothing saves them: a save, a save
-// state, a memory relay and the randomizer's dumps see only the retail objects. Only effects
-// no script object talks to are added (the import counts the others).
+// state, a memory relay and the randomizer's dumps see only the retail objects. An effect a
+// script object talks to is added only when every connection into it traces back to retail
+// senders (Drive); the import counts the others.
 //
 // Their editor ids are the area's, on the retail layer they load with, with instance numbers
 // from kFirstInstance up: no retail area uses those (the import checks).
@@ -61,10 +63,39 @@ struct SPortExternalVar;  // Kyoto/Particles/CPortParticleVars.hpp
 //   version 9 then has u32 actor slots, then per record: u32 editor id (layer bits included),
 //   u32 slot, u32 asset (see ActorSlotEffect). Files without them are still written as
 //   version 8 or older.
+//   version 10 then has u32 drives, then per record: u32 add-on editor id, u32 sender editor id
+//   (both layer bits included), u32 state, u32 message, f32 delay (see Drive). Files without
+//   them are still written as version 9 or older.
+//   version 11 appends u32 flags to each drive record (see Drive), then has u32 generators,
+//   then per generator: u32 flags (see Generator), f32 offset[3], u32 templates and that many
+//   add-on editor ids. Files without generators are still written as version 10 or older.
+//   version 12 then has u32 timers, then per timer: u32 add-on editor id, f32 start time, f32
+//   max random delay, u32 flags (see Timer). Files without timers are still written as version
+//   11 or older.
+//   version 13 then has u32 follows, then per follow: u32 add-on editor id, u32 followed editor
+//   id, u32 follower editor id, u32 flags (see Follow), u32 locator length and that many bytes.
+//   Files without follows are still written as version 12 or older.
+//   version 14 then has u32 triggers, then per trigger: u32 add-on editor id, f32 position[3],
+//   f32 extent[3], u32 trigger flags, u32 flags (see Trigger). Files without triggers are still
+//   written as version 13 or older.
+//   version 15 then has u32 relays, then per relay: u32 add-on editor id, u32 flags (see Relay).
+//   Files without relays are still written as version 14 or older.
+//   version 16 then has u32 ambients, then per ambient: f32 rate, u32 owner add-on editor id, f32
+//   sphere offset[3], f32 sphere radius, u32 weights and that many i32, u32 emitters and per
+//   emitter u32 index and u32 add-on editor id, u32 shapes and per shape u32 type, f32 center[3], f32 axes[9], f32 half[3]
+//   (see Ambient). Files without ambients are still written as version 15 or older.
+//   version 17 then has u32 hidden, u32 editor id[hidden] (layer bits included): retail Effect
+//   objects Remastered has no effect for that other objects still talk through. They are
+//   created, with their connections, but draw nothing and light nothing. Files without them
+//   are still written as version 16 or older.
+//   version 18 then has u32 fish clouds, then per record: u32 editor id (layer bits included),
+//   f32 speed variance, f32 turn[2], f32 slow angle[2], f32 dart interval[2], f32 min speed,
+//   f32 speed decay, f32 dart cone, f32 wobble pivot, f32 wobble angle, f32 wobble length, u32
+//   flags (see FishCloud). Files without them are still written as version 17 or older.
 namespace PortRoomEffects {
 
 constexpr uint32_t kFileMagic = 0x4652504D;  // 'MPRF'
-constexpr uint32_t kFileVersion = 9;
+constexpr uint32_t kFileVersion = 18;
 constexpr uint32_t kMaxSteamSplineBytes = 0x1000;
 constexpr uint32_t kMaxSteamSources = 64;
 constexpr uint32_t kMaxPatchOffset = 0x10000;
@@ -240,6 +271,180 @@ struct ActorSlotEffect {
   uint32_t part = 0;
 };
 
+// A connection into an add-on, as retail would have it on the sender: when the retail object
+// `sender` sends `state`, the add-on `target` is sent `message` (Activate, Deactivate or
+// ToggleActive), `delay` seconds later when Remastered passed it through timers retail has no
+// object for (sent again before then, the wait starts over).
+constexpr float kMaxDriveDelay = 600.f;  // seconds
+// With kDriveToGenerator, `target` is the index of one of the file's generators and the
+// message is SetToZero (13) too. kDriveRelayed: Remastered passed it through relays or timers,
+// so the object its target hears it from is not `sender` (a generator's copies then keep their
+// template's placement).
+constexpr uint32_t kDriveToGenerator = 1;
+constexpr uint32_t kDriveRelayed = 2;
+struct Drive {
+  uint32_t target = 0;
+  uint32_t sender = 0;
+  uint32_t state = 0;
+  uint32_t message = 0;
+  float delay = 0.f;
+  uint32_t flags = 0;
+};
+
+// A Remastered GeneratorMP1 whose Generate (47524e4c) connection reaches an add-on: on SetToZero,
+// while active, it makes the copies `templates` lists, in order (CScriptGeneratorMP1::AcceptScriptMsg
+// 0xf44128, retail CScriptGenerator's). It picks each at random among its templates and follows;
+// the import keeps only generators with one template and no Follow targets, so `templates` is
+// that one, spawn count times. Sent directly by an actor, a copy takes the actor's transform
+// (unless kGeneratorNoInheritXf) and its translation plus `offset` (a wall crawler swarm's last
+// kill instead of its translation); else it keeps the template's. Then it is sent Activate.
+// Activate, Deactivate and ToggleActive switch the generator.
+constexpr uint32_t kGeneratorActive = 1;
+constexpr uint32_t kGeneratorNoInheritXf = 2;
+constexpr uint32_t kMaxGeneratorTemplates = 64;
+struct Generator {
+  uint32_t flags = 0;
+  float offset[3] = {0, 0, 0};  // GameCube world space
+  std::vector<uint32_t> templates;  // the copies, by add-on id (one may repeat)
+};
+
+// A Remastered TimerMP1 retail has no object for, created as a retail Timer (ScriptLoader::LoadTimer,
+// CScriptTimer) where it is exact: the flags are its loop, autostart and active. Drives send it
+// its messages (Activate, ResetAndStart, ...), and its Zero sends the drives it is the sender of.
+// Remastered's restart flag (CScriptTimerMP1 +0x12) comes as loop with autostart.
+constexpr uint8_t kTimerType = 5;
+constexpr uint32_t kTimerLoop = 1;
+constexpr uint32_t kTimerAutoStart = 2;
+constexpr uint32_t kTimerActive = 4;
+constexpr float kMaxTimerTime = 600.f;  // seconds
+struct Timer {
+  uint32_t id = 0;
+  float startTime = 0.f;
+  float maxRandDelay = 0.f;
+  uint32_t flags = kTimerActive;
+};
+
+// A Remastered SpecialFunctionMP1 of function 3 (ObjectFollowLocator) retail has no object for,
+// created as a retail SpecialFunction of that function (ScriptLoader::LoadSpecialFunction,
+// CScriptSpecialFunction::ThinkObjectFollowLocator), which Remastered's (0xd951a8) is: its
+// Play -> Activate connection names the actor it follows, Play -> Deactivate the one it moves
+// to that actor's locator. Remastered's turret explosions follow their gun this way.
+constexpr uint8_t kSpecialFunctionType = 0x3A;
+constexpr uint32_t kFollowLocatorFunction = 3;
+constexpr uint32_t kFollowActive = 1;
+constexpr uint32_t kMaxLocatorName = 64;
+struct Follow {
+  uint32_t id = 0;
+  uint32_t followed = 0;  // a retail object
+  uint32_t follower = 0;  // a retail object or an add-on
+  uint32_t flags = kFollowActive;
+  std::string locator;
+};
+
+// A Remastered TriggerMP1 retail has no object for, created as a retail Trigger
+// (ScriptLoader::LoadTrigger, CScriptTrigger) where it is exact: no force, no damage, and none
+// of KillOnEnter, DetectCamera or UseBooleanIntersection (CTriggerMP1GOC::Create 0xf3f230).
+// Drives send it Activate, Deactivate and ToggleActive; its Entered and Exited send the drives
+// it is the sender of.
+constexpr uint8_t kTriggerType = 4;
+constexpr uint32_t kTriggerKillOnEnter = 0x800;
+constexpr uint32_t kTriggerDetectCamera = 0x4000;
+constexpr uint32_t kTriggerBooleanIntersection = 0x8000;
+constexpr uint32_t kTriggerRejectedFlags = kTriggerKillOnEnter | kTriggerDetectCamera | kTriggerBooleanIntersection;
+constexpr uint32_t kTriggerActive = 1;
+constexpr uint32_t kTriggerDeactivateOnEntered = 2;
+constexpr uint32_t kTriggerDeactivateOnExited = 4;
+struct Trigger {
+  uint32_t id = 0;
+  float pos[3] = {0, 0, 0};     // GameCube world space, the box's centre
+  float extent[3] = {0, 0, 0};  // the box's size, world axes
+  uint32_t triggerFlags = 1;    // ETriggerFlags
+  uint32_t flags = kTriggerActive;
+};
+
+// A Remastered ScriptRelayMP1 retail has no object for, created as a retail Relay
+// (ScriptLoader::LoadFaultyRelay, CScriptRelay), which Remastered's is (CScriptRelayMP1::
+// AcceptScriptMsg 0xf5e728, Think 0xf5e864). Drives send it SetToZero, Activate, Deactivate and
+// ToggleActive; its Zero sends the drives it is the sender of.
+constexpr uint8_t kRelayType = 0x15;
+constexpr uint32_t kRelayActive = 1;
+struct Relay {
+  uint32_t id = 0;
+  uint32_t flags = kRelayActive;
+};
+
+// A Remastered AmbientParticleEffect (CAmbientParticleEffectGOC::BeforeThink 0x4ba150): each
+// frame it adds rate * dt points (the fraction carried over) to draw, at random in a sphere
+// `offset` ahead of the camera (its current transform, camera axes), keeps those inside any of
+// its shapes (NTouchableUtils::ErasePointsInsideShapeList 0x897be0) and starts one particle at
+// each in the effects it links (SpawnParticlesAtPositions 0x4bb0a0, link data `index`): the
+// points split by `weights` between the indices, the rest at random. The rate is the sphere's
+// volume times the density (+0xd8) over the lifetime (+0xdc). Its two splines, of the GPU
+// availability, are identity and are taken at full availability. It spawns while the add-on its
+// own entity's EffectMP1 became (`owner`) is active.
+constexpr uint32_t kAmbientBox = 0;       // COBBoxShapeData cef3fcf1
+constexpr uint32_t kAmbientCylinder = 1;  // CCappedCylinderShapeData 06c7e0ae
+constexpr uint32_t kAmbientSphere = 2;    // CSphereShapeData 6ede23e6
+constexpr uint32_t kMaxAmbientShapes = 256;
+constexpr uint32_t kMaxAmbientWeights = 16;
+constexpr uint32_t kMaxAmbientEmitters = 16;
+constexpr float kMaxAmbientRate = 1e6f;  // points per second
+struct AmbientShape {
+  uint32_t type = kAmbientBox;
+  float center[3] = {0, 0, 0};  // GameCube world space
+  // A box: its axes (rows, world space) and half extents along them. A cylinder: axes[0] its
+  // axis, half[0] half its height and half[1] its radius. A sphere: half[0] its radius.
+  float axes[3][3] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
+  float half[3] = {0, 0, 0};
+};
+struct AmbientEmitter {
+  uint32_t index = 0;
+  uint32_t id = 0;  // the effect: an add-on, or a retail one drawing the GENP
+};
+struct Ambient {
+  float rate = 0.f;
+  uint32_t owner = 0;            // its own effect, as AmbientEmitter::id
+  float offset[3] = {0, 10, 0};  // camera space, GameCube axes
+  float radius = 15.f;
+  std::vector<int32_t> weights;
+  std::vector<AmbientEmitter> emitters;
+  std::vector<AmbientShape> shapes;
+};
+
+// A retail FishCloud the script matcher paired with a Remastered FishCloudMP1: its boids swim as
+// CFishCloudMP1's do (AcceptScriptMsg 0xdedff8, Think 0xdeea94, Render 0xdf0ac8). Each boid
+// gets its own speed, speed +- variance/2; it turns its heading toward its velocity at most
+// `turn` degrees a second (from turn[0] at full speed to turn[1] at min speed) with
+// kFishCloudSmoothTurn, else takes it at once; with kFishCloudSlowOnTurn it slows toward
+// `minSpeed` as its velocity leaves its heading (full speed inside slowAngle[0] degrees,
+// minSpeed outside slowAngle[1]); with kFishCloudDart it loses speedDecay a second and every
+// dartInterval seconds (at random between the two) gets back its own speed and a kick within
+// dartCone degrees of its velocity; with kFishCloudWobble its model swings wobbleAngle degrees
+// (scaled by its speed) about a point wobblePivot along it, a cycle every wobbleLength units
+// it swims. The properties are SLdrFishCloudMP1's (defaults when the instance leaves them
+// out): variance 1b365802, turn 66317b1a, slow angle 9f7a5320, dart interval 36a7a73d (each a
+// MinMax), min speed 80e236bf, decay 0ce12e2e, cone 91989ec8, pivot d197d04b, angle 5fc25d67,
+// length dc0c1975, the flags 85287746, 881fece8, b6bd9c54, be336d94.
+constexpr uint32_t kFishCloudSmoothTurn = 1;
+constexpr uint32_t kFishCloudSlowOnTurn = 2;
+constexpr uint32_t kFishCloudDart = 4;
+constexpr uint32_t kFishCloudWobble = 8;
+constexpr uint32_t kFishCloudFlags = 15;
+struct FishCloud {
+  uint32_t id = 0;
+  float speedVariance = 0.f;
+  float turn[2] = {0, 0};
+  float slowAngle[2] = {0, 0};
+  float dartInterval[2] = {0, 0};
+  float minSpeed = 0.1f;
+  float speedDecay = 0.15f;
+  float dartCone = 45.f;
+  float wobblePivot = 0.1f;
+  float wobbleAngle = 15.f;
+  float wobbleLength = 0.8f;
+  uint32_t flags = kFishCloudSmoothTurn;
+};
+
 struct File {
   std::vector<uint32_t> skips;
   uint32_t connected = 0;
@@ -250,6 +455,15 @@ struct File {
   std::vector<PropertyPatch> patches;
   std::vector<Steam> steams;
   std::vector<ActorSlotEffect> actorSlots;
+  std::vector<Drive> drives;
+  std::vector<Generator> generators;
+  std::vector<Timer> timers;
+  std::vector<Follow> follows;
+  std::vector<Trigger> triggers;
+  std::vector<Relay> relays;
+  std::vector<Ambient> ambients;
+  std::vector<uint32_t> hidden;
+  std::vector<FishCloud> fishClouds;
 };
 
 // Appends the effect as one SCLY object. Its light parameters are retail's most common
@@ -279,8 +493,16 @@ bool Enabled();
 // Around CGameArea::LoadScriptObjects: reads the area's file.
 void BeginArea(uint32_t mrea);
 void EndArea();
+// Around CStateManager::GenerateObject: a copy a script Generator makes of a template is
+// loaded as the area loaded it (the same override, patches, hidden flag...), so the lookups
+// below answer from the file the area kept. Nothing is skipped or added. False (and nothing
+// to end) when the area has no file or an area is loading.
+bool BeginGenerate(uint32_t mrea);
+void EndGenerate();
 // Whether the retail object `eid` is one the area being loaded leaves out.
 bool Skips(uint32_t eid);
+// Whether the retail Effect `eid` in the area being loaded is created hidden (File::hidden).
+bool Hidden(uint32_t eid);
 // The override of the retail object `eid` in the area being loaded, or null.
 const Override* FindOverride(uint32_t eid);
 // The death particle `slot` (PatternedEffect) of the retail object `eid` in the area being
@@ -288,6 +510,8 @@ const Override* FindOverride(uint32_t eid);
 const PatternedEffect* FindPatternedEffect(uint32_t eid, uint32_t slot);
 // The steam record of the retail Steam object `eid` in the area being loaded, or null.
 const Steam* FindSteam(uint32_t eid);
+// The fish cloud record of the retail FishCloud object `eid` in the area being loaded, or null.
+const FishCloud* FindFishCloud(uint32_t eid);
 // The actor slot effect `slot` (ActorSlotEffect) of the retail object `eid` in the area being
 // loaded, or null.
 const ActorSlotEffect* FindActorSlotEffect(uint32_t eid, uint32_t slot);
@@ -312,9 +536,32 @@ struct Spawned {
   std::string name;
   size_t vars;  // particle variables it sets
 };
-// The add-ons created for an area, as loaded (the console checks they still live).
+// From CEntity::SendScriptMsgs, after the sender's own connections: the add-ons of the
+// sender's area its state drives get their messages (or wait their delay).
+void OnScriptState(CStateManager& mgr, uint16_t senderUid, uint32_t editorId, int state);
+// Delivers the delayed messages that are due; drops those of areas no longer loaded.
+void Think(CStateManager& mgr, float dt);
+
+// The add-ons created for an area, as loaded (the console checks they still live); a timer
+// has part 0xFFFFFFFF.
 std::vector<Spawned> List(uint32_t mrea);
 // The retail objects left out when the area last loaded.
 size_t SkippedCount(uint32_t mrea);
+// A loaded area's drives, with how many messages each still holds back.
+std::vector<std::pair<Drive, size_t>> DrivesOf(uint32_t mrea);
+// A loaded area's generators: whether each is active, and how many copies it made.
+struct GeneratorState {
+  Generator generator;
+  bool active;
+  size_t made;
+};
+std::vector<GeneratorState> GeneratorsOf(uint32_t mrea);
+
+// The area's ambient spawners, with how many points fell inside their shapes so far.
+struct AmbientState {
+  Ambient ambient;
+  size_t spawned;
+};
+std::vector<AmbientState> AmbientsOf(uint32_t mrea);
 
 }  // namespace PortRoomEffects

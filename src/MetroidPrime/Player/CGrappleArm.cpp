@@ -4,7 +4,10 @@
 #ifdef TARGET_PC
 #include "MetroidPrime/CActor.hpp"
 #include "MetroidPrime/Player/CPlayerGun.hpp"
+#include "Kyoto/CResFactory.hpp"
+#include "Kyoto/Graphics/CCubeMaterial.hpp"
 #include "port_debug.h"
+#include "port_model_variant.h"
 #include "port_room_env.h"
 #include "vr/vr_model_mirror.h"
 #include "port_third_person_body.h"
@@ -53,6 +56,25 @@ static const CPlayerState::EPlayerSuit suitIndices[] = {
     CPlayerState::kPS_Power,       CPlayerState::kPS_Gravity,     CPlayerState::kPS_Varia,
     CPlayerState::kPS_Phazon,      CPlayerState::kPS_FusionPower, CPlayerState::kPS_FusionGravity,
     CPlayerState::kPS_FusionVaria, CPlayerState::kPS_FusionPhazon};
+
+#ifdef TARGET_PC
+static void PortSetThermalPart(CModelData& model, const char* name) {
+  const CAssetId variant = PortModelVariant::Id(NWeaponTypes::get_asset_id_from_name(name),
+                                                PortModelVariant::kThermalLook);
+  if (gpResourceFactory->GetResourceTypeById(variant) == 'CMDL') {
+    model.SetInfraModel(rstl::pair< CAssetId, CAssetId >(variant, 0));
+    model.PortSetInfraHdrOnly();
+  }
+}
+
+static void PortSetXRayPart(CModelData& model, const char* name) {
+  const CAssetId variant = PortModelVariant::Id(NWeaponTypes::get_asset_id_from_name(name),
+                                                PortModelVariant::kXRayLook);
+  if (gpResourceFactory->GetResourceTypeById(variant) == 'CMDL') {
+    model.SetXRayModel(rstl::pair< CAssetId, CAssetId >(variant, 0));
+  }
+}
+#endif
 
 float CGrappleArm::kPhaseDelta = 0.875f;
 float CGrappleArm::kAmplitudeX = 0.25f;
@@ -112,6 +134,18 @@ CGrappleArm::CGrappleArm(const CVector3f& scale)
   xa0_grappleGearModel.SetSortThermal(true);
   xec_grapNoz1Model.SetSortThermal(true);
   x138_grapNoz2Model.SetSortThermal(true);
+#ifdef TARGET_PC
+  // Remastered's CGrappleArmMP1::Render draws GrappleGear/GrapNoz1/GrapNoz2_Thermal in the thermal
+  // visor (shader 1826e69d, kb material/c928a6c5.md), which the import writes as looks of the
+  // retail CMDLs.
+  PortSetThermalPart(xa0_grappleGearModel, kGrappleGear);
+  PortSetThermalPart(xec_grapNoz1Model, kGrappleNoz1);
+  PortSetThermalPart(x138_grapNoz2Model, kGrappleNoz2);
+  // In X-ray it draws their _XRAY CMDLs (shader dfc2a7dc), looks 4 of the same.
+  PortSetXRayPart(xa0_grappleGearModel, kGrappleGear);
+  PortSetXRayPart(xec_grapNoz1Model, kGrappleNoz1);
+  PortSetXRayPart(x138_grapNoz2Model, kGrappleNoz2);
+#endif
 
   kPhaseDelta = gpTweakPlayer->GetGrappleBeamAnglePhaseDelta();
   kAmplitudeX = gpTweakPlayer->GetGrappleBeamXWaveAmplitude();
@@ -174,6 +208,35 @@ void CGrappleArm::Render(const CStateManager& mgr, const CVector3f& pos, const C
 #else
     const CTransform4f xf = CTransform4f::Translate(pos) * x220_xf * x2e0_auxXf;
 #endif
+#ifdef TARGET_PC
+    // Remastered's CGrappleArmMP1::Render (0xc7f308) in X-ray draws the arm once as its X-ray
+    // model (grappleArm.CHPR's Skeleton, the retail skeleton's replacement) and the gear and
+    // nozzles as their _XRAY CMDLs, all AlphaBlended(1.0).WithOtherFlags(0x20): depth first
+    // (kF_DrawNormal), then the blend. No 0.25 arm pass. HDR scene only.
+    if (CCubeMaterial::sPortSceneHdr && x50_grappleArmSkeletonModel &&
+        mgr.GetPlayerState()->GetCurrentVisor() == CPlayerState::kPV_XRay) {
+      const CModelFlags xrayFlags(CModelFlags::AlphaBlended(1.f),
+                                  CModelFlags::kF_DepthCompare | CModelFlags::kF_DepthUpdate |
+                                      CModelFlags::kF_DrawNormal);
+      if (x3a4_rainSplashGenerator.get() && x3a4_rainSplashGenerator->IsRaining()) {
+        CSkinnedModel::SetPointGeneratorFunc(x3a4_rainSplashGenerator.get(), PointGenerator);
+      }
+      RenderXRayModel(mgr, xf, xrayFlags);
+      if (x3a4_rainSplashGenerator.get() && x3a4_rainSplashGenerator->IsRaining()) {
+        CSkinnedModel::ClearPointGeneratorFunc();
+        x3a4_rainSplashGenerator->Draw(xf);
+      }
+      if (mgr.GetPlayerState()->HasPowerUp(CPlayerState::kIT_GrappleBeam)) {
+        xa0_grappleGearModel.Render(CModelData::kWM_XRay, xf * x250_grapLocatorXf, nullptr,
+                                    xrayFlags);
+        xec_grapNoz1Model.Render(CModelData::kWM_XRay, xf * x280_grapNozLoc1Xf, nullptr,
+                                 xrayFlags);
+        x138_grapNoz2Model.Render(CModelData::kWM_XRay, xf * x2b0_grapNozLoc2Xf, nullptr,
+                                  xrayFlags);
+      }
+      return;
+    }
+#endif
     if (x50_grappleArmSkeletonModel) {
       RenderXRayModel(mgr, xf, flags);
     }
@@ -189,9 +252,20 @@ void CGrappleArm::Render(const CStateManager& mgr, const CVector3f& pos, const C
       x3a4_rainSplashGenerator->Draw(xf);
     }
     if (mgr.GetPlayerState()->HasPowerUp(CPlayerState::kIT_GrappleBeam)) {
+#ifdef TARGET_PC
+      // The parts' X-ray models are Remastered's (PortSetXRayPart): retail X-ray keeps the normal.
+      CModelData::EWhichModel which = CModelData::GetRenderingModel(mgr);
+      if (which == CModelData::kWM_XRay) {
+        which = CModelData::kWM_Normal;
+      }
+      xa0_grappleGearModel.Render(which, xf * x250_grapLocatorXf, useLights, useFlags);
+      xec_grapNoz1Model.Render(which, xf * x280_grapNozLoc1Xf, useLights, useFlags);
+      x138_grapNoz2Model.Render(which, xf * x2b0_grapNozLoc2Xf, useLights, useFlags);
+#else
       xa0_grappleGearModel.Render(mgr, xf * x250_grapLocatorXf, useLights, useFlags);
       xec_grapNoz1Model.Render(mgr, xf * x280_grapNozLoc1Xf, useLights, useFlags);
       x138_grapNoz2Model.Render(mgr, xf * x2b0_grapNozLoc2Xf, useLights, useFlags);
+#endif
     }
   }
 }
@@ -722,6 +796,29 @@ void CGrappleArm::LoadSuitPoll() {
     x0_grappleArmModel =
         CModelData(CAnimRes(gpTweakGunRes->x8_grappleArm, x3a8_loadedSuit, x31c_scale, 41, false));
     x0_grappleArmModel->SetSortThermal(true);
+#ifdef TARGET_PC
+    // Remastered draws every suit's arm in the thermal visor with grappleArm.CHPR's Thermal
+    // subcharacter (MDL_ThermalHeatMask), which the import writes as look 3 of the grapple ANCS:
+    // a copy of it whose one rebound character carries the model.
+    const CAssetId variant =
+        PortModelVariant::Id(gpTweakGunRes->x8_grappleArm, PortModelVariant::kThermalLook);
+    if (gpResourceFactory->GetResourceTypeById(variant) == 'ANCS') {
+      TToken< CAnimCharacterSet > look = gpSimplePool->GetObj(SObjectTag('ANCS', variant));
+      const CCharacterSet& lookSet = (*look)->GetCharacterSet();
+      const CCharacterSet& baseSet = (*x184_grappleArm)->GetCharacterSet();
+      for (int i = 0; i < lookSet.GetCharacterList().size() &&
+                      i < baseSet.GetCharacterList().size();
+           ++i) {
+        const CCharacterInfo& info = lookSet.GetCharacterList()[i].second;
+        if (info.GetModelId() != baseSet.GetCharacterList()[i].second.GetModelId()) {
+          x0_grappleArmModel->SetInfraModel(
+              rstl::pair< CAssetId, CAssetId >(info.GetModelId(), info.GetSkinRulesId()));
+          x0_grappleArmModel->PortSetInfraHdrOnly();
+          break;
+        }
+      }
+    }
+#endif
     x328_gunController = rs_new CGunController(*x0_grappleArmModel);
     x3b2_29_suitLoading = false;
   }

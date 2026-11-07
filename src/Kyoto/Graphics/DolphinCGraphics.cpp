@@ -553,10 +553,21 @@ void CGraphics::LoadLight(ERglLight light, const CLight& info) {
     CVector3f hdrPos = info.GetPosition() + info.GetPortHdrOffset();
     MTXMultVec(mCameraMtx, reinterpret_cast< VecPtr >(&hdrPos), reinterpret_cast< VecPtr >(&hdrPos));
     const f32 viewPos[3] = {hdrPos.GetX(), hdrPos.GetY(), hdrPos.GetZ()};
+    f32 toLight[3];
+    if (info.HasPortHdrCone()) {
+      // SCachedLight::Initialize 0x16b5c8 +0x20: the way to the light, minus the turned axis.
+      CVector3f axis = info.GetPortHdrConeAxis();
+      MTXMultVecSR(mCameraMtx, reinterpret_cast< VecPtr >(&axis), reinterpret_cast< VecPtr >(&axis));
+      toLight[0] = -axis.GetX();
+      toLight[1] = -axis.GetY();
+      toLight[2] = -axis.GetZ();
+    }
     GXSetPBRLightHdr(lightId, info.GetPortHdrColor(), viewPos, info.GetPortHdrR0(),
-                     info.GetPortHdrR1(), info.GetPortHdrFalloff());
+                     info.GetPortHdrR1(), info.GetPortHdrFalloff(), info.GetPortHdrWiden(),
+                     info.HasPortHdrCone() ? toLight : nullptr, info.GetPortHdrConeScale(),
+                     info.GetPortHdrConeBias());
   } else {
-    GXSetPBRLightHdr(lightId, nullptr, nullptr, 0.f, 0.f, 0);
+    GXSetPBRLightHdr(lightId, nullptr, nullptr, 0.f, 0.f, 0, 0.f, nullptr, 0.f, 0.f);
   }
 #endif
 }
@@ -1592,7 +1603,7 @@ void CGraphics::LoadScreenProjectionTexMtx(GXTexMtx id) {
   GXLoadTexMtxImm(tex, id, GX_MTX3x4);
 }
 
-void CGraphics::PortSetProjectionDepthBias(float bias, float depth) {
+void CGraphics::PortSetProjectionDepthBias(float bias, float depth, float rangeSpan) {
   if (bias == 0.f) {
     FlushProjection();
     return;
@@ -1601,12 +1612,14 @@ void CGraphics::PortSetProjectionDepthBias(float bias, float depth) {
   if (mProj.IsPerspective()) {
     MTXFrustum(mtx, mProj.GetTop(), mProj.GetBottom(), mProj.GetLeft(), mProj.GetRight(),
                mProj.GetNear(), mProj.GetFar());
-    mtx[2][2] = PortParticleMath::DepthBiasedProjM22(mtx[2][2], mtx[2][3], mtx[3][2], mtx[3][3], depth, bias);
+    mtx[2][2] = PortParticleMath::DepthBiasedProjM22(mtx[2][2], mtx[2][3], mtx[3][2], mtx[3][3], depth, bias,
+                                                     rangeSpan);
     GXSetProjection(mtx, GX_PERSPECTIVE);
   } else {
     MTXOrtho(mtx, mProj.GetTop(), mProj.GetBottom(), mProj.GetLeft(), mProj.GetRight(),
              mProj.GetNear(), mProj.GetFar());
-    mtx[2][2] = PortParticleMath::DepthBiasedProjM22(mtx[2][2], mtx[2][3], mtx[3][2], mtx[3][3], depth, bias);
+    mtx[2][2] = PortParticleMath::DepthBiasedProjM22(mtx[2][2], mtx[2][3], mtx[3][2], mtx[3][3], depth, bias,
+                                                     rangeSpan);
     GXSetProjection(mtx, GX_ORTHOGRAPHIC);
   }
 }

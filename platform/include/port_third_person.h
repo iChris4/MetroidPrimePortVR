@@ -13,6 +13,8 @@ class CVector3f;
 // keep their own views. Setting `third_person` (F1 > Video, console `thirdperson`).
 namespace PortThirdPerson {
 
+// Shoulder and height are for the reference view (retail 55 degree FOV at 16:9); Framed() scales
+// them to the live one so she keeps her place on the screen beside the crosshair.
 struct Params {
   float distance = 3.5f; // metres behind the eye
   float shoulder = 0.9f; // metres to the right (the centre ray, the crosshair, clears her right pad)
@@ -26,6 +28,21 @@ constexpr float kWallMargin = 0.2f; // metres kept between the camera and the wa
 struct Vec3 {
   float x = 0.f, y = 0.f, z = 0.f;
 };
+
+// The view the shoulder and height are set for: tan(27.5 degrees), 16:9.
+constexpr float kRefTanHalfFov = 0.52056705f, kRefAspect = 16.f / 9.f;
+
+// `p` for a view of vertical FOV tan(fov/2) = `tanHalfFov` at `aspect`: the offsets grow with
+// the half-extents of the view, so a wider screen or FOV doesn't slide her under the crosshair.
+inline Params Framed(const Params& p, float tanHalfFov, float aspect) {
+  if (!(tanHalfFov > 0.f) || !(aspect > 0.f) || !std::isfinite(tanHalfFov * aspect)) {
+    return p;
+  }
+  Params out = p;
+  out.shoulder *= tanHalfFov * aspect / (kRefTanHalfFov * kRefAspect);
+  out.height *= tanHalfFov / kRefTanHalfFov;
+  return out;
+}
 
 // Pure maths (no game state): where the camera wants to be, and where it ends up when a wall
 // is hit `hitDistance` along the line from the pivot to it (negative: no hit).
@@ -99,5 +116,10 @@ CTransform4f View(const CTransform4f& game);
 // The same at this tick's camera distance, for what the simulation projects (orbit target
 // search, lock-on boxes); `game` when not active.
 CTransform4f TickView(const CTransform4f& game);
+// Where the camera is (while Active()) or would come to rest (behind her, pulled in at a wall)
+// for the first-person view `fp`: the morph ball camera starts there and ends there, so
+// morphing leaves and rejoins third person without a cut to the eye. False when third person
+// will not take the view once she stands (off, a cinematic, the free camera's own view).
+bool MorphCameraPosition(const CStateManager& mgr, const CTransform4f& fp, CVector3f& out);
 
 } // namespace PortThirdPerson

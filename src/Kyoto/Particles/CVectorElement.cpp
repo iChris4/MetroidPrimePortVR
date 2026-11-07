@@ -475,8 +475,8 @@ CVector3f EulerDegreesFromQuaternion(const CQuaternion& rotation) {
 } // namespace
 
 CVEPortRotationFromAxis::CVEPortRotationFromAxis(CVectorElement* first, CVectorElement* second,
-                                                 CVectorElement* fallback)
-: mFirst(first), mSecond(second), mFallback(fallback) {}
+                                                 CVectorElement* fallback, bool firstIsY)
+: mFirst(first), mSecond(second), mFallback(fallback), mFirstIsY(firstIsY) {}
 
 CVEPortRotationFromAxis::~CVEPortRotationFromAxis() {
   delete mFirst;
@@ -490,7 +490,8 @@ bool CVEPortRotationFromAxis::GetValue(int frame, CVector3f& valOut) const {
   mFirst->GetValue(frame, first);
   mSecond->GetValue(frame, second);
   CVector3f x, y, z;
-  if (PortParticleMath::RotationFromAxisZY(first, second, x, y, z)) {
+  if (mFirstIsY ? PortParticleMath::RotationFromAxisYZ(first, second, x, y, z)
+                : PortParticleMath::RotationFromAxisZY(first, second, x, y, z)) {
     valOut = EulerDegreesFromMatrix(CMatrix3f(x.GetX(), y.GetX(), z.GetX(), x.GetY(), y.GetY(),
                                               z.GetY(), x.GetZ(), y.GetZ(), z.GetZ()));
     return false;
@@ -577,15 +578,15 @@ bool CVEPortSystemVector::GetValue(int, CVector3f& valOut) const {
   } break;
   case 'CMRT': {
     // CERotationFromCamera 0x29d180: FromMatrix of GetCameraTransform's camera-to-world matrix
-    // (the view matrix), as EXTR in Remastered's particle space.
-    const CQuaternion q = CQuaternion::FromMatrix(CGraphics::GetViewMatrix());
+    // (the game camera), as EXTR in Remastered's particle space.
+    const CQuaternion q = CQuaternion::FromMatrix(CParticleGlobals::PortCameraTransform());
     valOut = EulerDegreesFromQuaternion(
         CQuaternion(q.GetScalar(), CVector3f(-q.AxisX(), q.AxisZ(), q.AxisY())));
   } break;
   case 'CMPS':
-    // CVECameraPositionInWorldSpace 0x2a23ec: GetCameraTransform 0x27b304's translation; the view
-    // matrix is camera-to-world.
-    valOut = CGraphics::GetViewMatrix().GetTranslation();
+    // CVECameraPositionInWorldSpace 0x2a23ec: GetCameraTransform 0x27b304's translation (the
+    // game camera, camera-to-world).
+    valOut = CParticleGlobals::PortCameraTransform().GetTranslation();
     break;
   default: {
     // CPSS: CVECameraPositionInSystemSpace 0x2a24fc, the world camera position taken into the
@@ -594,8 +595,8 @@ bool CVEPortSystemVector::GetValue(int, CVector3f& valOut) const {
     CQuaternion q;
     gen.PortGlobalFrame(t, q, s);
     valOut = PortParticleMath::CameraPositionInSystemSpace(
-        CGraphics::GetViewMatrix().GetTranslation(), t, q.GetScalar(), q.AxisX(), q.AxisY(),
-        q.AxisZ(), s);
+        CParticleGlobals::PortCameraTransform().GetTranslation(), t, q.GetScalar(), q.AxisX(),
+        q.AxisY(), q.AxisZ(), s);
   } break;
   }
   return false;
@@ -875,6 +876,81 @@ bool CVEPortAngleConeMinMax::GetValue(int frame, CVector3f& valOut) const {
   valOut = PortParticleMath::AngleConeMinMax(q, minAngle, maxAngle, magnitude, u0, u1);
   return false;
 }
+
+CVEPortAngleConeMinMaxVariance::CVEPortAngleConeMinMaxVariance(
+    CRealElement* rotateX, CRealElement* rotateY, CRealElement* rotateZ, CRealElement* minAngle,
+    CRealElement* maxAngle, CRealElement* magnitude, CIntElement* polarCount, CRealElement* polarVariance,
+    CIntElement* azimuthCount, CRealElement* azimuthVariance, u8 shuffle)
+: mRotate{rotateX, rotateY, rotateZ}
+, mMinAngle(minAngle)
+, mMaxAngle(maxAngle)
+, mMagnitude(magnitude)
+, mPolarCount(polarCount)
+, mPolarVariance(polarVariance)
+, mAzimuthCount(azimuthCount)
+, mAzimuthVariance(azimuthVariance)
+, mShuffle(shuffle) {}
+
+CVEPortAngleConeMinMaxVariance::~CVEPortAngleConeMinMaxVariance() {
+  for (CRealElement* angle : mRotate) {
+    delete angle;
+  }
+  delete mMinAngle;
+  delete mMaxAngle;
+  delete mMagnitude;
+  delete mPolarCount;
+  delete mPolarVariance;
+  delete mAzimuthCount;
+  delete mAzimuthVariance;
+}
+
+// Children in Remastered's order (rotation, A, B, magnitude, polar count and variance, azimuth count
+// and variance), the counts at least 1, the index (the creation count modulo the grid, or the
+// shuffler's pick), then the polar and azimuth draws.
+bool CVEPortAngleConeMinMaxVariance::GetValue(int frame, CVector3f& valOut) const {
+  float angles[3] = {0.f, 0.f, 0.f};
+  for (int i = 0; i < 3; ++i) {
+    mRotate[i]->GetValue(frame, angles[i]);
+  }
+  const PortParticleMath::Quat q = PortParticleMath::EulerQuat(angles[0], angles[1], angles[2]);
+  float minAngle = 0.f;
+  float maxAngle = 0.f;
+  float magnitude = 0.f;
+  int polarCount = 0;
+  float polarVariance = 0.f;
+  int azimuthCount = 0;
+  float azimuthVariance = 0.f;
+  mMinAngle->GetValue(frame, minAngle);
+  mMaxAngle->GetValue(frame, maxAngle);
+  mMagnitude->GetValue(frame, magnitude);
+  mPolarCount->GetValue(frame, polarCount);
+  mPolarVariance->GetValue(frame, polarVariance);
+  mAzimuthCount->GetValue(frame, azimuthCount);
+  mAzimuthVariance->GetValue(frame, azimuthVariance);
+  polarCount = polarCount < 2 ? 1 : polarCount;
+  azimuthCount = azimuthCount < 2 ? 1 : azimuthCount;
+  CRandom16* random = CRandom16::GetRandomNumber();
+  CElementGen* generator = nullptr;
+  const CParticleGlobals::SParticleSystem* system = CParticleGlobals::GetCurrentParticleSystem();
+  if (system != nullptr && CParticleGlobals::xPortSwooshEval == nullptr) {
+    generator = system->x4_system;
+  }
+  int index;
+  if (mShuffle != 0) {
+    PortParticleMath::IndexShuffler& shuffler =
+        generator != nullptr ? generator->PortShuffler(this) : mFallbackShuffler;
+    index = shuffler.Next(mShuffle, [random] { return uint32_t(random->Next()); }) & 0xff;
+  } else {
+    // Retail counts a particle before its emitter runs; Remastered's total is one less.
+    const int total = generator != nullptr ? std::max(generator->GetCumulativeParticleCount() - 1, 0) : 0;
+    index = total % (polarCount * azimuthCount);
+  }
+  const float u0 = random->PortFloat28();
+  const float u1 = random->PortFloat28();
+  valOut = PortParticleMath::AngleConeMinMaxVariance(q, minAngle, maxAngle, magnitude, polarCount, polarVariance,
+                                                     azimuthCount, azimuthVariance, index, u0, u1);
+  return false;
+}
 CVEPortRotateVector::CVEPortRotateVector(CVectorElement* vector, FourCC rotation, CRealElement* x,
                                          CRealElement* y, CRealElement* z)
 : mVector(vector), mRotation(rotation), mAngles{x, y, z} {}
@@ -908,10 +984,19 @@ bool CVEPortRotateVector::GetValue(int frame, CVector3f& valOut) const {
       q = {r.GetScalar(), -r.AxisX(), r.AxisZ(), r.AxisY()};
     }
   } break;
+  case 'INTR': {
+    // INTR and RLCL: the system rotation var (GetRotationElement 0x25d59c, AddRefVar(ctx 0,
+    // rotation, 0xb)), INTR's when authored, else the external one.
+    CParticleGlobals::SParticleSystem* sys = CParticleGlobals::GetCurrentParticleSystem();
+    if (CParticleGlobals::xPortSwooshEval == nullptr && sys != nullptr && sys->x4_system != nullptr) {
+      const CQuaternion r = sys->x4_system->PortSystemRotationVar();
+      q = {r.GetScalar(), -r.AxisX(), r.AxisZ(), r.AxisY()};
+    }
+  } break;
   case 'CMRT': {
     // CMRT: CERotationFromCamera 0x29d180, CQuaternion::FromMatrix of the camera transform
-    // (CVECameraPositionInWorldSpace's matrix, the view matrix), in Remastered's space.
-    const CQuaternion r = CQuaternion::FromMatrix(CGraphics::GetViewMatrix());
+    // (CVECameraPositionInWorldSpace's matrix, the game camera), in Remastered's space.
+    const CQuaternion r = CQuaternion::FromMatrix(CParticleGlobals::PortCameraTransform());
     q = {r.GetScalar(), -r.AxisX(), r.AxisZ(), r.AxisY()};
   } break;
   default:

@@ -83,17 +83,19 @@ constexpr ElementSig kElementSigs[] = {
     {"SMOV", "eeeee"},       {"SPAC", "be"},         {"SPAF", "be"},      {"SPAH", "eee"},
     {"SPAI", "be"},    {"SPAV", "be"},         {"SPHE", "eee"},     {"SPOS", "e"},
     {"SUB_", "ee"},    {"SWRL", "eeee"},       {"TPVC", "ge"},      {"TPVF", "ge"},
-    {"TPVI", "ge"},    {"TRSS", "eeeeee"},     {"TSCL", "e"},       {"VARC", "g"},
+    {"TPVI", "ge"},    {"TRSS", "RRRRRR"},     {"TSCL", "e"},       {"VARC", "g"},
     {"VARF", "g"},     {"VARI", "g"},          {"VARV", "g"},       {"VECF", "g"},
     {"VMAG", "e"},     {"VXTR", "e"},          {"VYTR", "e"},       {"VZTR", "e"},
     {"WIND", "ee"},
     // Pinned down against the shipped files: MPCB wraps a vector; MPAC is five
-    // reals, MPCN a vector and a radius; CREL a bool and two reals, LTHN two reals; MPRD is 2 or 4 elements; DFCP and DFCS 1 to 3.
-    {"MPCB", "e"},     {"MPAC", "eeeee"}, {"CREL", "eee"},   {"LTHN", "ee"},   {"MPCN", "ee"},       {"MPRD", "ee eeee"}, {"DFCP", "ee eee e"},
-    {"DFCS", "ee eee e"},
+    // reals, MPCN a vector and a radius; CREL a bool and two reals, LTHN two reals; MPRD is 2
+    // or 4 elements; DFCP and DFCS read two reals (GetRealElement 0x260de4).
+    {"MPCB", "e"},     {"MPAC", "eeeee"}, {"CREL", "eee"},   {"LTHN", "ee"},   {"MPCN", "ee"},       {"MPRD", "ee eeee"}, {"DFCP", "ee"},
+    {"DFCS", "ee"},
     // EXTT, EXTR and EXTS are leaves; SMOV is CSimpleMoverElement's (position,
     // velocity, rotation, scale, modifier); ROTV a vector turned by a rotation;
-    // TRST is five reals and a raw word.
+    // TRST is five reals and a raw word. TRSS (TMTR's UV transform) is six reals: untyped, a loose
+    // SLCT among them could take one argument and leave its ARRY to the next slot.
     {"TRST", "eeeeew"}, {"EXTS", "-"}, {"ROTV", "ee"},
     // TEXR's texture elements besides ATEX: an id and three elements (TXP2),
     // or an id and one to four (TXFB, whose first is an LFTW).
@@ -103,6 +105,8 @@ constexpr ElementSig kElementSigs[] = {
     // ATFB (CUVEAnimFlipBookTexture, ctor in GetTextureElement 0x266ba4): an id, the animation time as
     // an int read as a real, a flag. BNID (CIEBoneIndex, GetIntElement 0x26a910): a bone name and a flag.
     {"ATFB", "gee"},    {"BNID", "Se"},
+    // VISQ (CREVisibilityQuery, GetRealElement 0x2619e8): one int, read as a constant and unused.
+    {"VISQ", "e"},
 };
 
 // Elements by the type of value they are read as, with typed arguments: I an
@@ -131,7 +135,7 @@ constexpr ElementSig kRealSigs[] = {
     {"SUB_", "RR"},   {"GTCR", "C"},    {"GTCG", "C"},    {"GTCB", "C"},     {"GTCA", "C"},    {"DFCP", "RR"},
     {"CREL", "BRR"}, {"DFCS", "RR"}, {"MPRD", "RR eeee"}, {"TPVF", "gR"}, {"DPVF", "gR"}, {"SPAF", "bR"}, {"KPIN", "R"},
     {"SLCT", "Re"},   {"DIVD", "RR"},   {"SLTW", "RR"},   {"ABS_", "R"},    {"MPXV", "IR"},   {"COSE", "RRR"},  {"RSGN", "R"},     {"IRSN", "R"},
-    {"NEGT", "R"},    {"T2S_", "I"},    {"SDTR", "-"},
+    {"NEGT", "R"},    {"T2S_", "I"},    {"SDTR", "-"},    {"VISQ", "I"},
 };
 constexpr ElementSig kVectorSigs[] = {
     {"NONE", "-"},   {"CNST", "RRR"},   {"KEYE", "k"},    {"KEYP", "k"},   {"ANGC", "RRRRR"}, {"CONE", "VR"},
@@ -142,12 +146,17 @@ constexpr ElementSig kVectorSigs[] = {
     {"ANCR", "eRRR ebeee"}, {"ANCM", "eRRR"}, {"ANCV", "eRRRRRRRb"}, {"RNDV", "R"}, {"ROTV", "Ve"}, {"TPVV", "gV"}, {"DPVV", "gV"}, {"SPAV", "bV"},
     {"SLCT", "Re"},  {"NORM", "V"},     {"CMPS", "-"},    {"EXTT", "-"},   {"EXTS", "-"},
     {"CPSS", "-"},  {"ABS_", "V"}, {"PNCV", "-"}, {"SCLE", "VR"},
+    // PWSL reads the particle's position, no argument (GetVectorElement 0x251d94).
+    {"PWSL", "-"},
     // MCBS is MPCB's scale form (MPT_CVEConvertScaleToXLeftYUpZForward 0x2a30f8).
     {"MCBS", "V"},
     // LINV is CVELineWithVariance (GetVectorElement 0x251974): V V I R b.
     {"LINV", "VVIRb"},
     // CVEBonePosition (GetVectorElement 0x251974, GetValue 0x2a2690): the bone index element.
     {"BNPS", "e"},
+    // CVEDominantLightDirectionInWorldSpace (GetValue 0x2a40e8): no arguments.
+    {"DOML", "-"},
+    {"ISWT", "VV"}, // IElement 0x92
 };
 constexpr ElementSig kModVectorSigs[] = {
     {"NONE", "-"},     {"CNST", "RRR"},   {"GRAV", "V"},     {"WIND", "VR"},   {"EXPL", "RR"},
@@ -158,7 +167,15 @@ constexpr ElementSig kColorSigs[] = {
     {"CNST", "RRRR"},     {"KEYE", "k"},   {"KEYP", "k"},  {"FADE", "CCR"}, {"CFDE", "CCRR"}, {"CHAN", "CCI"},
     {"PULS", "IICC"},     {"PCOL", "-"},   {"NONE", "-"},  {"TPVC", "gC"},  {"DPVC", "gC"},   {"SPAC", "bC"},
     {"MDAO", "CR"},       {"SLCT", "Re"},       {"MULT", "CC"},       {"MUL2", "CC"},
+    {"VRTC", "VR"}, // a vector and a real (IElement 0xd3)
+    {"ISWT", "CC"}, // IElement 0xd8
 };
+// IEXP is a property and also an element wrapping one value of its type
+// (CREInverseExposure; colour IElement 0xe5): GetRealElement 0x260de4,
+// GetColorElement 0x25ece4 (GetVectorElement 0x251974 has none). Like rotations
+// it is only an element where its type is read.
+constexpr ElementSig kRealPropertyNamedSigs[] = {{"IEXP", "R"}};
+constexpr ElementSig kColorPropertyNamedSigs[] = {{"IEXP", "C"}};
 // Remastered's booleans (CBE...): LTHN is a bool of two reals. CREL (a real) picks
 // between two reals by one. A bool the table lacks reads untyped.
 constexpr ElementSig kBoolSigs[] = {{"LTHN", "RR"}};
@@ -206,7 +223,8 @@ constexpr PropertyType kPropertyTypes[] = {
     {'V', "PSIV PSOV ILOC IVEC POFS PMOP PMRT PMSC SSPO SEPO LOFF LDIR"},
     {'M', "PSVM VEL1 VEL2 VEL3 VEL4"},
     {'C', "COLR PMCL LCLR NCLR"},
-    {'E', "EMTR"},
+    // IEMT/FEMT: ELSC's start/end emitters (CParticleElectricDataFactory).
+    {'E', "EMTR IEMT FEMT"},
     {'Q', "PMRQ"},
 };
 
@@ -316,6 +334,42 @@ constexpr RolePropertySchema kRolePropertySchemas[] = {
     {FourCC("CRSM"), FourCC("3MUD"), RolePropertyEncoding::Guid, 0, 4},
     {FourCC("CRSM"), FourCC("3LAV"), RolePropertyEncoding::Guid, 0, 4},
     {FourCC("CRSM"), FourCC("3SAN"), RolePropertyEncoding::Guid, 0, 4},
+    {FourCC("CRSM"), FourCC("WTFX"), RolePropertyEncoding::Guid},
+    {FourCC("CRSM"), FourCC("PBSX"), RolePropertyEncoding::Guid},
+    {FourCC("CRSM"), FourCC("DENM"), RolePropertyEncoding::Guid},
+    {FourCC("CRSM"), FourCC("5DRN"), RolePropertyEncoding::Guid},
+    {FourCC("CRSM"), FourCC("1DOR"), RolePropertyEncoding::Guid},
+    // The rest of the role links the shipped CRSMs carry (all 37 walk to _END with them).
+    {FourCC("CRSM"), FourCC("2ATA"), RolePropertyEncoding::Guid},
+    {FourCC("CRSM"), FourCC("2ATB"), RolePropertyEncoding::Guid},
+    {FourCC("CRSM"), FourCC("2MGD"), RolePropertyEncoding::Guid},
+    {FourCC("CRSM"), FourCC("2MUD"), RolePropertyEncoding::Guid},
+    {FourCC("CRSM"), FourCC("2SAN"), RolePropertyEncoding::Guid},
+    {FourCC("CRSM"), FourCC("2SPW"), RolePropertyEncoding::Guid},
+    {FourCC("CRSM"), FourCC("3DOR"), RolePropertyEncoding::Guid},
+    {FourCC("CRSM"), FourCC("4ATA"), RolePropertyEncoding::Guid},
+    {FourCC("CRSM"), FourCC("4ATB"), RolePropertyEncoding::Guid},
+    {FourCC("CRSM"), FourCC("4MGD"), RolePropertyEncoding::Guid},
+    {FourCC("CRSM"), FourCC("4MTR"), RolePropertyEncoding::Guid},
+    {FourCC("CRSM"), FourCC("4SPW"), RolePropertyEncoding::Guid},
+    {FourCC("CRSM"), FourCC("5MTR"), RolePropertyEncoding::Guid},
+    {FourCC("CRSM"), FourCC("6ATA"), RolePropertyEncoding::Guid},
+    {FourCC("CRSM"), FourCC("6ATB"), RolePropertyEncoding::Guid},
+    {FourCC("CRSM"), FourCC("DCHR"), RolePropertyEncoding::Guid},
+    {FourCC("CRSM"), FourCC("DESH"), RolePropertyEncoding::Guid},
+    {FourCC("CRSM"), FourCC("FPFX"), RolePropertyEncoding::Guid},
+    {FourCC("CRSM"), FourCC("FSFX"), RolePropertyEncoding::Guid},
+    {FourCC("CRSM"), FourCC("GOFX"), RolePropertyEncoding::Guid},
+    {FourCC("CRSM"), FourCC("GRFX"), RolePropertyEncoding::Guid},
+    {FourCC("CRSM"), FourCC("HBFX"), RolePropertyEncoding::Guid},
+    {FourCC("CRSM"), FourCC("ICFX"), RolePropertyEncoding::Guid},
+    {FourCC("CRSM"), FourCC("JZAS"), RolePropertyEncoding::Guid},
+    {FourCC("CRSM"), FourCC("JZPS"), RolePropertyEncoding::Guid},
+    {FourCC("CRSM"), FourCC("MSFX"), RolePropertyEncoding::Guid},
+    {FourCC("CRSM"), FourCC("SPFX"), RolePropertyEncoding::Guid},
+    {FourCC("CRSM"), FourCC("SSFX"), RolePropertyEncoding::Guid},
+    {FourCC("CRSM"), FourCC("TALP"), RolePropertyEncoding::Guid},
+    {FourCC("CRSM"), FourCC("WSFX"), RolePropertyEncoding::Guid},
 };
 
 constexpr size_t kMaxRoleProperties = 1024;
@@ -475,12 +529,12 @@ struct Grammar {
     for (int arity = kMaxUnknownArity; arity >= 0; --arity) {
       unknownElement.push_back(std::string(size_t(arity), 'e'));
     }
-    auto addTyped = [this](char type, const ElementSig* sigs, size_t count) {
+    auto addTyped = [this](char type, const ElementSig* sigs, size_t count, bool named = true) {
       for (size_t i = 0; i < count; ++i) {
         typed[TypeIndex(type)][FourCC(sigs[i].fourcc)] = SplitSigs(sigs[i].sigs);
         // Rotations share names with properties (INTR): a rotation is only an
         // element where a rotation is read, never where a property may start.
-        if (type != 'Q') {
+        if (type != 'Q' && named) {
           elementNames.insert(FourCC(sigs[i].fourcc));
         }
       }
@@ -490,6 +544,8 @@ struct Grammar {
     addTyped('V', kVectorSigs, std::size(kVectorSigs));
     addTyped('M', kModVectorSigs, std::size(kModVectorSigs));
     addTyped('C', kColorSigs, std::size(kColorSigs));
+    addTyped('R', kRealPropertyNamedSigs, std::size(kRealPropertyNamedSigs), false);
+    addTyped('C', kColorPropertyNamedSigs, std::size(kColorPropertyNamedSigs), false);
     addTyped('E', kEmitterSigs, std::size(kEmitterSigs));
     addTyped('Q', kRotationSigs, std::size(kRotationSigs));
     addTyped('B', kBoolSigs, std::size(kBoolSigs));
@@ -964,7 +1020,7 @@ public:
       return ParameterTable(at);
     }
     if (fourcc == kTmtr) {
-      if (at + 2 > m_size || m_data[at] != 0) {
+      if (at + 2 > m_size || !SlotByte(at)) {
         return {};
       }
       return Sequence(at + 2, m_data[at + 1]);
@@ -988,10 +1044,16 @@ public:
     return {at + 14 + 16 * size_t(ReadLE16(m_data + at)) + size_t(ReadLE16(m_data + at + 12))};
   }
 
+  // A decal's TMTR/SMTR lead with its material slot (0 or 1, DPSM's two MTIN
+  // materials; the importer reads it at the property's offset + 5), every other
+  // form's with 0.
+  void SetSlotted(bool slotted) { m_slotted = slotted; }
+  bool SlotByte(size_t at) const { return m_data[at] == 0 || (m_slotted && m_data[at] == 1); }
+
   // PMTR/SMTR: u8 0, u8 total, then five groups of (u8 count, count x (element
   // + trailer)). The trailer is 3 bytes in PMTR and 6 in SMTR.
   std::vector<size_t> ModifierGroups(size_t at, size_t trailer) {
-    if (at >= m_size || m_data[at] != 0) {
+    if (at >= m_size || !SlotByte(at)) {
       return {};
     }
     Ends current{at + 2};
@@ -1668,7 +1730,7 @@ private:
   // bytes read little-endian ('CCH0' = 0x30484343), with args[1] a Word of
   // b0 | b1 << 8. args[0] is the entry's element.
   bool BuildModifiers(uint32_t fourcc, size_t at, size_t end, std::vector<EffectValue>& out) {
-    if (at + 2 > m_size || m_data[at] != 0) {
+    if (at + 2 > m_size || !SlotByte(at)) {
       return false;
     }
     if (fourcc == kTmtr) {
@@ -1959,6 +2021,7 @@ private:
   const uint8_t* m_data;
   size_t m_size;
   const Grammar& m_grammar;
+  bool m_slotted = false;
   bool m_reversedFourCC;
   bool m_strictRetail;
   bool m_roleDepthExceeded = false;
@@ -2105,13 +2168,15 @@ bool ParseEffect(const uint8_t* data, size_t size, EffectNode& out, std::string&
   out = EffectNode();
   if (size < kRootAt + 25 || std::memcmp(data, "RFRM", 4) != 0 ||
       (std::memcmp(data + 0x14, "GENP", 4) != 0 && std::memcmp(data + 0x14, "SWSH", 4) != 0 &&
-       std::memcmp(data + 0x14, "ELSM", 4) != 0 && std::memcmp(data + 0x14, "ELC2", 4) != 0)) {
+       std::memcmp(data + 0x14, "ELSM", 4) != 0 && std::memcmp(data + 0x14, "ELC2", 4) != 0 &&
+       std::memcmp(data + 0x14, "DPSM", 4) != 0)) {
     error = "not a GENP form";
     return false;
   }
   Parser parser(data, size);
-  // A standalone swoosh (SWSH form) or electric effect (ELSM, ELC2) has the same header, with
-  // that form as its root.
+  parser.SetSlotted(std::memcmp(data + 0x14, "DPSM", 4) == 0);
+  // A standalone swoosh (SWSH form), electric effect (ELSM, ELC2) or decal (DPSM) has the same
+  // header, with that form as its root.
   const bool child = std::memcmp(data + 0x14, "GENP", 4) != 0;
   if (!(child ? parser.Child(kRootAt) : parser.Generator(kRootAt, true))) {
     char text[64];

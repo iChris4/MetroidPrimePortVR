@@ -49,6 +49,12 @@ void DrawCutscenesSection() {
     SameLineAfterHelp();
     ImGui::TextDisabled("(on in randomized games)");
   }
+  bool seamlessPickups = sSeamlessPickups;
+  if (ImGui::Checkbox("Seamless item pickups", &seamlessPickups)) {
+    SetSeamlessPickups(seamlessPickups);
+  }
+  ItemHelp("Picking up an item keeps you in control: no cutscene, and its message shows on the "
+           "HUD instead of pausing. Applies to rooms loaded afterwards.");
   int elevatorRide = sElevatorRide;
   if (ImGui::Combo("Elevator ride", &elevatorRide, "Original\0Fast\0Skip\0")) {
     SetElevatorRide(static_cast< EElevatorRide >(elevatorRide));
@@ -94,6 +100,20 @@ void DrawCutscenesSection() {
   }
   ItemHelp("Each normal or charged shot also fires every other beam you own. Charge combos, "
            "missiles and the Phazon Beam are unchanged.");
+  int beamSwitchSpeed = sBeamSwitchSpeed;
+  if (ImGui::SliderInt("Beam switch speed", &beamSwitchSpeed, kBeamSwitchSpeedMin,
+                       kBeamSwitchSpeedMax, "%d%%", ImGuiSliderFlags_AlwaysClamp)) {
+    SetBeamSwitchSpeed(beamSwitchSpeed);
+  }
+  ItemHelp("How fast the arm cannon changes beams: 200% changes in half the time. 100% is the "
+           "original.");
+  bool walkSpeedEnabled = sWalkSpeedEnabled;
+  if (ImGui::Checkbox("Custom walk speed", &walkSpeedEnabled)) {
+    SetWalkSpeedEnabled(walkSpeedEnabled);
+  }
+  ItemHelp("Off: the original speed. A custom action (Controls) bound to this setting turns the "
+           "speed below on and off, to sprint.");
+  ImGui::BeginDisabled(!walkSpeedEnabled);
   int walkSpeed = sWalkSpeed;
   if (ImGui::SliderInt("Walk speed", &walkSpeed, kWalkSpeedMin, kWalkSpeedMax, "%d%%",
                        ImGuiSliderFlags_AlwaysClamp)) {
@@ -101,6 +121,7 @@ void DrawCutscenesSection() {
   }
   ItemHelp("How fast Samus moves on foot, walking, strafing and circle-strafing, in percent of "
            "the original speed. Jumps, dashes, turning and the Morph Ball are unchanged.");
+  ImGui::EndDisabled();
   EndOriginalLocked(locked);
 
   // Not under the Original experience lock: the stored choice applies there too.
@@ -129,6 +150,33 @@ void WearFusionSuit(CStateManager& mgr, bool wearing) {
   if (mgr.Player()->GetMorphballTransitionState() != CPlayer::kMS_Unmorphed) {
     mgr.Player()->MorphBall()->LoadMorphBallModel(mgr);
   }
+}
+
+void DrawDifficultySection() {
+  ImGui::SeparatorText("Difficulty");
+  const bool locked = BeginOriginalLocked();
+  float taken = sDamageTakenMult;
+  if (ImGui::SliderFloat("Damage taken", &taken, kDamageMultMin, kDamageMultMax, "x%.2f",
+                         ImGuiSliderFlags_AlwaysClamp)) {
+    SetDamageTakenMultiplier(taken);
+  }
+  ItemHelp("Multiplies the damage Samus takes. A Hard file's own x2 applies on top. Ctrl+click "
+           "to type a value.");
+  float dealt = sDamageDealtMult;
+  if (ImGui::SliderFloat("Damage dealt", &dealt, kDamageMultMin, kDamageMultMax, "x%.2f",
+                         ImGuiSliderFlags_AlwaysClamp)) {
+    SetDamageDealtMultiplier(dealt);
+  }
+  ItemHelp("Multiplies the damage of beams, charge shots, missiles and charge combos (not bombs, "
+           "as on Hard). A Hard file's own x0.5 applies on top. Ctrl+click to type a value.");
+  ImGui::BeginDisabled(sDamageTakenMult == 1.f && sDamageDealtMult == 1.f);
+  if (ImGui::Button("Reset difficulty")) {
+    SetDamageTakenMultiplier(1.f);
+    SetDamageDealtMultiplier(1.f);
+  }
+  ImGui::EndDisabled();
+  ImGui::SetItemTooltip("Both back to x1, the file's own difficulty.");
+  EndOriginalLocked(locked);
 }
 
 void DrawUnlocksSection() {
@@ -334,8 +382,6 @@ void DrawOverlaySection() {
       sUiTheme = theme;
       MarkDirty();
     }
-    ItemHelp("The overlay's look. Auto uses the Remastered style while the Remastered import is "
-             "loaded, else the Metroid Prime style; Plain is stock Dear ImGui.");
     if (ImGui::Checkbox("Menu sounds", &sUiSounds)) {
       MarkDirty();
     }

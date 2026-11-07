@@ -260,7 +260,8 @@ u8 AuroraSetCullMirrored(u8 mirrored);
 // Payload:
 //   u32 light (its GX_LIGHTn bit), f32 r, g, b (linear), f32 view-space x, y, z,
 //   f32 inner radius, f32 outer radius (0 = off), u32 falloff (0 none, 1 linear, 2 quadratic,
-//   3 1 - smoothstep)
+//   3 1 - smoothstep), f32 widen, f32 view-space x, y, z of the way to the light along a spot's
+//   axis, f32 cone scale, f32 cone bias (0, 1 for a point light)
 #define GX_AURORA_SET_PBR_LIGHT_HDR 0x0056
 
 // Multiplies the baked light of the following PBR draws (see GXSetPBRBakedLightModulation).
@@ -359,6 +360,10 @@ u8 AuroraSetCullMirrored(u8 mirrored);
 // Payload:
 //   f32 x, f32 y, f32 blended, u32 on
 #define GX_AURORA_SET_PBR_THERMAL 0x0073
+// Port extension: a 3x3 matrix on the colour of the following draws (see GXSetColorMatrix).
+// Payload:
+//   u32 mode (0 off, 1 on, 2 glow only), f32 rows[3][3] (all zero when off)
+#define GX_AURORA_SET_COLOR_MATRIX 0x0074
 
 #define GX2_SET_POLYGON_OFFSET 0x1000
 

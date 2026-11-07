@@ -93,6 +93,7 @@ enum Context : uint16_t {
   kCtxMap = 1 << 2,
   kCtxMenu = 1 << 3,
   kCtxScan = 1 << 4,
+  kCtxLockOn = 1 << 5, // with gameplay, while locked on to an object
   kCtxLayer1 = 1 << 8,
   kCtxLayer2 = 1 << 9,
   kCtxLayer3 = 1 << 10,
@@ -183,7 +184,18 @@ enum class ActionKind : uint8_t {
   X(BallUnmorph, Digital, "ball_unmorph", "Unmorph")                                              \
   X(BeamMenu, Digital, "beam_menu", "Trilogy beam radial selector (hold)")                          \
   X(VisorMenu, Digital, "visor_menu", "Trilogy visor radial selector (hold)")                      \
-  X(Dodge, Digital, "dodge", "Dodge (with strafe)")
+  X(Dodge, Digital, "dodge", "Dodge (with strafe)") \
+  X(Grapple, Digital, "grapple", "Grapple (at a grapple point)")                                   \
+  X(TargetNext, Digital, "target_next", "Next target (locked on)")                                 \
+  X(TargetPrev, Digital, "target_prev", "Previous target (locked on)")                             \
+  X(MapRotateUp, HalfAxis, "map_rotate_up", "Map rotate up")                                       \
+  X(MapRotateDown, HalfAxis, "map_rotate_down", "Map rotate down")                                 \
+  X(MapRotateLeft, HalfAxis, "map_rotate_left", "Map rotate left")                                 \
+  X(MapRotateRight, HalfAxis, "map_rotate_right", "Map rotate right")                              \
+  X(MapPanUp, HalfAxis, "map_pan_up", "Map pan up")                                                \
+  X(MapPanDown, HalfAxis, "map_pan_down", "Map pan down")                                          \
+  X(MapPanLeft, HalfAxis, "map_pan_left", "Map pan left")                                          \
+  X(MapPanRight, HalfAxis, "map_pan_right", "Map pan right")
 
 enum class Action : uint16_t {
 #define PORT_INPUT_ACTION_ENUM(id, kind, key, label) id,
@@ -296,6 +308,11 @@ public:
   void SetProfile(const Profile* profile);
   // Drops every latch and timer; inputs held now are consumed until released.
   void Reset();
+  // Whether a Toggle binding of `a` is on, and turning them all off: the next
+  // poll reads them as let go (a release edge if nothing else holds `a`), and
+  // the next press turns them on again.
+  bool Toggled(Action a) const;
+  void Untoggle(Action a);
   // One poll. contexts: the active context bits (layers are added from the
   // profile's Layer actions). nowMs: a monotonic clock. quiet: context bits whose
   // switching on or off leaves held inputs alone instead of consuming them.

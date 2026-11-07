@@ -1,5 +1,6 @@
 #include "port_input_devices.h"
 
+#include "port_controls.h"
 #include "port_debug.h"
 #include "port_custom_actions.h"
 #include "port_input_map.h"
@@ -259,11 +260,13 @@ void BindController(Profile& p) {
   const PADButtonMapping* buttons = PADGetButtonMappings(kPort, &buttonCount);
   const PADAxisMapping* axes = PADGetAxisMappings(kPort, &axisCount);
   const PADDeadZones* dz = PADGetDeadZones(kPort);
-  // No controller on the port: bind the standard defaults anyway, so the Remap
-  // page shows what a pad would get (nothing reads them until one connects).
+  // No controller on the port: bind the standard defaults with the last pad
+  // preset anyway, so the Remap page shows what a pad would get (nothing reads
+  // them until one connects).
   PADDefaultMapping fallback;
   if (buttons == nullptr || axes == nullptr) {
     PADGetDefaultMapping(&fallback, PAD_TYPE_STANDARD);
+    PortControls::ApplySavedPadPreset(fallback.buttons, PAD_BUTTON_COUNT, fallback.axes, PAD_AXIS_COUNT);
     buttons = fallback.buttons;
     axes = fallback.axes;
     buttonCount = PAD_BUTTON_COUNT;
@@ -374,6 +377,14 @@ void BindBeamChords(Profile& p) {
   for (const Input& shift : padShifts) BindIn(p, Action::SpringBall, shift, PortInput::kCtxMorphBall);
 }
 
+// Turbo: A on one poll and off the next, so the gun sees a press edge every other
+// tick. The rate is the nominal one: adaptive simulation changes the tick every
+// frame, and a profile that changes every frame is rebuilt every frame (issue #235).
+uint16_t TurboHz() {
+  const unsigned rate = PortDebug::SimRate();
+  return static_cast< uint16_t >(rate > 0 ? (rate + 1) / 2 : 30);
+}
+
 void BindPortControls(Profile& p) {
   for (int bit = 0; bit < PortDebug::kPadAltCount; ++bit) {
     Bind(p, PadBitAction(1u << bit), NativeInput(PortDebug::PadAltButton(bit)));
@@ -381,20 +392,14 @@ void BindPortControls(Profile& p) {
 
   BindBeamChords(p);
 
-  // Turbo: A on one poll and off the next, so the gun sees a press edge every
-  // other tick. Retail has no turbo; the touch button has its own setting. The
-  // rate is the nominal one: adaptive simulation changes the tick every frame,
-  // and a profile that changes every frame is rebuilt every frame (issue #235).
-  const unsigned rate = PortDebug::SimRate();
-  const auto turboHz = static_cast< uint16_t >(rate > 0 ? (rate + 1) / 2 : 30);
+  // Retail has no turbo; the touch button has its own setting (BindStockTouch).
+  const uint16_t turboHz = TurboHz();
   if (!PortDebug::OriginalExperience()) {
     for (int slot = 0; slot < PAD_KEY_SLOT_COUNT; ++slot) {
       Bind(p, Action::PadA, KeySlotInput(PortDebug::TurboBinding(slot), kMouseHeld), turboHz);
     }
     Bind(p, Action::PadA, NativeInput(PortDebug::TurboBinding(PAD_KEY_SLOT_COUNT)), turboHz);
   }
-  Bind(p, Action::PadA, Make(Device::Touch, kTouchTurbo), turboHz);
-  Bind(p, Action::PadZ, Make(Device::Touch, kTouchMapTap));
 
   // The port's own keys and the pad's overlay chord. Back + Start is ordered both
   // ways, so either can be held first; the chord also keeps Start from pausing.
@@ -481,6 +486,17 @@ void FillRawState(PortInput::RawState& raw, unsigned mouseHeld, bool focused) {
                                     useDz);
       }
     }
+    // Flick stick turns by the right stick's angle: a dead zone per axis zeroes
+    // the minor axis near each axis (a snap every 90 degrees while circling), so
+    // under it the right stick's dead zone is round.
+    if (useDz && PortDebug::FlickStick()) {
+      const float x = static_cast< float >(pad.axes[SDL_GAMEPAD_AXIS_RIGHTX]);
+      const float y = static_cast< float >(pad.axes[SDL_GAMEPAD_AXIS_RIGHTY]);
+      const float dzr = static_cast< float >(dz->substickDeadZone);
+      const bool inside = x * x + y * y <= dzr * dzr;
+      raw.padAxes[SDL_GAMEPAD_AXIS_RIGHTX] = inside ? 0.f : StickValue(pad.axes[SDL_GAMEPAD_AXIS_RIGHTX], 0, false);
+      raw.padAxes[SDL_GAMEPAD_AXIS_RIGHTY] = inside ? 0.f : StickValue(pad.axes[SDL_GAMEPAD_AXIS_RIGHTY], 0, false);
+    }
   }
 
   uint32_t mouse = 0;
@@ -562,12 +578,26 @@ uint16_t GameContexts() {
     if (morph == CPlayer::kMS_Morphed || morph == CPlayer::kMS_Morphing) return PortInput::kCtxMorphBall;
   }
   uint16_t contexts = PortInput::kCtxGameplay;
+  if (const CPlayer* player = mgr->GetPlayer();
+      player != nullptr && player->GetOrbitState() == CPlayer::kOS_OrbitObject && !PortDebug::OriginalExperience()) {
+    contexts |= PortInput::kCtxLockOn;
+  }
   const CPlayerState* state = mgr->GetPlayerState();
   if (state != nullptr && state->GetCurrentVisor() == CPlayerState::kPV_Scan) {
     contexts |= PortInput::kCtxScan;
     if (mgr->GetGameState() == CStateManager::kGS_SoftPaused) contexts |= PortInput::kCtxMenu;
   }
   return contexts;
+}
+
+// Locked on to an object or grappling (orbiting a carcass or a point is not a lock).
+static bool OrbitLocked() {
+  CStateManager* mgr = PortDebug::StateManager();
+  const CPlayer* player = mgr != nullptr ? mgr->GetPlayer() : nullptr;
+  if (player == nullptr) return false;
+  const CPlayer::EPlayerOrbitState orbit = player->GetOrbitState();
+  return orbit == CPlayer::kOS_OrbitObject || orbit == CPlayer::kOS_ForcedOrbitObject ||
+         orbit == CPlayer::kOS_Grapple;
 }
 
 // A next/previous pick the game hasn't taken yet.
@@ -670,6 +700,9 @@ void RouteDirectActions(const PortInput::Output& out) {
   PushCyclePick(false, visorDir != 0 ? CycleTarget(false, visorDir) : visorPick);
   if (out.Pressed(Action::SpringBall)) PortDebug::RequestSpringBall();
   if (out.Pressed(Action::Dodge)) PortDebug::RequestDodge();
+  if (out.Pressed(Action::TargetNext)) PortDebug::RequestTargetCycle(1);
+  if (out.Pressed(Action::TargetPrev)) PortDebug::RequestTargetCycle(-1);
+  PortDebug::SetGrappleHeld(out.Held(Action::Grapple));
 }
 
 // The port's own actions: polled every frame by PollPortActions, not with the game
@@ -793,12 +826,15 @@ bool SetUserBindings(const PortInput::UserBindings& bindings) {
 }
 
 static bool TouchControlCode(int control) {
-  return (control >= 0 && control < kTouchControlCount) ||
+  return (control >= 0 && control < kTouchControlCount) || control == kTouchMenuBack ||
          (control >= kTouchBallBase && control < kTouchBallBase + kTouchBallCount) ||
          (control >= kTouchCustomBase && control < kTouchCustomBase + kTouchCustomCount);
 }
 static_assert(kTouchCustomBase == PortInput::kTouchButtonBase && kTouchCustomCount == PortInput::kTouchButtonSlots);
 static_assert(kTouchCustomBase + kTouchCustomCount <= PortInput::kTouchCount);
+static_assert(PortInput::kTouchTurboCode == kTouchTurbo);
+static_assert(std::end(PortInput::kTouchStockControls)[-2].control == kTouchMapTap &&
+              std::end(PortInput::kTouchStockControls)[-1].control == kTouchMenuBack);
 
 void SetTouchControl(int control, bool down) {
   if (!TouchControlCode(control)) return;
@@ -946,8 +982,9 @@ void KeepPortMenuReachable(Profile& p) {
 void BuildProfile(Profile& out) {
   BuildBaseProfile(out);
   const SActiveProfiles user = ActiveUserProfiles();
-  if (user.sel.base != nullptr) PortInput::Overlay(out, *user.sel.base);
-  if (user.sel.pad != nullptr) PortInput::Overlay(out, *user.sel.pad);
+  if (user.sel.base != nullptr) PortInput::Overlay(out, PortInput::WithoutStockTouch(*user.sel.base));
+  if (user.sel.pad != nullptr) PortInput::Overlay(out, PortInput::WithoutStockTouch(*user.sel.pad));
+  PortInput::BindStockTouch(out, TurboHz());
   PublishTouchBound(out);
   // After the overlay: a controls.toml touch binding of the same action must not
   // drop the layout's own buttons. Re-read every poll, so an added one works at once.
@@ -1157,7 +1194,14 @@ bool PromptButtonInput(unsigned padButton, PortInput::Family family, Input& out)
 }
 
 bool PromptAxisInput(PADAxis axis, PortInput::Family family, Input& out) {
-  return PromptInputFor({PadAxisAction(axis)}, family, out);
+  // On the map a bound map row (rotate on the control stick, pan on the C-stick) comes first.
+  const Action game = PadAxisAction(axis);
+  if ((GameContexts() & PortInput::kCtxMap) != 0) {
+    for (const PortInput::MapRow& m : PortInput::kMapRows) {
+      if (m.game == game && PromptInputFor({m.row}, family, out)) return true;
+    }
+  }
+  return PromptInputFor({game}, family, out);
 }
 
 PADStatus Synthesize(const PortInput::Output& out) {
@@ -1172,10 +1216,18 @@ PADStatus Synthesize(const PortInput::Output& out) {
   for (const SMenuAction& m : kMenuActions) {
     if (m.padButton != 0 && out.Held(m.menu)) s.button |= static_cast< u16 >(m.padButton);
   }
-  s.stickX = StickX(out.Value(Action::MainRight), out.Value(Action::MainLeft));
-  s.stickY = StickY(out.Value(Action::MainDown), out.Value(Action::MainUp));
-  s.substickX = StickX(out.Value(Action::CRight), out.Value(Action::CLeft));
-  s.substickY = StickY(out.Value(Action::CDown), out.Value(Action::CUp));
+  // A stick direction or its map row (only live on the map), the stronger.
+  const auto stick = [&](Action game) {
+    float v = out.Value(game);
+    for (const PortInput::MapRow& m : PortInput::kMapRows) {
+      if (m.game == game) v = std::max(v, out.Value(m.row));
+    }
+    return v;
+  };
+  s.stickX = StickX(stick(Action::MainRight), stick(Action::MainLeft));
+  s.stickY = StickY(stick(Action::MainDown), stick(Action::MainUp));
+  s.substickX = StickX(stick(Action::CRight), stick(Action::CLeft));
+  s.substickY = StickY(stick(Action::CDown), stick(Action::CUp));
   // An open radial menu takes the C-stick (PortRadial::Tick), so it doesn't swap beams too.
   if (PortRadial::Capturing()) s.substickX = s.substickY = 0;
   s.triggerLeft = Trigger(std::max(out.Value(Action::LAnalog), out.Value(Action::MenuLAnalog)), (s.button & PAD_TRIGGER_L) != 0);
@@ -1210,10 +1262,13 @@ SPoll Poll(unsigned mouseHeld, bool focused) {
   static bool sInit = false;
   static double sClockMs = 0.0;
 
+  PortControls::ApplySavedPadPreset();
   Profile next;
   BuildProfile(next);
   ApplyMenuButtons(next);
   PortInput::ApplyBallButtons(next);
+  PortInput::ApplyMapRows(next);
+  PortInput::ApplyTargetRows(next);
   const uint16_t contexts = GameContexts();
   ApplyTwinStickFreeAim(next, contexts);
   if (!sInit || next != sProfile) {
@@ -1221,6 +1276,20 @@ SPoll Poll(unsigned mouseHeld, bool focused) {
     sProfile = std::move(next);
     sRuntime.SetProfile(&sProfile);
     sInit = true;
+  }
+
+  // A Toggle-trigger L lets go when its lock ends, as Toggle Lock-On does: a
+  // killed target leaves the player orbiting its carcass, a lost look angle a
+  // fixed point in empty space (#243). A toggle that never locked stays on.
+  static bool sToggleLocked = false;
+  if (!sRuntime.Toggled(Action::PadL) && !sRuntime.Toggled(Action::LAnalog)) {
+    sToggleLocked = false;
+  } else if (OrbitLocked()) {
+    sToggleLocked = true;
+  } else if (sToggleLocked) {
+    sRuntime.Untoggle(Action::PadL);
+    sRuntime.Untoggle(Action::LAnalog);
+    sToggleLocked = false;
   }
 
   PortInput::RawState raw;
@@ -1247,6 +1316,10 @@ SPoll Poll(unsigned mouseHeld, bool focused) {
   }
 
   r.status = Synthesize(out);
+  if (r.status.substickX != 0 || r.status.substickY != 0) {
+    r.cStickX = std::clamp(out.Value(Action::CRight) - out.Value(Action::CLeft), -1.f, 1.f);
+    r.cStickY = std::clamp(out.Value(Action::CUp) - out.Value(Action::CDown), -1.f, 1.f);
+  }
   // The scan text reads only A: the Menu row's, not gameplay's (issue #93). The
   // other buttons keep gameplay's, so the held lock stays. A mouse button on A
   // (fire under mouse aim) still turns the page, as it does in the other text

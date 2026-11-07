@@ -31,6 +31,11 @@
 
 #ifdef TARGET_PC
 #include "vr/vr_view.h"
+#include "port_third_person.h"
+
+// Third person: where its camera stood from the eye as the morph began; the ToBall camera
+// leaves from there.
+static CVector3f sPortToBallOffset = CVector3f::Zero();
 #endif
 
 static CMaterialList kLineOfSightIncludeList = CMaterialList(kMT_Solid);
@@ -1772,6 +1777,11 @@ void CBallCamera::UpdateUsingTransitions(float dt, CStateManager& mgr) {
         FindDesiredPosition(distance, elevation, entryDirection, mgr,
                             nearDoor) -
         eyePos;
+#ifdef TARGET_PC
+    // Third person: from its camera (SetState) rather than the eye.
+    toDesired -= sPortToBallOffset;
+    eyePos += sPortToBallOffset;
+#endif
     CVector3f finalPos = eyePos + toDesired * player->GetMorphBallTransitionFactor();
 
     if (CPhysicsActor* act = TCastToPtr< CPhysicsActor >(mgr.ObjectById(x46c_collisionActorId))) {
@@ -2408,9 +2418,15 @@ void CBallCamera::SetState(EBallCameraState state, CStateManager& mgr) {
   case kBCS_ToBall: {
     CTransform4f xf = mgr.CameraManager()->GetFirstPersonCamera()->GetTransform();
 #ifdef TARGET_PC
+    // Desktop third-person offsets must never change the tracked VR entry.
+    CVector3f tpPos;
+    sPortToBallOffset = CVector3f::Zero();
     if (PortVr::VrImmersive()) {
       xf = CTransform4f::LookAt(xf.GetTranslation(), xf.GetTranslation() +
                                PortVr::VrBallCameraEntryDirection());
+    } else if (PortThirdPerson::MorphCameraPosition(mgr, xf, tpPos)) {
+      sPortToBallOffset = tpPos - mgr.GetPlayer()->GetEyePosition();
+      xf.SetTranslation(tpPos);
     }
 #endif
     SetTransform(xf);

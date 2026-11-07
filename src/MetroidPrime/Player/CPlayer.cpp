@@ -583,9 +583,17 @@ void CPlayer::UpdateGunState(const CFinalInput& input, CStateManager& mgr) {
       needsDraw = true;
     }
 
-    if (x3b8_grappleState != kGS_None ||
-        mgr.GetPlayerState()->GetCurrentVisor() == CPlayerState::kPV_Scan ||
-        mgr.GetPlayerState()->GetTransitioningVisor() == CPlayerState::kPV_Scan) {
+#ifdef TARGET_PC
+    const bool grappleHolsters = x3b8_grappleState != kGS_None && !PortDebug::GrappleShoot();
+    const bool scanHolsters = !PortDebug::ScanShoot();
+#else
+    const bool grappleHolsters = x3b8_grappleState != kGS_None;
+    const bool scanHolsters = true;
+#endif
+    if (grappleHolsters ||
+        (scanHolsters &&
+         (mgr.GetPlayerState()->GetCurrentVisor() == CPlayerState::kPV_Scan ||
+          mgr.GetPlayerState()->GetTransitioningVisor() == CPlayerState::kPV_Scan))) {
       needsDraw = false;
     }
 
@@ -712,7 +720,9 @@ CVector3f CPlayer::PortAnchorGunDown(const CVector3f& pos, CStateManager& mgr) c
   if (!camMgr->IsInFPCamera()) {
     return pos;
   }
-  const float drop = CGameCamera::VertPlusGunDrop(CCameraManager::GetDefaultAspectRatio());
+  const CGameCamera& cam = camMgr->GetCurrentCamera(mgr);
+  const float gunFov = PortDebug::GunDrawFov(cam.GetUnwidenedFov());
+  const float drop = CGameCamera::VertPlusGunDrop(gunFov, CCameraManager::GetDefaultAspectRatio());
   if (drop <= 0.f) {
     return pos;
   }
@@ -830,13 +840,13 @@ void CPlayer::UpdateGunTransform(const CVector3f& gunPos, CStateManager& mgr) {
     }
     CTransform4f aimXf = CTransform4f::LookAt(CVector3f::Zero(), toAim);
     aimXf.SetTranslation(viewGunPos);
-    // With the FOV slider off retail the gun is drawn at the retail FOV (CStateManager's
+    // With the gun at its own FOV, unlike the view's, it is drawn at that FOV (CStateManager's
     // RenderGun pass), so the model aims where the point sits under that projection: the
     // same screen spot as the crosshair at the same depth.
     CVector3f toModelAim = toAim;
-    if (mgr.GetCameraManager()->IsInFPCamera() && cam.GetFov() != PortDebug::kFovRetail) {
+    if (mgr.GetCameraManager()->IsInFPCamera() && PortDebug::GunOwnFov(cam.GetFov())) {
       const float gunTan =
-          tanf(CGameCamera::VertPlusFov(PortDebug::kFovRetail, cam.GetAspectRatio()) * 0.5f *
+          tanf(CGameCamera::VertPlusFov(PortDebug::GunDrawFov(cam.GetFov()), cam.GetAspectRatio()) * 0.5f *
                (M_PIF / 180.f));
       const float viewTan = tanf(cam.GetRenderFov() * 0.5f * (M_PIF / 180.f));
       const CVector3f p = viewXf.TransposeRotate(rayDir * distance);
@@ -933,10 +943,18 @@ bool CPlayer::MouseLookIsFree(const CStateManager& mgr) const {
 
 bool CPlayer::PortLockFreeAim(const CStateManager& mgr) const {
   // Scan locks and grapples still aim through the centre.
-  return PortDebug::LockOnFreeAim() && MouseControlsAllowed(mgr) &&
+  if (!MouseControlsAllowed(mgr) ||
+      mgr.GetPlayerState()->GetCurrentVisor() == CPlayerState::kPV_Scan) {
+    return false;
+  }
+  // Under pointer aim an empty lock always frees the pointer: Trilogy's Z with nothing
+  // targeted holds the view and leaves the cursor free. A target lock follows the setting.
+  if (x304_orbitState == kOS_OrbitPoint && PortDebug::PointerAim()) {
+    return true;
+  }
+  return PortDebug::LockOnFreeAim() &&
          (x304_orbitState == kOS_OrbitObject || x304_orbitState == kOS_OrbitPoint ||
-          x304_orbitState == kOS_OrbitCarcass || x304_orbitState == kOS_ForcedOrbitObject) &&
-         mgr.GetPlayerState()->GetCurrentVisor() != CPlayerState::kPV_Scan;
+          x304_orbitState == kOS_OrbitCarcass || x304_orbitState == kOS_ForcedOrbitObject);
 }
 
 // The port's free-aim crosshair. On a Trilogy disc with the Classic style, Trilogy's aiming
@@ -979,9 +997,11 @@ void CPlayer::UpdateMouseAim(CStateManager& mgr) {
   // (issue #190).
   const bool scanPointHold = x304_orbitState == kOS_OrbitPoint &&
                              mgr.GetPlayerState()->GetCurrentVisor() == CPlayerState::kPV_Scan;
+  const bool lockFree = PortLockFreeAim(mgr);
+  const bool emptyLock = lockFree && x304_orbitState == kOS_OrbitPoint && PortDebug::PointerAim();
   if (PortDebug::UpdateMouseAim(active, !MouseLookIsFree(mgr),
                                forward.GetX(), forward.GetY(), forward.GetZ(),
-                               PortLockFreeAim(mgr), scanPointHold)) {
+                               lockFree, scanPointHold, emptyLock)) {
     SetTransform(CQuaternion::ZRotation(CRelAngle(PortDebug::AimYaw()))
                      .BuildTransform4f(GetTransform().GetTranslation()));
   }
@@ -1277,7 +1297,14 @@ void CPlayer::UpdateVisorState(const CFinalInput& input, float dt, CStateManager
     const int wristVisor = -1;
 #endif
     const CPlayerState::EPlayerVisor currentVisor = playerState->GetTransitioningVisor();
-    if (wristVisor < 0 && currentVisor == CPlayerState::kPV_Scan &&
+#ifdef TARGET_PC
+    // scan_shoot: the Scan Visor keeps the arm cannon out, so a shot fires from it
+    // rather than switching to the Combat Visor.
+    const bool scanHolsters = !PortDebug::ScanShoot();
+#else
+    const bool scanHolsters = true;
+#endif
+    if (wristVisor < 0 && currentVisor == CPlayerState::kPV_Scan && scanHolsters &&
         (ControlMapper::GetPressInput(ControlMapper::kC_FireOrBomb, input) ||
          ControlMapper::GetPressInput(ControlMapper::kC_MissileOrPowerBomb, input)) &&
         playerState->HasPowerUp(CPlayerState::kIT_CombatVisor)) {
@@ -1296,7 +1323,7 @@ void CPlayer::UpdateVisorState(const CFinalInput& input, float dt, CStateManager
         CPlayerState::EPlayerVisor visor = static_cast< CPlayerState::EPlayerVisor >(i);
         if (currentVisor != visor) {
           playerState->StartTransitionToVisor(visor);
-          if (visor == CPlayerState::kPV_Scan) {
+          if (visor == CPlayerState::kPV_Scan && scanHolsters) {
             HolsterGun(mgr);
           } else {
             DrawGun(mgr);
@@ -1606,7 +1633,12 @@ void CPlayer::UpdateCinematicState(CStateManager& mgr) {
           break;
         case kMS_Unmorphed:
           SetCameraState(kCS_FirstPerson, mgr);
+#ifdef TARGET_PC
+          if (mgr.GetPlayerState()->GetCurrentVisor() != CPlayerState::kPV_Scan ||
+              PortDebug::ScanShoot()) {
+#else
           if (mgr.GetPlayerState()->GetCurrentVisor() != CPlayerState::kPV_Scan) {
+#endif
             ForceGunOrientation(GetTransform(), mgr);
             DrawGun(mgr);
           }
@@ -1681,7 +1713,19 @@ void CPlayer::SetCameraState(EPlayerCameraState camState, CStateManager& mgr) {
 }
 
 void CPlayer::UpdateFreeLookState(const CFinalInput& input, float dt, CStateManager& mgr) {
+  mMouseLookButtonHeld = false;
   if (MouseControlsAllowed(mgr)) {
+    // Port: the mouse owns the view, but R still does what holding it does to the
+    // camera timers (UpdateCameraTimers). That zeroes the jump camera timer, so a
+    // later L in the air keeps Samus's momentum (CheckPostGrapple skips ComputeDash):
+    // the R-jump (issue #252).
+    const bool hold1 = ControlMapper::GetDigitalInput(ControlMapper::kC_LookHold1, input);
+    const bool hold2 = ControlMapper::GetDigitalInput(ControlMapper::kC_LookHold2, input);
+    mMouseLookButtonHeld =
+        gpTweakPlayer->mHoldButtonsForFreeLook &&
+        (gpTweakPlayer->mTwoButtonsForFreeLook ? hold1 && hold2 : hold1 || hold2) &&
+        x304_orbitState != kOS_ForcedOrbitObject &&
+        (x3b8_grappleState == kGS_None || x3b8_grappleState == kGS_Firing);
     x3dc_inFreeLook = false;
     x3dd_lookButtonHeld = false;
     x3de_lookAnalogHeld = false;
@@ -1771,7 +1815,7 @@ void CPlayer::UpdateFreeLookState(const CFinalInput& input, float dt, CStateMana
 }
 
 void CPlayer::UpdateCameraTimers(float dt, const CFinalInput& input) {
-  if (x3dc_inFreeLook || x3dd_lookButtonHeld) {
+  if (x3dc_inFreeLook || x3dd_lookButtonHeld || mMouseLookButtonHeld) {
     x294_jumpCameraTimer = 0.f;
     x29c_fallCameraTimer = 0.f;
     return;
@@ -2571,6 +2615,21 @@ void CPlayer::ProcessInput(const CFinalInput& input, CStateManager& mgr) {
       x4a0_playerStuckTracker->AddState(playerState, GetTranslation(), GetVelocityWR(),
                                         CVector2f(input.ALeftX(), input.ALeftY()));
     }
+
+#ifdef TARGET_PC
+    // The moon jump cheat: Jump held in the air rises at a steady speed. In the ball Jump is the
+    // boost, so only on foot.
+    static const float kMoonJumpSpeed = 12.f;
+    if (PortDebug::MoonJump() && x304_orbitState != CPlayer::kOS_Grapple &&
+        x258_movementState != NPlayer::kMS_OnGround &&
+        ControlMapper::GetDigitalInput(ControlMapper::kC_JumpOrBoost, input)) {
+      CVector3f vel = GetVelocityWR();
+      if (vel.GetZ() < kMoonJumpSpeed) {
+        vel.SetZ(kMoonJumpSpeed);
+        SetVelocityWR(vel);
+      }
+    }
+#endif
   }
 
   ComputeFreeLook(input);
@@ -3076,6 +3135,9 @@ void CPlayer::RenderGun(const CStateManager& mgr, const CVector3f& pos) const {
   }
 
   bool isInScanVisor = mgr.GetPlayerState()->GetActiveVisor(mgr) == CPlayerState::kPV_Scan;
+#ifdef TARGET_PC
+  isInScanVisor = isInScanVisor && !PortDebug::ScanShoot();
+#endif
   float visorTransitionFactor = mgr.GetPlayerState()->GetVisorTransitionFactor();
   bool tmp = isInScanVisor && visorTransitionFactor >= 1.f;
   if (tmp != true &&
@@ -3591,7 +3653,7 @@ bool CPlayer::CanRenderUnsorted(const CStateManager& mgr) const { return false; 
 bool CPlayer::HasTransitionBeamModel() const {
   // The Dread Samus body (port_dread_samus_mod.h) carries its own cannon: Prime's is not drawn on it.
   return !x7f0_ballTransitionBeamModel.null() && !x7f0_ballTransitionBeamModel->IsNull() &&
-         !PortDreadSamus::Replaces(PortDreadSamus::InGameBody(x7cc_transitionSuit));
+         !PortDreadSamus::HasOwnCannon(PortDreadSamus::InGameBody(x7cc_transitionSuit));
 }
 
 void CPlayer::LoadAnimationTokens() {
@@ -3905,6 +3967,6 @@ void CPlayer::PortApplyDeferredRiderCarry(uint tick) {
 void CPlayer::PortEndMovementTick(uint tick) {
   PortApplyDeferredRiderCarry(tick);
   // DecayRiderFrameCount (PostSimulation): a rider set this tick carries next tick.
-  xa3c_rider.Decay();
+  xa3c_rider.Decay(PortDebug::TickPeriod() * 60.f);
 }
 #endif

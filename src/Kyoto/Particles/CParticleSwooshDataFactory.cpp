@@ -162,13 +162,14 @@ bool CParticleSwooshDataFactory::CreateWPSM(CSwooshDescription* swoosh, CInputSt
       swoosh->xPortRazyFallbackLocal = in.ReadLong() != 0;
       break;
     // Port-only: PROT of [KPIN]([RADD(EXTR, ]REUL(0, 0, z))), flags bit 0 kept from birth,
-    // bit 1 from the orientation.
+    // bit 1 from the orientation, bit 2 INTR's rather than EXTR's.
     case 'PROZ':
       CParticleDataFactory::GetClassID(in);
       {
         const int flags = in.ReadLong();
         swoosh->xPortRotKeep = (flags & 1) != 0;
         swoosh->xPortRotOriented = (flags & 2) != 0;
+        swoosh->xPortRotIntr = (flags & 4) != 0;
       }
       swoosh->xPortRotZ.reset(CParticleDataFactory::GetRealElement(in));
       break;
@@ -182,6 +183,10 @@ bool CParticleSwooshDataFactory::CreateWPSM(CSwooshDescription* swoosh, CInputSt
       CParticleDataFactory::GetClassID(in);
       swoosh->xPortShutdownMode = u8(in.ReadLong());
       break;
+    // Port-only: Remastered's SHTT (xPortShutdownTime), an int element.
+    case 'PSHT':
+      swoosh->xPortShutdownTime.reset(CParticleDataFactory::GetIntElement(in));
+      break;
     // Port-only: Remastered's DFOG 1 (xPortUnfogged).
     case 'PDFG':
       CParticleDataFactory::GetClassID(in);
@@ -192,10 +197,24 @@ bool CParticleSwooshDataFactory::CreateWPSM(CSwooshDescription* swoosh, CInputSt
       CParticleDataFactory::GetClassID(in);
       swoosh->xPortDepthBias = in.ReadFloat();
       break;
-    // Port-only Remastered transform mode; only 3 (xPortXfmdFollow) and 4 (xPortXfmdMover) are written.
+    // Port-only: Remastered's DVVN (GetDefaultInverseExposure 0x29c118: DVVN == 1) and IEXP,
+    // kept in stream order.
+    case 'DVVN':
+      CParticleDataFactory::GetClassID(in);
+      swoosh->xPortExposurePolicy = true;
+      swoosh->xPortInverseExposure = in.ReadLong() == 1;
+      break;
+    case 'IEXP':
+      CParticleDataFactory::GetClassID(in);
+      swoosh->xPortExposurePolicy = true;
+      swoosh->xPortInverseExposure = in.ReadLong() != 0;
+      break;
+    // Port-only Remastered transform mode; only 1 (xPortXfmdSystem), 3 (xPortXfmdFollow) and 4
+    // (xPortXfmdMover) are written.
     case 'XFMD': {
       CParticleDataFactory::GetClassID(in);
       const int mode = in.ReadLong();
+      swoosh->xPortXfmdSystem = mode == 1;
       swoosh->xPortXfmdFollow = mode == 3;
       swoosh->xPortXfmdMover = mode == 4;
       break;
@@ -205,11 +224,67 @@ bool CParticleSwooshDataFactory::CreateWPSM(CSwooshDescription* swoosh, CInputSt
       CParticleDataFactory::GetClassID(in);
       swoosh->xPortVars.reset(PortReadVarTable(in));
       break;
+    // Port-only Remastered system variables (PSYS); a malformed one leaves none.
+    case 'PSYS':
+      CParticleDataFactory::GetClassID(in);
+      swoosh->xPortSys.reset(PortReadSys(in));
+      break;
+    // Port-only Remastered per-point variables (PPVR, ADV0..8 and IAV0..3); a malformed one
+    // leaves none.
+    case 'PPVR':
+      CParticleDataFactory::GetClassID(in);
+      swoosh->xPortPartVars.reset(PortReadPartVars(in, true));
+      break;
     // Port-only marker of a converted Remastered swoosh (xPortIrnd).
     case 'PIRN':
       CParticleDataFactory::GetClassID(in);
       swoosh->xPortIrnd = in.ReadLong() != 0;
       break;
+    // Port-only Remastered SEED (xPortSeed) and GUID word (xPortGuidWord).
+    case 'PSED':
+      CParticleDataFactory::GetClassID(in);
+      swoosh->xPortSeed = in.ReadLong();
+      break;
+    case 'PGID':
+      CParticleDataFactory::GetClassID(in);
+      swoosh->xPortGuidWord = in.ReadLong();
+      break;
+    // Port-only Remastered TXUP (xPortTexUScroll).
+    case 'PTXU':
+      CParticleDataFactory::GetClassID(in);
+      swoosh->xPortTexUScroll = in.ReadLong() != 0;
+      break;
+    // Port-only Remastered INTR (xPortIntRotation): flags (bit 0 times the external orientation),
+    // then the Euler vector.
+    case 'PSIR':
+      CParticleDataFactory::GetClassID(in);
+      swoosh->xPortIntExternal = (in.ReadLong() & 1) != 0;
+      swoosh->xPortIntRotation.reset(CParticleDataFactory::GetVectorElement(in));
+      break;
+    // Port-only Remastered PSCL (xPortScale), in Remastered's numbers.
+    case 'PSSC':
+      swoosh->xPortScale.reset(CParticleDataFactory::GetVectorElement(in));
+      break;
+    // Port-only Remastered LWQD (xPortLwqd).
+    case 'PLWQ':
+      CParticleDataFactory::GetClassID(in);
+    {
+      const int n = in.ReadLong();
+      swoosh->xPortLwqd = n < 1 ? 1 : n > 10 ? 10 : n;
+      break;
+    }
+    // Port-only Remastered SNRD/SNRA (xPortSnrd/xPortSnra), clamped as CreateSWSH 0x2dc280/0x2dc5bc.
+    case 'PSRD':
+    case 'PSRA': {
+      CParticleDataFactory::GetClassID(in);
+      const float v = in.ReadFloat();
+      if (classId == 'PSRD') {
+        swoosh->xPortSnrd = v < 0.f ? 0.f : v > 10.f ? 10.f : v;
+      } else {
+        swoosh->xPortSnra = v < 0.f ? 0.f : v > 60.f ? 60.f : v;
+      }
+      break;
+    }
     // Port-only Remastered material, as a PART's.
     case 'VMAT':
     case 'VTMT':

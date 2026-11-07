@@ -114,6 +114,100 @@ bool CDecalDataFactory::CreateDPSM(CDecalDescription* desc, CInputStream& in, CS
     case 'DMOO':
       desc->x5c_25_DMOO = CParticleDataFactory::GetBool(in);
       break;
+#ifdef TARGET_PC
+    // The port-only Remastered fields (port_remastered_effect_convert.cpp, ConvertDecal).
+    case 'PRDC':
+      if (CParticleDataFactory::GetClassID(in) != 'CNST') {
+        return false;
+      }
+      desc->xPortRemastered = CParticleDataFactory::GetInt(in) != 0;
+      break;
+    case 'MSTL':
+      desc->xPortMSTL = CParticleDataFactory::GetIntElement(in);
+      break;
+    case 'MSTR':
+      desc->xPortMSTR = CParticleDataFactory::GetRealElement(in);
+      break;
+    case 'MSTW':
+      desc->xPortMSTW = CParticleDataFactory::GetRealElement(in);
+      break;
+    case 'MSTH':
+      desc->xPortMSTH = CParticleDataFactory::GetRealElement(in);
+      break;
+    case 'DUL1':
+      desc->xPortDUL[0] = CParticleDataFactory::GetRealElement(in);
+      break;
+    case 'DUL2':
+      desc->xPortDUL[1] = CParticleDataFactory::GetRealElement(in);
+      break;
+    case 'PMTI': {
+      if (CParticleDataFactory::GetClassID(in) != 'CNST') {
+        return false;
+      }
+      const uint slot = in.ReadLong();
+      if (slot > 1) {
+        return false;
+      }
+      CDecalDescription::SPortMaterial& material = desc->xPortMaterial[slot];
+      material.xPresent = true;
+      material.xTexture = in.ReadLong();
+      in.ReadBytes(material.xGuid, sizeof(material.xGuid));
+      material.xShader = in.ReadLong();
+      material.xBlend = static_cast< int >(in.ReadLong());
+      material.xWrapS = in.ReadLong();
+      material.xWrapT = in.ReadLong();
+      material.xLinear = in.ReadLong();
+      for (int row = 0; row < 3; ++row) {
+        for (int c = 0; c < 4; ++c) {
+          material.xDefaults[row][c] = in.ReadFloat();
+        }
+      }
+      material.xTextureToken =
+          TCachedToken< CTexture >(pool->GetObj(SObjectTag('TXTR', material.xTexture)));
+      material.xTextureToken->Lock();
+    } break;
+    case 'PSMT':
+    case 'PTMT': {
+      if (CParticleDataFactory::GetClassID(in) != 'CNST') {
+        return false;
+      }
+      const uint slot = in.ReadLong();
+      const uint count = in.ReadLong();
+      if (slot > 1 || count > 64) {
+        return false;
+      }
+      CDecalDescription::SPortMaterial& material = desc->xPortMaterial[slot];
+      if (clsId == 'PTMT') {
+        if (count != 6) {
+          return false;
+        }
+        for (int i = 0; i < 6; ++i) {
+          material.xTmtr[i].reset(CParticleDataFactory::GetRealElement(in));
+          if (!material.xTmtr[i]) {
+            return false;
+          }
+        }
+        break;
+      }
+      for (uint i = 0; i < count; ++i) {
+        CDecalDescription::SPortParam param;
+        param.xRow = in.ReadLong();
+        param.xComp = in.ReadLong();
+        if (param.xRow > 2 || param.xComp > 4) {
+          return false;
+        }
+        if (param.xComp == 4) {
+          param.xColor.reset(CParticleDataFactory::GetColorElement(in));
+        } else {
+          param.xReal.reset(CParticleDataFactory::GetRealElement(in));
+        }
+        if (!param.xColor && !param.xReal) {
+          return false;
+        }
+        material.xSmtr.push_back(std::move(param));
+      }
+    } break;
+#endif
     case '_END':
       done = true;
       break;

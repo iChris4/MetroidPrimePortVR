@@ -136,7 +136,7 @@ in `assets/`, and no `.iso`, `.pak` or `.strg` is in the package. An earlier
 revision of this section recorded the signer as `d8814c79…` and six notices; both
 were wrong.
 
-The port targets `versionName "0.36.0"` and `versionCode 44`. A version bump
+The port targets `versionName "0.42.0"` and `versionCode 50`. A version bump
 also adds a `<release>` entry (newest first) to
 `packaging/io.github.odrannnn.metroidprimeport.metainfo.xml`, which is the
 version Flatpak reports; `tools/make_flatpak.sh` stops if the two differ.
@@ -200,7 +200,14 @@ ctest targets, all run by both CI jobs.
 
 Every build ships `assets/initial_pipeline_cache.db`: the pipeline configs of a tour
 of the front end and every room, so a first start compiles the game's shaders in the
-background instead of skipping draws as it meets them. It holds retail rows only. When
+background instead of skipping draws as it meets them. It holds retail rows only, plus
+the contexts (global, front end, each area) that used each one: lazy mode, always on
+Android, builds the global and front-end rows at startup and an area's rows when the game
+prefetches that area, so a seed without them builds nothing ahead of use. A row holds
+the sample count it was recorded at; aurora also queues each non-shadow row at the
+running MSAA setting (`queue_cached_row`), so a seed recorded at either setting covers
+both. The fog curve and alpha compare references are uniforms, so rows differ only by
+fog on or off and by constant references (aurora folds older rows on load). When
 aurora bumps a pipeline config version, aurora ignores the seed and the
 `port_pipeline_seed` test fails. To record it again, run
 `python3 tools/pipeline_seed.py tour`, then `merge` (see the script's `--help`).

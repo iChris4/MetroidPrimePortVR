@@ -8,11 +8,14 @@
 #include "Kyoto/Graphics/CGraphics.hpp"
 #include "Kyoto/Math/CAABox.hpp"
 #include "Kyoto/Particles/CParticleGen.hpp"
+#include "Kyoto/Particles/PortParticleMath.hpp"
 
 class CPortParticleDepthBias {
 public:
   // `gen`'s draws until the scope ends; nested scopes (child generators) restore the parent's bias.
-  CPortParticleDepthBias(const CParticleGen& gen, float bias) {
+  // `usesDepthRange` is the description's DBSO bit (desc+0x6b bit 2): the shift scales by the
+  // depth range's span when set (ConstructDepthBias 0x2b104c).
+  CPortParticleDepthBias(const CParticleGen& gen, float bias, bool usesDepthRange) {
     State& s = state();
     prev = s;
     if (bias == 0.f && prev.bias == 0.f) {
@@ -23,7 +26,16 @@ public:
       const rstl::optional_object< CAABox > bounds = gen.GetBounds();
       if (bounds) {
         next.bias = bias;
-        next.depth = (CGraphics::GetViewMatrix() * bounds->GetCenterPoint()).GetY();
+        // Distance in front of the camera along its forward axis: CalculateProjMatrixDepthBias
+        // 0x22a604 takes dot(centre - T, forward column) of the device context's camera transform
+        // (ctx+0x22c). The view matrix here is the camera's world transform (SetViewPointMatrix),
+        // so multiplying the centre by it would not give a view-space depth.
+        const CTransform4f& camera = CGraphics::GetViewMatrix();
+        next.depth = CVector3f::Dot(bounds->GetCenterPoint() - camera.GetTranslation(), camera.GetForward());
+        if (usesDepthRange) {
+          next.rangeSpan =
+              PortParticleMath::RemasteredDepthRangeSpan(CGraphics::GetDepthNear(), CGraphics::GetDepthFar());
+        }
       }
     }
     apply(next);
@@ -41,6 +53,7 @@ private:
   struct State {
     float bias = 0.f;
     float depth = 0.f;
+    float rangeSpan = 1.f;
   };
   static State& state() {
     static thread_local State s;
@@ -48,7 +61,7 @@ private:
   }
   static void apply(const State& next) {
     state() = next;
-    CGraphics::PortSetProjectionDepthBias(next.bias, next.depth);
+    CGraphics::PortSetProjectionDepthBias(next.bias, next.depth, next.rangeSpan);
   }
   State prev;
   bool active = false;

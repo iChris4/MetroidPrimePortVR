@@ -10,6 +10,7 @@
 
 #include "port_remastered_room_internal.h"
 #include "port_gunship_scenery.h"
+#include "port_remastered_table.h"
 
 namespace PortRemastered {
 namespace RoomDetail {
@@ -300,7 +301,7 @@ bool Writer::ReadRoomFile(const RoomPak& rp, RoomData& out, std::string& error) 
   out.name = rp.name;
   out.pak = rp.pak;
   out.id = SwapUuid(asset->id.data());
-  return out.room.Parse(out.bytes, error);
+  return out.room.Parse(out.bytes, error, m_io.neverLoads);
 }
 
 bool Writer::LoadAreas(uint32_t mlvl, std::string& error) {
@@ -2469,8 +2470,38 @@ void Writer::WriteGeometry(const RoomData& r, uint32_t mrea, const Area& area) {
     uint32_t instance;
     Vec3 pos, lo, hi;
     bool lore;
+    bool covers;  // hides the dropped retail actors whose origin its box holds
+    bool own;     // the room's own model on a carried-over actor: hides only that actor
   };
   std::vector<Standin> standins;
+  // The retail Actors whose model the table replaces by its carried-over copy (a Remastered id
+  // 10000000-0000-f000-f000-0000XXXXXXXX), which only some rooms place: Research Lab Hydra's
+  // force field 982D9D75 is the Frigate hangar's carried-over pane in the table, but Remastered's
+  // Research_A puts its own (603d908b) on the same spot, unmarked as added. Such an actor stands
+  // in for the retail one, so the room draws the model Remastered gives it there.
+  std::vector<const ScriptObject*> carriedActors;
+  {
+    static constexpr uint8_t kCarried[12] = {0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0xf0, 0x00, 0xf0, 0x00, 0x00, 0x00};
+    size_t count = 0;
+    const TableEntry* table = Table(count);
+    std::vector<uint32_t> carried;
+    for (size_t i = 0; i < count; ++i) {
+      // A save station's room carries its retail model over as well (m_roomRetailIds), so its own
+      // model there is another object at the same spot, not this one's replacement.
+      if (std::memcmp(table[i].rem, kCarried, 12) == 0 && m_roomRetailIds.count(table[i].retail) == 0) {
+        carried.push_back(table[i].retail);
+      }
+    }
+    for (const ScriptObject& o : area.objects) {
+      if (o.type == kRetailActor && o.hasPos && std::any_of(carried.begin(), carried.end(), [&](uint32_t id) {
+            const uint8_t be[4] = {uint8_t(id >> 24), uint8_t(id >> 16), uint8_t(id >> 8), uint8_t(id)};
+            return std::search(o.props.begin(), o.props.end(), be, be + 4) != o.props.end();
+          })) {
+        carriedActors.push_back(&o);
+      }
+    }
+  }
+  size_t ownModels = 0;
   std::vector<const Component*> renderActors = r.room.Of(kActorMP1);
   const auto renderPlatforms = r.room.Of(kPlatformComponent);
   renderActors.insert(renderActors.end(), renderPlatforms.begin(), renderPlatforms.end());
@@ -2488,10 +2519,28 @@ void Writer::WriteGeometry(const RoomData& r, uint32_t mrea, const Area& area) {
     const bool synthetic = hasModel && (m_syntheticEntities.count(c->entity) != 0 ||
                                         (!isPlatform && std::memcmp(r.room.Bytes(prop->second), kRetailIdPrefix, 12) != 0 &&
                                          loreSheet(r.room.Bytes(prop->second))));
-    if ((!isPlatform && f.find(kPropActorAdded) == f.end() && !synthetic) || (!hasModel && !hasAnim) ||
+    const bool added = f.find(kPropActorAdded) != f.end();
+    const bool ownModel = !isPlatform && !added && !synthetic && hasModel && !carriedActors.empty() &&
+                          std::memcmp(r.room.Bytes(prop->second), kRetailIdPrefix, 12) != 0;
+    if ((!isPlatform && !added && !synthetic && !ownModel) || (!hasModel && !hasAnim) ||
         !r.room.Xform(*c, pos, rot, scale)) {
       continue;
     }
+    if (ownModel) {
+      const Vec3 w = Apply(area.xf, MulR2G(pos));
+      const auto carried = std::find_if(carriedActors.begin(), carriedActors.end(),
+                                        [&](const ScriptObject* o) { return MaxAbs(o->pos, w) < kRetailActorNear; });
+      if (carried == carriedActors.end()) {
+        continue;
+      }
+      const uint8_t* model = r.room.Bytes(prop->second);
+      char line[160];
+      std::snprintf(line, sizeof line, "  %s: retail actor %08X at (%.1f, %.1f, %.1f) draws the room's own %02x%02x%02x%02x",
+                    r.name.c_str(), (*carried)->id, w[0], w[1], w[2], model[3], model[2], model[1], model[0]);
+      Log(line);
+      ++ownModels;
+    }
+    const bool standsIn = synthetic || ownModel;
     if (isPlatform) {
       // A platform is a retail Platform that moves and collides as its script drives it.
       // Its Remastered model is drawn only riding that Platform (`platformTransform`) or one it
@@ -2632,10 +2681,12 @@ void Writer::WriteGeometry(const RoomData& r, uint32_t mrea, const Area& area) {
     PortRoomGeo::Instance& inst = instances.emplace_back();
     inst.model = known->second;
     place(inst, pos, rot, scale);
-    if (Vec3 lo, hi; synthetic && modelBounds(r.room.Bytes(prop->second), lo, hi)) {
+    if (Vec3 lo, hi; standsIn && modelBounds(r.room.Bytes(prop->second), lo, hi)) {
       Standin& s = standins.emplace_back();
       s.instance = uint32_t(instances.size() - 1);
       s.lore = loreSheet(r.room.Bytes(prop->second));
+      s.covers = synthetic;
+      s.own = ownModel;
       s.pos = Apply(area.xf, MulR2G(pos));
       s.lo = Vec3{HUGE_VAL, HUGE_VAL, HUGE_VAL};
       s.hi = Vec3{-HUGE_VAL, -HUGE_VAL, -HUGE_VAL};
@@ -2766,7 +2817,9 @@ void Writer::WriteGeometry(const RoomData& r, uint32_t mrea, const Area& area) {
         if (by != nullptr) {
           break;
         }
-        if (MaxAbs(s.pos, o.pos) < kRetailActorNear) {
+        // Other retail actors may stand at the carried-over one's origin: only that one goes.
+        if (MaxAbs(s.pos, o.pos) < kRetailActorNear &&
+            (!s.own || std::find(carriedActors.begin(), carriedActors.end(), &o) != carriedActors.end())) {
           by = &s;
           break;
         }
@@ -2775,7 +2828,7 @@ void Writer::WriteGeometry(const RoomData& r, uint32_t mrea, const Area& area) {
             return MaxAbs(p, o.pos) < kRetailActorNear;
           })) {
         for (const Standin& s : standins) {
-          if (inside(o.pos, s.lo, s.hi, kStandinMargin)) {
+          if (s.covers && inside(o.pos, s.lo, s.hi, kStandinMargin)) {
             by = &s;
             break;
           }
@@ -2788,8 +2841,13 @@ void Writer::WriteGeometry(const RoomData& r, uint32_t mrea, const Area& area) {
     }
   }
   if (!m_syntheticEntities.empty() || !standins.empty()) {
-    Log("  " + r.name + ": " + std::to_string(standins.size()) + " of " + std::to_string(m_syntheticEntities.size()) +
+    const size_t synthetics = size_t(std::count_if(standins.begin(), standins.end(), [](const Standin& s) { return !s.own; }));
+    Log("  " + r.name + ": " + std::to_string(synthetics) + " of " + std::to_string(m_syntheticEntities.size()) +
         " Remastered stand-in actors drawn, " + std::to_string(standinHidden) + " retail actors hidden");
+  }
+  if (ownModels != 0) {
+    Log("  " + r.name + ": " + std::to_string(ownModels) +
+        " actors draw the room's own model where the table carries a retail one over");
   }
   // The room's skies, drawn in place of the world's: retail has one per world, Remastered
   // one per room, each turned and scaled to suit it (and two in the Frigate's hangar, one
@@ -3267,10 +3325,26 @@ void Writer::PairRetailModels(const RoomData& r, const Area& area) {
           out.animated = ancs != 0 && ancs != 0xffffffffu;
         }
       }
+      // When the counts differ (Remastered added or dropped some, or keeps one entity for a
+      // retail Platform and Actor on the same spot), the entity is the one standing where the
+      // object does, within kRetailActorNear as WriteGeometry leaves such entities to the
+      // retail object; an object with none keeps the retail model.
+      const Placed* found = nullptr;
+      if (named.size() == placed.size()) {
+        found = &placed[n];
+      } else {
+        double nearest = kRetailActorNear;
+        for (const Placed& p : placed) {
+          if (const double d = MaxAbs(p.pos, o.pos); d < nearest) {
+            nearest = d;
+            found = &p;
+          }
+        }
+      }
       double basis[3][3], inverse[3][3];
       EditorBasis(o.rot, o.scale, basis);
-      if (named.size() == placed.size() && Invert3(basis, inverse)) {
-        const Placed& p = placed[n];
+      if (found != nullptr && Invert3(basis, inverse)) {
+        const Placed& p = *found;
         out.ok = true;
         out.entity = p.entity;
         for (int i = 0; i < 3; ++i) {
@@ -3454,7 +3528,7 @@ std::string Writer::WriteRoom(const RoomData& r, const std::map<std::string, Pla
   }
 
   std::vector<uint8_t> out = {'M', 'P', 'E', 'V'};
-  AppendLE32(out, 33);
+  AppendLE32(out, 34);
   float tone[5];
   std::copy(tonemap, tonemap + 5, tone);
   Tonemap(r, tone);
@@ -3849,6 +3923,57 @@ std::string Writer::WriteRoom(const RoomData& r, const std::map<std::string, Pla
     }
     for (const std::string& n : notes) {
       Log("  " + r.name + ": " + n);
+    }
+  }
+  {
+    // The LightHints (version 34): each one's entity +Z, turned Rz * Ry * Rx as a spot's, is the
+    // direction CLightHintManager::BeforeThink 0x598054 gives the dominant light once its hint
+    // owns it.
+    struct Hint {
+      int32_t layer;
+      bool on;
+      float dir[3];
+    };
+    std::vector<Hint> hints;
+    for (const Component* c : r.room.Of(kLightHint)) {
+      Vec3 pos, euler, scale;
+      if (!r.room.Xform(*c, pos, euler, scale)) {
+        continue;
+      }
+      constexpr double kDegToRad = 3.14159265358979323846 / 180;
+      const double x = euler[0] * kDegToRad, y = euler[1] * kDegToRad, z = euler[2] * kDegToRad;
+      const double cx = std::cos(x), sx = std::sin(x), cy = std::cos(y), sy = std::sin(y), cz = std::cos(z),
+                   sz = std::sin(z);
+      const Vec3 fwd = MulR2G({cz * sy * cx + sz * sx, sz * sy * cx - cz * sx, cy * cx});
+      Vec3 d{};
+      for (size_t i = 0; i < 3; ++i) {
+        d[i] = m.a[i][0] * fwd[0] + m.a[i][1] * fwd[1] + m.a[i][2] * fwd[2];
+      }
+      const double len = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+      if (!(len > 1e-6)) {
+        continue;
+      }
+      Hint h{};
+      for (size_t i = 0; i < 3; ++i) {
+        h.dir[i] = float(d[i] / len);
+      }
+      const auto layer = scripts.layer.find(c->entity);
+      h.layer = layer != scripts.layer.end() ? int32_t(layer->second) : -1;
+      h.on = r.room.Active(*c);
+      char line[160];
+      std::snprintf(line, sizeof line, "  %s: light hint (%.3f, %.3f, %.3f) layer %d%s", r.name.c_str(), h.dir[0],
+                    h.dir[1], h.dir[2], int(h.layer), h.on ? "" : " (off)");
+      Log(line);
+      hints.push_back(h);
+    }
+    AppendLE32(out, uint32_t(hints.size()));
+    for (const Hint& h : hints) {
+      AppendLE32(out, uint32_t(h.layer));
+      out.push_back(h.on ? 1 : 0);
+      out.insert(out.end(), 3, 0);
+      for (float v : h.dir) {
+        AppendLEFloat(out, v);
+      }
     }
   }
   if (!scripts.envOps.empty() || scripts.envUnresolved != 0) {

@@ -24,6 +24,7 @@ constexpr float kReleaseTime = 0.15f; // seconds to ease back out after a wall l
 bool sEnabled = false;
 bool sActive = false;
 Params sParams;
+Params sFramed; // sParams for the live view (Frame)
 // The distance behind the pivot the camera sits at: this tick's, and the tick's start, which
 // frames between ticks blend from (as PortFreeCam does).
 float sLength = 0.f;
@@ -51,9 +52,9 @@ Geometry Compute(const CTransform4f& xf) {
   const Vec3 fwd = ToVec(xf.GetForward());
   const Vec3 right = ToVec(xf.GetRight());
   const Vec3 up = ToVec(xf.GetUp());
-  const Vec3 pivot{eye.x + up.x * sParams.height, eye.y + up.y * sParams.height,
-                   eye.z + up.z * sParams.height};
-  const Vec3 want = ComputeEye(eye, fwd, right, up, sParams);
+  const Vec3 pivot{eye.x + up.x * sFramed.height, eye.y + up.y * sFramed.height,
+                   eye.z + up.z * sFramed.height};
+  const Vec3 want = ComputeEye(eye, fwd, right, up, sFramed);
   Geometry g;
   g.pivot = FromVec(pivot);
   const CVector3f delta = FromVec(want) - g.pivot;
@@ -75,6 +76,19 @@ float Blend() {
     return -1.f;
   }
   return t;
+}
+
+// What the camera stops short of.
+const CMaterialFilter& WallFilter() {
+  static const CMaterialFilter filter = CMaterialFilter::MakeIncludeExclude(
+      CMaterialList(kMT_Solid), CMaterialList(kMT_ProjectilePassthrough));
+  return filter;
+}
+
+// sFramed for the first-person camera's live FOV and aspect.
+void Frame(const CFirstPersonCamera& fp) {
+  constexpr float kDegToRad = 3.14159265f / 180.f;
+  sFramed = Framed(sParams, std::tan(0.5f * fp.GetRenderFov() * kDegToRad), fp.GetAspectRatio());
 }
 
 bool StateAllows(const CStateManager& mgr) {
@@ -123,17 +137,23 @@ void Update(CStateManager& mgr, float dt) {
   if (!allowed) {
     sActive = false;
     sAimValid = false;
-    PortThirdPersonBody::Release();
+    // Off, the body goes; only paused (morph ball, a cinematic), it stays loaded so it stands
+    // there the tick she does, not a load later.
+    if (sEnabled) {
+      PortThirdPersonBody::Suspend();
+    } else {
+      PortThirdPersonBody::Release();
+    }
     return;
   }
   PortThirdPersonBody::Update(mgr, dt);
-  const CTransform4f xf = mgr.GetCameraManager()->GetFirstPersonCamera()->GetTransform();
+  const CFirstPersonCamera& fp = *mgr.GetCameraManager()->GetFirstPersonCamera();
+  Frame(fp);
+  const CTransform4f xf = fp.GetTransform();
   const Geometry g = Compute(xf);
-  static const CMaterialFilter filter = CMaterialFilter::MakeIncludeExclude(
-      CMaterialList(kMT_Solid), CMaterialList(kMT_ProjectilePassthrough));
   float target = g.full;
   if (g.full > 0.f) {
-    const CRayCastResult hit = mgr.RayStaticIntersection(g.pivot, g.dir, g.full, filter);
+    const CRayCastResult hit = mgr.RayStaticIntersection(g.pivot, g.dir, g.full, WallFilter());
     target = PullInLength(g.full, hit.IsValid() ? hit.GetTime() : -1.f);
   }
   if (!sActive) {
@@ -191,6 +211,36 @@ CTransform4f TickView(const CTransform4f& game) {
   CTransform4f xf = game;
   xf.SetTranslation(g.pivot + g.dir * std::min(sLength, g.full));
   return xf;
+}
+
+bool MorphCameraPosition(const CStateManager& mgr, const CTransform4f& fp, CVector3f& out) {
+#if defined(MP_ENABLE_OPENXR)
+  // Includes the unmorph failsafe path: desktop third-person must not steer
+  // an immersive transition, even if its saved preference is enabled.
+  if (PortVr::VrImmersive()) {
+    return false;
+  }
+#endif
+  if (Active()) {
+    out = TickView(fp).GetTranslation();
+    return true;
+  }
+  const CCameraManager* cams = mgr.GetCameraManager();
+  if (!sEnabled || cams == nullptr || cams->IsInCinematicCamera() ||
+      (PortFreeCam::Active() && !PortFreeCam::Drive())) {
+    return false;
+  }
+  if (const CFirstPersonCamera* cam = cams->GetFirstPersonCamera()) {
+    Frame(*cam);
+  }
+  const Geometry g = Compute(fp);
+  float len = g.full;
+  if (g.full > 0.f) {
+    const CRayCastResult hit = mgr.RayStaticIntersection(g.pivot, g.dir, g.full, WallFilter());
+    len = PullInLength(g.full, hit.IsValid() ? hit.GetTime() : -1.f);
+  }
+  out = g.pivot + g.dir * len;
+  return true;
 }
 
 CTransform4f View(const CTransform4f& game) {

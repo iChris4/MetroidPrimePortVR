@@ -1100,7 +1100,7 @@ public:
     return out;
   }
 
-  // The id a Remastered-only model (pak order) is written under, converting
+  // The id a Remastered model (pak order) is written under, converting
   // it the first time; 0 when it cannot be.
   uint32_t Model(const EffectGuid& id) {
     const auto known = m_models.find(id);
@@ -1180,19 +1180,26 @@ public:
   // The retail id for an id as an effect stores it: the disc's own when it
   // was carried over from retail, else a converted texture's or model's.
   uint32_t Stored(const EffectGuid& stored, uint32_t type) {
+    const EffectGuid id = Swap(stored);
+    // Remastered's own model under a carried-over id comes first, converted on its own:
+    // the retail id's CMDL stays the disc's unless a room places it (retailmodels), so
+    // an effect-only model (the drain debris PMDLs, 8C2D2698 and its siblings) would
+    // otherwise draw retail's GC model. Its own conversion keeps Remastered's space,
+    // the one its effect draws it in, where a room-placed one is baked to its placement.
+    if (type == kCmdl && m_io.typeOf(id) == kCmdl) {
+      if (const uint32_t model = Model(id)) {
+        return model;
+      }
+    }
     const std::optional<uint32_t> retail = EffectRetailId(stored);
     if (retail && m_io.retailId(*retail)) {
       return *retail;
     }
-    const EffectGuid id = Swap(stored);
     if (type == kTxtr && m_io.typeOf(id) == kTxtr) {
       return Texture(id);
     }
-    if (type == kCmdl && m_io.typeOf(id) == kCmdl) {
-      return Model(id);
-    }
     // A Remastered-only GENP the import writes under its own id (a room's or port actor's,
-    // e.g. an ELC2's GPSM/EPSM in kActorEffectGuids).
+    // e.g. an ELSM/ELC2's GPSM/EPSM, ElectricGenps).
     if (type == kPart && m_io.typeOf(id) == kGenp &&
         std::find(m_io.roomOnly.begin(), m_io.roomOnly.end(), id) != m_io.roomOnly.end()) {
       return RoomEffectId(id);
@@ -1247,12 +1254,14 @@ public:
       }
       return m_black != 0 ? FlipbookAtlas{m_black, 1, 1, 1} : FlipbookAtlas{};
     }
-    const std::optional<uint32_t> retail = EffectRetailId(stored);
-    if (retail && m_io.retailId(*retail)) {
-      return FlipbookAtlas{*retail, 1, 1, 1};
-    }
+    // Remastered's own file under a carried-over id comes first: it is an sRGB texture its
+    // shaders sample decoded, where the disc's GC texture holds the encoded bytes.
     const EffectGuid id = Swap(stored);
     if (m_io.typeOf(id) != kTxtr) {
+      const std::optional<uint32_t> retail = EffectRetailId(stored);
+      if (retail && m_io.retailId(*retail)) {
+        return FlipbookAtlas{*retail, 1, 1, 1};
+      }
       return {};
     }
     int width = 0, height = 0, layers = 0;
@@ -1333,8 +1342,25 @@ public:
     io.flipbook = [&](const EffectGuid& stored) { return Flipbook(Swap(stored)); };
     io.materialData = [&](const EffectGuid& material) { return MaterialData(material); };
     io.vfxTexture = [&](const EffectGuid& stored) { return VfxTexture(stored); };
+    // The top mip's size, as GetFullTextureWidth/Height.
+    io.textureSize = [&](const EffectGuid& stored, uint32_t& width, uint32_t& height) {
+      int w = 0, h = 0;
+      std::vector<uint8_t> rgba;
+      std::string error;
+      if (!m_io.texture || !m_io.texture(Swap(stored), w, h, rgba, error) || w <= 0 || h <= 0) {
+        return false;
+      }
+      width = uint32_t(w);
+      height = uint32_t(h);
+      return true;
+    };
     if (m_io.modelMesh) {
       io.modelMesh = [&](uint32_t model) { return m_io.modelMesh(model); };
+    }
+    if (m_io.modelAnimatesUv) {
+      io.modelAnimatesUv = [&](const EffectGuid& stored, bool& animatesUv) {
+        return m_io.modelAnimatesUv(Swap(stored), animatesUv);
+      };
     }
     return io;
   }
@@ -1394,7 +1420,8 @@ public:
   bool ExternalSwooshes(const EffectNode& parent, const EffectGuid& parentId, uint32_t retail,
                         const std::map<EffectGuid, Child>& children,
                         std::map<EffectGuid, ExternalSwoosh>& out, std::string& error) {
-    if (parent.form != kElsm) {
+    // ELC2 names its swoosh the same way (CreateELC2 0xb70854, GetSwooshGeneratorDesc).
+    if (parent.form != kElsm && parent.form != EffectFourCC("ELC2")) {
       return true;
     }
     std::set<EffectGuid> resolving;
@@ -1729,7 +1756,45 @@ public:
         Effect(id, pairing);
       }
     }
+    for (const EffectPairing& pairing : m_io.decals) {
+      Decal(pairing);
+    }
     return m_result;
+  }
+
+  // One paired DPSM over its disc DPSC, or the DPSC left as it is (logged).
+  void Decal(const EffectPairing& pairing) {
+    const std::string name = Hex8(pairing.retail) + ".DPSC";
+    std::vector<uint8_t> data;
+    std::vector<uint8_t> disc;
+    std::string error;
+    EffectNode decal;
+    if (!m_io.read(EffectFourCC("DPSM"), pairing.id, data, error) ||
+        !ParseEffect(data.data(), data.size(), decal, error)) {
+      error = "parse: " + error;
+    } else if (!m_io.retail || !m_io.retail(EffectFourCC("DPSC"), pairing.retail, disc)) {
+      error = "the disc has no DPSC";
+    } else {
+      std::vector<uint8_t> out;
+      std::vector<std::string> dropped;
+      const std::map<EffectGuid, Child> children;  // a DPSM embeds none
+      const std::map<EffectGuid, ExternalSwoosh> swooshes;
+      if (ConvertDecal(decal, data.data(), disc, ConvertIO(children, swooshes), out, dropped, error)) {
+        if (m_io.write(name, out)) {
+          ++m_result.decals;
+          std::string left;
+          for (const std::string& fourcc : dropped) {
+            left += " " + fourcc;
+          }
+          Log(name + ": decal " + EffectGuidString(Swap(pairing.id)) + " (" + pairing.method + ")" +
+              (left.empty() ? std::string() : ", not written:" + left));
+          return;
+        }
+        error = "could not write it";
+      }
+    }
+    ++m_result.decalsFailed;
+    Log(name + ": decal " + EffectGuidString(Swap(pairing.id)) + " left retail: " + error);
   }
 
 private:
@@ -1749,6 +1814,37 @@ private:
 bool WantsRemasteredEffects() { return port::EnvFlag("MP_REMASTERED_EFFECTS", true); }
 
 EffectImportResult ImportEffects(const EffectImportIO& io) { return Importer(io).Run(); }
+
+std::vector<EffectGuid> ElectricGenps(const EffectImportIO& io) {
+  std::vector<EffectGuid> out;
+  if (!io.typeOf || !io.read) {
+    return out;
+  }
+  for (const EffectGuid& id : io.effects) {
+    const uint32_t type = io.typeOf(id);
+    if (type != kElsm && type != EffectFourCC("ELC2")) {
+      continue;
+    }
+    std::vector<uint8_t> data;
+    std::string error;
+    EffectNode effect;
+    if (!io.read(type, id, data, error) || !ParseEffect(data.data(), data.size(), effect, error)) {
+      continue;  // Effect() reports it
+    }
+    for (const EffectProperty& property : effect.properties) {
+      EffectGuid stored{};
+      if ((property.fourcc != EffectFourCC("GPSM") && property.fourcc != EffectFourCC("EPSM")) ||
+          !AssetGuid(property.value, stored) || stored == EffectGuid{} || FindNode(effect, stored) != nullptr ||
+          io.typeOf(Swap(stored)) != kGenp) {
+        continue;
+      }
+      if (std::find(out.begin(), out.end(), Swap(stored)) == out.end()) {
+        out.push_back(Swap(stored));
+      }
+    }
+  }
+  return out;
+}
 
 uint32_t RoomEffectId(const EffectGuid& id) { return SyntheticEffectId(EffectGuidString(Swap(id)).c_str()); }
 

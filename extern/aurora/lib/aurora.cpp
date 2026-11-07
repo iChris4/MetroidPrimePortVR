@@ -6,6 +6,7 @@
 #include "gfx/resources.hpp"
 #include "gfx/depth_peek.hpp"
 #include "gfx/overdraw.hpp"
+#include "gfx/vis_query.hpp"
 #include "gfx/frame.hpp"
 #include "gfx/pipeline_cache.hpp"
 #include "gfx/recording.hpp"
@@ -654,6 +655,7 @@ void end_frame(uint64_t contentTag) noexcept {
     const auto stereoSink = stereo_host::encode(encoder, stereoState, logicalFrame, contentTag);
     webgpu::gpu_prof::frame_end(encoder);
     gfx::overdraw::frame_end(encoder);
+    gfx::vis_query::detail::frame_end(encoder);
     const wgpu::CommandBufferDescriptor cmdBufDescriptor{.label = "Redraw command buffer"};
     const auto buffer = encoder.Finish(&cmdBufDescriptor);
     {
@@ -668,6 +670,7 @@ void end_frame(uint64_t contentTag) noexcept {
     // The bridge's native follow-up on the same queue, then its completion callback.
     stereo_host::submitted(stereoSink);
     gfx::overdraw::after_submit();
+    gfx::vis_query::detail::after_submit();
     if (canPresent && g_surface) {
       ZoneScopedN("Present");
       wgpu::ConvertibleStatus status = wgpu::Status::Error;

@@ -18,6 +18,10 @@
 #include <utility>
 #include <vector>
 
+namespace PortRoomEnv {
+float ParticleInverseExposure(bool blended);
+}
+
 // Port-only Remastered particle variables (PVAR). A converted generator or swoosh description
 // carries the table (PVRT); each CElementGen/CParticleSwoosh holds the live values, which start at
 // the defaults. VARF/VARI/VARV/VARC elements read the slot of the system being updated or rendered.
@@ -99,15 +103,20 @@ public:
 // Remastered's particle variables (GPSM ADV1..9 and IAV0..3), in its SortVars order: one is
 // evaluated after those it reads. At spawn every variable runs; on later frames only those that are
 // not constant after start (CVarContext IsConstantAfterStart), so the one RNG sequence is the same
-// as Remastered's. A kind 0 item runs the generator's own ADVn element.
-enum class EPortPartVarKind : u32 { RealAdv = 0, RealOwn = 1, Int = 2 };
+// as Remastered's. A kind 0 item runs the generator's own ADVn element. Kinds 3 and 4 are VAV0..3
+// and CAV0..3 (CreateGPSM/CreateSWSH AddDefinedVar): no shipped element reads them, so their
+// values are not kept, but they run in their place, which keeps the RNG sequence (a VAV0 of
+// RAND draws).
+enum class EPortPartVarKind : u32 { RealAdv = 0, RealOwn = 1, Int = 2, Vector = 3, Color = 4 };
 
 struct SPortPartVarItem {
   EPortPartVarKind kind = EPortPartVarKind::RealAdv;
   u32 slot = 0;
   bool constAfterStart = false;
-  CRealElement* real = nullptr;  // kind 1: ADV9
-  CIntElement* intE = nullptr;   // kind 2: IAV<slot>
+  CRealElement* real = nullptr;    // kind 1: ADV9
+  CIntElement* intE = nullptr;     // kind 2: IAV<slot>
+  CVectorElement* vec = nullptr;   // kind 3: VAV<slot>
+  CColorElement* color = nullptr;  // kind 4: CAV<slot>
 };
 
 class CPortPartVars {
@@ -121,6 +130,8 @@ public:
     for (size_t i = 0; i < items.size(); ++i) {
       delete items[i].real;
       delete items[i].intE;
+      delete items[i].vec;
+      delete items[i].color;
     }
   }
 
@@ -144,6 +155,16 @@ public:
         int v = 0;
         item.intE->GetValue(frame, v);
         std::memcpy(&values[9 + item.slot], &v, sizeof(v));
+        break;
+      }
+      case EPortPartVarKind::Vector: {
+        CVector3f v;
+        item.vec->GetValue(frame, v);
+        break;
+      }
+      case EPortPartVarKind::Color: {
+        CColor c;
+        item.color->GetValue(frame, c);
         break;
       }
       }
@@ -179,6 +200,10 @@ public:
   float SysReal(u32 slot) const { return slot < x_sys[0].size() ? x_sys[0][slot][0] : 0.f; }
   int SysInt(u32 slot) const {
     return slot < x_sys[1].size() ? static_cast< int >(x_sys[1][slot][0]) : 0;
+  }
+  CVector3f SysVector(u32 slot) const {
+    return slot < x_sys[3].size() ? CVector3f(x_sys[3][slot][0], x_sys[3][slot][1], x_sys[3][slot][2])
+                                  : CVector3f::Zero();
   }
   // The system that built this one (CVarContext 0x24f06c: ctx+0x48 = the parent's), or null.
   void SetParent(const CPortVarMemory* parent) { x_parent = parent != this ? parent : nullptr; }
@@ -375,12 +400,46 @@ public:
   }
 };
 
+// PSYV (port-only; a vector PSAn, GetVectorElement 0x251a44): the current system's vector slot.
+class CVEPortSysVar : public CVectorElement {
+  u32 x4_slot;
+
+public:
+  explicit CVEPortSysVar(u32 slot) : x4_slot(slot) {}
+  ~CVEPortSysVar() override {}
+  bool GetValue(int, CVector3f& out) const override {
+    out = CPortVarGlobals::sCurrent != nullptr ? CPortVarGlobals::sCurrent->SysVector(x4_slot)
+                                               : CVector3f::Zero();
+    return false;
+  }
+};
+
 // PSDT (port-only; Remastered's SDTR, CREShutdownTimeRemaining 0x2999e0): the current system's
 // shutdown countdown remaining over its total (SHTT), 1 when none is running.
 class CREPortShutdownRemaining : public CRealElement {
 public:
   CREPortShutdownRemaining() {}
   ~CREPortShutdownRemaining() override {}
+  bool GetValue(int frame, float& out) const override;
+};
+
+// PVSQ (port-only; Remastered's VISQ, CREVisibilityQuery 0x299790): the current system's
+// occlusion visibility (samples passing the depth test over samples drawn), 1 with none yet.
+class CREPortVisibility : public CRealElement {
+public:
+  CREPortVisibility() {}
+  ~CREPortVisibility() override {}
+  bool GetValue(int frame, float& out) const override;
+};
+
+// PDML (port-only; one component of Remastered's DOML vector, CVEDominantLightDirectionInWorldSpace
+// 0x2a40e8): the dominant light direction LightHints set (PortRoomEnv::DominantLight), world space.
+class CREPortDominantLight : public CRealElement {
+  u32 x4_component;
+
+public:
+  explicit CREPortDominantLight(u32 component) : x4_component(component) {}
+  ~CREPortDominantLight() override {}
   bool GetValue(int frame, float& out) const override;
 };
 
@@ -759,6 +818,77 @@ public:
   }
 };
 
+// A decal SMTR's IEXP (CREInverseExposure 0x299830, CCEInverseExposure 0x2c8f80): the child times
+// CParticleGen::GetInverseExposure(1), the auto inverse exposure (CPostFXManager 0xb005ac); a colour
+// scales its RGB only (ScaleRGB). The importer writes it as the port-only PIEX.
+class CREPortInverseExposure : public CRealElement {
+  CRealElement* x4_value;
+
+public:
+  explicit CREPortInverseExposure(CRealElement* value) : x4_value(value) {}
+  ~CREPortInverseExposure() override { delete x4_value; }
+  bool GetValue(int frame, float& out) const override {
+    x4_value->GetValue(frame, out);
+    out *= PortRoomEnv::ParticleInverseExposure(true);
+    return false;
+  }
+};
+
+class CCEPortInverseExposure : public CColorElement {
+  CColorElement* x4_value;
+
+public:
+  explicit CCEPortInverseExposure(CColorElement* value) : x4_value(value) {}
+  ~CCEPortInverseExposure() override { delete x4_value; }
+  bool GetValue(int frame, CColor& out) const override {
+    float v[4];
+    GetValueHdr(frame, v);
+    auto clamp = [](float f) { return f < 0.f ? 0.f : f > 1.f ? 1.f : f; };
+    out = CColor(clamp(v[0]), clamp(v[1]), clamp(v[2]), clamp(v[3]));
+    return false;
+  }
+  bool GetValueHdr(int frame, float out[4]) const override {
+    x4_value->GetValueHdr(frame, out);
+    const float scale = PortRoomEnv::ParticleInverseExposure(true);
+    for (int i = 0; i < 3; ++i) {
+      out[i] *= scale;
+    }
+    return false;
+  }
+};
+
+// VRTC: CCEVectorAndRealToColor 0x2c84fc, (max(vector, 0), max(real, 0)) from a zero vector and a
+// real of 1. The importer writes it as the port-only PVRC.
+class CCEPortVectorAndRealToColor : public CColorElement {
+  CVectorElement* x4_vector;
+  CRealElement* x8_real;
+
+public:
+  CCEPortVectorAndRealToColor(CVectorElement* vector, CRealElement* real) : x4_vector(vector), x8_real(real) {}
+  ~CCEPortVectorAndRealToColor() override {
+    delete x4_vector;
+    delete x8_real;
+  }
+  bool GetValue(int frame, CColor& out) const override {
+    float v[4];
+    GetValueHdr(frame, v);
+    auto clamp = [](float f) { return f > 1.f ? 1.f : f; };
+    out = CColor(clamp(v[0]), clamp(v[1]), clamp(v[2]), clamp(v[3]));
+    return false;
+  }
+  bool GetValueHdr(int frame, float out[4]) const override {
+    CVector3f vector = CVector3f::Zero();
+    float real = 1.f;
+    x4_vector->GetValue(frame, vector);
+    x8_real->GetValue(frame, real);
+    out[0] = std::max(vector.GetX(), 0.f);
+    out[1] = std::max(vector.GetY(), 0.f);
+    out[2] = std::max(vector.GetZ(), 0.f);
+    out[3] = std::max(real, 0.f);
+    return false;
+  }
+};
+
 // MDAO: CCEModifyAlphaOnly 0x2c8678, the colour's RGB with alpha max(real, 0).
 class CCEPortModifyAlpha : public CColorElement {
   CColorElement* x4_color;
@@ -844,6 +974,12 @@ class CInputStream;
 // Reads a PVRT body (after the CNST class id): u32 count, then per variable 16 guid bytes, u32
 // type and 4 float bit patterns. Null on a malformed table.
 CPortVarTable* PortReadVarTable(CInputStream& in);
+// Reads a PSYS body (after the CNST class id). Null on a malformed one.
+CPortSys* PortReadSys(CInputStream& in);
+// Reads a PPVR body (after the CNST class id): u32 count, then per item u32 kind, slot and
+// constant-after-start flag, and for kinds 1..4 the element. A generator's kind 1 is ADV9 only; a
+// swoosh (whose ADV0..8 are all its own, per point) has no kind 0. Null on a malformed one.
+CPortPartVars* PortReadPartVars(CInputStream& in, bool swoosh);
 
 #endif // TARGET_PC
 #endif // _CPORTPARTICLEVARS

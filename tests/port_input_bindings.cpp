@@ -1,6 +1,7 @@
 #include "port_input_bindings.h"
 #include "port_test.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <initializer_list>
@@ -103,7 +104,8 @@ void TestInputText() {
   REQUIRE(InputToText(In(Device::Touch, 3)) == "touch:a");
   REQUIRE(InputToText(In(Device::Touch, 28)) == "touch:tturbo");
   REQUIRE(InputToText(In(Device::Touch, 32)) == "touch:beam_shift");
-  REQUIRE(InputToText(In(Device::Touch, 35)) == "touch:35");
+  REQUIRE(InputToText(In(Device::Touch, 35)) == "touch:menu_back");
+  REQUIRE(InputToText(In(Device::Touch, 36)) == "touch:36");
   REQUIRE(InputToText(In(Device::Touch, 40)) == "touch:bbomb");
   REQUIRE(InputToText(In(Device::Touch, 44)) == "touch:bunmorph");
   REQUIRE(InputToText(In(Device::Touch, 45)) == "touch:45");
@@ -457,6 +459,58 @@ void TestTouchButtons() {
   Input back;
   REQUIRE(InputFromText("touch:k9", back) && back == In(Device::Touch, 73));
 }
+
+// The stock touch buttons: fixed actions a user binding can't take or clear.
+void TestStockTouch() {
+  REQUIRE(StockTouchInput(In(Device::Touch, 4)) && StockTouchInput(In(Device::Touch, 22)));
+  REQUIRE(StockTouchInput(In(Device::Touch, 33)) && StockTouchInput(In(Device::Touch, 35)));
+  REQUIRE(!StockTouchInput(In(Device::Touch, 10)) && !StockTouchInput(In(Device::Touch, 32)));
+  REQUIRE(!StockTouchInput(In(Device::Touch, 40)) && !StockTouchInput(In(Device::Touch, 64)));
+  REQUIRE(!StockTouchInput(In(Device::PadButton, 4)));
+
+  // A binding with a stock code anywhere in it goes; Visor, beam shift, the Morph
+  // Ball rows and added buttons stay.
+  UserProfile user;
+  user.replace = true;
+  user.bindings.push_back(Bind(Action::PadA, {In(Device::Touch, 4)}));
+  user.bindings.push_back(Bind(Action::BeamIce, {In(Device::Touch, 32), In(Device::Touch, 5)}));
+  user.bindings.push_back(Bind(Action::VisorScan, {In(Device::Touch, 10)}));
+  user.bindings.push_back(Bind(Action::BeamIce, {In(Device::Touch, 32), In(Device::PadButton, 0)}));
+  user.bindings.push_back(Bind(Action::BallBomb, {In(Device::Touch, 40)}));
+  user.bindings.push_back(Bind(Action::PadY, {In(Device::Touch, 64)}));
+  const UserProfile kept = WithoutStockTouch(user);
+  REQUIRE(kept.replace && kept.bindings.size() == 4);
+  REQUIRE((kept.bindings[0] == user.bindings[2]) && (kept.bindings[3] == user.bindings[5]));
+
+  // After even a replacing overlay, touch B jumps and LB jumps in every context,
+  // the back arrow only backs out, and Turbo pulses A.
+  Profile p;
+  Overlay(p, kept);
+  BindStockTouch(p, 15);
+  Runtime runtime;
+  runtime.SetProfile(&p);
+  RawState raw;
+  raw.touch.set(4);
+  REQUIRE(runtime.Poll(raw, kCtxGameplay, 1000).Held(Action::PadB));
+  REQUIRE(!runtime.Last().Held(Action::PadA));
+  raw.touch.reset();
+  raw.touch.set(22);
+  REQUIRE(runtime.Poll(raw, kCtxMenu, 1016).Held(Action::PadB));
+  raw.touch.reset();
+  raw.touch.set(35);
+  REQUIRE(!runtime.Poll(raw, kCtxGameplay, 1032).Held(Action::PadB));
+  raw.touch.reset();
+  runtime.Poll(raw, kCtxMenu, 1040);
+  raw.touch.set(35);
+  REQUIRE(runtime.Poll(raw, kCtxMenu, 1048).Held(Action::PadB));
+  raw.touch.reset();
+  raw.touch.set(7);
+  REQUIRE(runtime.Poll(raw, kCtxGameplay, 1064).Held(Action::PadL));
+  REQUIRE(runtime.Last().Value(Action::LAnalog) == 1.f);
+  const auto turbo = std::find_if(p.bindings.begin(), p.bindings.end(),
+                                  [](const Binding& b) { return b.inputs[0] == In(Device::Touch, 33); });
+  REQUIRE(turbo != p.bindings.end() && turbo->action == Action::PadA && turbo->turboHz == 15);
+}
 // Custom actions: Action values past the fixed enum, named custom:<id> in the
 // file and defined by [[custom_action]] tables before the profiles.
 void TestCustomActions() {
@@ -737,12 +791,61 @@ void TestBallButtons() {
   BlockRowInputs(e, [](const Binding& b) { return b.action == Action::MenuA; }, kCtxMap, true);
   REQUIRE(e.bindings[0].blocked == kCtxMap && e.bindings[1].blocked == 0 && e.bindings[2].blocked == 0);
 }
+// A key on a map row does only that on the map, scoped bindings included, and
+// everything it did before elsewhere; an unbound row changes nothing.
+void TestMapRows() {
+  REQUIRE(FindMapRow(Action::MapPanUp)->game == Action::CUp);
+  REQUIRE(FindMapRow(Action::MapRotateLeft)->game == Action::MainLeft);
+  REQUIRE(FindMapRow(Action::CUp) == nullptr);
+  REQUIRE(ActionFromKey("map_pan_right") == Action::MapPanRight);
+
+  const Input w = In(Device::Key, 26), i = In(Device::Key, 12);
+  Binding scoped = Bind(Action::PadZ, {w});
+  scoped.contexts = kCtxMap | kCtxMenu;
+  Profile base;
+  base.chordWindowMs = 0;
+  base.bindings = {Bind(Action::MainUp, {w}), Bind(Action::CUp, {i}), scoped};
+  Profile p = base;
+  ApplyMapRows(p);
+  REQUIRE(p == base);
+
+  Binding pan = Bind(Action::MapPanUp, {w});
+  pan.contexts = kCtxGameplay | kCtxLayer1;
+  p.bindings.push_back(pan);
+  ApplyMapRows(p);
+  REQUIRE(p.bindings[3].contexts == kCtxMap && p.bindings[3].blocked == 0);
+  REQUIRE(p.bindings[0].blocked == kCtxMap && p.bindings[1].blocked == 0 && p.bindings[2].blocked == kCtxMap);
+  Runtime runtime;
+  runtime.SetProfile(&p);
+  RawState raw;
+  raw.keys.set(26);
+  const Output& play = runtime.Poll(raw, kCtxGameplay, 1000);
+  REQUIRE(play.Value(Action::MainUp) == 1.f && play.Value(Action::MapPanUp) == 0.f);
+  raw.keys.reset();
+  runtime.Poll(raw, kCtxMap, 1008);
+  raw.keys.set(26);
+  const Output& map = runtime.Poll(raw, kCtxMap, 1016);
+  REQUIRE(map.Value(Action::MapPanUp) == 1.f);
+  REQUIRE(map.Value(Action::MainUp) == 0.f);
+  REQUIRE(!map.Held(Action::PadZ));
+  raw.keys.reset();
+  runtime.Poll(raw, kCtxMenu, 1024);
+  raw.keys.set(26);
+  REQUIRE(runtime.Poll(raw, kCtxMenu, 1032).Held(Action::PadZ));
+  // The C-stick's own key still pans the map.
+  raw.keys.reset();
+  runtime.Poll(raw, kCtxMap, 1040);
+  raw.keys.set(12);
+  REQUIRE(runtime.Poll(raw, kCtxMap, 1048).Value(Action::CUp) == 1.f);
+}
 } // namespace
 
 int main() {
   TestCustomActions();
   TestBallButtons();
+  TestMapRows();
   TestTouchButtons();
+  TestStockTouch();
   TestDuplicateBindings();
   TestFamilyEditing();
   TestInputText();

@@ -171,6 +171,10 @@ public:
   // The beam's charge, 0 to 1, which the Ice Beam cannon's frost shell (kind 12) dissolves
   // with: Remastered's DisintegrationAmount. At 0 the shell is not drawn.
   static void PortSetChargeShell(float amount);
+  // The gun's heat, 0 to 1 (CGunWeaponMP1::SetHeatVisualLevel), and whether the draws that
+  // follow take it: only the gun's own thermal model does, not the arms or grapple parts.
+  static void PortSetGunHeat(float level);
+  static void PortApplyGunHeat(bool on);
   // While active, every model drawn outside the thermal visor is a frozen enemy's body, drawn as
   // Remastered's RenderIcy (kind 47, 0xfc4794) in place of its materials: dirGC is the freeze
   // direction in the game's world, t the seconds since the freeze, darkening the actor's ice
@@ -212,6 +216,11 @@ public:
     PortInventoryScope& operator=(const PortInventoryScope&);
   };
   static bool PortInventoryKind(float kind) { return kind > 35.5f && kind < 37.5f; }
+  // A Remastered model particle drawn by its CMDL's own materials (no MTIN): while set, the
+  // particle's DIFC rgb, unclamped (RenderNonInstanced 0x2bd27c: COLR x max(ITEN, 0) x the
+  // inverse exposure), replaces the flags' colour on the tinted PBR kinds under every blend,
+  // opaque included. nullptr clears it. Read synchronously by the Draw it wraps.
+  static void PortSetParticleDiffuse(const float* rgb);
   // How a surface draws while a pass may be set. Outside: not the visor's (no pass, or not kind
   // 36 or 37), it takes the usual path. Pbr: the visor's, by its shader. Tev: the visor's, on
   // its TEV fallback with the doll's flags: drawn under another mode than the pass's (blended
@@ -324,6 +333,10 @@ public:
   // The override's x and y as they are: the hot world's global (1.0, 0.2509804).
   static void PortSetThermalOverrideConstants(float x, float y);
   static void PortClearThermalOverride();
+  // Port: the first-person gun's beam colour (port_beam_colours.h) while `model` draws: the
+  // materials in `mask` (CModel::PortBeamGlowMask) take the beam's matrix, a PBR surface on its
+  // glow term alone, the rest none. A null model ends it.
+  static void PortSetBeamGlow(const CCubeModel* model, int beam, uint64_t mask);
   // The override as it is now, to put back after a nested one (PortRestoreThermalOverride).
   static void PortGetThermalOverride(bool& on, float& x, float& y);
   static void PortRestoreThermalOverride(bool on, float x, float y);
@@ -342,6 +355,11 @@ public:
   void PortDrawThermalOverride(const float* positions, const float* normals, const CModelFlags& flags,
                                ESurfaceSelection which) const;
   static bool sPortThermalSplit;
+  // Set around draws of Remastered scene nodes with no baked lighting: CModelLightingData::Default
+  // (no lightmap, no probe volume) on scene group 0, which no area's baked context has, so
+  // InitializeBakedLightingMaterialData gives them no probe either (the fish cloud's boids). Their
+  // PBR draws take no baked ambient, volume, lightmap or backlight; only the runtime lights.
+  static bool sPortUnbaked;
 #endif
   bool TryLockTextures() const;
   void Draw(const CModelFlags& flags) const;

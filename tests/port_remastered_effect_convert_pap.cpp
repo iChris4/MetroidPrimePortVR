@@ -245,9 +245,66 @@ void TestNoPpvr() {
   }
 }
 
+// LTME = RAND(SPAI(#0, 60), SPAI(#1, 100)): parent reads never fold to constants, so the RAND is
+// CIERandom, the port-only PRAN over the two reads, not a drop.
+void TestIntRandParentRead() {
+  std::vector<uint8_t> out = Header();
+  PutProperty(out, "LTME", 0);
+  PutFourCC(out, "RAND");
+  PutFourCC(out, "SPAI");
+  out.push_back(0);
+  PutCnst(out, 60);
+  PutFourCC(out, "SPAI");
+  out.push_back(1);
+  PutCnst(out, 100);
+  PutTexr(out, 0x1234ABCD);
+  PutProperty(out, "_END", 4);
+  const std::vector<ConvertedPart> parts = Convert(out);
+  CHECK_MSG(parts.size() == 1, "one part");
+  if (parts.size() != 1) {
+    return;
+  }
+  for (const std::string& d : parts[0].dropped) {
+    CHECK_MSG(d.rfind("LTME", 0) != 0, d.c_str());
+  }
+  std::vector<uint8_t> ltme = Four("PRAN");
+  Append(ltme, Four("SPAI"));
+  Be(ltme, {0});
+  Append(ltme, Four("CNST"));
+  Be(ltme, {60});
+  Append(ltme, Four("SPAI"));
+  Be(ltme, {1});
+  Append(ltme, Four("CNST"));
+  Be(ltme, {100});
+  CHECK_MSG(Contains(parts[0].part, ltme), "LTME reads a PRAN of the two SPAI reads");
+}
+
+// SPWT on a generator with no child system: nothing reads it, so it is neither written nor dropped.
+void TestChildlessSpwt() {
+  std::vector<uint8_t> out = Header();
+  PutProperty(out, "SPWT", 1);
+  PutFourCC(out, "CNST");
+  PutCnst(out, Bits(0.f));
+  PutCnst(out, Bits(0.5f));
+  PutCnst(out, Bits(0.f));
+  PutTexr(out, 0x1234ABCD);
+  PutProperty(out, "_END", 4);
+  const std::vector<ConvertedPart> parts = Convert(out);
+  CHECK_MSG(parts.size() == 1, "one part");
+  if (parts.size() != 1) {
+    return;
+  }
+  for (const std::string& d : parts[0].dropped) {
+    CHECK_MSG(d.rfind("SPWT", 0) != 0, d.c_str());
+  }
+  CHECK_MSG(!Contains(parts[0].part, Four("SPWT")), "no SPWT written");
+}
+
 }  // namespace
 
 int main() {
+  TestChildlessSpwt();
+  TestIntRandParentRead();
   TestPpvr();
   TestPap9Leaf();
   TestNoPpvr();

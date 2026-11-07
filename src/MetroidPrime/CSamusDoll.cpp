@@ -16,6 +16,7 @@
 #include "MetaRender/CCubeRenderer.hpp"
 #include "Collision/CollisionUtil.hpp"
 #include "Kyoto/Graphics/CModel.hpp"
+#include "Kyoto/Graphics/CCubeModel.hpp"
 #ifdef TARGET_PC
 #include "port_dread_samus_mod.h"
 #endif
@@ -64,10 +65,14 @@ static SObjectTag PortSuitVariantTag(const char* name, int suit) {
                     CMorphBall::PortSuitVariant(tag->GetId(), tag->GetType(), suit));
 }
 
-// Whether the dread-samus mod serves this suit's doll body: one mesh with its own boots, cannon
-// and visor, so the suit's other parts, boots, beam and visor models are not drawn.
+// Whether a mod serves this suit's doll body: one mesh with its own boots and visor, so the suit's
+// other parts, boots and visor models are not drawn.
 static bool PortDreadDoll(int suit) {
   return PortDreadSamus::Replaces(PortDreadSamus::DollBody(suit));
+}
+// Whether that body has its own cannon too (Dread, Dark Samus), so the beam model is not drawn.
+static bool PortDollHasCannon(int suit) {
+  return PortDreadSamus::HasOwnCannon(PortDreadSamus::DollBody(suit));
 }
 #endif
 
@@ -387,8 +392,11 @@ void CSamusDoll::Update(float dt, CRandom16& rand) {
 void CSamusDoll::Draw(const CStateManager& mgr, float alpha) {
 #ifdef TARGET_PC
   const PortPauseLighting::Scope dollScope(PortPauseLighting::doll, PortPauseLighting::active);
-  const PortPauseLighting::Scope phazonScope(PortPauseLighting::phazon,
-      mgr.GetPlayerState()->HasPowerUp(CPlayerState::kIT_PhazonSuit));
+  // Remastered builds the doll's models on the master scene (CSamusDollMP1::TryFinishLoad
+  // 0xe78a18, CModelLightingDataMP1::Default), group 0, while the UI area's baked context
+  // has its own group (CGameAreaLoader::ContinueLoad 0x3f8ea0, room types mask 0x1b9), so
+  // HasProbeData (0x1c6bbc) fails and the doll has no baked light, only the UI lights.
+  const PortPauseLighting::Scope unbakedScope(CCubeModel::sPortUnbaked, PortPauseLighting::active);
 #endif
   if (!IsLoaded()) {
     return;
@@ -438,9 +446,8 @@ void CSamusDoll::Draw(const CStateManager& mgr, float alpha) {
       GXPortSetShadowCaster(GX_FALSE);
       float worldToView[3][4];
       PortPauseLighting::LightView(worldToView);
-      float lights[48];
-      PortPauseLighting::Lights(worldToView, PortPauseLighting::phazon, lights);
-      GXPortSetRoomLights(lights, 3);
+      float lights[32];
+      GXPortSetRoomLights(lights, PortPauseLighting::Lights(worldToView, lights));
     }
     ~UILights() {
       if (!on) return;
@@ -480,7 +487,7 @@ void CSamusDoll::Draw(const CStateManager& mgr, float alpha) {
       xc8_suitModel0->AnimationData()->SubstituteModelData(backupModel);
     }
 #ifdef TARGET_PC
-    // Port: a Dread body has its own boots, cannon and visor (PortDreadDoll).
+    // Port: a mod's body has its own boots and visor (PortDreadDoll), and maybe cannon.
     const bool portDread = PortDreadDoll(x44_suit);
     if (!portDread)
 #endif
@@ -492,12 +499,16 @@ void CSamusDoll::Draw(const CStateManager& mgr, float alpha) {
     CGraphics::EnableLight(kLight0);
     CGraphics::SetAmbientColor(CColor(0x00000000));
 #ifdef TARGET_PC
-    if (!portDread) {
+    if (!PortDollHasCannon(x44_suit)) {
 #endif
     CGraphics::SetModelMatrix(gunXf);
     beam->Draw(CModelFlags::AlphaBlended(drawAlpha));
     beam->Draw(CModelFlags::Additive(drawAlpha * itemPulse * x5c_beamPulseFactor)
                    .DepthCompareUpdate(true, false));
+#ifdef TARGET_PC
+    }
+    if (!portDread) {
+#endif
 
     CGraphics::SetModelMatrix(visorXf);
     const float visorT =

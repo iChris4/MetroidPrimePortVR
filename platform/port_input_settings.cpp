@@ -5,11 +5,16 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <iterator>
 #include <mutex>
 #include <ostream>
+#include <string_view>
 
 namespace PortInput {
 namespace {
+
+// Settings::padPreset's values, as ApplyPadPresetNamed takes them.
+constexpr std::string_view kPadPresetNames[] = {"gamecube", "remastered", "modern", "southpaw"};
 
 std::mutex sLayoutMutex;
 std::string sLayout;
@@ -58,6 +63,9 @@ bool ApplySetting(std::string_view keyView, std::string_view valueView) {
     s.mouseAim = ParseBool(value);
   } else if (key == "twin_stick") {
     s.twinStick = ParseBool(value);
+  } else if (key == "pad_preset") {
+    const auto it = std::find(std::begin(kPadPresetNames), std::end(kPadPresetNames), value);
+    s.padPreset = it != std::end(kPadPresetNames) ? int(it - std::begin(kPadPresetNames)) : -1;
   } else if (key == "touch_colors") {
     s.touchColors = ParseBool(value);
   } else if (key == "touch_labels") {
@@ -73,6 +81,13 @@ bool ApplySetting(std::string_view keyView, std::string_view valueView) {
     }
   } else if (key == "stick_aim_split") {
     s.stickAimSplit = ParseBool(value);
+  } else if (key == "flick_stick") {
+    s.flickStick = ParseBool(value);
+  } else if (key == "flick_stick_outer_deadzone") {
+    const float f = ParseFloat(value);
+    if (std::isfinite(f) && f >= 0.f && f <= kFlickOuterDeadZoneMax) {
+      s.flickOuterDeadZone = f;
+    }
   } else if (key == "stick_aim_rate_y") {
     const float f = ParseFloat(value);
     if (std::isfinite(f) && f >= 50.f && f <= 10000.f) {
@@ -144,6 +159,8 @@ bool ApplySetting(std::string_view keyView, std::string_view valueView) {
     s.touchClassic = ParseBool(value);
   } else if (key == "touch_twin_stick") {
     s.touchTwinStick = ParseBool(value);
+  } else if (key == "touch_flick_stick") {
+    s.touchFlickStick = ParseBool(value);
   } else if (key == "touch_wheels") {
     s.touchWheels = ParseBool(value);
   } else if (key == "touch_visor_tap_scan") {
@@ -209,6 +226,8 @@ bool ApplySetting(std::string_view keyView, std::string_view valueView) {
     }
   } else if (key == "lock_on_free_aim") {
     s.lockOnFreeAim = ParseBool(value);
+  } else if (key == "hand_on_cannon") {
+    s.handOnCannon = ParseBool(value);
   } else if (key == "crosshair_size") {
     const int v = std::atoi(value.c_str());
     if (v >= kCrosshairSizeMin && v <= kCrosshairSizeMax) {
@@ -271,6 +290,17 @@ bool ApplySetting(std::string_view keyView, std::string_view valueView) {
     s.fastMorph = ParseBool(value);
   } else if (key == "lock_on_toggle") {
     s.lockOnToggle = ParseBool(value);
+    // Toggle Lock-On used to latch grapples too; a file from before
+    // grapple_toggle keeps that (grapple_toggle, written after, overrides).
+    s.grappleToggle = s.lockOnToggle;
+  } else if (key == "grapple_toggle") {
+    s.grappleToggle = ParseBool(value);
+  } else if (key == "grapple_shoot") {
+    s.grappleShoot = ParseBool(value);
+  } else if (key == "scan_shoot") {
+    s.scanShoot = ParseBool(value);
+  } else if (key == "spider_toggle") {
+    s.spiderToggle = ParseBool(value);
   } else if (key == "aim_lock_on") {
     s.aimLockOn = ParseBool(value);
   } else if (key == "sticky_charge") {
@@ -312,6 +342,9 @@ void WriteControlSettings(std::ostream& out) {
   const Settings& s = Get();
   out << "mouse_aim=" << (s.mouseAim ? 1 : 0) << '\n';
   out << "twin_stick=" << (s.twinStick ? 1 : 0) << '\n';
+  if (s.padPreset >= 0 && s.padPreset < int(std::size(kPadPresetNames))) {
+    out << "pad_preset=" << kPadPresetNames[s.padPreset] << '\n';
+  }
   out << "touch_colors=" << (s.touchColors ? 1 : 0) << '\n';
   out << "touch_labels=" << (s.touchLabels ? 1 : 0) << '\n';
   out << "touch_turbo=" << (s.touchTurbo ? 1 : 0) << '\n';
@@ -336,6 +369,10 @@ void WriteControlSettings(std::ostream& out) {
 void WriteGameplaySettings(std::ostream& out) {
   const Settings& s = Get();
   out << "lock_on_toggle=" << (s.lockOnToggle ? 1 : 0) << '\n';
+  out << "grapple_toggle=" << (s.grappleToggle ? 1 : 0) << '\n';
+  out << "grapple_shoot=" << (s.grappleShoot ? 1 : 0) << '\n';
+  out << "scan_shoot=" << (s.scanShoot ? 1 : 0) << '\n';
+  out << "spider_toggle=" << (s.spiderToggle ? 1 : 0) << '\n';
   out << "aim_lock_on=" << (s.aimLockOn ? 1 : 0) << '\n';
   out << "sticky_charge=" << (s.stickyCharge ? 1 : 0) << '\n';
   out << "rapid_charge=" << (s.rapidCharge ? 1 : 0) << '\n';
@@ -350,6 +387,8 @@ void WriteAimSettings(std::ostream& out) {
   out << "stick_aim_rate=" << s.stickAimRate << '\n';
   out << "stick_aim_split=" << (s.stickAimSplit ? 1 : 0) << '\n';
   out << "stick_aim_rate_y=" << s.stickAimRateY << '\n';
+  out << "flick_stick=" << (s.flickStick ? 1 : 0) << '\n';
+  out << "flick_stick_outer_deadzone=" << s.flickOuterDeadZone << '\n';
   out << "gyro_mode=" << s.gyroMode << '\n';
   out << "gyro_source=" << s.gyroSource << '\n';
   out << "gyro_sensitivity=" << s.gyroSensitivity << '\n';
@@ -375,7 +414,10 @@ void WriteAimSettings(std::ostream& out) {
   out << "touch_map_tap=" << (s.touchMapTap ? 1 : 0) << '\n';
   out << "touch_classic_gc=" << (s.touchClassic ? 1 : 0) << '\n';
   out << "touch_twin_stick=" << (s.touchTwinStick ? 1 : 0) << '\n';
-  out << "touch_wheels=" << (s.touchWheels ? 1 : 0) << '\n';
+  out << "touch_flick_stick=" << (s.touchFlickStick ? 1 : 0) << '\n';
+  if (s.touchWheels) {
+    out << "touch_wheels=1\n"; // not migrated yet
+  }
   out << "touch_visor_tap_scan=" << (s.touchVisorTapScan ? 1 : 0) << '\n';
   out << "mouse_invert_x=" << (s.mouseInvertX ? 1 : 0) << '\n';
   out << "mouse_invert_y=" << (s.mouseInvertY ? 1 : 0) << '\n';
@@ -396,6 +438,7 @@ void WriteAimSettings(std::ostream& out) {
   out << "pointer_aim_box=" << s.pointerAimBox << '\n';
   out << "pointer_aim_turn=" << s.pointerAimTurn << '\n';
   out << "lock_on_free_aim=" << (s.lockOnFreeAim ? 1 : 0) << '\n';
+  out << "hand_on_cannon=" << (s.handOnCannon ? 1 : 0) << '\n';
 }
 
 void WriteSettings(std::ostream& out) {
@@ -413,6 +456,12 @@ void ApplyEnvOverrides() {
   }
   if (port::EnvFlag("MP_TWIN_STICK")) {
     s.twinStick = true;
+  }
+  if (port::EnvFlag("MP_FLICK_STICK")) {
+    s.flickStick = true;
+  }
+  if (port::EnvFlag("MP_TOUCH_FLICK_STICK")) {
+    s.touchFlickStick = true;
   }
   if (port::EnvFlag("MP_MOUSE_INVERT_X")) {
     s.mouseInvertX = true;

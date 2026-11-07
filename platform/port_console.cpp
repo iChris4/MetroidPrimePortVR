@@ -21,6 +21,7 @@
 #include "port_third_person.h"
 #include "port_third_person_body.h"
 #include "port_dread_samus_mod.h"
+#include "port_echoes_suits_mod.h"
 #include "port_gci.h"
 #include "port_photo.h"
 #include "port_pointer.h"
@@ -773,8 +774,18 @@ void CmdAreas(CStateManager& mgr) {
   const int current = world->GetCurrentAreaId().Value();
   for (int i = 0; i < world->GetNumAreas(); ++i) {
     const CGameArea& area = world->GetAreaAlways(TAreaId(i));
-    Out("%3d %08X%s%s", i, static_cast< uint32_t >(area.GetAreaAssetId()),
-        area.IsPostConstructed() ? " loaded" : "", i == current ? "  <- current" : "");
+    const bool loaded = area.IsPostConstructed();
+    Out("%3d %08X%s%s%s", i, static_cast< uint32_t >(area.GetAreaAssetId()), loaded ? " loaded" : "",
+        loaded ? (area.GetOcclusionState() == CGameArea::kOS_Visible ? " visible" : " occluded") : "",
+        i == current ? "  <- current" : "");
+  }
+  if (current >= 0 && current < world->GetNumAreas()) {
+    // Remastered's object positions (room files) are area-local: world = this * (-x, z, y).
+    const CTransform4f& m = world->GetAreaAlways(TAreaId(current)).GetTM();
+    Out("current area transform rows (%.4f %.4f %.4f %.3f) (%.4f %.4f %.4f %.3f) "
+        "(%.4f %.4f %.4f %.3f)",
+        m.Get00(), m.Get01(), m.Get02(), m.Get03(), m.Get10(), m.Get11(), m.Get12(), m.Get13(),
+        m.Get20(), m.Get21(), m.Get22(), m.Get23());
   }
   Finish();
 }
@@ -1210,8 +1221,53 @@ void CmdFxQuery() {
       uid.value = s.uid;
       const CEntity* const ent = mgr->GetObjectById(uid);
       const bool alive = ent != nullptr && ent->GetEditorId().Value() == (s.eid & 0x3FFFFFF);
-      Out("  %08X u%u PART %08X %s %s, %zu variable(s) set", s.eid, unsigned(s.uid), s.part,
-          !alive ? "gone" : ent->GetActive() ? "active" : "inactive", s.name.c_str(), s.vars);
+      const char* const state = !alive ? "gone" : ent->GetActive() ? "active" : "inactive";
+      if (s.part == 0xFFFFFFFF) {
+        Out("  %08X u%u %s %s", s.eid, unsigned(s.uid), state, s.name.c_str());  // a timer or follow locator
+      } else {
+        Out("  %08X u%u PART %08X %s %s, %zu variable(s) set", s.eid, unsigned(s.uid), s.part, state, s.name.c_str(),
+            s.vars);
+      }
+      for (const auto& [d, pending] : PortRoomEffects::DrivesOf(mrea)) {
+        if ((d.flags & PortRoomEffects::kDriveToGenerator) == 0 && (d.target & 0x3FFFFFF) == (s.eid & 0x3FFFFFF)) {
+          Out("    driven by %08X state %u: msg %u after %.2fs%s", d.sender, unsigned(d.state), unsigned(d.message),
+              d.delay, pending != 0 ? ", pending" : "");
+        }
+      }
+    }
+    const std::vector< PortRoomEffects::GeneratorState > generators = PortRoomEffects::GeneratorsOf(mrea);
+    for (size_t i = 0; i < generators.size(); ++i) {
+      const PortRoomEffects::GeneratorState& g = generators[i];
+      std::string templates;
+      for (uint32_t id : g.generator.templates) {
+        char text[16];
+        std::snprintf(text, sizeof text, " %08X", id);
+        templates += text;
+      }
+      Out("  generator %zu %s, %zu cop%s made, templates%s", i, g.active ? "active" : "inactive", g.made,
+          g.made == 1 ? "y" : "ies", templates.c_str());
+      for (const auto& [d, pending] : PortRoomEffects::DrivesOf(mrea)) {
+        if ((d.flags & PortRoomEffects::kDriveToGenerator) != 0 && d.target == i) {
+          Out("    driven by %08X state %u: msg %u after %.2fs%s%s", d.sender, unsigned(d.state), unsigned(d.message),
+              d.delay, (d.flags & PortRoomEffects::kDriveRelayed) != 0 ? ", relayed" : "",
+              pending != 0 ? ", pending" : "");
+        }
+      }
+    }
+    for (const PortRoomEffects::AmbientState& s : PortRoomEffects::AmbientsOf(mrea)) {
+      const PortRoomEffects::Ambient& a = s.ambient;
+      std::string emitters;
+      for (const PortRoomEffects::AmbientEmitter& e : a.emitters) {
+        char text[24];
+        std::snprintf(text, sizeof text, " %u:%08X", unsigned(e.index), e.id);
+        emitters += text;
+      }
+      Out("  ambient of %08X: %.2f point(s)/s, %zu shape(s), %zu spawned, emitters%s", a.owner, a.rate,
+          a.shapes.size(), s.spawned, emitters.c_str());
+      for (const PortRoomEffects::AmbientShape& sh : a.shapes) {
+        Out("    shape %u at (%.1f %.1f %.1f) half (%.1f %.1f %.1f)", unsigned(sh.type), sh.center[0], sh.center[1],
+            sh.center[2], sh.half[0], sh.half[1], sh.half[2]);
+      }
     }
   } else if (sub == "barrier") {
     // The Parasite Queen barrier group (port_queen_barrier.h), from each live ring controller.
@@ -1492,6 +1548,63 @@ void CmdInfAmmo() {
     line += " (refused: Original experience or Archipelago)";
   }
   Out("%s", line.c_str());
+  Finish();
+}
+
+// Appended to a cheat's state when the Original experience or Archipelago holds it off.
+const char* CheatRefused(bool set, bool applied) {
+  return set && !applied ? " (refused: Original experience or Archipelago)" : "";
+}
+
+void CmdMoonJump() {
+  if (sCmd.args.size() > 2) {
+    return Finish("usage: moonjump [0|1]");
+  }
+  if (sCmd.args.size() == 2) {
+    const std::string arg = Lower(sCmd.args[1]);
+    if (arg != "0" && arg != "1" && arg != "on" && arg != "off") {
+      return Finish("usage: moonjump [0|1]");
+    }
+    PortDebug::SetMoonJump(arg == "1" || arg == "on");
+  }
+  Out("moonjump %d%s", PortDebug::MoonJumpSet() ? 1 : 0,
+      CheatRefused(PortDebug::MoonJumpSet(), PortDebug::MoonJump()));
+  Finish();
+}
+
+void CmdBoost() {
+  static const char* const usage = "usage: boost [speed <1..10>] [time <1..10>] [air 0|1] [steer 0|1]";
+  float speed = PortDebug::BoostSpeedScaleSet();
+  float duration = PortDebug::BoostDurationScaleSet();
+  bool air = PortDebug::BoostAnywhereSet();
+  bool steer = PortDebug::BoostSteerSet();
+  if (sCmd.args.size() % 2 == 0) {
+    return Finish(usage);
+  }
+  for (size_t i = 1; i + 1 < sCmd.args.size(); i += 2) {
+    const std::string key = Lower(sCmd.args[i]);
+    const std::string value = Lower(sCmd.args[i + 1]);
+    float number = 0.f;
+    if (key == "air" || key == "steer") {
+      if (value != "0" && value != "1" && value != "on" && value != "off") {
+        return Finish(usage);
+      }
+      (key == "air" ? air : steer) = value == "1" || value == "on";
+    } else if ((key == "speed" || key == "time") && ParseFloat(value, number)) {
+      (key == "speed" ? speed : duration) = number;
+    } else {
+      return Finish(usage);
+    }
+  }
+  PortDebug::SetBoostScales(speed, duration);
+  PortDebug::SetBoostAnywhere(air);
+  PortDebug::SetBoostSteer(steer);
+  const bool set = PortDebug::BoostSpeedScaleSet() != 1.f || PortDebug::BoostDurationScaleSet() != 1.f || air ||
+                   steer;
+  const bool applied = PortDebug::BoostSpeedScale() != 1.f || PortDebug::BoostDurationScale() != 1.f ||
+                       PortDebug::BoostAnywhere() || PortDebug::BoostSteer();
+  Out("boost speed %.2f time %.2f air %d steer %d%s", PortDebug::BoostSpeedScaleSet(),
+      PortDebug::BoostDurationScaleSet(), air ? 1 : 0, steer ? 1 : 0, CheatRefused(set, applied));
   Finish();
 }
 
@@ -2037,7 +2150,7 @@ void CmdCollision() {
   Finish();
 }
 
-// touchpad [attach|detach|stick <x> <y>]: the touch overlay's kind of virtual gamepad, for
+// touchpad [attach|detach|stick|rstick <x> <y>]: the touch overlay's kind of virtual gamepad, for
 // testing how controllers share the ports with it on any platform.
 void CmdTouchPad() {
   static PortTouchPad::Pad pad;
@@ -2050,12 +2163,15 @@ void CmdTouchPad() {
     }
   } else if (arg == "detach") {
     PortTouchPad::Detach(pad);
-  } else if (arg == "stick" && sCmd.args.size() > 3 && ParseFloat(sCmd.args[2], x) && ParseFloat(sCmd.args[3], y) &&
-             pad.ok()) {
-    SDL_SetJoystickVirtualAxis(pad.handle, SDL_GAMEPAD_AXIS_LEFTX, PortTouchPad::AxisValue(x));
-    SDL_SetJoystickVirtualAxis(pad.handle, SDL_GAMEPAD_AXIS_LEFTY, PortTouchPad::AxisValue(y));
+  } else if ((arg == "stick" || arg == "rstick") && sCmd.args.size() > 3 && ParseFloat(sCmd.args[2], x) &&
+             ParseFloat(sCmd.args[3], y) && pad.ok()) {
+    const bool right = arg == "rstick";
+    SDL_SetJoystickVirtualAxis(pad.handle, right ? SDL_GAMEPAD_AXIS_RIGHTX : SDL_GAMEPAD_AXIS_LEFTX,
+                               PortTouchPad::AxisValue(x));
+    SDL_SetJoystickVirtualAxis(pad.handle, right ? SDL_GAMEPAD_AXIS_RIGHTY : SDL_GAMEPAD_AXIS_LEFTY,
+                               PortTouchPad::AxisValue(y));
   } else if (!arg.empty()) {
-    return Finish("usage: touchpad [attach|detach|stick <x> <y>] (stick needs an attached pad)");
+    return Finish("usage: touchpad [attach|detach|stick|rstick <x> <y>] (stick needs an attached pad)");
   }
   if (pad.ok()) {
     Out("touchpad attached (joystick %u, port %d)", static_cast< unsigned >(pad.id),
@@ -2190,8 +2306,9 @@ void CmdThirdPerson() {
 // freecam [on|off|freeze on|off|player on|off|drive on|off|speed <n>|pos <x> <y> <z>|look <yaw> <pitch>]
 void CmdFreeCam() {
   static const char* const usage =
-      "usage: freecam [on|off|freeze on|off|player on|off|drive on|off|speed <n>|pos <x> <y> <z>|look <yaw> <pitch>]";
-  const CStateManager* mgr = PortDebug::StateManager();
+      "usage: freecam [on|off|here|freeze on|off|player on|off|drive on|off|speed <n>|pos <x> <y> <z>|"
+      "look <yaw> <pitch>]";
+  CStateManager* mgr = PortDebug::StateManager();
   if (sCmd.args.size() > 1) {
     const std::string arg = Lower(sCmd.args[1]);
     const std::string value = sCmd.args.size() > 2 ? Lower(sCmd.args[2]) : std::string();
@@ -2202,6 +2319,10 @@ void CmdFreeCam() {
         return Finish("not in a world");
       }
       PortFreeCam::SetActive(arg == "on", mgr);
+    } else if (arg == "here") {
+      if (mgr == nullptr || !PortFreeCam::MovePlayerHere(*mgr)) {
+        return Finish("the free camera is off");
+      }
     } else if (arg == "freeze" && (value == "on" || value == "off")) {
       PortFreeCam::SetFrozen(value == "on");
     } else if (arg == "player" && (value == "on" || value == "off")) {
@@ -2436,10 +2557,29 @@ void CmdPadPreset() {
 }
 
 void CmdFov() {
+  if (sCmd.args.size() > 1 && sCmd.args[1] == "gun") {
+    if (sCmd.args.size() > 2) {
+      PortDebug::SetGunFollowsFov(sCmd.args[2] != "0");
+    }
+    Out("gun %s", PortDebug::GunFollowsFov() ? "follows fov" : "own fov");
+    return Finish();
+  }
+  if (sCmd.args.size() > 1 && sCmd.args[1] == "cannon") {
+    if (sCmd.args.size() > 2) {
+      const float fov = static_cast< float >(std::atof(sCmd.args[2].c_str()));
+      if (!(fov >= PortDebug::kFovMin && fov <= PortDebug::kFovMax)) {
+        return Finish("usage: fov cannon [45..120]   the arm cannon's own FOV (retail 55)");
+      }
+      PortDebug::SetGunFov(fov);
+    }
+    Out("cannon fov %.1f%s", PortDebug::GunFov(), PortDebug::GunFollowsFov() ? " (unused: gun follows fov)" : "");
+    return Finish();
+  }
   const float fov =
       sCmd.args.size() > 1 ? static_cast< float >(std::atof(sCmd.args[1].c_str())) : 0.f;
   if (!(fov >= PortDebug::kFovMin && fov <= PortDebug::kFovMax)) {
-    return Finish("usage: fov <45..120>   first-person vertical FOV (retail 55)");
+    return Finish("usage: fov <45..120> | fov gun [0|1] | fov cannon [45..120]   first-person vertical\n"
+                  "FOV (retail 55); gun 1 draws the arm cannon at it too, cannon sets its own FOV");
   }
   PortDebug::SetFirstPersonFov(fov);
   Finish();
@@ -2693,6 +2833,18 @@ void CmdStackBeams() {
   Finish();
 }
 
+void CmdSeamlessPickups() {
+  if (sCmd.args.size() > 1) {
+    const std::string& v = sCmd.args[1];
+    if (v != "0" && v != "1") {
+      return Finish("usage: seamlesspickups [0|1]");
+    }
+    PortDebug::SetSeamlessPickups(v == "1");
+  }
+  Out(PortDebug::SeamlessPickups() ? "seamlesspickups 1" : "seamlesspickups 0");
+  Finish();
+}
+
 void CmdAimLockOn() {
   if (sCmd.args.size() > 1) {
     const std::string& v = sCmd.args[1];
@@ -2712,6 +2864,53 @@ void CmdDodge() {
   Out(PortDebug::OriginalExperience() ? "dodge requested (off under original experience)"
                                       : "dodge requested");
   Finish();
+}
+
+// A press of the Grapple action, held for `seconds` (default 1): it grapples
+// when a grapple point is the lock-on target, and the next press lets go.
+void CmdGrapple() {
+  float seconds = 1.f;
+  if (sCmd.args.size() > 2 || (sCmd.args.size() == 2 && !ParseFloat(sCmd.args[1], seconds)) ||
+      seconds < 0.f) {
+    return Finish("usage: grapple [seconds]");
+  }
+  PortDebug::HoldGrapple(seconds);
+  Out(PortDebug::OriginalExperience() ? "grapple held (off under original experience)"
+                                      : "grapple held");
+  Finish();
+}
+
+// `<name> [0|1]` for a boolean setting: sets it, then prints it.
+void BoolSettingCmd(const char* name, bool (*get)(), void (*set)(bool)) {
+  if (sCmd.args.size() > 1) {
+    const std::string& v = sCmd.args[1];
+    if (sCmd.args.size() > 2 || (v != "0" && v != "1")) {
+      return Finish((std::string("usage: ") + name + " [0|1]").c_str());
+    }
+    set(v == "1");
+  }
+  Out("%s %d", name, get() ? 1 : 0);
+  Finish();
+}
+
+void CmdSpiderToggle() {
+  BoolSettingCmd("spidertoggle", PortDebug::SpiderToggle, PortDebug::SetSpiderToggle);
+}
+
+void CmdGrappleShoot() {
+  BoolSettingCmd("grappleshoot", PortDebug::GrappleShoot, PortDebug::SetGrappleShoot);
+}
+
+void CmdScanShoot() {
+  BoolSettingCmd("scanshoot", PortDebug::ScanShoot, PortDebug::SetScanShoot);
+}
+
+void CmdGrappleToggle() {
+  BoolSettingCmd("grappletoggle", PortDebug::GrappleToggle, PortDebug::SetGrappleToggle);
+}
+
+void CmdLockToggle() {
+  BoolSettingCmd("locktoggle", PortDebug::LockOnToggle, PortDebug::SetLockOnToggle);
 }
 
 void CmdRadial() {
@@ -2739,13 +2938,43 @@ void CmdRadial() {
 
 void CmdWalkSpeed() {
   if (sCmd.args.size() > 1) {
-    const int value = std::atoi(sCmd.args[1].c_str());
-    if (value < PortDebug::kWalkSpeedMin || value > PortDebug::kWalkSpeedMax) {
-      return Finish("usage: walkspeed [50..200]");
+    const std::string& v = sCmd.args[1];
+    if (v == "on" || v == "off") {
+      PortDebug::SetWalkSpeedEnabled(v == "on");
+    } else {
+      const int value = std::atoi(v.c_str());
+      if (value < PortDebug::kWalkSpeedMin || value > PortDebug::kWalkSpeedMax) {
+        return Finish("usage: walkspeed [50..200|on|off]");
+      }
+      PortDebug::SetWalkSpeed(value);
     }
-    PortDebug::SetWalkSpeed(value);
   }
-  Out("walkspeed %d", PortDebug::WalkSpeed());
+  Out("walkspeed %d (%s)", PortDebug::WalkSpeed(), PortDebug::WalkSpeedEnabled() ? "on" : "off");
+  Finish();
+}
+
+void CmdBeamSwitch() {
+  if (sCmd.args.size() > 1) {
+    const int value = std::atoi(sCmd.args[1].c_str());
+    if (sCmd.args.size() > 2 || value < PortDebug::kBeamSwitchSpeedMin ||
+        value > PortDebug::kBeamSwitchSpeedMax) {
+      return Finish("usage: beamswitch [100..400]");
+    }
+    PortDebug::SetBeamSwitchSpeed(value);
+  }
+  Out("beamswitch %d", PortDebug::BeamSwitchSpeed());
+  Finish();
+}
+
+// As a press of the Next/Previous target action: while locked on, the lock moves
+// to the next target right (next) or left (prev) on screen, wrapping around.
+void CmdTarget() {
+  if (sCmd.args.size() != 2 || (sCmd.args[1] != "next" && sCmd.args[1] != "prev")) {
+    return Finish("usage: target next|prev");
+  }
+  PortDebug::RequestTargetCycle(sCmd.args[1] == "next" ? 1 : -1);
+  Out(PortDebug::OriginalExperience() ? "target switch requested (off under original experience)"
+                                      : "target switch requested");
   Finish();
 }
 
@@ -2852,6 +3081,29 @@ void CmdDreadCannon() {
     return Finish("usage: dreadcannon [0|1]");
   }
   Out(PortDreadSamus::FirstPersonCannonShown() ? "dreadcannon 1" : "dreadcannon 0");
+  Finish();
+}
+
+void CmdEchoesCannon() {
+  const std::string value = sCmd.args.size() > 1 ? sCmd.args[1] : "";
+  if (value == "0" || value == "1") {
+    PortEchoesSuits::SetFirstPersonCannonShown(value == "1");
+  } else if (!value.empty()) {
+    return Finish("usage: echoescannon [0|1]");
+  }
+  Out(PortEchoesSuits::FirstPersonCannonShown() ? "echoescannon 1" : "echoescannon 0");
+  Finish();
+}
+
+void CmdDarkSamus() {
+  const std::string value = sCmd.args.size() > 1 ? sCmd.args[1] : "";
+  if (value == "0" || value == "1") {
+    PortEchoesSuits::SetPlayAsDarkSamus(value == "1");
+  } else if (!value.empty()) {
+    return Finish("usage: darksamus [0|1]");
+  }
+  Out("darksamus %d (served %d)", PortEchoesSuits::PlayAsDarkSamus() ? 1 : 0,
+      PortEchoesSuits::DarkSamusServed() ? 1 : 0);
   Finish();
 }
 
@@ -3319,6 +3571,9 @@ void CmdRoomEnv() {
     } else if (arg == "fogregions" && sCmd.args.size() > 2 &&
                (Lower(sCmd.args[2]) == "on" || Lower(sCmd.args[2]) == "off")) {
       PortRoomEnv::SetFogRegionsEnabled(Lower(sCmd.args[2]) == "on");
+    } else if (arg == "fogregion" && sCmd.args.size() > 3 &&
+               (Lower(sCmd.args[3]) == "on" || Lower(sCmd.args[3]) == "off")) {
+      PortRoomEnv::SetFogRegionEnabled(uint32_t(std::atoi(sCmd.args[2].c_str())), Lower(sCmd.args[3]) == "on");
     } else if (arg == "state" && sCmd.args.size() > 3) {
       PortRoomEnv::SendScriptState(uint32_t(std::strtoul(sCmd.args[2].c_str(), nullptr, 16)) & 0x3ffffff,
                                    std::atoi(sCmd.args[3].c_str()));
@@ -3341,7 +3596,7 @@ void CmdRoomEnv() {
     } else {
       return Finish("usage: roomenv [on|off|info [<x> <y> <z>]|auto on|off|static on|off|"
                     "arealights on|off|balllight on|off|<scale>|blend on|off|bloom on|off|"
-                    "grade on|off|grades|fog|volfog on|off|fogregions on|off|"
+                    "grade on|off|grades|fog|volfog on|off|fogregions on|off|fogregion <i> on|off|"
                     "volume on|off|ambient <scale>|"
                     "show off|coords|light]");
     }
@@ -4242,6 +4497,12 @@ const CommandSpec kCommands[] = {
      "god [on|off]               the player takes no damage (no argument: show)"},
     {"infammo", nullptr, [](CStateManager&) { CmdInfAmmo(); },
      "infammo [all|missile|powerbomb] [0|1]  firing uses no ammo, the HUD shows infinity (no state: show)"},
+    {"moonjump", nullptr, [](CStateManager&) { CmdMoonJump(); },
+     "moonjump [0|1]             Jump held in the air lifts Samus (no state: show)"},
+    {"boost", nullptr, [](CStateManager&) { CmdBoost(); },
+     "boost [speed <x>] [time <x>] [air 0|1] [steer 0|1]\n"
+     "                           Boost Ball speed and duration multipliers (1..10), boosting in the air,\n"
+     "                           steering while boosted (none: show)"},
     {"hint", nullptr, [](CStateManager&) { CmdHint(); },
      "hint show                  show the hint the game would show next"},
     {"memo", nullptr, [](CStateManager& mgr) { CmdMemo(mgr); },
@@ -4334,7 +4595,7 @@ const CommandSpec kCommands[] = {
      "remastered [start <image.nsp|xci> [key file] | cancel | toggle]  the Remastered import and its progress;\n"
      "                           toggle turns it on or off, as its binding"},
     {"touchpad", CmdTouchPad, nullptr,
-     "touchpad [attach|detach|stick <x> <y>]  a virtual gamepad like Android's touch overlay"},
+     "touchpad [attach|detach|stick|rstick <x> <y>]  a virtual gamepad like Android's touch overlay"},
     {"minimap", CmdMinimap, nullptr,
      "minimap  the HUD minimap's screen rect (x0 y0 x1 y1, 0..1), or invalid"},
     {"maptap", CmdMapTap, nullptr, "maptap   a touch-overlay minimap tap: one Z press, opens the map"},
@@ -4352,8 +4613,9 @@ const CommandSpec kCommands[] = {
     {"mappan", CmdMapPan, nullptr,
      "mappan <dx> <dy> [hold s]   drag the open map screen by dx,dy dp (view height 400 dp); finger down for hold s (0.25)"},
     {"freecam", CmdFreeCam, nullptr,
-     "freecam [on|off|freeze on|off|player on|off|drive on|off|speed <n>|pos <x> <y> <z>|look <yaw> <pitch>]\n"
-     "                           fly the view away from the player (HUD hidden; freeze holds the game still)"},
+     "freecam [on|off|here|freeze on|off|player on|off|drive on|off|speed <n>|pos <x> <y> <z>|look <yaw> <pitch>]\n"
+     "                           fly the view away from the player (HUD hidden; freeze holds the game still;\n"
+     "                           here moves Samus to the camera and turns it off)"},
     {"thirdperson", CmdThirdPerson, nullptr,
      "thirdperson [on|off] [distance <m>] [shoulder <m>] [height <m>] [clips] [feet] [clip <name>|off [phase [yaw]]] [backwalk procedural|struggle|reverse]\n"
      "                           third-person gameplay camera (also third_person* settings)"},
@@ -4368,7 +4630,9 @@ const CommandSpec kCommands[] = {
      "keypreset classic|mouse|<saved name>|save <name>   apply or save a keyboard preset (Controls > Remap)"},
     {"padpreset", CmdPadPreset, nullptr,
      "padpreset gamecube|remastered|modern|southpaw|<saved name>|save <name>   apply or save a controller preset"},
-    {"fov", CmdFov, nullptr, "fov <45..120>              first-person vertical FOV, as the Options row does"},
+    {"fov", CmdFov, nullptr, "fov <45..120>|gun [0|1]|cannon [45..120]  first-person vertical FOV, as the\n"
+                             "                           Options row does; gun 1: the arm cannon follows it;\n"
+                             "                           cannon: the arm cannon's own FOV"},
     {"gunoffset", CmdGunOffset, nullptr,
      "gunoffset <r> <f> <u>      arm cannon offset in metres (+-1), as the Video row does"},
     {"pointeraim", CmdPointerAim, nullptr,
@@ -4400,6 +4664,12 @@ const CommandSpec kCommands[] = {
     {"visorfx", CmdHelmetVisorFx, nullptr, ""},
     {"dreadcannon", CmdDreadCannon, nullptr,
      "dreadcannon [0|1]   the Dread arm cannon in first person (dread_first_person_cannon); prints it"},
+    {"echoescannon", CmdEchoesCannon, nullptr,
+     "echoescannon [0|1]  the Echoes arm cannon in first person (echoes_first_person_cannon), from the "
+     "next beam selected; prints it"},
+    {"darksamus", CmdDarkSamus, nullptr,
+     "darksamus [0|1]     play as Echoes' Dark Samus (echoes_dark_samus), from the next mod reload; prints it "
+     "and whether this load serves her"},
     {"interp", CmdInterp, nullptr,
      "interp [actor|pose|particle|all <0|1>]   frame interpolation settings (F1 Video > Frame rate)"},
     {"present", CmdPresent, nullptr,
@@ -4414,14 +4684,32 @@ const CommandSpec kCommands[] = {
      "mapui [0|1]                 the map's extra legend entries and the Mark room prompt"},
     {"stackbeams", CmdStackBeams, nullptr,
      "stackbeams [0|1]           every shot also fires the other owned beams' projectiles (stack_beams)"},
+    {"beamswitch", CmdBeamSwitch, nullptr,
+     "beamswitch [100..400]      beam change speed in percent (beam_switch_speed); no argument prints it"},
+    {"target", CmdTarget, nullptr,
+     "target next|prev           while locked on, lock the next target right (next) or left (prev) on screen"},
+    {"seamlesspickups", CmdSeamlessPickups, nullptr,
+     "seamlesspickups [0|1]      pickups without control lock, cutscene or message box (seamless_pickups)"},
     {"aimlockon", CmdAimLockOn, nullptr,
      "aimlockon [0|1]            lock-on picks the target nearest the crosshair (aim_lock_on)"},
     {"dodge", CmdDodge, nullptr,
      "dodge                      a Dodge press (sideways dash, locked on or not; needs a strafe held)"},
+    {"grapple", CmdGrapple, nullptr,
+     "grapple [seconds]          presses the Grapple action, held that long (default 1 s): grapples at a grapple point, or lets go"},
+    {"spidertoggle", CmdSpiderToggle, nullptr,
+     "spidertoggle [0|1]         an R press holds the spider ball on its track until the next (spider_toggle)"},
+    {"grappleshoot", CmdGrappleShoot, nullptr,
+     "grappleshoot [0|1]         the arm cannon stays out and fires while grappling (grapple_shoot)"},
+    {"scanshoot", CmdScanShoot, nullptr,
+     "scanshoot [0|1]            the arm cannon stays out and fires in the Scan Visor (scan_shoot)"},
+    {"grappletoggle", CmdGrappleToggle, nullptr,
+     "grappletoggle [0|1]        an L press at a grapple point holds the grapple until the next (grapple_toggle)"},
+    {"locktoggle", CmdLockToggle, nullptr,
+     "locktoggle [0|1]           an L press holds a lock-on until the next (lock_on_toggle)"},
     {"radial", CmdRadial, nullptr,
      "radial [beam|visor [x y] | release]  holds a radial menu with its selection (x right, y up); radial_menus"},
     {"walkspeed", CmdWalkSpeed, nullptr,
-     "walkspeed [50..200]        on-foot movement speed in percent (walk_speed); no argument prints it"},
+     "walkspeed [50..200|on|off] on-foot speed in percent (walk_speed, walk_speed_enabled); no argument prints it"},
     {"beamdoors", nullptr, CmdBeamDoors,
      "beamdoors [status|on|off|list [here]|unlock <door index|all>|reset]  the beam doors opened for good\n"
      "                           (beam_doors_stay_unlocked; on/off, unlock restyle the loaded doors)"},

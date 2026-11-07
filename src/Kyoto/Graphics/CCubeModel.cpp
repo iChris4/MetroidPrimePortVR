@@ -18,6 +18,7 @@
 #include <dolphin/gx/GXExtra.h>
 #include "port_debug.h"
 #include "port_icy_assets.h"
+#include "port_beam_colours.h"
 #include "port_pbr_record.h"
 #include "port_room_env.h"
 #include "port_visor_mesh.h"
@@ -37,6 +38,12 @@ static bool sPortBindPose = false;
 static float sPortProbePos[3];
 static PortRoomEnv::Selection sPortCameraEnv;
 static bool sPortCameraCube = false;
+// PortSetBeamGlow: the gun model whose glow surfaces take the beam's colour matrix.
+static struct {
+  const CCubeModel* model = nullptr;
+  int beam = -1;
+  uint64_t mask = 0;
+} sPortBeamGlow;
 bool CCubeModel::sUsingPackedLightmaps = false;
 
 inline uint GetMaterialOffset(const uchar* materialData, const int idx) {
@@ -267,6 +274,8 @@ f32 sPortKindValue = 0.f;
 bool sPortSky = false;
 f32 sPortSkyGain[3];
 f32 sPortChargeShell = 0.f;
+f32 sPortGunHeat = 0.f;
+bool sPortGunHeatOn = false;
 // The frozen enemy's icy pass (PortSetIcy): the freeze direction in the game's world and the
 // seconds since the freeze, and the actor's ice darkening. Remastered's RenderIcy material maps,
 // bound to maps 0-2.
@@ -419,6 +428,10 @@ void CCubeModel::PortTakeThermalSkipCounts(unsigned& cold, unsigned& hotDropped)
 }
 
 void CCubeModel::PortSetChargeShell(const f32 amount) { sPortChargeShell = amount; }
+
+void CCubeModel::PortSetGunHeat(const f32 level) { sPortGunHeat = level; }
+
+void CCubeModel::PortApplyGunHeat(const bool on) { sPortGunHeatOn = on; }
 
 void CCubeModel::PortSetIcy(const bool active, const f32 dirGC[3], const f32 t, const f32 darkening) {
   sPortIcy.active = active;
@@ -691,6 +704,10 @@ f32 CCubeModel::PortSetPBRMaterial(const int idx, const f32 fade, const bool fad
     values[1] *= pulse;
     values[2] *= pulse;
   }
+  if (pk == aurora::PbrKind::ThermalHeatMask && sPortGunHeatOn) {
+    // CCH1.y: the HTRN gun heat (CGunWeaponMP1::SetHeatVisualLevel, the gun's model 3 only).
+    shield[5] = sPortGunHeat;
+  }
   for (const SPortPBROverride& entry : sPortPBROverrides) {
     if (entry.model == this && entry.material == idx) {
       values[entry.field] = entry.value;
@@ -700,13 +717,13 @@ f32 CCubeModel::PortSetPBRMaterial(const int idx, const f32 fade, const bool fad
   PortApplyKindParam(sPortKindSlot, sPortKindValue, values);
   // A liquid's surface (kinds 5 and 6) moves: its first parameter is a rate, and the
   // shader gets the phase. So do falling water (kind 7), the beam glow (9) and the
-  // Waste Disposal tank's distortion (11), the Frigate's force fields (14) and the Phazon3 stone (21); glass (8) does not
-  // move.
+  // Waste Disposal tank's distortion (11), the Frigate's force fields (14), the Phazon3 stone (21) and the sky's
+  // flow (49); glass (8) does not move.
   if ((values[13] > 4.5f && values[13] < 7.5f) || (values[13] > 8.5f && values[13] < 9.5f) ||
       (values[13] > 10.5f && values[13] < 11.5f) || (values[13] > 13.5f && values[13] < 15.5f) || (values[13] > 17.5f && values[13] < 18.5f) ||
       (values[13] > 20.5f && values[13] < 22.5f) || (values[13] > 28.5f && values[13] < 29.5f) ||
        (values[13] > 31.5f && values[13] < 32.5f) || (values[13] > 42.5f && values[13] < 46.5f) ||
-      (values[13] > 47.5f && values[13] < 48.5f)) {
+      (values[13] > 47.5f && values[13] < 49.5f)) {
     // The Phazon3 stone and the PhazonPool blister read Remastered's scene clock (stops while paused, wraps at 15120 s).
     values[15] *= ((values[13] > 20.5f && values[13] < 22.5f) || (values[13] > 31.5f && values[13] < 32.5f))
                       ? CGraphics::GetSimTime()
@@ -725,6 +742,17 @@ f32 CCubeModel::PortSetPBRMaterial(const int idx, const f32 fade, const bool fad
     shield[21] = view.Get12();
     shield[22] = -view.Get11();
     shield[23] = view.Get13();
+  }
+  // The sky's flow (kind 49) pushes its clouds along Remastered world (sin a, 0, cos a), times the
+  // strength, in view space: GameCube (-sin a, cos a, 0) through the view's rotation, as
+  // (right, up, -forward). The record holds the strength and the angle a.
+  if (pk == aurora::PbrKind::SkyFlow) {
+    const f32 k = values[16];
+    const f32 sa = -std::sin(values[17]);
+    const f32 ca = std::cos(values[17]);
+    values[16] = k * (sa * view.Get00() + ca * view.Get10());
+    values[17] = k * (sa * view.Get02() + ca * view.Get12());
+    values[18] = -k * (sa * view.Get01() + ca * view.Get11());
   }
   // EnergyField's VS supplies Remastered world X/Y, not GameCube world X/Y:
   // the converter's R2G is (-x,z,y). These rows undo that change of basis.
@@ -848,7 +876,19 @@ u8 sPortGlassPerfDest;
 // The pause visor's pass CSamusDoll set (CCubeModel::PortInventoryScope), while it is set.
 bool sPortInventoryActive = false;
 CCubeModel::PortInventoryPass sPortInventoryPass = {false, {1.f, 1.f, 1.f, 1.f}, 0.f, 1.f};
+// CCubeModel::PortSetParticleDiffuse, while set.
+bool sPortParticleDiffuseSet = false;
+f32 sPortParticleDiffuse[3] = {1.f, 1.f, 1.f};
 } // namespace
+
+void CCubeModel::PortSetParticleDiffuse(const float* rgb) {
+  sPortParticleDiffuseSet = rgb != nullptr;
+  if (rgb != nullptr) {
+    sPortParticleDiffuse[0] = rgb[0];
+    sPortParticleDiffuse[1] = rgb[1];
+    sPortParticleDiffuse[2] = rgb[2];
+  }
+}
 
 CCubeModel::PortInventoryScope::PortInventoryScope(const PortInventoryPass& pass) {
   assert(!sPortInventoryActive && "PortInventoryScope does not nest");
@@ -950,7 +990,7 @@ void CCubeModel::DrawSurface(const CCubeSurface& surface, const CModelFlags& mod
   }
   // The TEV fallback of a PBR material lit by the bake takes only the runtime lights, as its PBR
   // draw does (GXSetPBRLightSkip below); Remastered has no area lights on a baked-lit model.
-  if (!inventory && material.IsFlagSet(kStateFlag_PortPBR) && CCubeMaterial::sPortAreaLights != 0 &&
+  if (!inventory && !sPortUnbaked && material.IsFlagSet(kStateFlag_PortPBR) && CCubeMaterial::sPortAreaLights != 0 &&
       !PortRoomEnv::AreaLights() && !(outside && (fadeBlend || CCubeMaterial::PortPBRAllowed(drawFlags)))) {
     const CTransform4f& tevXf = CGraphics::GetModelMatrix();
     const CVector3f tevOrigin = x20_bounds.Invalid() ? tevXf.GetTranslation() : tevXf * x20_bounds.GetCenterPoint();
@@ -1011,6 +1051,16 @@ void CCubeModel::DrawSurface(const CCubeSurface& surface, const CModelFlags& mod
   // paths PortPBRAllowed rejects.
   const bool pbr = icy || inventory || (outside && (fadeBlend || (material.IsFlagSet(kStateFlag_PortPBR) &&
                                                                   CCubeMaterial::PortPBRAllowed(drawFlags))));
+  if (sPortBeamGlow.model == this) {
+    const uint idx = surface.GetMaterialIndex();
+    float rows[3][3];
+    if (!icy && !inventory && (pbr || (idx < 64 && ((sPortBeamGlow.mask >> idx) & 1) != 0)) &&
+        PortBeamColours::Matrix(sPortBeamGlow.beam, rows)) {
+      GXSetColorMatrix(rows, pbr ? GX_TRUE : GX_FALSE);
+    } else {
+      GXSetColorMatrix(nullptr, GX_FALSE);
+    }
+  }
   // A fading model is shaded as it is at full alpha.
   const CModelFlags& lookFlags = fadeBlend ? opaqueFlags : drawFlags;
   const bool sortedDraw = !icy && ((inventory ? modelFlags : lookFlags).GetTrans() >= CModelFlags::kT_Blend ||
@@ -1074,7 +1124,11 @@ void CCubeModel::DrawSurface(const CCubeSurface& surface, const CModelFlags& mod
         ++CCubeMaterial::sPortPBRProbeDraws;
       }
     }
-    if (found && env.hasAmbient) {
+    if (sPortUnbaked) {
+      // No baked light: an absolute ambient of nothing, not the GX ambient (null would take that).
+      static const f32 kNoAmbient[6][3] = {};
+      GXSetPBRAmbient(kNoAmbient, 2.f);
+    } else if (found && env.hasAmbient) {
       // The baked ambient's directions are in world space, the shader's normal in view space.
       f32 rows[6][3];
       memcpy(rows, env.ambient, sizeof(rows));
@@ -1088,7 +1142,7 @@ void CCubeModel::DrawSurface(const CCubeSurface& surface, const CModelFlags& mod
     } else {
       GXSetPBRAmbient(nullptr, 0.f);
     }
-    if (found && env.volume != 0) {
+    if (!sPortUnbaked && found && env.volume != 0) {
       // The volume is in world space, the shader's position and normal in view space.
       const CVector3f eye = view.GetTranslation();
       const f32 at[3] = {eye.GetX(), eye.GetY(), eye.GetZ()};
@@ -1112,7 +1166,7 @@ void CCubeModel::DrawSurface(const CCubeSurface& surface, const CModelFlags& mod
     // Room geometry with a lookup into its room's lightmap is lit by that, per texel, in
     // place of the volume; the material says which texcoord holds the lightmap UV.
     const int lightmapSlot =
-        !icy && found && env.lightmap != 0 ? PortLightmapSlot(static_cast< int >(surface.GetMaterialIndex())) : -1;
+        !icy && !sPortUnbaked && found && env.lightmap != 0 ? PortLightmapSlot(static_cast< int >(surface.GetMaterialIndex())) : -1;
     if (lightmapSlot >= 0) {
       f32 axes[3][3];
       for (int row = 0; row < 3; ++row) {
@@ -1128,8 +1182,8 @@ void CCubeModel::DrawSurface(const CCubeSurface& surface, const CModelFlags& mod
       GXSetPBRLightmap(0, nullptr, nullptr);
     }
     // Lit by the bake, which holds the area's light, a model keeps only the runtime lights.
-    const bool baked =
-        found && ((env.hasAmbient && env.ambientAbsolute) || env.volume != 0 || lightmapSlot >= 0);
+    const bool baked = !sPortUnbaked && found &&
+                       ((env.hasAmbient && env.ambientAbsolute) || env.volume != 0 || lightmapSlot >= 0);
     GXSetPBRLightSkip(PortPauseLighting::doll ? 0xffu :
                      baked && !PortRoomEnv::AreaLights() ? CCubeMaterial::sPortAreaLights : 0u);
     // The frame's tone curve, when rooms are exposed as Remastered exposes them. Remastered
@@ -1150,7 +1204,8 @@ void CCubeModel::DrawSurface(const CCubeSurface& surface, const CModelFlags& mod
     // MP_REMASTERED_BACKLIGHT=0 turns it off; set but empty leaves it on, as it always has.
     static const bool sBacklightOff =
         !port::EnvFlag("MP_REMASTERED_BACKLIGHT", true) && *port::EnvString("MP_REMASTERED_BACKLIGHT") != '\0';
-    if (sBacklightOff) {
+    // Its colours are the baked ambient's, which an unbaked draw has none of.
+    if (sBacklightOff || sPortUnbaked) {
       GXSetPBRBacklight(nullptr, nullptr, 0.f, 0.f, 0.f, 0.f);
     } else {
       const CAABox& box = GetBoundingBox();
@@ -1300,6 +1355,12 @@ void CCubeModel::DrawSurface(const CCubeSurface& surface, const CModelFlags& mod
           diffuse[2] = tint.GetBlue();
           diffuse[3] = trans == CModelFlags::kT_One ? tint.GetAlpha() : 1.f;
         }
+      }
+      // A model particle's DIFC (PortSetParticleDiffuse): its alpha rides the blend's fade.
+      if (!icy && sPortParticleDiffuseSet && tintable) {
+        diffuse[0] = sPortParticleDiffuse[0];
+        diffuse[1] = sPortParticleDiffuse[1];
+        diffuse[2] = sPortParticleDiffuse[2];
       }
       GXSetPBRModelModulation(diffuse, incan, 1.f);
     }
@@ -1582,6 +1643,7 @@ void CCubeModel::DrawFlat(const float* positions, const float* normals,
 
 #ifdef TARGET_PC
 bool CCubeModel::sPortThermalSplit = false;
+bool CCubeModel::sPortUnbaked = false;
 
 void CCubeModel::PortSetThermalOverride(const float a, const float b) {
   sPortThermalOverride.on = true;
@@ -1596,6 +1658,12 @@ void CCubeModel::PortSetThermalOverrideConstants(const float x, const float y) {
 }
 
 void CCubeModel::PortClearThermalOverride() { sPortThermalOverride.on = false; }
+
+void CCubeModel::PortSetBeamGlow(const CCubeModel* model, const int beam, const uint64_t mask) {
+  sPortBeamGlow.model = model;
+  sPortBeamGlow.beam = beam;
+  sPortBeamGlow.mask = mask;
+}
 
 void CCubeModel::PortGetThermalOverride(bool& on, float& x, float& y) {
   on = sPortThermalOverride.on;

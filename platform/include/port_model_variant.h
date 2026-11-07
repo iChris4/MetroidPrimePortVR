@@ -15,7 +15,7 @@ namespace PortModelVariant {
 // `key` picks the look: the suit (CPlayerState::EPlayerSuit) for Samus, the
 // weapon type for the beam troopers. The id of a variant that is
 // also a retail resource's is never written, so it cannot shadow one.
-inline uint32_t Id(uint32_t retail, int key) {
+constexpr uint32_t Id(uint32_t retail, int key) {
   uint32_t h = port::kFnv32Basis;
   const auto mix = [&h](uint32_t v) {
     for (int i = 0; i < 4; ++i) {
@@ -27,5 +27,14 @@ inline uint32_t Id(uint32_t retail, int key) {
   mix(uint32_t(key));
   return h;
 }
+
+// The look Remastered draws as model 3 (the thermal hot pass): the arm
+// cannon's heat mask (a beam's gun character) and the suit arm's
+// <Suit>Arm_Thermal (a retail arm CMDL).
+constexpr int kThermalLook = 3;
+
+// The look Remastered draws in the X-ray visor where retail has no X-ray model
+// (the grapple arm's <Part>_XRAY CMDLs).
+constexpr int kXRayLook = 4;
 
 } // namespace PortModelVariant

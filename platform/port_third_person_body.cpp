@@ -10,6 +10,7 @@
 #include "port_shell.h"
 #include "port_third_person.h"
 
+#include "Kyoto/Animation/CAnimTreeNode.hpp"
 #include "Kyoto/Animation/CCharLayoutInfo.hpp"
 #include "Kyoto/CResFactory.hpp"
 #include "Kyoto/CSimplePool.hpp"
@@ -91,10 +92,12 @@ constexpr LocoSlot kForwardTiers[] = {kSlowWalk, kWalk, kSlowRun, kFastRun};
 constexpr LocoSlot kBackTiers[] = {kWalkBack};
 // The clips played once (or held) for a stance or over the upper body, as phases of the clip:
 // from, to (held there once reached). The jump is the run-and-jump's push-off into its tuck; the
-// fall holds the tuck's airborne pose, legs drawn up and the cannon forward (the crater jump's
-// drop is a dive, crouched with an arm flung up, and read as a stumble); the landing the hangar landing's crouch and rise (after it she
-// turns to the ship); the flinch the Omega intro's lean back from the blast; the scan the scan
-// cutscene's hand at the visor. Their root height is held at the skeleton's (Ground): the
+// fall the hangar landing's descent, the legs reaching down for the ground, under the tuck's upper
+// body (held; the tuck alone read as a frozen hunch, and the landing's own upper body leans back
+// out of a flip; the crater jump's drop is a dive, crouched with an arm flung up); the landing
+// that clip's touchdown on from there, its crouch and rise (after it she turns to the ship), so
+// the fall flows into it; the flinch the Omega intro's lean back from the blast; the scan the
+// scan cutscene's hand at the visor. Their root height is held at the skeleton's (Ground): the
 // player's own movement carries the body.
 struct OneShot {
   const char* name;
@@ -102,10 +105,19 @@ struct OneShot {
   float to;
 };
 constexpr OneShot kJump{"01_Intro_Hanger_runandjump_samus", 0.66f, 0.7f};
-constexpr OneShot kFall{"01_Intro_Hanger_runandjump_samus", 0.7f, 0.72f};
-constexpr OneShot kLand{"01_Intro_Hanger_landintoship_samus", 0.06f, 0.3f};
-constexpr OneShot kFlinch{"Omega_Intro_Samus_01_flinch", 0.2f, 0.45f};
+constexpr OneShot kFall{"01_Intro_Hanger_landintoship_samus", 0.03f, 0.04f};
+constexpr OneShot kLand{"01_Intro_Hanger_landintoship_samus", 0.05f, 0.3f};
+// The flinch ends back at the ready (0.36): from 0.38 she raises the cannon overhead.
+constexpr OneShot kFlinch{"Omega_Intro_Samus_01_flinch", 0.2f, 0.36f};
 constexpr OneShot kScan{"Scan_Cine_forward", 0.03f, 0.03f};
+// Turning in place, the turn clip's legs step around as far as the player has turned (TurnPhase):
+// B_180turn_samus, half a turn (its root carries the turn, which the body drops: the player's
+// own turn carries it). samus_turnaround does not turn: the cutscene turns the actor. The
+// clip's root turn is sampled this finely (Measure).
+constexpr const char* kTurn = "B_180turn_samus";
+constexpr int kTurnSamples = 32;
+// Facing turning faster than this (radians a second) turns the legs.
+constexpr float kTurnRate = 0.5f;
 // A hit of at least this much flinches the body: what makes the first-person cannon jolt
 // (CPlayerGun::TakeDamage), so heat and poison don't.
 constexpr float kFlinchDamage = 10.f;
@@ -183,7 +195,12 @@ struct State {
   float locoLead[kLocoSlots][kLeadSamples] = {};
   float stopLead[kStopSamples] = {};
   float stopStart = 0.f; // the Stop clip's phase this stop began at (StopStart)
-  Clip jump, fall, land, flinch, scan;
+  Clip jump, fall, land, flinch, scan, turn;
+  float turnYaw[kTurnSamples + 1] = {}; // the turn clip's root turn at each sample, unwrapped
+  // Turning in place: the facing last tick (radians), how far the body has turned since it
+  // started (TurnPhase), and the turn clip's share of the idle, eased.
+  bool haveYaw = false;
+  float lastYaw = 0.f, turned = 0.f, turnWeight = 0.f;
   AimCell aim[9] = {};
   bool aimLayer = false;
   // The cannon's yaw and pitch in each aim cell (radians, model space, + right and up), and
@@ -417,8 +434,24 @@ void TurnSeg(CHierarchyPoseBuilder& pb, const CCharLayoutInfo& layout, CSegId se
   pb.Insert(seg, parentRot.BuildInverted() * turn * parentRot * pose);
 }
 
-// Turns the shoulder so the cannon's axis (GUN_LCTR to Charge_LCTR) runs through the aim point,
-// by s.aimWeight, over the clip's pose. All in the body's unscaled model space.
+// The cannon's muzzle for GUN_LCTR at `gun` and Charge_LCTR at `charge` (one space; `scale` turns
+// the cannon box's metres into it): its bore is GUN_LCTR toward the result. The cinematic beam,
+// drawn at GUN_LCTR, has its barrel along its own +X through its origin, the muzzle at the box's
+// far end; Charge_LCTR sits off that line, above the barrel, so its line would aim and fire from
+// beside the cannon. The dread-samus body's own cannon: Charge_LCTR. The echoes-suits bodies are
+// skinned to Prime's skeleton, their cannon where Prime's beam would be: the beam's reach.
+CVector3f BoreTip(const CTransform4f& gun, const CVector3f& charge, float scale) {
+  if (PortDreadSamus::ReplacesWithDread(PortDreadSamus::CutsceneBody(s.loadedChar))) {
+    return charge;
+  }
+  // Until the beam's model loads, as far out as Charge_LCTR.
+  const float reach =
+      s.beamData ? s.beamData->GetBounds().GetMaxPoint().GetX() * scale : gun.TransposeMultiply(charge).GetX();
+  return gun * CVector3f(reach, 0.f, 0.f);
+}
+
+// Turns the shoulder so the cannon's bore (BoreTip) runs through the aim point, by s.aimWeight,
+// over the clip's pose. All in the body's unscaled model space.
 void AimArm(const CStateManager& mgr, CAnimData& data) {
   if (s.shoulder == CSegId::Invalid()) {
     return;
@@ -446,9 +479,14 @@ void AimArm(const CStateManager& mgr, CAnimData& data) {
     pb.BuildTransform(seg, xf);
     return xf.GetTranslation();
   };
+  const auto tip = [&pb, &position] {
+    CTransform4f xf = CTransform4f::Identity();
+    pb.BuildTransform(s.gunSeg, xf);
+    return BoreTip(xf, position(s.muzzleSeg), 1.f / kBodyScale);
+  };
   const CVector3f pivot = position(s.shoulder);
   const CVector3f gun = position(s.gunSeg) - pivot;
-  const CVector3f muzzle = position(s.muzzleSeg) - pivot;
+  const CVector3f muzzle = tip() - pivot;
   if (!(muzzle - gun).CanBeNormalized() || (target - pivot).Magnitude() < 1.f) {
     return;
   }
@@ -478,8 +516,8 @@ void AimArm(const CStateManager& mgr, CAnimData& data) {
     parentRot = pb.GetSegRotation(seg) * parentRot;
   }
   pb.Insert(s.shoulder, parentRot.BuildInverted() * turn * parentRot * s.shoulderPose);
-  const CVector3f line = position(s.muzzleSeg) - position(s.gunSeg);
-  const CVector3f rest = target - position(s.muzzleSeg);
+  const CVector3f line = tip() - position(s.gunSeg);
+  const CVector3f rest = target - tip();
   s.armMiss = line.CanBeNormalized() && rest.CanBeNormalized()
                   ? std::acos(std::clamp(CVector3f::Dot(line.AsNormalized(), rest.AsNormalized()), -1.f, 1.f))
                   : 0.f;
@@ -748,9 +786,12 @@ CVector3f SegPosition(const CAnimData& data, CSegId seg) {
   return xf.GetTranslation();
 }
 
-// Pose (built last) as the cannon's yaw and pitch: the axis from GUN_LCTR to Charge_LCTR.
+// Pose (built last) as the cannon's yaw and pitch: its bore (BoreTip).
 void CannonAngles(const CAnimData& data, float& yaw, float& pitch) {
-  const CVector3f d = SegPosition(data, s.muzzleSeg) - SegPosition(data, s.gunSeg);
+  CTransform4f gun = CTransform4f::Identity();
+  data.GetPoseBuilder().BuildTransform(s.gunSeg, gun);
+  const CVector3f d =
+      BoreTip(gun, SegPosition(data, s.muzzleSeg), 1.f / kBodyScale) - gun.GetTranslation();
   yaw = std::atan2(d.GetX(), d.GetY());
   pitch = std::atan2(d.GetZ(), std::sqrt(d.GetX() * d.GetX() + d.GetY() * d.GetY()));
 }
@@ -761,7 +802,7 @@ Pose sArms;
 Pose sModel;
 Pose sBlended;
 Pose sUpper;
-Pose sWalkArm;
+Pose sFreeArm;
 
 // Pose p with each rotation turned into the model's frame (its parents' rotations times its
 // own); a segment RecalcPoseBuilder doesn't set keeps the pose builder's rotation.
@@ -820,6 +861,20 @@ void Measure(CAnimData& data) {
   }
 
   s.stopStart = 0.f;
+
+  // The turn clip's root turn about the model's up (+ right), unwrapped.
+  std::fill(std::begin(s.turnYaw), std::end(s.turnYaw), 0.f);
+  const CSegId root = s.hips != CSegId::Invalid() ? layout.GetOriginalParent(s.hips) : CSegId::Invalid();
+  if (s.turn.Valid() && root != CSegId::Invalid() && root != CSegId::Character()) {
+    float last = 0.f;
+    for (int k = 0; k <= kTurnSamples; ++k) {
+      Sample(s.turn, std::min(float(k) / kTurnSamples, 0.999f), sTmp);
+      const CVector3f f = s.turn.data->GetRootAnimationTree()->GetRotation(root).Transform(CVector3f(0.f, 1.f, 0.f));
+      const float yaw = std::atan2(f.GetX(), f.GetY());
+      s.turnYaw[k] = k == 0 ? 0.f : s.turnYaw[k - 1] + std::remainder(yaw - last, 2.f * 3.14159265f);
+      last = yaw;
+    }
+  }
 
   // The aim grid: every cell its clips (missing ones the ready pose), then each row's columns
   // put on the side their cannon points to.
@@ -915,7 +970,7 @@ constexpr float kSideLoop = 0.8f;
 constexpr float kSideCadence = 2.4f;
 constexpr float kStepGap = 0.12f;
 
-// The legs' bones and lengths, and the ready pose's feet, for Backpedal (s.legs if all there).
+// The legs' bones and lengths, and the relaxed ready's feet, for Backpedal (s.legs if all there).
 void FindLegBones(CAnimData& data) {
   const CCharLayoutInfo& layout = *data.GetCharLayoutInfo();
   static const char* const kNames[2][4] = {{"L_hip", "L_knee", "L_ankle", "L_ball"},
@@ -932,7 +987,7 @@ void FindLegBones(CAnimData& data) {
   if (!s.legs) {
     return;
   }
-  Sample(data, s.ready, 0.f, sTmp);
+  Sample(data, s.idle, 0.f, sTmp);
   for (int f = 0; f < 2; ++f) {
     const CVector3f hip = SegPosition(data, s.leg[f][0]);
     const CVector3f knee = SegPosition(data, s.leg[f][1]);
@@ -941,6 +996,22 @@ void FindLegBones(CAnimData& data) {
     s.thigh[f] = (knee - hip).Magnitude();
     s.shin[f] = (s.restAnkle[f] - knee).Magnitude();
     s.legs = s.legs && s.thigh[f] > 1e-3f && s.shin[f] > 1e-3f;
+  }
+  // Walking, her feet fall under the hips (B_slowwalk_samus, about ±0.09), not at the ready's
+  // standing ±0.27: the gait's feet take the slow walk's mean across a loop, the rest kept.
+  const Clip& walk = s.loco[kSlowWalk];
+  if (walk.Valid()) {
+    constexpr int kSamples = 16;
+    float x[2] = {0.f, 0.f};
+    for (int i = 0; i < kSamples; ++i) {
+      Sample(walk, float(i) / kSamples, sTmp);
+      for (int f = 0; f < 2; ++f) {
+        x[f] += SegPosition(*walk.data, s.leg[f][2]).GetX() / kSamples;
+      }
+    }
+    for (int f = 0; f < 2; ++f) {
+      s.restAnkle[f] = CVector3f(x[f], s.restAnkle[f].GetY(), s.restAnkle[f].GetZ());
+    }
   }
 }
 
@@ -953,15 +1024,39 @@ CQuaternion ModelRotation(const CHierarchyPoseBuilder& pb, const CCharLayoutInfo
   return rot;
 }
 
+// upper's upper body over out's legs, the spine kept as it faces in the model in upper, so the
+// torso does not lean with the other clip's hips.
+void UpperOver(CAnimData& data, Pose& out, const Pose& upper) {
+  if (s.spine == CSegId::Invalid()) {
+    Overlay(out, upper, 1.f, true);
+    return;
+  }
+  ModelRotations(data, upper, sModel);
+  const CQuaternion spine = sModel.rot[s.spine.val()];
+  Overlay(out, upper, 1.f, true);
+  ModelRotations(data, out, sModel);
+  const int sp = s.spine.val();
+  const CQuaternion parent = sModel.rot[sp] * out.rot[sp].BuildInverted();
+  out.rot[sp] = parent.BuildInverted() * spine;
+}
+
 // Walking any way but forward, posed rather than sampled (no clip walks backward well, #216, and
-// none sidesteps): the ready pose above the hips, the cannon held, and below them each foot on its
+// none sidesteps): the ready pose above the hips, the cannon held (the free arm swinging or
+// hanging), and below them each foot on its
 // BackpedalFoot path along the way she goes (s.stepAngle), planted feet sliding the other way under
 // her at her ground speed (s.stride runs a loop per s.backLoop of ground). Two-bone IK puts each
 // ankle there, its knee bent forward; the hips crouch so the stretched leg reaches, and bob at
 // each step. Sidestepping, the feet stand wider so they never cross (StepWiden), and land flat.
 void Backpedal(CAnimData& data, Pose& out) {
+  // Below the hips the relaxed ready (s.idle) she stands in: B_ready_samus stands in a side-on
+  // lunge, and stepping from it splayed the legs wide and low. Above them the ready pose, the
+  // spine kept as it faces in the model so the cannon stays levelled over the other hips.
   const float readyDuration = std::max(data.GetAnimationDuration(s.ready), 0.1f);
-  Sample(data, s.ready, Wrap(s.clock / readyDuration), out);
+  Sample(data, s.ready, Wrap(s.clock / readyDuration), sUpper);
+  const float idleDuration = std::max(data.GetAnimationDuration(s.idle), 0.1f);
+  Sample(data, s.idle, Wrap(s.clock / idleDuration), out);
+  sFreeArm = out;
+  UpperOver(data, out, sUpper);
   CHierarchyPoseBuilder& pb = data.PoseBuilder();
   const CCharLayoutInfo& layout = *data.GetCharLayoutInfo();
   const float leg = 0.5f * (s.thigh[0] + s.shin[0] + s.thigh[1] + s.shin[1]);
@@ -969,6 +1064,25 @@ void Backpedal(CAnimData& data, Pose& out) {
   const float dirX = std::sin(s.stepAngle);
   const float dirY = std::cos(s.stepAngle);
   const float across = std::fabs(dirX);
+  // The free arm not held out as in the ready pose: the walk's swing in step with the feet (the
+  // left foot furthest forward at stride 0, as below), hanging as in the relaxed ready sideways.
+  if (s.loco[kWalk].Valid()) {
+    Sample(s.loco[kWalk], Wrap(s.stride + s.locoPeak[kWalk]), sUpper);
+    for (const CSegId& seg : s.segs) {
+      const int i = seg.val();
+      if (s.freeArm[i]) {
+        sFreeArm.rot[i] = Blend(sUpper.rot[i], sFreeArm.rot[i], across);
+        sFreeArm.off[i] = sUpper.off[i] * (1.f - across) + sFreeArm.off[i] * across;
+      }
+    }
+  }
+  for (const CSegId& seg : s.segs) {
+    const int i = seg.val();
+    if (s.freeArm[i]) {
+      out.rot[i] = sFreeArm.rot[i];
+      out.off[i] = sFreeArm.off[i];
+    }
+  }
   // A foot is planted while it covers 2 * kBackHalf legs of ground (kSideHalf across), at most
   // kBackDuty of a loop.
   const float maxHalf = kBackHalf + (kSideHalf - kBackHalf) * across;
@@ -1095,8 +1209,15 @@ void PoseBody(CAnimData& data) {
   float total = 0.f;
   const float idleDuration = std::max(data.GetAnimationDuration(s.idle), 0.1f);
   if (s.stanceWeight[int(Stance::Idle)] > 0.f) {
-    Sample(data, s.idle, Wrap(s.clock / idleDuration), sTmp);
-    Mix(sAcc, total, sTmp, s.stanceWeight[int(Stance::Idle)], false);
+    const float turnWeight = s.turn.Valid() ? s.turnWeight : 0.f;
+    if (turnWeight < 1.f) {
+      Sample(data, s.idle, Wrap(s.clock / idleDuration), sTmp);
+      Mix(sAcc, total, sTmp, s.stanceWeight[int(Stance::Idle)] * (1.f - turnWeight), false);
+    }
+    if (turnWeight > 0.f) {
+      Sample(s.turn, std::min(TurnPhase(s.turned, s.turnYaw, kTurnSamples), 0.999f), sTmp);
+      Mix(sAcc, total, sTmp, s.stanceWeight[int(Stance::Idle)] * turnWeight, false);
+    }
   }
   if (s.stanceWeight[int(Stance::Stop)] > 0.f) {
     // Played once: held on its last frame (phase 1 would wrap to its first).
@@ -1131,6 +1252,12 @@ void PoseBody(CAnimData& data) {
     const float w = s.stanceWeight[int(e.stance)];
     if (w > 0.f && e.clip.Valid()) {
       Sample(e.clip, ShotPhase(e.clip, e.shot, s.stanceTime[int(e.stance)]), sTmp);
+      if (e.stance == Stance::Fall && s.jump.Valid()) {
+        // The descent's legs under the jump's tucked upper body: the landing clip comes out of a
+        // flip, leaning back with an arm flung up.
+        Sample(s.jump, kJump.to, sUpper);
+        UpperOver(data, sTmp, sUpper);
+      }
       Ground(sTmp);
       Mix(sAcc, total, sTmp, w, false);
     }
@@ -1185,36 +1312,26 @@ void PoseBody(CAnimData& data) {
       Mix(sArms, armsTotal, sModel, weights[j], true);
     }
     if (armsTotal > 0.f) {
-      // Walking, the free arm keeps the walk's swing under the aimed shoulders.
-      const float freeAim = s.aimWeight * (1.f - s.stanceWeight[int(Stance::Loco)] * (1.f - s.backWeight));
-      sWalkArm = sAcc;
+      // The free arm keeps the legs' pose under the aimed shoulders (the walk's swing, the relaxed
+      // ready's hang): the aim clips hold it straight out, frozen at kAimHold.
       ModelRotations(data, sAcc, sModel);
       const CCharLayoutInfo& layout = **data.PoseBuilder().CharLayoutInfo();
       for (const CSegId& seg : s.segs) {
         const int i = seg.val();
-        if (!s.upper[i]) {
+        if (!s.upper[i] || s.freeArm[i]) {
           continue;
         }
         sBlended.rot[i] = Blend(sModel.rot[i], sArms.rot[i], s.aimWeight);
       }
       for (const CSegId& seg : s.segs) {
         const int i = seg.val();
-        if (!s.upper[i]) {
+        if (!s.upper[i] || s.freeArm[i]) {
           continue;
         }
         const int parent = layout.GetOriginalParent(seg).val();
         const CQuaternion& parentModel = s.upper[parent] ? sBlended.rot[parent] : sModel.rot[parent];
         sAcc.rot[i] = parentModel.BuildInverted() * sBlended.rot[i];
         sAcc.off[i] = sAcc.off[i] * (1.f - s.aimWeight) + sArms.off[i] * s.aimWeight;
-      }
-      if (freeAim < s.aimWeight) {
-        for (const CSegId& seg : s.segs) {
-          const int i = seg.val();
-          if (s.freeArm[i]) {
-            sAcc.rot[i] = Blend(sWalkArm.rot[i], sAcc.rot[i], s.aimWeight > 0.f ? freeAim / s.aimWeight : 0.f);
-            sAcc.off[i] = sWalkArm.off[i] * (1.f - freeAim) + sArms.off[i] * freeAim;
-          }
-        }
       }
     }
   }
@@ -1252,6 +1369,26 @@ void PoseBody(CAnimData& data) {
     CannonAngles(data, s.poseYaw, s.posePitch);
   }
   s.advanced = true;
+}
+
+// Idle, nothing raised or played: how the body starts, built or back from a pause.
+void StandStill() {
+  s.backWeight = 0.f;
+  s.stance = Stance::Idle;
+  std::fill(std::begin(s.stanceWeight), std::end(s.stanceWeight), 0.f);
+  s.stanceWeight[int(Stance::Idle)] = 1.f;
+  std::fill(std::begin(s.locoWeight), std::end(s.locoWeight), 0.f);
+  s.locoWeight[kWalk] = 1.f;
+  s.flinchTime = -1.f;
+  s.scanWeight = 0.f;
+  s.airTime = 0.f;
+  s.slowTime = s.brakeTime = s.lastSpeed = 0.f;
+  s.gunUp = 0.f;
+  s.aimWeight = 0.f;
+  s.reachWeight = 0.f;
+  s.haveLast = false;
+  s.haveYaw = false;
+  s.turned = s.turnWeight = 0.f;
 }
 
 void Build(CStateManager& mgr) {
@@ -1329,17 +1466,10 @@ void Build(CStateManager& mgr) {
   s.land = FindClip(kLand.name);
   s.flinch = FindClip(kFlinch.name);
   s.scan = FindClip(kScan.name);
+  s.turn = FindClip(kTurn);
   Measure(*data);
   FindLegBones(*data);
-  s.backWeight = 0.f;
-  s.stance = Stance::Idle;
-  std::fill(std::begin(s.stanceWeight), std::end(s.stanceWeight), 0.f);
-  s.stanceWeight[int(Stance::Idle)] = 1.f;
-  std::fill(std::begin(s.locoWeight), std::end(s.locoWeight), 0.f);
-  s.locoWeight[kWalk] = 1.f;
-  s.flinchTime = -1.f;
-  s.scanWeight = 0.f;
-  s.airTime = 0.f;
+  StandStill();
   s.suitModel.reset();
   s.suitSkin.reset();
 }
@@ -1403,6 +1533,46 @@ CVector3f GroundVelocity(const CStateManager& mgr, const CPlayer& player, float 
   return v;
 }
 
+// The aim point (the one the shots head for, CPlayerGun::PortShotFromThirdPersonCannon) while
+// the gun is up, and its place on the aim grid, eased toward over `dt` once the arm is up.
+void Aim(const CStateManager& mgr, bool gunUp, float dt) {
+  const CPlayer& player = *mgr.GetPlayer();
+  s.haveAim = false;
+  if (gunUp) {
+    if (player.GetOrbitTargetId() != kInvalidUniqueId &&
+        TCastToConstPtr< CActor >(mgr.GetObjectById(player.GetOrbitTargetId())) != nullptr) {
+      s.aimPoint = player.GetAssistedTargetAim();
+      s.haveAim = true;
+    } else {
+      s.haveAim = PortThirdPerson::AimPoint(s.aimPoint);
+    }
+  }
+  if (s.haveAim && s.aimLayer) {
+    // Where the aim point is from the shoulder, as a place on the aim grid.
+    CTransform4f bodyXf = player.GetTransform();
+    CVector3f origin = bodyXf.GetTranslation();
+    origin.SetZ(player.GetBoundingBox().GetMinPoint().GetZ());
+    bodyXf.SetTranslation(origin);
+    const CVector3f d = bodyXf.TransposeMultiply(s.aimPoint) * (1.f / kBodyScale) - s.pivot;
+    s.aimYawNow = std::atan2(d.GetX(), d.GetY());
+    s.aimPitchNow = std::atan2(d.GetZ(), std::sqrt(d.GetX() * d.GetX() + d.GetY() * d.GetY()));
+    const float yaw = std::atan2(d.GetX(), d.GetY()) - s.aimYaw[4];
+    const float pitch =
+        std::atan2(d.GetZ(), std::sqrt(d.GetX() * d.GetX() + d.GetY() * d.GetY())) - s.aimPitch[4];
+    const float u = std::clamp(yaw >= 0.f ? yaw / s.gridRight : yaw / s.gridLeft, -1.f, 1.f);
+    const float v = std::clamp(pitch >= 0.f ? pitch / s.gridUp : pitch / s.gridDown, -1.f, 1.f);
+    if (s.aimWeight <= 0.f) {
+      // Raised from the side: straight to the aim.
+      s.gridU = u;
+      s.gridV = v;
+      s.gridSpeedU = s.gridSpeedV = 0.f;
+    } else {
+      SmoothToward(s.gridU, s.gridSpeedU, u, dt);
+      SmoothToward(s.gridV, s.gridSpeedV, v, dt);
+    }
+  }
+}
+
 } // namespace
 
 void Update(CStateManager& mgr, float dt) {
@@ -1417,6 +1587,7 @@ void Update(CStateManager& mgr, float dt) {
   }
   if (!s.body || !s.animating) {
     s.haveLast = false;
+    s.haveYaw = false;
     return;
   }
   PumpBeam(mgr);
@@ -1430,6 +1601,7 @@ void Update(CStateManager& mgr, float dt) {
     s.aimWeight = 0.f;
     s.reachWeight = 0.f;
     s.haveLast = false;
+    s.haveYaw = false;
     return;
   }
   const CTransform4f& xf = player.GetTransform();
@@ -1478,6 +1650,24 @@ void Update(CStateManager& mgr, float dt) {
     s.changes[s.changeCount++] = {s.clock, stance, fwd, side, vel.GetZ()};
   }
   s.stance = stance;
+  // Turning on the spot: the turn clip steps the legs around as far as the facing turned, so
+  // the planted feet stay put while the body turns over them.
+  const CVector3f facing = xf.GetForward();
+  const float yaw = std::atan2(facing.GetX(), facing.GetY());
+  const float turn = s.haveYaw ? std::remainder(yaw - s.lastYaw, 2.f * 3.14159265f) : 0.f;
+  s.lastYaw = yaw;
+  s.haveYaw = true;
+  const bool turning = stance == Stance::Idle && dt > 0.f && std::fabs(turn) > kTurnRate * dt;
+  if (stance == Stance::Idle && s.turnWeight > 0.f) {
+    s.turned += turn;
+  }
+  if (turning && s.turnWeight == 0.f) {
+    s.turned = turn;
+  }
+  s.turnWeight = Approach(s.turnWeight, turning ? 1.f : 0.f, dt / kBlendSeconds);
+  if (s.turnWeight == 0.f) {
+    s.turned = 0.f;
+  }
   for (int i = 0; i < int(Stance::Count); ++i) {
     s.stanceWeight[i] = Approach(s.stanceWeight[i], i == int(stance) ? 1.f : 0.f, dt / kBlendSeconds);
     s.stanceTime[i] += dt;
@@ -1556,41 +1746,7 @@ void Update(CStateManager& mgr, float dt) {
     s.stride = Wrap(s.stride + dt * (s.legsBack ? -speed : speed) / stride);
   }
 
-  // The aim point is the one the shots head for (CPlayerGun::PortShotFromThirdPersonCannon).
-  s.haveAim = false;
-  if (gunUp) {
-    if (player.GetOrbitTargetId() != kInvalidUniqueId &&
-        TCastToConstPtr< CActor >(mgr.GetObjectById(player.GetOrbitTargetId())) != nullptr) {
-      s.aimPoint = player.GetAssistedTargetAim();
-      s.haveAim = true;
-    } else {
-      s.haveAim = PortThirdPerson::AimPoint(s.aimPoint);
-    }
-  }
-  if (s.haveAim && s.aimLayer) {
-    // Where the aim point is from the shoulder, as a place on the aim grid.
-    CTransform4f bodyXf = xf;
-    CVector3f origin = bodyXf.GetTranslation();
-    origin.SetZ(player.GetBoundingBox().GetMinPoint().GetZ());
-    bodyXf.SetTranslation(origin);
-    const CVector3f d = bodyXf.TransposeMultiply(s.aimPoint) * (1.f / kBodyScale) - s.pivot;
-    s.aimYawNow = std::atan2(d.GetX(), d.GetY());
-    s.aimPitchNow = std::atan2(d.GetZ(), std::sqrt(d.GetX() * d.GetX() + d.GetY() * d.GetY()));
-    const float yaw = std::atan2(d.GetX(), d.GetY()) - s.aimYaw[4];
-    const float pitch =
-        std::atan2(d.GetZ(), std::sqrt(d.GetX() * d.GetX() + d.GetY() * d.GetY())) - s.aimPitch[4];
-    const float u = std::clamp(yaw >= 0.f ? yaw / s.gridRight : yaw / s.gridLeft, -1.f, 1.f);
-    const float v = std::clamp(pitch >= 0.f ? pitch / s.gridUp : pitch / s.gridDown, -1.f, 1.f);
-    if (s.aimWeight <= 0.f) {
-      // Raised from the side: straight to the aim.
-      s.gridU = u;
-      s.gridV = v;
-      s.gridSpeedU = s.gridSpeedV = 0.f;
-    } else {
-      SmoothToward(s.gridU, s.gridSpeedU, u, dt);
-      SmoothToward(s.gridV, s.gridSpeedV, v, dt);
-    }
-  }
+  Aim(mgr, gunUp, dt);
   s.aimWeight = s.haveAim ? std::min(s.aimWeight + dt / kAimInSeconds, 1.f)
                           : std::max(s.aimWeight - dt / kAimOutSeconds, 0.f);
 
@@ -1610,7 +1766,25 @@ void Update(CStateManager& mgr, float dt) {
 
 bool Ready() { return s.body && s.animating; }
 
-void NoteShot() { s.gunUp = kGunUpSeconds; }
+void NoteShot(const CStateManager& mgr) {
+  s.gunUp = kGunUpSeconds;
+  if (!Ready() || s.pinned.Valid() || s.aimWeight >= 1.f) {
+    return;
+  }
+  // Fired from the lowered (or still rising) arm: up at once, posed now, so the shot leaves the
+  // cannon where the next frame draws it, not from the hanging arm the cannon then swings off.
+  const float weight = s.aimWeight;
+  s.aimWeight = 0.f; // the grid straight to the aim (Aim)
+  Aim(mgr, true, 0.f);
+  if (!s.haveAim) {
+    s.aimWeight = weight;
+    return;
+  }
+  s.aimWeight = 1.f;
+  CAnimData& data = *s.body->AnimationData();
+  PoseBody(data);
+  AimArm(mgr, data);
+}
 
 void PreRender(const CStateManager& mgr) {
   if (Ready()) {
@@ -1633,27 +1807,14 @@ void PreRender(const CStateManager& mgr) {
   }
 }
 
-// The cannon's muzzle for the body at `xf`, facing down the barrel: from the wrist (GUN_LCTR)
-// toward Charge_LCTR, at the far end of the drawn cannon (Charge_LCTR sits mid-barrel on it), or
-// at Charge_LCTR with no cannon drawn.
+// The cannon's muzzle for the body at `xf`, facing down the bore (BoreTip).
 CTransform4f Muzzle(const CTransform4f& xf) {
   const CTransform4f gun = xf * s.body->GetScaledLocatorTransform("GUN_LCTR");
   const CVector3f charge = (xf * s.body->GetScaledLocatorTransform("Charge_LCTR")).GetTranslation();
-  CVector3f dir = charge - gun.GetTranslation();
+  const CVector3f tip = BoreTip(gun, charge, 1.f);
+  const CVector3f dir = tip - gun.GetTranslation();
   if (dir.Magnitude() < 0.01f) {
-    return CTransform4f::Translate(charge);
-  }
-  dir = dir.AsNormalized();
-  CVector3f tip = charge;
-  if (s.beamData && !PortDreadSamus::Replaces(PortDreadSamus::CutsceneBody(s.loadedChar))) {
-    // The farthest the cannon's box reaches along the barrel, in the cannon's own frame.
-    const CVector3f d = gun.TransposeRotate(dir);
-    const CAABox box = s.beamData->GetBounds();
-    float reach = 0.f;
-    for (int i = 0; i < 3; ++i) {
-      reach += std::max(box.GetMinPoint()[i] * d[i], box.GetMaxPoint()[i] * d[i]);
-    }
-    tip = gun.GetTranslation() + dir * reach;
+    return CTransform4f::Translate(tip);
   }
   return CTransform4f::LookAt(tip, tip + dir);
 }
@@ -1684,8 +1845,8 @@ bool Render(const CStateManager& mgr, const CTransform4f& feet, const CActorLigh
   const CModelFlags flags = fade < 1.f ? CModelFlags(CModelFlags::kT_Blend, fade) : CModelFlags::Normal();
   s.body->Touch(mgr, 0);
   s.body->Render(mgr, xf, lights, flags);
-  // Prime's cannon at the hand locator, unless the dread-samus mod's body carries its own.
-  const bool drawGun = s.beamData && !PortDreadSamus::Replaces(PortDreadSamus::CutsceneBody(s.loadedChar));
+  // Prime's cannon at the hand locator, unless a mod's body carries its own.
+  const bool drawGun = s.beamData && !PortDreadSamus::HasOwnCannon(PortDreadSamus::CutsceneBody(s.loadedChar));
   const CTransform4f gun = drawGun ? xf * s.body->GetScaledLocatorTransform("GUN_LCTR") : xf;
   if (drawGun) {
     s.beamData->Touch(mgr, 0);
@@ -1758,6 +1919,12 @@ bool GrappleHand(const CPlayer& player, CVector3f& out) {
 
 void Release() { Drop(); }
 
+void Suspend() {
+  if (s.body && s.animating) {
+    StandStill();
+  }
+}
+
 std::string DescribeClips() {
   if (!Ready()) {
     return "body not ready\n";
@@ -1809,6 +1976,9 @@ std::string DescribeFeet() {
                   s.locoPeak[i], s.locoWeight[i]);
     out += line;
   }
+  std::snprintf(line, sizeof(line), "turn %s turned %+.2f phase %.2f w %4.2f\n", s.turn.Valid() ? "ok " : "---",
+                s.turned, TurnPhase(s.turned, s.turnYaw, kTurnSamples), s.turnWeight);
+  out += line;
   std::snprintf(line, sizeof(line), "stop start %.2f\n", s.stopStart);
   out += line;
   static const char* const kStanceNames[] = {"idle", "stop", "loco", "jump", "fall", "land"};
@@ -1826,6 +1996,10 @@ std::string DescribeFeet() {
                 : sBackWalk == BackWalk::Struggle ? "struggle"
                                                   : "reverse",
                 s.backWeight, s.backLoop, s.backDuty, s.backCrouch, int(s.legs), s.thigh[0], s.thigh[1], s.shin[0], s.shin[1]);
+  out += line;
+  std::snprintf(line, sizeof(line), "standing feet L %+.3f %+.3f %+.3f R %+.3f %+.3f %+.3f\n", s.restAnkle[0].GetX(),
+                s.restAnkle[0].GetY(), s.restAnkle[0].GetZ(), s.restAnkle[1].GetX(), s.restAnkle[1].GetY(),
+                s.restAnkle[1].GetZ());
   out += line;
   for (int i = 0; i < s.changeCount; ++i) {
     const auto& c = s.changes[i];

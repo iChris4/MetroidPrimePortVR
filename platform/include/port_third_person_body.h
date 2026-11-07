@@ -204,6 +204,31 @@ inline float StopStart(float lead, bool rising, const float* stop, int n) {
   return best;
 }
 
+// Where in the turn clip (B_180turn_samus) the body is once it has turned by turned (radians,
+// + the clip's way). yaw: the clip's root turn at n + 1 evenly spaced phases, 0 to 1, unwrapped,
+// from 0 to its whole turn. Each whole turn starts the clip over (it begins and ends in the same
+// stand); a turn the other way plays it backward. The phase returned (0..1) is the one whose
+// root has turned as far, so the planted feet stay where they were.
+inline float TurnPhase(float turned, const float* yaw, int n) {
+  const float whole = n > 0 ? yaw[n] : 0.f;
+  if (std::fabs(whole) < 1e-3f) {
+    return 0.f;
+  }
+  float t = turned / whole;
+  t = (t - std::floor(t)) * whole;
+  // The first sample past t (the clip's turn held where it pauses or goes back a little).
+  float reached = 0.f;
+  for (int k = 0; k < n; ++k) {
+    const float a = reached;
+    const float b = whole > 0.f ? std::max(yaw[k + 1], a) : std::min(yaw[k + 1], a);
+    if (whole > 0.f ? b >= t : b <= t) {
+      return (k + (b != a ? (t - a) / (b - a) : 0.f)) / n;
+    }
+    reached = b;
+  }
+  return 1.f;
+}
+
 // Moves value toward target by at most step.
 inline float Approach(float value, float target, float step) {
   return value < target ? std::min(value + step, target) : std::max(value - step, target);
@@ -298,16 +323,17 @@ inline bool Stepping(float fwd, float side, bool stepping) {
   return stepping ? a > kStepAngle - kStepFlip : a > kStepAngle + kStepFlip;
 }
 
-// How far each foot stands out from the ready pose's place so the feet never come nearer than
+// How far each foot stands out from its standing place so the feet never come nearer than
 // minGap: across, the gait's share across the facing; half, how far a foot moves either way of
-// its place; gap, the ready pose's feet apart. Out of step by half a loop, they close by up to
+// its place; gap, the standing feet apart. Out of step by half a loop, they close by up to
 // 2 |across| half.
 inline float StepWiden(float across, float half, float gap, float minGap) {
   return std::max(std::fabs(across) * half - 0.5f * (gap - minGap), 0.f);
 }
 
-// A shot left the cannon (CPlayerGun): the body raises it for kGunUpSeconds.
-void NoteShot();
+// A shot is leaving the cannon (CPlayerGun): the body raises it for kGunUpSeconds, a lowered arm
+// at once (posed now, before CannonPosition), so the shot starts at the cannon as it is drawn.
+void NoteShot(const CStateManager& mgr);
 // Once per game tick while the third-person camera is active (PortThirdPerson::Update).
 void Update(CStateManager& mgr, float dt);
 // The body is built and animated, and stands in for the frozen one.
@@ -328,6 +354,9 @@ bool TakeMuzzle(CTransform4f& out);
 bool GrappleHand(const CPlayer& player, CVector3f& out);
 // Drops the body (third person off, a new world).
 void Release();
+// Third person paused (morph ball, a cinematic): keeps the body loaded and stands it idle, as
+// it comes back.
+void Suspend();
 
 // Debug (console `thirdperson clips`): the body's Samus clips, one line each: index, name,
 // duration, mean root speed.

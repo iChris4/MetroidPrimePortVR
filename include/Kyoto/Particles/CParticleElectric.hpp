@@ -57,6 +57,15 @@ public:
   uint PortFxAsset() const override;
   void PortFxDescribe(PortFxInfo& out) const override;
   bool PortIsRemastered() const { return xPortElc2.get() != nullptr; }
+  // Remastered's CParticleGen::ShutdownEffect 0x27a66c (no electric SHTT, so at once) into
+  // DoShutdownBehavior: ELSM 0x283094, ELC2 0xb74f84. A retail electric only stops emitting.
+  void ShutdownEffect() override;
+  void PortDoShutdownBehavior(u32 mode) override;
+  const CElectricDescription* PortDesc() const { return *x1c_elecDesc; }
+  int PortCurFrame() const { return x28_currentFrame; }
+  // CParticleElectric2::HasAnyParticlesRecursive 0xb77b08: a live bolt, else any GPSM or EPSM
+  // child with particles.
+  bool PortHasAnyParticlesRecursive() const;
   void PortSetSpawnSpread(const CVector3f& spread, const CVector3f& origin) override;
   // Remastered CParticleElectric2's beam API (an ELC2 only): Beam_AllowEmission 0xb78704,
   // Beam_SetStartAndEndLocationAndUpdateExistingParticle 0xb782fc, Beam_Reset 0xb784ec.
@@ -186,6 +195,7 @@ private:
   std::unique_ptr< CParticleElectric2Port > xPortElc2;
   void PortElc2Step(bool emitting);
   void PortElc2PlaceChildren();
+  void PortElc2Swooshes();
   CVector3f xPortSpawnSpread{1.f, 1.f, 1.f};
   CVector3f xPortSpawnOrigin{0.f, 0.f, 0.f};
   // x38_translation with its offset from the parent's translation spread.

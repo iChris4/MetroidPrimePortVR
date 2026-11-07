@@ -696,7 +696,12 @@ void CCompoundTargetReticle::UpdateOrbitZoneGroup(float dt, const CStateManager&
   }
 
   if (mgr.GetPlayer()->IsCrosshairsOpen() &&
-      mgr.GetPlayerState()->GetCurrentVisor() != CPlayerState::kPV_Scan) {
+      mgr.GetPlayerState()->GetCurrentVisor() != CPlayerState::kPV_Scan
+#ifdef TARGET_PC
+      // Port: the per-visor crosshair setting (issue #241) fades it out as Scan does.
+      && PortDebug::CrosshairInVisor(mgr.GetPlayerState()->GetCurrentVisor())
+#endif
+  ) {
     x1e8_crosshairsScale =
         rstl::min_val(x1e8_crosshairsScale + dt / gpTweakTargeting->x1c4_crosshairsScaleDur, 1.f);
   } else {
@@ -737,8 +742,8 @@ void CCompoundTargetReticle::Draw(const CStateManager& mgr, bool hideLockon) con
 #ifdef TARGET_PC
       // fn_802379D4: new groups bypass x28; the retained crosshair and scan do not.
       if (xPortTri) {
-        PortTriDrawNext(rot);
-        PortTriDrawLocked(rot);
+        PortTriDrawNext(rot, camXf, mgr);
+        PortTriDrawLocked(rot, camXf);
         PortTriDrawCrosshairs(rot, mgr);
         PortTriDrawScan(rot, mgr);
         PortTriDrawAiming(rot, mgr);
@@ -2114,7 +2119,9 @@ void CCompoundTargetReticle::PortTriUpdateCombat(float dt, const CStateManager& 
   x258_aimArmAlpha = (1.f - x264_aimTarget) * (200.f / 255.f) + x264_aimTarget * (160.f / 255.f);
   x260_aimCenterAlpha = 1.f; // fn_80015D2C: port pointer always valid/on-screen.
   if (player.GetGunHolsterState() == CPlayer::kGH_Holstered ||
-      !PortTriReticle::AimVisible(x20_prevState)) x258_aimArmAlpha = x260_aimCenterAlpha = 0.f;
+      !PortTriReticle::AimVisible(x20_prevState) ||
+      !PortDebug::CrosshairInVisor(mgr.GetPlayerState()->GetCurrentVisor()))
+    x258_aimArmAlpha = x260_aimCenterAlpha = 0.f;
   if (x388_triOffScreenTicks != 0.f) { // fn_80236E24: unreachable for port pointer sources.
     x254_aimArmColor = x25c_aimCenterColor = skTriScanOverrideColor;
   }
@@ -2123,9 +2130,8 @@ void CCompoundTargetReticle::PortTriUpdateCombat(float dt, const CStateManager& 
   const TUniqueId next = player.GetOrbitNextTargetId();
   actor = TCastToConstPtr< CActor >(mgr.GetObjectById(next));
   const CVector3f world = actor ? actor->GetOrbitPosition(mgr) : x2c0_triNextWorld;
-  const CVector3f projected = PortTriProjectCombat(cam, world);
   if (next != kInvalidUniqueId && next != x27c_triNext) {
-    if (x2a0_triNextAlpha == 0.f) x2e4_triNextFrom = projected;
+    if (x2a0_triNextAlpha == 0.f) x2e4_triNextFrom = world;
     else {
       x2e4_triNextFrom = x2c0_triNextWorld;
       x2cc_triNextMoving = true;
@@ -2134,19 +2140,21 @@ void CCompoundTargetReticle::PortTriUpdateCombat(float dt, const CStateManager& 
   }
   x2a0_triNextAlpha = Clamp(x2a0_triNextAlpha + (next != kInvalidUniqueId ? dt : -dt) *
       (100.f / 255.f) / .25f, 0.f, 100.f / 255.f);
+  // Kept as a world point and put on the 1.25 plane when drawn (PortTriDrawNext): placed there
+  // now, the drawn camera's travel since this update (a step, head bob, smooth frames) moved it
+  // by that travel over 1.25 units, so it shook and trailed far from what it marks.
   if (x2cc_triNextMoving) {
     x2d4_triNextTime = Clamp(x2d4_triNextTime + dt, 0.f, .25f);
     if (x2d4_triNextTime < .25f) {
       const float q = x2d4_triNextTime / .25f;
-      x280_triNextPos = PortTriProjectCombat(cam, x2e4_triNextFrom) * (1.f - q) + projected * q;
-      x2c0_triNextWorld = eye + (x280_triNextPos - eye).AsNormalized() * (world - eye).Magnitude();
+      const CVector3f nearPos = PortTriProjectCombat(cam, x2e4_triNextFrom) * (1.f - q) +
+                                PortTriProjectCombat(cam, world) * q;
+      x2c0_triNextWorld = eye + (nearPos - eye).AsNormalized() * (world - eye).Magnitude();
     } else {
       x2cc_triNextMoving = false;
-      x280_triNextPos = projected;
       x2c0_triNextWorld = world;
     }
   } else {
-    x280_triNextPos = projected;
     x2c0_triNextWorld = world;
   }
   x27c_triNext = next;
@@ -2167,7 +2175,6 @@ void CCompoundTargetReticle::PortTriUpdateCombat(float dt, const CStateManager& 
     }
     hideArms = IsGrappleTarget(locked, mgr);
   }
-  x2f4_triLockPos = cam * CVector3f(0.f, 1.25f, 0.f);
   if (has && locked == x2f0_triLocked) x324_triLockTime += dt;
   else if (!has && x2f0_triLocked != kInvalidUniqueId) {
     if (release && x20_prevState == kRS_Combat && !IsGrappleTarget(x2f0_triLocked, mgr))
@@ -2236,11 +2243,19 @@ static float PortTriXhairSize() {
 }
 
 // fn_80237B04: independent next-target and released-lock loops.
-void CCompoundTargetReticle::PortTriDrawNext(const CMatrix3f& rot) const {
+void CCompoundTargetReticle::PortTriDrawNext(const CMatrix3f& rot, const CTransform4f& camXf,
+                                             const CStateManager& mgr) const {
+  // The drawn camera's points: the next target where its actor is drawn, the release at the centre.
+  CVector3f nextWorld = x2c0_triNextWorld;
+  if (const CActor* actor = TCastToConstPtr< CActor >(mgr.GetObjectById(x27c_triNext))) {
+    nextWorld = actor->PortPresentedPoint(nextWorld);
+  }
+  const CVector3f nextPos = PortTriProjectCombat(camXf, nextWorld);
+  const CVector3f lockPos = camXf * CVector3f(0.f, 1.25f, 0.f);
   for (int group = 0; group < 2; ++group) {
     const float alpha = group == 0 ? x2a0_triNextAlpha : x350_triReleaseAlpha;
     if (alpha <= 0.f) continue;
-    const CTransform4f base(rot, group == 0 ? x280_triNextPos : x2f4_triLockPos);
+    const CTransform4f base(rot, group == 0 ? nextPos : lockPos);
     for (int i = 0; i < 3; ++i) {
       const float angle = (group == 0 ? x28c_triNextAngle : 0.f) + i * 120.f * (M_PIF / 180.f);
       PortTriDrawModel(x3a4_lockArm, base * CTransform4f::RotateY(CRelAngle::FromRadians(angle)) *
@@ -2249,9 +2264,9 @@ void CCompoundTargetReticle::PortTriDrawNext(const CMatrix3f& rot) const {
   }
 }
 // fn_80237EC4: arms/base interleaved; only tech gets a CTimeProvider (80346FE4).
-void CCompoundTargetReticle::PortTriDrawLocked(const CMatrix3f& rot) const {
+void CCompoundTargetReticle::PortTriDrawLocked(const CMatrix3f& rot, const CTransform4f& camXf) const {
   if (x2f0_triLocked == kInvalidUniqueId || x304_triLockAlpha <= 0.f) return;
-  const CTransform4f base(rot, x2f4_triLockPos);
+  const CTransform4f base(rot, camXf * CVector3f(0.f, 1.25f, 0.f));
   const CColor blue = PortTriColor(0x89d6ffff);
   for (int i = 0; i < 3; ++i) {
     const CTransform4f xf = base * CTransform4f::RotateY(CRelAngle::FromDegrees(i * 120.f));
@@ -2326,7 +2341,14 @@ void CCompoundTargetReticle::PortTriDrawCrosshairs(const CMatrix3f& rot, const C
   if (const CModel* model = x34_crosshairs.GetObject()) {
     CColor color = PortTriXhairColor(gpTweakTargeting->x1c0_crosshairsColor);
     color.SetAlpha(PortTriAlphaU8(255.f * PortTriXhairAlpha(x1e8_crosshairsScale)));
-    gpRender->SetModelMatrix(xf * CTransform4f::Scale(x1e8_crosshairsScale * PortTriXhairSize()));
+    CTransform4f scale = CTransform4f::Scale(x1e8_crosshairsScale * PortTriXhairSize());
+    if (PortDebug::CrosshairStyle() == PortDebug::kCrosshairStyle_GameCube) {
+      // Placed at the eye, a scale about the origin moves the model out with its size and its
+      // apparent size never changes (issue #255): scale it about its own centre instead.
+      const CVector3f centre = model->GetBoundingBox().GetCenterPoint();
+      scale = CTransform4f::Translate(centre) * scale * CTransform4f::Translate(-centre);
+    }
+    gpRender->SetModelMatrix(xf * scale);
     model->Draw(CModelFlags(CModelFlags::kT_Additive, 0, CModelFlags::kF_Nothing, color));
   }
 }
@@ -2557,11 +2579,41 @@ COrbitPointMarker::COrbitPointMarker()
 
 bool COrbitPointMarker::CheckLoadComplete() { return x28_orbitPointModel.TryCache(); }
 
+#ifdef TARGET_PC
+// port: an empty lock that keeps the camera pitch (mouse aim, twin stick) holds the orbit
+// point level at eye height, so the marker sat above or below the screen centre by the pitch
+// (issue #250). Lift it onto the view ray at the point's horizontal distance, where retail's
+// SetOrbitPosition put it.
+static CVector3f PortOrbitMarkerTargetPos(const CPlayer& player, const CGameCamera& cam,
+                                          const CStateManager& mgr) {
+  CVector3f pos = player.GetHUDOrbitTargetPosition();
+  if (!player.PortEmptyLockKeepsPitch(mgr)) {
+    return pos;
+  }
+  const CVector3f camPos = cam.GetTranslation();
+  const CVector3f fwd = cam.GetTransform().GetForward();
+  const float flatLen = CMath::SqrtF(fwd.GetX() * fwd.GetX() + fwd.GetY() * fwd.GetY());
+  if (flatLen < 0.01f) {
+    return pos;
+  }
+  const float dx = pos.GetX() - camPos.GetX();
+  const float dy = pos.GetY() - camPos.GetY();
+  const float dist = CMath::SqrtF(dx * dx + dy * dy);
+  return CVector3f(pos.GetX(), pos.GetY(), camPos.GetZ() + fwd.GetZ() * dist / flatLen);
+}
+#else
+static CVector3f PortOrbitMarkerTargetPos(const CPlayer& player, const CGameCamera&,
+                                          const CStateManager&) {
+  return player.GetHUDOrbitTargetPosition();
+}
+#endif
+
 void COrbitPointMarker::Update(float dt, const CStateManager& mgr) {
   x24_curTime += dt;
   const CPlayer* player = mgr.GetPlayer();
   CPlayer::EPlayerOrbitState orbitState = player->GetOrbitState();
   const CGameCamera& curCam = mgr.GetCameraManager()->GetCurrentCamera(mgr);
+  const CVector3f hudOrbitPos = PortOrbitMarkerTargetPos(*player, curCam, mgr);
 
   bool freeOrbit =
       (orbitState == CPlayer::kOS_OrbitPoint || orbitState == CPlayer::kOS_OrbitCarcass);
@@ -2570,9 +2622,9 @@ void COrbitPointMarker::Update(float dt, const CStateManager& mgr) {
     if (orbitState == CPlayer::kOS_OrbitPoint || orbitState == CPlayer::kOS_OrbitCarcass) {
       ResetInterpolationTimer(gpTweakTargeting->x54_orbitPointInTime);
       x10_lagTargetPos = !x4_camRelZPos
-                             ? player->GetHUDOrbitTargetPosition() + CVector3f(0.f, 0.f, x0_zOffset)
-                             : CVector3f(player->GetHUDOrbitTargetPosition().GetX(),
-                                         player->GetHUDOrbitTargetPosition().GetY(),
+                             ? hudOrbitPos + CVector3f(0.f, 0.f, x0_zOffset)
+                             : CVector3f(hudOrbitPos.GetX(),
+                                         hudOrbitPos.GetY(),
                                          x0_zOffset + curCam.GetTranslation().GetZ());
       CEulerAngles euler =
           CEulerAngles::FromQuaternion(CQuaternion::FromMatrix(curCam.GetTransform()));
@@ -2588,7 +2640,7 @@ void COrbitPointMarker::Update(float dt, const CStateManager& mgr) {
   }
 
   if (!x4_camRelZPos) {
-    CVector3f orbitPos = player->GetHUDOrbitTargetPosition();
+    CVector3f orbitPos = hudOrbitPos;
     float targetZ = x0_zOffset + orbitPos.GetZ();
     float delta = targetZ - x10_lagTargetPos.GetZ();
     if (delta < 0.1f) {
@@ -2601,9 +2653,9 @@ void COrbitPointMarker::Update(float dt, const CStateManager& mgr) {
           CVector3f(orbitPos.GetX(), orbitPos.GetY(), x10_lagTargetPos.GetZ() + 0.1f);
     }
   } else {
-    x10_lagTargetPos = CVector3f(player->GetHUDOrbitTargetPosition().GetX(),
-                                 player->GetHUDOrbitTargetPosition().GetY(),
-                                 x0_zOffset + player->GetHUDOrbitTargetPosition().GetZ());
+    x10_lagTargetPos = CVector3f(hudOrbitPos.GetX(),
+                                 hudOrbitPos.GetY(),
+                                 x0_zOffset + hudOrbitPos.GetZ());
   }
 
   if (x1c_lastFreeOrbit) {

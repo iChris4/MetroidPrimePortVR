@@ -2,6 +2,7 @@
 #include "MetroidPrime/CStateManager.hpp"
 #include "port_actor_shadow.h"
 #include "port_apclient.h"
+#include "port_beam_colours.h"
 #include "port_beam_doors.h"
 #include "port_collision_view.h"
 #include "port_debug.h"
@@ -19,6 +20,7 @@
 #include "port_hold_toggle.h"
 #include "port_livesplit.h"
 #include "port_log.h"
+#include "port_motion_watch.h"
 #include "port_room_env.h"
 #include "port_room_geo.h"
 #include "port_room_liquid.h"
@@ -67,6 +69,8 @@
 #include "MetroidPrime/HUD/CSamusHud.hpp"
 #include "MetroidPrime/Player/CGameState.hpp"
 #include "MetroidPrime/Player/CPlayer.hpp"
+#include "MetroidPrime/Player/CMorphBall.hpp"
+#include "MetroidPrime/ScriptObjects/CScriptGrapplePoint.hpp"
 #include "MetroidPrime/Player/CGrappleArm.hpp"
 #include "MetroidPrime/Player/CPlayerGun.hpp"
 #include "MetroidPrime/Weapons/CPowerBomb.hpp"
@@ -115,6 +119,7 @@
 #include "Kyoto/Graphics/CCubeMaterial.hpp"
 #include "Kyoto/Graphics/CGX.hpp"
 #include <dolphin/gx/GXExtra.h>
+#include "aurora/vfx.hpp"
 #include <stdlib.h>
 #include <algorithm>
 #include <map>
@@ -130,6 +135,7 @@
 #include "Kyoto/Math/CUnitVector3f.hpp"
 #include "Kyoto/Streams/CMemoryInStream.hpp"
 #include "Kyoto/Particles/CParticleElectric.hpp"
+#include "Kyoto/Particles/CParticleGlobals.hpp"
 #include "MetaRender/CCubeRenderer.hpp"
 #include "Weapons/CDecal.hpp"
 #include "WorldFormat/CPVSAreaSet.hpp"
@@ -770,6 +776,7 @@ CStateManager::~CStateManager() {
   if (PortDebug::StateManager() == this) {
     PortDebug::SetStateManager(nullptr);
   }
+  CParticleGlobals::PortSetCameraTransform(nullptr);
   if (gpGameState != nullptr) {
     PortLiveSplit::GameSessionEnd(gpGameState->GetTotalPlayTime());
   }
@@ -1632,7 +1639,12 @@ void CStateManager::Update(float dt) {
   UpdateGameState();
 #ifdef TARGET_PC
   // Remastered's CVisorEffectManagerMP1::Update; where it runs in the frame is (unverified).
-  CHUDBillboardEffect::PortUpdateVisorOverrides(*this, dt);
+  // Update 0xd0ef2c returns at once while soft-paused (game logic +0x158 == 1); otherwise its
+  // first step is the face reflection fade.
+  if (x904_gameState != kGS_SoftPaused) {
+    PortFaceReflection::Update(xPortFaceReflection, dt);
+    CHUDBillboardEffect::PortUpdateVisorOverrides(*this, dt);
+  }
 #endif
 #ifdef MP_ENABLE_SMOKE_DRIVER
   PortSmokeAreaReload(*this);
@@ -1786,6 +1798,7 @@ void CStateManager::Update(float dt) {
   if (x904_gameState == kGS_Running || x904_gameState == kGS_SoftPaused) {
     Think(dt);
     PortRoomGeo::Think(*this, dt);
+    PortRoomEffects::Think(*this, dt);
   }
 
   if (x904_gameState != kGS_SoftPaused) {
@@ -1854,33 +1867,93 @@ void CStateManager::Update(float dt) {
 }
 
 #ifdef TARGET_PC
-// Toggle lock-on and sticky charge (F1 Input, pause Options > Controller). Edges
-// come from the combined digital/analog state, since a GameCube L passes the
-// analog threshold and clicks on different ticks and would toggle twice.
-static void ApplyHoldToggle(CFinalInput& input, const CPlayer* player,
+// Toggle lock-on, the Grapple key and Toggle Grapple, sticky charge and Toggle
+// Spider Ball (F1 Input, pause Options > Controller). Edges come from the
+// combined digital/analog state, since a GameCube trigger passes the analog threshold and clicks on
+// different ticks and would toggle twice.
+static void ApplyHoldToggle(CFinalInput& input, const CStateManager& mgr, const CPlayer* player,
                             const CPlayerState* playerState, bool enabled) {
   static PortHoldToggle::Toggle sLockOn;
+  static PortHoldToggle::GrappleKey sGrapple;
   static PortHoldToggle::Sticky sCharge;
+  static PortHoldToggle::Toggle sSpider;
+  static PortHoldToggle::Grace sSpiderOn;
   static bool sPrevL = false;
+  static bool sSwallowL = false; // an L press the grapple took, until released
+  static float sDebounceL = 0.f;
+  static bool sPrevGrapple = false;
+  static bool sPrevGrappleL = false;
+  static bool sPrevJump = false;
+  static bool sSwallowJump = false; // a jump that let go of the grapple, until released
+  static bool sPrevR = false;
 
   const bool unmorphed =
       enabled && player != nullptr && player->GetMorphballTransitionState() == CPlayer::kMS_Unmorphed;
-
-  const bool heldL = input.DL() || input.DLTrigger();
-  const bool pressL = heldL && !sPrevL;
-  sPrevL = heldL;
-  // Only a lock on an object counts: a killed target leaves the player orbiting
-  // its carcass, and a lost look angle a fixed point, both of which hold the aim
-  // in place for as long as L is held.
   const CPlayer::EPlayerOrbitState orbit =
       player != nullptr ? player->GetOrbitState() : CPlayer::kOS_NoOrbit;
-  const bool locked = orbit == CPlayer::kOS_OrbitObject ||
-                      orbit == CPlayer::kOS_ForcedOrbitObject || orbit == CPlayer::kOS_Grapple;
-  const PortHoldToggle::Output outL =
-      sLockOn.Update(unmorphed && PortDebug::LockOnToggle(), heldL, pressL, locked,
-                     input.Time());
-  if (sLockOn.Latched() || outL.held != heldL) {
-    input.PortSetL(outL.held, outL.pressed);
+
+  const bool padL = input.DL() || input.DLTrigger();
+  const bool pressPadL = padL && !sPrevL;
+  sPrevL = padL;
+  sDebounceL = sDebounceL > input.Time() ? sDebounceL - input.Time() : 0.f;
+
+  // The Grapple key stands in for L at a grapple point: the next target while
+  // not orbiting, the orbited one while the lock turns into a grapple. Under
+  // Toggle Grapple an L press there does the same.
+  const bool grappleKey = PortDebug::GrappleHeld();
+  const bool grapplePress = grappleKey && !sPrevGrapple;
+  sPrevGrapple = grappleKey;
+  const bool pressToggleL = unmorphed && pressPadL && PortDebug::GrappleToggle();
+  bool atPoint = false;
+  if (unmorphed && (grapplePress || pressToggleL || sGrapple.Taken())) {
+    const TUniqueId target =
+        orbit == CPlayer::kOS_NoOrbit ? player->GetOrbitNextTargetId() : player->GetOrbitTargetId();
+    atPoint = TCastToConstPtr< CScriptGrapplePoint >(mgr.GetObjectById(target)) != nullptr;
+  }
+  // An L press taken for the grapple stays hidden from Toggle Lock-On and the
+  // game until L is released; a press within kDebounce of the last one is
+  // trigger bounce and is only hidden.
+  bool grapplePressL = false;
+  if (pressToggleL && (atPoint || sGrapple.Taken() || orbit == CPlayer::kOS_Grapple)) {
+    sSwallowL = true;
+    grapplePressL = sDebounceL <= 0.f;
+    sDebounceL = PortHoldToggle::Toggle::kDebounce;
+  }
+  sSwallowL = sSwallowL && padL;
+  // A jump that lets go of the grapple only lets go: the game's grapple release
+  // already throws Samus, and the press would otherwise spend her double jump.
+  const bool jumpHeld = ControlMapper::GetDigitalInput(ControlMapper::kC_JumpOrBoost, input);
+  const bool jumpPress = jumpHeld && !sPrevJump;
+  sPrevJump = jumpHeld;
+  const bool grappleTaken = sGrapple.Taken();
+  const bool grappleL = sGrapple.Update(unmorphed && !PortDebug::OriginalExperience(),
+                                        grapplePress || grapplePressL, jumpPress, atPoint,
+                                        orbit == CPlayer::kOS_Grapple, input.Time());
+  sSwallowJump = jumpHeld && (sSwallowJump || (grappleTaken && !grappleL && jumpPress));
+  if (sSwallowJump && ControlMapper::GetPressInput(ControlMapper::kC_JumpOrBoost, input)) {
+    input.PortSetB(input.DB(), false);
+  }
+
+  // Only a lock on an object counts: a killed target leaves the player orbiting
+  // its carcass, and a lost look angle a fixed point, both of which hold the aim
+  // in place for as long as L is held. A grapple point doesn't either: grapples
+  // latch under Toggle Grapple, not Toggle Lock-On.
+  const bool lockToggle = unmorphed && PortDebug::LockOnToggle();
+  bool locked = false;
+  if (lockToggle &&
+      (orbit == CPlayer::kOS_OrbitObject || orbit == CPlayer::kOS_ForcedOrbitObject)) {
+    locked = TCastToConstPtr< CScriptGrapplePoint >(
+                 mgr.GetObjectById(player->GetOrbitTargetId())) == nullptr;
+  }
+  const PortHoldToggle::Output outL = sLockOn.Update(lockToggle, padL && !sSwallowL,
+                                                     pressPadL && !sSwallowL, locked, input.Time());
+  // The Grapple key's L joins after Toggle Lock-On, which would otherwise latch
+  // it and keep the grapple after the key lets go.
+  const bool heldL = outL.held || grappleL;
+  const bool pressL = outL.pressed || (grappleL && !sPrevGrappleL);
+  sPrevGrappleL = grappleL;
+  if (sLockOn.Latched() || outL.held != padL || grappleL) {
+    input.PortSetL(heldL, pressL);
   }
 
   const bool heldA = input.DA();
@@ -1890,6 +1963,28 @@ static void ApplyHoldToggle(CFinalInput& input, const CPlayer* player,
   const PortHoldToggle::Output outA = sCharge.Update(charge, heldA, pressA, input.Time());
   if (outA.held != heldA || outA.pressed != pressA) {
     input.PortSetA(outA.held, outA.pressed);
+  }
+
+  // Toggle Spider Ball: the spider ball's hold on its track is the lock. Damage
+  // knocks a latched ball off for a moment (CMorphBall's damage timer), which is
+  // not the end of the track; a hit away from a track doesn't latch a plain hold.
+  const bool morphed =
+      enabled && player != nullptr && player->GetMorphballTransitionState() == CPlayer::kMS_Morphed;
+  const CMorphBall* const ball = player != nullptr ? player->GetMorphBall() : nullptr;
+  const bool heldR = input.DR() || input.DRTrigger();
+  const bool pressR = heldR && !sPrevR;
+  sPrevR = heldR;
+  const bool spider = morphed && PortDebug::SpiderToggle() && ball != nullptr;
+  const bool onTrack =
+      spider && sSpiderOn.Update(ball->GetSpiderBallState() == CMorphBall::kSBS_Active ||
+                                     (sSpider.Latched() && ball->PortDamageTimer() > 0.f),
+                                 input.Time());
+  if (!spider) {
+    sSpiderOn.Reset();
+  }
+  const PortHoldToggle::Output outR = sSpider.Update(spider, heldR, pressR, onTrack, input.Time());
+  if (sSpider.Latched() || outR.held != heldR) {
+    input.PortSetR(outR.held, outR.pressed);
   }
 }
 #endif
@@ -1917,12 +2012,12 @@ void CStateManager::ProcessInput(const CFinalInput& input) {
 #ifdef TARGET_PC
       // Twin stick's raw right stick (Spring Ball) is input too.
       PortDebug::SetTwinStickRightY(0.f);
-      ApplyHoldToggle(xb54_finalInput, x84c_player, GetPlayerState(), false);
+      ApplyHoldToggle(xb54_finalInput, *this, x84c_player, GetPlayerState(), false);
 #endif
     } else {
       xb54_finalInput = input;
 #ifdef TARGET_PC
-      ApplyHoldToggle(xb54_finalInput, x84c_player, GetPlayerState(), true);
+      ApplyHoldToggle(xb54_finalInput, *this, x84c_player, GetPlayerState(), true);
 #endif
     }
   }
@@ -1969,6 +2064,9 @@ void CStateManager::UpdateAreaSounds() {
 void CStateManager::ApplyDamage(const TUniqueId damagerId, const TUniqueId damageeId,
                                 const TUniqueId radiusSender, const CDamageInfo& info,
                                 const CMaterialFilter& filter, const CVector3f& knockbackVec) {
+#ifdef TARGET_PC
+  const PortMotionWatch::DamagerScope motionDamager(*this, damagerId);
+#endif
   const CEntity* damagerEnt = GetObjectById(damagerId);
   CEntity* damageeEnt = ObjectById(damageeId);
   const CActor* const damager = TCastToConstPtr< CActor >(damagerEnt);
@@ -2057,6 +2155,7 @@ bool CStateManager::ApplyLocalDamage(const CVector3f& pos, const CVector3f& dir,
     if (gpGameState->GetHardMode()) {
       useDamage *= gpGameState->GetHardModeDamageMultiplier();
     }
+    useDamage *= PortDebug::DamageTakenMultiplier();
 
     float damageReduction = 0.f;
     if (x8b8_playerState->HasPowerUp(CPlayerState::kIT_VariaSuit)) {
@@ -2223,6 +2322,9 @@ const bool CStateManager::TestRayDamage(const CVector3f& pos, const CActor& dama
 
 void CStateManager::ApplyRadiusDamage(const CActor& damager, const CVector3f& pos, CActor& damagee,
                                       const CDamageInfo& info) {
+#ifdef TARGET_PC
+  const PortMotionWatch::DamagerScope motionDamager(*this, damager.GetUniqueId());
+#endif
   CVector3f delta = damagee.GetTranslation() - pos;
   if (!(delta.MagSquared() < info.GetRadius() * info.GetRadius())) {
     if (!damagee.GetTouchBounds()) {
@@ -2410,6 +2512,9 @@ void CStateManager::KnockBackPlayer(CPlayer& player, const CVector3f& dir, float
   float angle = CVector3f::GetAngleDiff(dir, -player.GetVelocityWR()) * 0.5f;
   usePower *= 1.f - angle / M_PIF;
 
+#ifdef TARGET_PC
+  PortMotionWatch::NoteKnockback(dir, usePower);
+#endif
   player.ApplyImpulseWR(dir * usePower, CAxisAngle::Identity());
   player.UseCollisionImpulses();
   player.SetAccelerationChangeTimer(0.25f);
@@ -2544,8 +2649,12 @@ rstl::pair< TEditorId, TUniqueId > CStateManager::GenerateObject(const TEditorId
 #ifdef TARGET_PC
     // Only script generators set the generating flag (a boss's own spawns do not):
     // a save state brings such a copy back from the template it was made from.
+    // The copy takes the area's room effects (override, patches...) as the template did.
+    const bool roomEffects = PortRoomEffects::BeginGenerate(area->GetAreaAssetId());
     const rstl::pair< TEditorId, TUniqueId > made =
         LoadScriptObject(TAreaId(areaId), build.first->x0_type, build.first->x8_length, stream);
+    if (roomEffects)
+      PortRoomEffects::EndGenerate();
     if (xf94_26_generatingObject && made.second != kInvalidUniqueId)
       PortSaveState::NoteGenerated(*this, made.second.value);
     return made;
@@ -2828,6 +2937,8 @@ void CStateManager::PreRender() {
   const CTransform4f curCamXf =
       PortFreeCam::View(x870_cameraManager->GetCurrentCameraTransform(*this));
 #ifdef TARGET_PC
+  // CDisplayManager::Update 0xafded0: the camera the particle elements read, once per frame.
+  CParticleGlobals::PortSetCameraTransform(&curCamXf);
   const float curRenderFov = PortFreeCam::PresentedFovOverride() > 0.f
                                  ? CGameCamera::VertPlusFov(PortFreeCam::PresentedFovOverride(), curCam.GetAspectRatio())
                                  : curCam.GetRenderFov();
@@ -3058,36 +3169,36 @@ static std::vector<const PortRoomEnv::FogRegion*> sPortFogRegions;
 // MP_SHADOW_DIR ("x,y,z", the way the light travels) and MP_SHADOW_COLOR ("r,g,b") override the
 // room's sun.
 // The room's Remastered sun (port_room_env.h), when its import has one.
-static bool PortRoomSun(const CGameArea& area, CScriptLayerManager* layers, bool cinematic, float dir[3],
+static bool PortRoomSun(const CGameArea& area, const CStateManager& mgr, bool cinematic, float dir[3],
                         float color[3]) {
   struct Layers {
-    CScriptLayerManager* layers;
+    const CStateManager& mgr;
     TAreaId area;
-  } l{layers, area.GetId()};
+  } l{mgr, area.GetId()};
   return PortRoomEnv::Sun(
       [](int32_t layer, void* context) {
         const Layers& l = *static_cast< const Layers* >(context);
-        return l.layers == nullptr || l.layers->IsLayerActive(l.area, TLayerId(layer));
+        return l.mgr.PortLayerLoaded(l.area, layer);
       },
       &l, cinematic, dir, color);
 }
 
 // The room's other directional lights, which light without a shadow, as room light records.
-static void PortRoomSunLights(const CGameArea& area, CScriptLayerManager* layers, bool cinematic,
+static void PortRoomSunLights(const CGameArea& area, const CStateManager& mgr, bool cinematic,
                               const float worldToView[3][4], std::vector< float >& out) {
   struct Layers {
-    CScriptLayerManager* layers;
+    const CStateManager& mgr;
     TAreaId area;
-  } l{layers, area.GetId()};
+  } l{mgr, area.GetId()};
   PortRoomEnv::SunLights(
       [](int32_t layer, void* context) {
         const Layers& l = *static_cast< const Layers* >(context);
-        return l.layers == nullptr || l.layers->IsLayerActive(l.area, TLayerId(layer));
+        return l.mgr.PortLayerLoaded(l.area, layer);
       },
       &l, cinematic, worldToView, out);
 }
 
-static bool PortSetupShadow(const CTransform4f& view, const CGameArea* area, CScriptLayerManager* layers,
+static bool PortSetupShadow(const CTransform4f& view, const CGameArea* area, const CStateManager& mgr,
                             bool cinematic, bool enabled, bool roomLights) {
   static const bool sOn = port::EnvFlag("MP_SHADOWS", true);
   static const float sDistance = port::EnvFloat("MP_SHADOW_DISTANCE", 350.f);
@@ -3100,7 +3211,7 @@ static bool PortSetupShadow(const CTransform4f& view, const CGameArea* area, CSc
     float envDir[3];
     if (sDirEnv != nullptr && sscanf(sDirEnv, "%f,%f,%f", &envDir[0], &envDir[1], &envDir[2]) == 3) {
       dir[0] = envDir[0], dir[1] = envDir[1], dir[2] = envDir[2];
-    } else if (area != nullptr && PortRoomSun(*area, layers, cinematic, dir, color)) {
+    } else if (area != nullptr && PortRoomSun(*area, mgr, cinematic, dir, color)) {
       for (int i = 0; i < 3; ++i) {
         dir[i] = -dir[i]; // the way the light travels, as a CLight's direction
       }
@@ -3152,7 +3263,7 @@ static bool PortSetupShadow(const CTransform4f& view, const CGameArea* area, CSc
   if (roomLights) {
     PortRoomEnv::RoomLights(worldToView, sRoomLights);
     if (area != nullptr) {
-      PortRoomSunLights(*area, layers, cinematic, worldToView, sRoomLights);
+      PortRoomSunLights(*area, mgr, cinematic, worldToView, sRoomLights);
     }
   }
   GXPortSetRoomLights(sRoomLights.data(), u32(sRoomLights.size() / 16));
@@ -3255,6 +3366,18 @@ static void PortDrawVolumetricFog(const CStateManager& mgr, const CTransform4f& 
   GXPortVolumetricFog(&p);
 }
 
+bool CStateManager::PortLayerLoaded(TAreaId area, int layer) const {
+  const CScriptLayerManager* layers = x8c8_worldLayerState.GetPtr();
+  if (layers == nullptr || area == kInvalidAreaId || layer >= layers->GetAreaLayerCount(area)) {
+    return true;
+  }
+  uint64_t loaded = 0;
+  if (PortSaveState::AreaLoadedLayers(*this, area.Value(), loaded)) {
+    return ((loaded >> layer) & 1) != 0;
+  }
+  return layers->IsLayerActive(area, TLayerId(layer));
+}
+
 void CStateManager::PortCaptureProbeFace() const {
   if (CCubeMaterial::sPortPBRProbeMode < 0) {
     // off/on/mirror/window or 0-3, as docs/SETTINGS.md lists them.
@@ -3277,23 +3400,28 @@ void CStateManager::PortCaptureProbeFace() const {
     }
   }
   PortRoomEnv::SetLoadedAreas(mreas, mreaCount);
-  // Their probes follow the script layers, as Remastered's ReflectionProbe entities do.
-  if (const CScriptLayerManager* const layers = x8c8_worldLayerState.GetPtr()) {
-    for (int i = 0; i < x850_world->GetNumAreas(); ++i) {
-      const CGameArea& area = *x850_world->GetArea(TAreaId(i));
-      if (!area.IsLoaded()) {
-        continue;
-      }
-      uint64_t active = 0;
-      const int count = layers->GetAreaLayerCount(TAreaId(i));
-      for (int layer = 0; layer < 64; ++layer) {
-        if (layer >= count || layers->IsLayerActive(TAreaId(i), TLayerId(layer))) {
-          active |= uint64_t(1) << layer;
-        }
-      }
-      PortRoomEnv::SetAreaLayers(area.GetAreaAssetId(), active);
+  for (int i = 0; i < x850_world->GetNumAreas(); ++i) {
+    const CGameArea& area = *x850_world->GetArea(TAreaId(i));
+    if (area.IsLoaded()) {
+      PortRoomEnv::SetAreaVisible(area.GetAreaAssetId(), area.GetOcclusionState() == CGameArea::kOS_Visible);
     }
   }
+  // Their probes follow the script layers the area loaded with, as Remastered's ReflectionProbe
+  // entities do.
+  for (int i = 0; i < x850_world->GetNumAreas(); ++i) {
+    const CGameArea& area = *x850_world->GetArea(TAreaId(i));
+    if (!area.IsLoaded()) {
+      continue;
+    }
+    uint64_t active = 0;
+    for (int layer = 0; layer < 64; ++layer) {
+      if (PortLayerLoaded(TAreaId(i), layer)) {
+        active |= uint64_t(1) << layer;
+      }
+    }
+    PortRoomEnv::SetAreaLayers(area.GetAreaAssetId(), active);
+  }
+  PortRoomEnv::UpdateLightHints();
   if (x8cc_nextAreaId != kInvalidAreaId) {
     PortRoomEnv::SetViewArea(x850_world->GetArea(x8cc_nextAreaId)->GetAreaAssetId());
   }
@@ -3384,18 +3512,12 @@ void CStateManager::PortCaptureProbeFace() const {
       dt += 900.f;
     }
     lastTime = xf14_curTimeMod900;
-    struct Layers {
-      const CScriptLayerManager* layers;
-      TAreaId area;
-    } layers{x8c8_worldLayerState.GetPtr(), x8cc_nextAreaId};
     PortRoomEnv::UpdateFog(
         [](int32_t layer, void* context) {
-          const Layers& l = *static_cast< const Layers* >(context);
-          return l.layers == nullptr || l.area == kInvalidAreaId ||
-                 layer >= l.layers->GetAreaLayerCount(l.area) ||
-                 l.layers->IsLayerActive(l.area, TLayerId(layer));
+          const CStateManager& mgr = *static_cast< const CStateManager* >(context);
+          return mgr.PortLayerLoaded(mgr.x8cc_nextAreaId, layer);
         },
-        &layers, dt);
+        const_cast< CStateManager* >(this), dt);
     PortRoomLiquid::Advance(dt);
     sPortVolFog = PortRoomEnv::VolumetricFog(sPortFog);
     sPortRemasteredFog = PortRoomEnv::FogOwnsRoom();
@@ -3512,6 +3634,15 @@ void CStateManager::PortCaptureProbeFace() const {
 
 #ifdef TARGET_PC
 bool CStateManager::sPortSceneHdrRequest = false;
+// Set by an HDR, non-thermal world pass that left its visor effects for PortDrawVisorEffects.
+static bool sPortVisorEffectsDeferred = false;
+
+namespace {
+bool PortIsVisorEffect(const CActor& actor) {
+  const CHUDBillboardEffect* const fx = TCastToConstPtr< CHUDBillboardEffect >(&actor);
+  return fx != nullptr && fx->PortIsVisorEffect();
+}
+} // namespace
 float CStateManager::sPortViewZoom = 1.f;
 // Frames performance mode's gun-first pass stays off after a world screen copy (DrawWorld).
 static int sPortGunFirstHold = 0;
@@ -3583,6 +3714,11 @@ void CStateManager::DrawWorld() const {
   uint mask;
   bool thermal = visor == CPlayerState::kPV_Thermal;
   uint targetMask;
+#ifdef TARGET_PC
+  // The thermal visor draws beams in its own palette: no picked colours for the whole frame,
+  // the gun drawn after the world included.
+  PortBeamColours::SetSuppressed(thermal);
+#endif
   if (thermal) {
     xf34_thermalFlag = kTD_Cold;
     mask = 0x34;
@@ -3631,10 +3767,10 @@ void CStateManager::DrawWorld() const {
       !PortThirdPerson::Active()) {
     const CGameCamera& gunCam = x870_cameraManager->GetCurrentCamera(*this);
     const CGraphics::CProjectionState gunProj = CGraphics::GetProjectionState();
-    if (gunCam.GetFov() != PortDebug::kFovRetail) {
+    if (PortDebug::GunOwnFov(gunCam.GetFov())) {
       const CViewport& gunViewport = CGraphics::GetViewport();
       gpRender->SetPerspective(
-          CGameCamera::VertPlusFov(PortDebug::kFovRetail, gunCam.GetAspectRatio()),
+          CGameCamera::VertPlusFov(PortDebug::GunDrawFov(gunCam.GetFov()), gunCam.GetAspectRatio()),
           static_cast< float >(gunViewport.mWidth), static_cast< float >(gunViewport.mHeight),
           gunCam.GetNearClipDistance(), gunCam.GetFarClipDistance());
     }
@@ -3649,7 +3785,7 @@ void CStateManager::DrawWorld() const {
   const u32 portGunFirstSerial = GXPortCopySerial();
   // The opaque world casts (and receives) from here to GXPortRenderShadowMap, but for the sky.
   const bool portShadow =
-      PortSetupShadow(backupViewMatrix, portVisArea, x8c8_worldLayerState.GetPtr(),
+      PortSetupShadow(backupViewMatrix, portVisArea, *this,
                       x870_cameraManager->IsInCinematicCamera(), !thermal && visor != CPlayerState::kPV_XRay && !portCollisionOnly,
                       !thermal && visor != CPlayerState::kPV_XRay);
   GXPortSetShadowCaster(portShadow);
@@ -3864,7 +4000,8 @@ void CStateManager::DrawWorld() const {
     // stash for pass B; its decals and simple shadows draw now, sorted among themselves.
     portDrawToken[i] = x8dc_objectDrawToken;
     gpRender->PortStashBuckets(i);
-    if (isVisArea && !thermal && !portCollisionOnly) {
+    // The HDR thermal cold scene draws its decals too (RenderDecalGeometry 0xf9d854).
+    if (isVisArea && (!thermal || portThermalScene) && !portCollisionOnly) {
       CDecalManager::AddToRenderer(frustum, *this);
     }
     gpRender->PortDrawSortedDrawables(area.GetId().Value());
@@ -3968,6 +4105,32 @@ void CStateManager::DrawWorld() const {
     }
 #ifdef TARGET_PC
     if (portThermalScene) {
+      // Remastered draws the cold pass after the whole scene is queued, so the normal node a
+      // hot-only actor queues in the hot pass (RenderUnsortedParts 0xfa71c4) lands in the cold
+      // bins too. Draw those nodes here, with the hot pass's thermal flag for its gates.
+      unsigned coldNodes = 0;
+      xf34_thermalFlag = kTD_Hot;
+      for (int i = 0; i < areas.size(); ++i) {
+        const TAreaId id = areas[i]->GetId();
+        for (const CActor** it = thermalActors.begin(); it != thermalActors.end(); ++it) {
+          const CActor* actor = *it;
+          if ((actor->GetThermalFlags() & 1) == 0 &&
+              (actor->GetCurrentAreaId() == id ||
+               (actor->GetCurrentAreaId() == kInvalidAreaId && id == visAreaId))) {
+            CPortActorRenderScope presented(*actor);
+            actor->PortAddThermalColdNode(frustum, *this);
+            ++coldNodes;
+          }
+        }
+      }
+      xf34_thermalFlag = kTD_Cold;
+      static const bool sColdNodeLog = port::EnvFlag("MP_VISORMESH_LOG");
+      if (sColdNodeLog && CGraphics::GetFrameCounter() % 60 == 0) {
+        fprintf(stderr, "visor-mesh: frame %u thermal cold nodes: actors %u, drawn %u\n",
+                static_cast< uint >(CGraphics::GetFrameCounter()), coldNodes,
+                CModelData::sPortThermalColdNodes);
+      }
+      CModelData::sPortThermalColdNodes = 0;
       CCubeMaterial::sPortPBRThermal = CCubeMaterial::kPT_None;
       CCubeModel::PortSetThermalPass(PortVisorMesh::kTP_None);
     }
@@ -4042,16 +4205,17 @@ void CStateManager::DrawWorld() const {
   if (x84c_player != nullptr) {
 #endif
 #ifdef TARGET_PC
-    // Port: with the FOV slider off retail, draw the arm cannon at the retail
+    // Port: when the arm cannon's FOV differs from the view's, draw it at its own
     // FOV (a view-model FOV), so a wide view doesn't shrink it or push it off
-    // the screen's corner.
+    // the screen's corner. "Arm cannon follows FOV" keeps the world's projection instead.
     const CGameCamera& gunCam = x870_cameraManager->GetCurrentCamera(*this);
-    const bool gunFov = !PortVr::VrImmersive() && x870_cameraManager->IsInFPCamera() &&
-                        gunCam.GetFov() != PortDebug::kFovRetail;
+    // Not in third person: its charge fx and grapple beam form on the body, in the world's view.
+    const bool gunFov = !PortVr::VrImmersive() && x870_cameraManager->IsInFPCamera() && !PortThirdPerson::Active() &&
+                        PortDebug::GunOwnFov(gunCam.GetFov());
     const CGraphics::CProjectionState gunProj = CGraphics::GetProjectionState();
     if (gunFov) {
       const CViewport& gunViewport = CGraphics::GetViewport();
-      gpRender->SetPerspective(CGameCamera::VertPlusFov(PortDebug::kFovRetail, gunCam.GetAspectRatio()), static_cast< float >(gunViewport.mWidth),
+      gpRender->SetPerspective(CGameCamera::VertPlusFov(PortDebug::GunDrawFov(gunCam.GetFov()), gunCam.GetAspectRatio()), static_cast< float >(gunViewport.mWidth),
                                static_cast< float >(gunViewport.mHeight),
                                gunCam.GetNearClipDistance(), gunCam.GetFarClipDistance());
     }
@@ -4099,12 +4263,20 @@ void CStateManager::DrawWorld() const {
   if (!portZoomed)
     PortViewModel::Draw(*this);
 #endif
+#ifdef TARGET_PC
+  // Remastered draws its visor effects after the post (RenderAfterPostFX 0xf9fa6c, but not in
+  // thermal), reading a copy of the post output: CMFGame calls PortDrawVisorEffects there.
+  const bool portDeferVisorEffects = CCubeMaterial::sPortSceneHdr && !thermal;
+  sPortVisorEffectsDeferred = portDeferVisorEffects;
+#endif
   if (!renderLast.empty()) {
     CGraphics::SetDepthRange(0.015625f, 0.03125f);
     for (const TUniqueId* it = renderLast.begin(); it != renderLast.end(); ++it) {
       if (const CActor* actor = static_cast< const CActor* >(GetObjectById(*it))) {
         if (!thermal || (actor->GetThermalFlags() & 2) != 0) {
 #ifdef TARGET_PC
+          if (portDeferVisorEffects && PortIsVisorEffect(*actor))
+            continue;
           CPortActorRenderScope presented(*actor);
 #endif
           actor->Render(*this);
@@ -4140,6 +4312,38 @@ void CStateManager::DrawWorld() const {
   DrawE3DeathEffect();
   DrawAdditionalFilters();
 }
+
+#ifdef TARGET_PC
+void CStateManager::PortDrawVisorEffects() const {
+  if (!sPortVisorEffectsDeferred)
+    return;
+  sPortVisorEffectsDeferred = false;
+  const rstl::reserved_vector< TUniqueId, 20 >& renderLast =
+      x86c_stateManagerContainer->xf39c_renderLast;
+  bool any = false;
+  for (const TUniqueId* it = renderLast.begin(); it != renderLast.end() && !any; ++it) {
+    const CActor* actor = static_cast< const CActor* >(GetObjectById(*it));
+    any = actor != nullptr && PortIsVisorEffect(*actor);
+  }
+  // RenderVisorEffects returns before its copy when there are no visor effect commands.
+  if (!any || !aurora::gfx::vfx::begin_visor_effects())
+    return;
+  const CViewport backupViewport = CGraphics::GetViewport();
+  const CTransform4f backupViewMatrix = CGraphics::GetViewMatrix();
+  SetupViewForDraw(backupViewport);
+  CGraphics::SetDepthRange(0.015625f, 0.03125f);
+  for (const TUniqueId* it = renderLast.begin(); it != renderLast.end(); ++it) {
+    const CActor* actor = static_cast< const CActor* >(GetObjectById(*it));
+    if (actor != nullptr && PortIsVisorEffect(*actor)) {
+      CPortActorRenderScope presented(*actor);
+      actor->Render(*this);
+    }
+  }
+  CGraphics::SetDepthRange(0.125f, 1.f);
+  aurora::gfx::vfx::end_visor_effects();
+  ResetViewAfterDraw(backupViewport, backupViewMatrix);
+}
+#endif
 
 void CStateManager::ResetViewAfterDraw(const CViewport& backupViewport,
                                        const CTransform4f& backupViewMatrix) const {
@@ -4205,6 +4409,32 @@ void CStateManager::DrawCameraFilters() const {
     xb84_camFilterPasses[i].Draw();
   }
 }
+
+#ifdef TARGET_PC
+int CStateManager::PortCameraFilterMultiply(float rgb[3]) const {
+  for (int i = 0; i < kCFS_Max; ++i) {
+    CColor color;
+    if (xb84_camFilterPasses[i].PortMultiplyColor(color)) {
+      rgb[0] = color.GetRed();
+      rgb[1] = color.GetGreen();
+      rgb[2] = color.GetBlue();
+      return i;
+    }
+    if (!xb84_camFilterPasses[i].PortDrawsNothing()) {
+      return -1;
+    }
+  }
+  return -1;
+}
+
+void CStateManager::PortDrawCameraFilters(int skip) const {
+  for (int i = 0; i < kCFS_Max; ++i) {
+    if (i != skip) {
+      xb84_camFilterPasses[i].Draw();
+    }
+  }
+}
+#endif
 
 void CStateManager::DrawDebugStuff() const {}
 

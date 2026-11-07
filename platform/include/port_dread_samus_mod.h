@@ -25,7 +25,11 @@ inline constexpr const char* kStampName = ".dread-samus-version";
 // 10: the cannon's glowing core pushed out onto the inside of its shell.
 // 11: the shoulder pads in Dread's idle pose rather than its T-pose bind (#221).
 // 12: both pads from the hanging-arm idle; the aiming one turned the cannon-side disc forward (#226).
-inline constexpr int kVersion = 12;
+// 13: dread-suits.txt, each suit's BCLR textures, for the suit colours (#221).
+inline constexpr int kVersion = 13;
+// In the mod folder: lines "<suit> <texture id>", the BCLR .dds files PortSuitColours
+// recolours for that CPlayerState::EPlayerSuit ('#' starts a comment). The mod loader skips .txt.
+inline constexpr const char* kSuitColoursName = "dread-suits.txt";
 
 // The first-person suit arms (CGunWeapon::skSuitArmNames PowerArm, GravityArm, VariaArm,
 // PhazonArm) by CPlayerState::EPlayerSuit. The import writes a variant of each holding the suit's
@@ -137,9 +141,15 @@ inline uint32_t DollBody(int suit) {
   }
 }
 
-// Whether the Dread body stands in for a retail body CMDL now: the dread-samus mod is loaded and
-// serves that id (PortMods). Its skinned cannon replaces Prime's separate one, which is then not drawn.
+// Whether a one-piece body with its own boots and visor stands in for a retail body CMDL now: the
+// dread-samus or echoes-suits mod is loaded and serves that id (PortMods). Prime's suit parts, boots
+// and visor are then not drawn.
 bool Replaces(uint32_t bodyCmdl);
+// Whether that body is Dread's: it alone has its muzzle at Charge_LCTR and its own skeleton.
+bool ReplacesWithDread(uint32_t bodyCmdl);
+// Whether that body also carries its own cannon (Dread's, or Echoes' Dark Samus; the Echoes suits'
+// bodies end in a bare forearm): Prime's separate cannon is then not drawn on it.
+bool HasOwnCannon(uint32_t bodyCmdl);
 
 // The skin the mod ships for a cutscene body CMDL it serves (CINF 19C53902), 0 for any other. A
 // Remastered install replaces the Samus ANCS and with it the skin ids, so a character's own skin id

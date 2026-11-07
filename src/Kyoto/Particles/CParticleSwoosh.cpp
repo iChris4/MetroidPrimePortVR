@@ -15,6 +15,7 @@
 #include "Kyoto/Particles/CSwooshDescription.hpp"
 
 #include "Kyoto/Math/CAbsAngle.hpp"
+#include "Kyoto/Math/CQuaternion.hpp"
 #include "dolphin/gx/GXVert.h"
 #include "float.h"
 #include "rstl/math.hpp"
@@ -23,14 +24,20 @@
 #ifdef TARGET_PC
 #include "MetroidPrime/CActor.hpp"
 #include "MetroidPrime/Cameras/CCameraManager.hpp"
+#include "port_beam_colours.h"
 #include "port_debug.h"
 #include <climits>
 #include "port_fx_debug.h"
+#include "port_room_env.h"
 #include "port_swoosh_ring.h"
 #include "port_vfx_particles.h"
 #endif
 
 uint CParticleSwoosh::mSwooshAliveCount = 0;
+#ifdef TARGET_PC
+uint CParticleSwoosh::sPortChildSeed = 0;
+bool CParticleSwoosh::sPortChildSeedSet = false;
+#endif
 static float kFrameTime = 1.f / 60.f;
 
 #pragma sym on
@@ -76,9 +83,26 @@ CParticleSwoosh::CParticleSwoosh(const TToken< CSwooshDescription > desc, const 
   int i = 0;
 #ifdef TARGET_PC
   xPortVars.Init(x1c_desc->xPortVars.get());
+  xPortVars.InitSys(x1c_desc->xPortSys.get());
   // The generator that builds this swoosh, for SPA*/DPV*/TPV*.
   xPortVars.SetParent(CPortVarGlobals::sCurrent);
   CPortVarScope portVarScope(&xPortVars);
+  const bool portChildSeed = sPortChildSeedSet;
+  sPortChildSeedSet = false;
+  if (x1c_desc->xPortIrnd) {
+    // Remastered reads CRND and drops it (CreateSWSH 0x2dc4cc). The CParticleGen ctor seeds the
+    // system from its parms (0x279724: 99 by default, ctor 0x2af2e0; a parent's child seed), and
+    // a nonzero SEED (desc+0x204) replaces that (CParticleSwoosh ctor 0x27c6bc).
+    uint seed = portChildSeed ? sPortChildSeed : 99;
+    if (x1c_desc->xPortSeed != 0) {
+      seed = x1c_desc->xPortSeed;
+    }
+    x1c0_rand.SetSeed(seed);
+  }
+  // INTR holds from creation, before any setter runs.
+  if (x1c_desc->xPortIntRotation) {
+    SetOrientation(CTransform4f::Identity());
+  }
 #endif
   CGlobalRandom _(x1c0_rand);
   mSwooshAliveCount++;
@@ -104,6 +128,10 @@ CParticleSwoosh::CParticleSwoosh(const TToken< CSwooshDescription > desc, const 
     } else {
       x2c_PSLT = 0x7fffff;
     }
+#ifdef TARGET_PC
+    // CAddVarSystem::Init once LENG and SIDE are known (ctor 0x27c858).
+    PortEvalSys(true);
+#endif
 
     x1d0_25_AALP = x1c_desc->x44_31_AALP;
 
@@ -161,6 +189,35 @@ static CParticleGlobals::SPortSwooshEval PortSwooshEvalFor(const CTransform4f& w
 }
 #endif
 
+#ifdef TARGET_PC
+namespace {
+// Binds a point's variables for the PAPn its elements read (Remastered's ctx+0x20); a null one
+// keeps whatever is bound.
+struct PortAccessScope {
+  float* prev = CParticleGlobals::mParticleAccessParameters;
+  explicit PortAccessScope(float* values) {
+    if (values != nullptr) {
+      CParticleGlobals::mParticleAccessParameters = values;
+    }
+  }
+  ~PortAccessScope() { CParticleGlobals::mParticleAccessParameters = prev; }
+  PortAccessScope(const PortAccessScope&) = delete;
+  PortAccessScope& operator=(const PortAccessScope&) = delete;
+};
+}  // namespace
+
+float* CParticleSwoosh::PortPartValues(int index) {
+  if (!x1c_desc->xPortPartVars) {
+    return nullptr;
+  }
+  const size_t size = size_t(x15c_swooshes.capacity()) * kPortPartValues;
+  if (xPortPartValues.size() != size) {
+    xPortPartValues.assign(size, 0.f);
+  }
+  return &xPortPartValues[size_t(index) * kPortPartValues];
+}
+#endif
+
 const bool CParticleSwoosh::Update(double dt) {
 #ifdef TARGET_PC
   PortFx::UpdateScope fxScope(dt);
@@ -178,6 +235,13 @@ const bool CParticleSwoosh::Update(double dt) {
   CParticleGlobals::SetEmitterTime(x28_curFrame);
   CParticleGlobals::UpdateParticleLifetimeTweenValues(0);
   CGlobalRandom random(x1c0_rand);
+#ifdef TARGET_PC
+  // The first Update runs CAddVarSystem::Init again (0x27dde4, or InitialUpdate 0x27d16c).
+  if (!xPortSysInit) {
+    xPortSysInit = true;
+    PortEvalSys(true);
+  }
+#endif
   double evalTime = x28_curFrame * kFrameTime;
   float timeScale = 1.f;
   if (x1c_desc->x4_TIME) {
@@ -190,6 +254,14 @@ const bool CParticleSwoosh::Update(double dt) {
   x30_curTime += advance;
   while (x1d0_26_forceOneUpdate || evalTime < x30_curTime) {
     x1d0_26_forceOneUpdate = false;
+#ifdef TARGET_PC
+    // CAddVarSystem::Update at the start of each tick (InternalUpdate 0x27d308).
+    PortEvalSys(false);
+    // Remastered advances the ring only in CreateNewParticle 0x27cdc8; an electric swoosh's
+    // points are never retired by a step without one.
+    const bool portEmit = x1d0_24_emitting && x28_curFrame < x2c_PSLT;
+    if (!xPortElectric || portEmit)
+#endif
     if (++x158_curParticle >= x15c_swooshes.capacity()) {
       x158_curParticle = 0;
     }
@@ -213,6 +285,22 @@ const bool CParticleSwoosh::Update(double dt) {
       for (const CREPortKeep* keep : x1c_desc->xPortKeeps) {
         keep->Latch(0);
       }
+      // CreateNewParticle 0x27cdc8: the new point's time context (age 0, life LENG - 1), then
+      // _Init_Particle (0x27ced0) runs every per-point variable at time 0 into its slice, which
+      // stays bound for the point's create-time elements.
+      // An electric point is born at the age it keeps: the live count, itself included, less one.
+      const int spawnAge =
+          xPortElectric
+              ? x1ac_particleCount - (x15c_swooshes[x158_curParticle].mActive ? 1 : 0)
+              : 0;
+      float* const spawnValues = PortPartValues(x158_curParticle);
+      PortAccessScope spawnAccess(spawnValues);
+      if (spawnValues != nullptr) {
+        CParticleGlobals::SetParticleLifetime(rstl::max_val(x1b4_LENG - 1, 1));
+        CParticleGlobals::UpdateParticleLifetimeTweenValues(spawnAge);
+        static CRealElement* const kNoAdvs[8] = {};
+        x1c_desc->xPortPartVars->Eval(kNoAdvs, true, spawnAge, spawnValues);
+      }
 #endif
       if (x1c_desc->x1c_IROT) {
         x1c_desc->x1c_IROT->GetValue(x28_curFrame, x15c_swooshes[x158_curParticle].mInitialRot);
@@ -225,6 +313,11 @@ const bool CParticleSwoosh::Update(double dt) {
         ++x1ac_particleCount;
         x15c_swooshes[x158_curParticle].mActive = true;
       }
+#ifdef TARGET_PC
+      if (xPortElectric) {
+        x15c_swooshes[x158_curParticle].mFrame = spawnAge;
+      }
+#endif
       x15c_swooshes[x158_curParticle].mOrientation = x44_orientation;
 #ifdef TARGET_PC
       if (x1c_desc->xPortRazyAxis) {
@@ -260,7 +353,15 @@ const bool CParticleSwoosh::Update(double dt) {
         x1c_desc->x40_TSPN->GetValue(x28_curFrame, tspn);
       }
       x1cc_TSPN = tspn;
-    } else if (x15c_swooshes[x158_curParticle].mActive) {
+#ifdef TARGET_PC
+      ++xPortCreated; // CreateNewParticle 0x27d128
+#endif
+    }
+#ifdef TARGET_PC
+    else if (xPortElectric) {
+    }
+#endif
+    else if (x15c_swooshes[x158_curParticle].mActive) {
       x1ac_particleCount = rstl::max_val(0, x1ac_particleCount - 1);
       x15c_swooshes[x158_curParticle].mActive = false;
     }
@@ -277,6 +378,13 @@ const bool CParticleSwoosh::Update(double dt) {
     UpdateTranslationAndOrientation();
     evalTime += kFrameTime;
     ++x28_curFrame;
+#ifdef TARGET_PC
+    // UpdateCountdownTimerForShutdown (0x27b864) after the tick's frame step (InternalUpdate
+    // 0x27d29c): counts down while positive, shuts down at zero.
+    if (xPortShutdownCountdown > 0 && --xPortShutdownCountdown == 0) {
+      PortDoShutdownBehavior(0xff);
+    }
+#endif
   }
   x1c4_ = timer.GetElapsedTime();
   return false;
@@ -286,12 +394,21 @@ void CParticleSwoosh::SetOrientation(const CTransform4f& orientation) {
 #ifdef TARGET_PC
   // XFMD 3: Remastered's setters all write the one system var (MPT_SetOrientation 0x27f92c ->
   // SetExternalRotation), which the draw uses as the global orientation; the local one stays identity.
-  if (x1c_desc->xPortXfmdFollow) {
-    xb0_globalOrientation = orientation.GetRotation();
+  // INTR replaces what they set with the system rotation var (PortIntOrientation).
+  xPortExtOrientation = orientation;
+  // XFMD 1: the birth orientation (var bc) is the system's own; only EXTR reads what is set.
+  if (x1c_desc->xPortXfmdSystem) {
     return;
   }
-#endif
+  const CTransform4f system = x1c_desc->xPortIntRotation ? PortIntOrientation(orientation) : orientation;
+  if (x1c_desc->xPortXfmdFollow) {
+    xb0_globalOrientation = system.GetRotation();
+    return;
+  }
+  x44_orientation = system;
+#else
   x44_orientation = orientation;
+#endif
   x74_invOrientation = x44_orientation.GetQuickInverse();
 #ifdef TARGET_PC
   // KPIN freezes a PRAZ point's rotation at its birth; PROZ sets its own.
@@ -308,6 +425,84 @@ void CParticleSwoosh::SetOrientation(const CTransform4f& orientation) {
 }
 
 #ifdef TARGET_PC
+// HACK_InitForElectric 0x27ebfc: one forced step per ring slot creates every point (ages 0 to
+// capacity - 1, frozen), then emission stops and a last forced step runs from frame 0.
+void CParticleSwoosh::PortInitForElectric() {
+  xPortElectric = true;
+  for (int i = 0; i < x15c_swooshes.capacity(); ++i) {
+    SetWarmUp();
+    Update(0.0);
+  }
+  SetParticleEmission(false);
+  x28_curFrame = 0;
+  SetWarmUp();
+  Update(0.0);
+  x28_curFrame = 0;
+}
+
+// HACK_ReInitForElectric 0x27ed0c: a forced step from frame 0 for a new bolt. Remastered keeps
+// +0x30's time and steps once per frame unit of dt; the port's Update would catch up every frame
+// since that time instead, so its time restarts too (the same steps at a fixed frame dt).
+void CParticleSwoosh::PortReInitForElectric() {
+  x28_curFrame = 0;
+  x30_curTime = 0.0;
+  SetWarmUp();
+  Update(0.0);
+  x28_curFrame = 0;
+}
+
+// The system variables in PSYS order, as CElementGen::PortEvalSys: all of them (CAddVarSystem::Init
+// 0x278438) or those that are not init-only (Update 0x278638), on the swoosh's own time context:
+// its frame and +0x140, the PSLT capped at 0x1000000 or that without one (ctor 0x27c6e8).
+void CParticleSwoosh::PortEvalSys(bool init) {
+  const CPortSys* sys = x1c_desc->xPortSys.get();
+  if (sys == nullptr) {
+    return;
+  }
+  const int frame = x28_curFrame;
+  const int systemLifetime = x1c_desc->x0_PSLT ? rstl::min_val(x2c_PSLT, 0x1000000) : 0x1000000;
+  const int lifetime = CParticleGlobals::mParticleLifetime;
+  const float lifetimeReal = CParticleGlobals::mParticleLifetimeReal;
+  const int percentage = CParticleGlobals::mParticleLifetimePercentage;
+  const float percentageReal = CParticleGlobals::mParticleLifetimePercentageReal;
+  const float percentageRemainder = CParticleGlobals::mParticleLifetimePercentageRemainder;
+  const float systemTween = CParticleGlobals::xPortSystemTween;
+  CParticleGlobals::SetParticleLifetime(systemLifetime);
+  CParticleGlobals::UpdateParticleLifetimeTweenValues(frame);
+  CParticleGlobals::PortSetSystemTime(frame, systemLifetime);
+  for (const SPortSysItem& item : sys->items) {
+    if (item.initOnly && !init) {
+      continue;
+    }
+    std::array< float, 4 > v{};
+    switch (item.type) {
+    case EPortVarType::Real:
+      item.real->GetValue(frame, v[0]);
+      break;
+    case EPortVarType::Int: {
+      int i = 0;
+      item.intE->GetValue(frame, i);
+      v[0] = static_cast< float >(i);
+    } break;
+    case EPortVarType::Color:
+      item.color->GetValueHdr(frame, v.data());
+      break;
+    default: {
+      CVector3f vec;
+      item.vec->GetValue(frame, vec);
+      v = {vec.GetX(), vec.GetY(), vec.GetZ(), 0.f};
+    } break;
+    }
+    xPortVars.SetSys(item.type, item.slot, v);
+  }
+  CParticleGlobals::mParticleLifetime = lifetime;
+  CParticleGlobals::mParticleLifetimeReal = lifetimeReal;
+  CParticleGlobals::mParticleLifetimePercentage = percentage;
+  CParticleGlobals::mParticleLifetimePercentageReal = percentageReal;
+  CParticleGlobals::mParticleLifetimePercentageRemainder = percentageRemainder;
+  CParticleGlobals::xPortSystemTween = systemTween;
+}
+
 // Remastered's PROT KPIN(RAZY(EMRV, ROTV(axis, RLCL), fallback)) at a point's birth
 // (CreateNewParticle 0x27cdc8, CERotationFromAxis::GetValue 0x29d298): Z = the motion, X = F x Z
 // for F the axis turned by the orientation, Y = Z x X, each falling back (orientation or identity)
@@ -355,10 +550,23 @@ CTransform4f CParticleSwoosh::PortRotZOrientation() const {
     const CVector3f c = q.GetColumn(i);
     columns[i] = CVector3f(-c.GetX(), c.GetZ(), c.GetY());
     if (x1c_desc->xPortRotOriented) {
-      columns[i] = x44_orientation.Rotate(columns[i]);
+      columns[i] = (x1c_desc->xPortRotIntr ? x44_orientation : xPortExtOrientation).Rotate(columns[i]);
     }
   }
   return CTransform4f::FromColumns(columns[0], -columns[2], columns[1], CVector3f(0.f, 0.f, 0.f));
+}
+
+// INTR, the system rotation var 0xb (CParticleDescription::Compile 0x289af0), which the setters do
+// not write: r, or the external orientation times r (RADD = a * b). In the port's space r is B r B
+// (the converter's PINR Euler vector, turned as CElementGen::PortApplyIntFrame turns it), and the
+// external orientation in Remastered's is B Q B, so RADD(EXTR, r) is Q * (B r B).
+CTransform4f CParticleSwoosh::PortIntOrientation(const CTransform4f& external) const {
+  CVector3f euler = CVector3f::Zero();
+  x1c_desc->xPortIntRotation->GetValue(0, euler);
+  CTransform4f rotation = CTransform4f::RotateZ(CRelAngle::FromDegrees(euler.GetZ()));
+  rotation.RotateLocalY(CRelAngle::FromDegrees(euler.GetY()));
+  rotation.RotateLocalX(CRelAngle::FromDegrees(euler.GetX()));
+  return x1c_desc->xPortIntExternal ? external.GetRotation() * rotation : rotation;
 }
 #endif
 
@@ -379,7 +587,8 @@ void CParticleSwoosh::UpdateTranslationAndOrientation() {
   CParticleGlobals::SetParticleLifetime(portRemastered ? rstl::max_val(x1b4_LENG - 1, 1) : x1b4_LENG);
   const int nodeCount = x1ac_particleCount;
   int nodeBase = 0;
-  if (portRemastered && !(x1d0_24_emitting && x28_curFrame < x2c_PSLT)) {
+  // An electric swoosh's frozen ages run from 0.
+  if (portRemastered && !xPortElectric && !(x1d0_24_emitting && x28_curFrame < x2c_PSLT)) {
     nodeBase = INT_MAX;
     for (int k = 0; k < x15c_swooshes.capacity(); ++k) {
       if (x15c_swooshes.data()[k].mActive) {
@@ -404,6 +613,10 @@ void CParticleSwoosh::UpdateTranslationAndOrientation() {
     if (!swoosh.mActive) {
       continue;
     }
+#ifdef TARGET_PC
+    // UpdateExisting 0x27d590 leaves an electric point's age as it was born (+0x188 bit 5).
+    if (!xPortElectric)
+#endif
     swoosh.mFrame = x28_curFrame - swoosh.mStartFrame;
     CParticleGlobals::UpdateParticleLifetimeTweenValues(swoosh.mFrame);
 #ifdef TARGET_PC
@@ -424,6 +637,19 @@ void CParticleSwoosh::UpdateTranslationAndOrientation() {
     }
     CParticleGlobals::PortSwooshEvalScope segEvalScope(&segEval);
     CPortKeepScope segKeepScope(&swoosh.mPortKeep);
+    // UpdateExisting 0x27d590: _Update_Particle (0x27d6d4) runs the variables that are not
+    // constant after start at the point's age, before its elements. A point is never updated in
+    // the tick that created it (CreateNewParticle comes after UpdateExisting).
+    float* const pointValues = PortPartValues(i);
+    PortAccessScope pointAccess(pointValues);
+    const bool bornThisStep = xPortElectric
+                                  ? x1d0_24_emitting && x28_curFrame < x2c_PSLT &&
+                                        i == x158_curParticle
+                                  : swoosh.mFrame <= 0;
+    if (pointValues != nullptr && !bornThisStep) {
+      static CRealElement* const kNoAdvs[8] = {};
+      x1c_desc->xPortPartVars->Eval(kNoAdvs, false, swoosh.mFrame, pointValues);
+    }
 #endif
     if (x1c_desc->x44_28_SROT == true) {
       if (x1c_desc->x1c_IROT) {
@@ -477,6 +703,10 @@ void CParticleSwoosh::UpdateTranslationAndOrientation() {
         x1c_desc->x14_COLR->GetValueHdr(swoosh.mFrame, point.color);
       }
     }
+    // PSCL runs for every point after PROT, at its birth and each update (UpdateExisting 0x27d700).
+    if (x1c_desc->xPortScale) {
+      x1c_desc->xPortScale->GetValue(swoosh.mFrame, swoosh.mPortScale);
+    }
 #endif
     swoosh.mLeftRad = GetLeftRadius(i);
     UpdateMaxRadius(swoosh.mLeftRad);
@@ -492,6 +722,11 @@ void CParticleSwoosh::UpdateTranslationAndOrientation() {
 
 void CParticleSwoosh::SetTranslation(const CVector3f& translation) {
 #ifdef TARGET_PC
+  // XFMD 1: the system's own transform births and draws the points; no setter moves them.
+  if (x1c_desc->xPortXfmdSystem) {
+    xPortExtTranslation = translation;
+    return;
+  }
   // XFMD 3: the one system translation (MPT_SetTranslation 0x27f9c4 -> SetExternalTranslation
   // 0x27b45c), drawn as the global translation; points are born at zero and the head is not moved.
   if (x1c_desc->xPortXfmdFollow) {
@@ -505,6 +740,10 @@ void CParticleSwoosh::SetTranslation(const CVector3f& translation) {
 
 void CParticleSwoosh::SetGlobalTranslation(const CVector3f& translation) {
 #ifdef TARGET_PC
+  if (x1c_desc->xPortXfmdSystem) {
+    xPortExtTranslation = translation;
+    return;
+  }
   // XFMD 4: MPT_SetGlobalTranslation 0x27faa4 also writes the external translation, which the
   // EMVR's EXTT gives var b8, the position a point is born at; the global translation stays zero.
   if (x1c_desc->xPortXfmdMover) {
@@ -517,8 +756,17 @@ void CParticleSwoosh::SetGlobalTranslation(const CVector3f& translation) {
 
 void CParticleSwoosh::SetGlobalOrientation(const CTransform4f& orientation) {
 #ifdef TARGET_PC
+  if (x1c_desc->xPortXfmdSystem) {
+    xPortExtOrientation = orientation;
+    return;
+  }
   // XFMD 4: MPT_SetGlobalOrientation 0x27fa24 writes the external rotation (EXTR, var bc).
   if (x1c_desc->xPortXfmdMover) {
+    SetOrientation(orientation);
+    return;
+  }
+  // XFMD 3: it writes the one system var (0x27fa24 -> SetExternalRotation), so INTR replaces it too.
+  if (x1c_desc->xPortXfmdFollow && x1c_desc->xPortIntRotation) {
     SetOrientation(orientation);
     return;
   }
@@ -526,7 +774,14 @@ void CParticleSwoosh::SetGlobalOrientation(const CTransform4f& orientation) {
   xb0_globalOrientation = orientation.GetRotation();
 }
 
-void CParticleSwoosh::SetLocalScale(const CVector3f& scale) { x14c_localScale = scale; }
+void CParticleSwoosh::SetLocalScale(const CVector3f& scale) {
+#ifdef TARGET_PC
+  if (x1c_desc->xPortXfmdSystem) {
+    return;
+  }
+#endif
+  x14c_localScale = scale;
+}
 
 #ifdef TARGET_PC
 // A point is born at the system translation plus POFS, both in the system's axes. Spreading POFS
@@ -559,7 +814,9 @@ bool CParticleSwoosh::IsSystemDeletable() const {
 void CParticleSwoosh::Render() {
 #ifdef TARGET_PC
   PortFx::RenderScope fxScope(x1c_desc->xPortUnfogged);
-  CPortParticleDepthBias portDepthBias(*this, x1c_desc->xPortDepthBias);
+  PortBeamColours::Scope beamScope(xPortBeamTint);
+  // CreateSWSH never reads DBSO: a swoosh keeps CParticleDescription's default (0x288314), on.
+  CPortParticleDepthBias portDepthBias(*this, x1c_desc->xPortDepthBias, true);
   if (PortFx::gMuteActive && PortFx::IsMuted(*this)) {
     return;
   }
@@ -764,7 +1021,24 @@ static inline float fast_cosine(float x);
 
 bool CParticleSwoosh::PortVfxSwoosh() const {
   const CPortVfxData* vfx = x1c_desc->xPortVfx.get();
-  return vfx != nullptr && (vfx->mat.version == 2 || vfx->mat.version == 3) && x1b8_SIDE >= 2 && !x1c_desc->x44_29_WIRE;
+  return vfx != nullptr && vfx->mat.Supported() && x1b8_SIDE >= 2 && !x1c_desc->x44_29_WIRE;
+}
+
+// TXUP (UpdateRenderState 0x27e6b0): with a live point, the uv rect's u bounds move back by
+// (created % n) / n, n = TSPN, else max(ring size - 1, 1), so the texture stays put along the trail
+// as points are added.
+float CParticleSwoosh::PortTexUScroll() const {
+  if (!x1c_desc->xPortTexUScroll || x1ac_particleCount < 1) {
+    return 0.f;
+  }
+  int n = 0;
+  if (x1c_desc->x40_TSPN) {
+    x1c_desc->x40_TSPN->GetValue(x28_curFrame, n);
+  }
+  if (n <= 0) {
+    n = rstl::max_val(static_cast< int >(x15c_swooshes.size()) - 1, 1);
+  }
+  return static_cast< float >(xPortCreated % n) / static_cast< float >(n);
 }
 
 // RenderNSidedSpline's geometry through the swoosh's VFX material (VMAT). The base uv is
@@ -800,6 +1074,24 @@ int CParticleSwoosh::PortSplineRef(int curIdx, int j) {
   }
 }
 
+// The spline steps of the segment curIdx -> prevIdx. SPLN, unless Remastered's SNRD or SNRA is
+// set (SetupSplineNodeGenerationMode 0x29bfac); then UpdateRenderData_Swoosh 0x2b5a78 takes the
+// larger of round(SNRD * the segment's length) and round(SNRA * (1 - dot(q, q')^2)) of its
+// endpoint orientations.
+int CParticleSwoosh::PortSplineSteps(int curIdx, int prevIdx) const {
+  const CSwooshDescription& d = **x1c_desc;
+  if (!(d.xPortSnrd > 0.f) && !(d.xPortSnra > 0.f)) {
+    return x1b0_SPLN;
+  }
+  const SSwooshData& cur = x15c_swooshes.data()[curIdx];
+  const SSwooshData& prev = x15c_swooshes.data()[prevIdx];
+  const float dist = (prev.mTranslation - cur.mTranslation).Magnitude();
+  const float dot = CQuaternion::Dot(CQuaternion::FromMatrix(cur.mOrientation), CQuaternion::FromMatrix(prev.mOrientation));
+  const int byDist = static_cast< int >(floorf(d.xPortSnrd * dist + 0.5f));
+  const int byTurn = static_cast< int >(floorf(d.xPortSnra * (1.f - dot * dot) + 0.5f));
+  return byTurn < byDist ? byDist : byTurn;
+}
+
 void CParticleSwoosh::PortRenderVfx() {
   const CPortVfxData& vfx = *x1c_desc->xPortVfx;
   float vsmt[kPortVfxVsmtCount] = {};
@@ -811,6 +1103,18 @@ void CParticleSwoosh::PortRenderVfx() {
   if (xPortVfxPts.size() != size_t(x15c_swooshes.capacity())) {
     return; // not updated yet
   }
+  // DVVN/IEXP: UpdateRenderData_Swoosh 0x2b6820 scales ITEN by the context's inverse exposure
+  // (ctx+0x18, resolve_inverse_exposure 0x20eba0: auto when blended, static when opaque); the
+  // tonemap's frame exposure undoes it, not the GX tone's inherited w.
+  float exposureGain = 1.f;
+  if (x1c_desc->xPortExposurePolicy) {
+    desc.alreadyExposed = false;
+    desc.exposureOverride = PortVfxFrameExposureOverride();
+    if (x1c_desc->xPortInverseExposure) {
+      exposureGain =
+          PortRoomEnv::ParticleInverseExposure(vfx.mat.blend != uint32_t(aurora::gfx::vfx::Blend::Opaque));
+    }
+  }
   if (x1c_desc->x40_TSPN) {
     x1c_desc->x40_TSPN->GetValue(x28_curFrame, x1ec_TSPN);
   }
@@ -818,6 +1122,7 @@ void CParticleSwoosh::PortRenderVfx() {
     x1ec_TSPN = x15c_swooshes.size() - 1;
   }
   const float uvSpan = x1ec_TSPN > 0 ? 1.f / x1ec_TSPN : 1.f;
+  const float uScroll = PortTexUScroll();
   CPortVfxUvXf uvXf;
   uvXf.Eval(vfx, x28_curFrame);
   const float modu[4] = {x20c_moduColor.GetRed(), x20c_moduColor.GetGreen(), x20c_moduColor.GetBlue(),
@@ -826,6 +1131,7 @@ void CParticleSwoosh::PortRenderVfx() {
   const bool cros = x1c_desc->x44_25_CROS && x1b8_SIDE % 2 == 0;
   // Remastered builds one strip per segment below SIDE 3 (0x2b52e0), not a quad per ring edge.
   const int faces = x1b8_SIDE < 3 ? 1 : (cros ? x1b8_SIDE / 2 : x1b8_SIDE);
+  const int strips = x1c_desc->xPortLwqd;
   // ORNT with SIDE 2: the ribbon width axis is rebuilt from the camera and the trail direction
   // every frame (CERotationFromAxis), not taken from the stored orientation.
   const bool orntView = x1c_desc->x45_25_ORNT && x1b8_SIDE == 2;
@@ -885,9 +1191,11 @@ void CParticleSwoosh::PortRenderVfx() {
         const PortSwooshRing::Vec newerPos = newer ? sysVec(newer->mTranslation) : pos;
         const PortSwooshRing::Vec axis =
             PortSwooshRing::WidthAxis(pos, sysVec(camSys), older ? &olderPos : nullptr, newer ? &newerPos : nullptr);
+        // PSCL's X scales the ring's local X (0x2b607c), the width axis here.
+        const float scaleX = swoosh.mPortScale.GetX();
         PortSwooshRing::Vec v0, v1;
-        PortSwooshRing::Ring(sysVec(swoosh.mTranslation + swoosh.mUseOffset), axis, swoosh.mLeftRad,
-                             swoosh.mRightRad, v0, v1);
+        PortSwooshRing::Ring(sysVec(swoosh.mTranslation + swoosh.mUseOffset), axis, swoosh.mLeftRad * scaleX,
+                             swoosh.mRightRad * scaleX, v0, v1);
         ring[j][0] = CVector3f(v0.x, v0.y, v0.z);
         ring[j][1] = CVector3f(v1.x, v1.y, v1.z);
         continue;
@@ -897,7 +1205,11 @@ void CParticleSwoosh::PortRenderVfx() {
         const float rawAngle = M_PIF * (sideAngle + (swoosh.mInitialRot + swoosh.mRotm)) / 180.f;
         const float angle = fabs(rawAngle) > M_PIF ? CMath::WrapPi(rawAngle) : rawAngle;
         const float radius = sideAngle > 0.f && sideAngle <= 180.f ? swoosh.mLeftRad : swoosh.mRightRad;
-        ring[j][k] = swoosh.mOrientation * CVector3f(radius * fast_cosine(angle), 0.f, radius * fast_sine(angle)) +
+        // 0x2b607c scales the local ring (r cos, r sin, 0) by PSCL before q; the port's ring is
+        // m * (r cos, 0, r sin) with m = Q * Rx(-90), so Remastered's local Y is the port's Z.
+        const CVector3f& scale = swoosh.mPortScale;
+        ring[j][k] = swoosh.mOrientation * CVector3f(radius * fast_cosine(angle) * scale.GetX(), 0.f,
+                                                     radius * fast_sine(angle) * scale.GetY()) +
                      swoosh.mTranslation + swoosh.mUseOffset;
       }
     }
@@ -907,7 +1219,7 @@ void CParticleSwoosh::PortRenderVfx() {
     const SPortVfxPoint& pa = xPortVfxPts[curIdx];
     const SPortVfxPoint& pb = xPortVfxPts[prevIdx];
     auto pointAt = [&](float t, float color[4], float extra[4][4]) {
-      const float iten = pa.iten + (pb.iten - pa.iten) * t;
+      const float iten = (pa.iten + (pb.iten - pa.iten) * t) * exposureGain;
       const float* ca = pa.color;
       const float* cb = pb.color;
       for (int c = 0; c < 4; ++c) {
@@ -918,21 +1230,34 @@ void CParticleSwoosh::PortRenderVfx() {
       }
     };
 
-    float uMin = (x1ec_TSPN > 0 ? i % x1ec_TSPN : i) * uvSpan;
-    const float segUvSpan = uvSpan / (x1b0_SPLN + 1);
-    for (int splineIdx = 0; splineIdx < x1b0_SPLN + 1; ++splineIdx) {
-      const float t0 = splineIdx / static_cast< float >(x1b0_SPLN + 1);
-      const float t1 = (splineIdx + 1) / static_cast< float >(x1b0_SPLN + 1);
+    float uMin = (x1ec_TSPN > 0 ? i % x1ec_TSPN : i) * uvSpan - uScroll;
+    const int steps = PortSplineSteps(curIdx, prevIdx) + 1;
+    const float segUvSpan = uvSpan / steps;
+    for (int splineIdx = 0; splineIdx < steps; ++splineIdx) {
+      const float t0 = splineIdx / static_cast< float >(steps);
+      const float t1 = (splineIdx + 1) / static_cast< float >(steps);
       const float uMax = uMin + segUvSpan;
       float c0[4], c1[4], e0[4][4], e1[4][4];
       pointAt(t0, c0, e0);
       pointAt(t1, c1, e1);
       for (int face = 0; face < faces; ++face) {
         const int other = cros ? face + x1b8_SIDE / 2 : (face + 1) % x1b8_SIDE;
-        emit(GetSplinePoint(ring[0][face], ring[1][face], ring[2][face], ring[3][face], t0), uMin, 0.f, c0, e0);
-        emit(GetSplinePoint(ring[0][other], ring[1][other], ring[2][other], ring[3][other], t0), uMin, 1.f, c0, e0);
-        emit(GetSplinePoint(ring[0][other], ring[1][other], ring[2][other], ring[3][other], t1), uMax, 1.f, c1, e1);
-        emit(GetSplinePoint(ring[0][face], ring[1][face], ring[2][face], ring[3][face], t1), uMax, 0.f, c1, e1);
+        const CVector3f a0 = GetSplinePoint(ring[0][face], ring[1][face], ring[2][face], ring[3][face], t0);
+        const CVector3f b0 = GetSplinePoint(ring[0][other], ring[1][other], ring[2][other], ring[3][other], t0);
+        const CVector3f a1 = GetSplinePoint(ring[0][face], ring[1][face], ring[2][face], ring[3][face], t1);
+        const CVector3f b1 = GetSplinePoint(ring[0][other], ring[1][other], ring[2][other], ring[3][other], t1);
+        // LWQD: the face's edge points are lerped across in n steps, position and v alike
+        // (0x2b6a58 calling 0x2b6c70 at t = 0, then t += 1/n n times).
+        const float step = 1.f / static_cast< float >(strips);
+        float s1 = 0.f;
+        for (int q = 0; q < strips; ++q) {
+          const float s0 = s1;
+          s1 += step;
+          emit(CVector3f::Lerp(a0, b0, s0), uMin, s0, c0, e0);
+          emit(CVector3f::Lerp(a0, b0, s1), uMin, s1, c0, e0);
+          emit(CVector3f::Lerp(a1, b1, s1), uMax, s1, c1, e1);
+          emit(CVector3f::Lerp(a1, b1, s0), uMax, s0, c1, e1);
+        }
       }
       uMin = uMax;
     }
@@ -1745,6 +2070,10 @@ void CParticleSwoosh::UpdateSwooshTranslation(const CVector3f& translation) {
 
 void CParticleSwoosh::SetGlobalScale(const CVector3f& scale) {
 #ifdef TARGET_PC
+  // XFMD 1: var b0 is SYSS's, one by default.
+  if (x1c_desc->xPortXfmdSystem) {
+    return;
+  }
   // XFMD 4: the external scale is read by no mover, so the draw keeps unit scale (var b0 = one).
   if (x1c_desc->xPortXfmdMover) {
     return;
@@ -1762,11 +2091,26 @@ bool CParticleSwoosh::GetParticleEmission() const { return x1d0_24_emitting; }
 // CParticleGen::ShutdownEffect (0x27a66c) -> DoShutdownBehavior (0x27b88c) with the description's
 // SHTM: 0 stops the emission, 1 also runs Remastered's CParticleSwoosh::DestroyParticles (0x27f744),
 // which empties the segment ring (current index, live counts to 0), so the trail vanishes at once.
-// The retail DestroyParticles stays empty.
-void CParticleSwoosh::ShutdownEffect() { PortDoShutdownBehavior(0xff); }
+// The retail DestroyParticles stays empty. With a SHTT the shutdown waits that many ticks instead,
+// armed once.
+void CParticleSwoosh::ShutdownEffect() {
+  if (!x1c_desc->xPortShutdownTime) {
+    PortDoShutdownBehavior(0xff);
+    return;
+  }
+  if (xPortShutdownCountdown == -1) {
+    CPortVarScope portVarScope(&xPortVars);
+    CParticleGlobals::SetEmitterTime(x28_curFrame);
+    int ticks = 0;
+    x1c_desc->xPortShutdownTime->GetValue(x28_curFrame, ticks);
+    xPortShutdownCountdown = ticks;
+  }
+}
+
+u32 CParticleSwoosh::PortOwnShutdownMode() const { return x1c_desc->xPortShutdownMode; }
 
 void CParticleSwoosh::PortDoShutdownBehavior(u32 mode) {
-  const u32 use = mode == 0xff ? x1c_desc->xPortShutdownMode : (mode & 0xff);
+  const u32 use = mode == 0xff ? PortShutdownMode() : (mode & 0xff);
   if (use >= 2) {
     return;
   }
@@ -1774,13 +2118,18 @@ void CParticleSwoosh::PortDoShutdownBehavior(u32 mode) {
   if (use == 1) {
     x158_curParticle = 0;
     x1ac_particleCount = 0;
+    xPortCreated = 0;
     for (int i = 0; i < x15c_swooshes.capacity(); ++i) {
       x15c_swooshes.data()[i].mActive = false;
     }
   }
 }
-// XFMD 3: the getters read the one system var too (MPT_GetTranslation 0x27fb54).
+// XFMD 3: the getters read the one system var too (MPT_GetTranslation 0x27fb54). MPT_GetOrientation
+// 0x27fb28 reads the external rotation (var bc only under XFMD 5), not INTR's; so does XFMD 1.
 const CTransform4f& CParticleSwoosh::GetOrientation() const {
+  if (x1c_desc->xPortIntRotation || x1c_desc->xPortXfmdSystem) {
+    return xPortExtOrientation;
+  }
   return x1c_desc->xPortXfmdFollow ? xb0_globalOrientation : x44_orientation;
 }
 #else
@@ -1791,6 +2140,9 @@ const CTransform4f& CParticleSwoosh::GetGlobalOrientation() const { return xb0_g
 const CVector3f& CParticleSwoosh::GetGlobalTranslation() const { return xa4_globalTranslation; }
 #ifdef TARGET_PC
 const CVector3f& CParticleSwoosh::GetTranslation() const {
+  if (x1c_desc->xPortXfmdSystem) {
+    return xPortExtTranslation;
+  }
   return x1c_desc->xPortXfmdFollow ? xa4_globalTranslation : x38_translation;
 }
 #else

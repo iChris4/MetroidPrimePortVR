@@ -307,6 +307,33 @@ camera.
 
 See [`docs/DREAD_SAMUS.md`](DREAD_SAMUS.md) for the import and its limits.
 
+### Metroid Prime 2: Echoes suits
+
+Under F1 > Mods > Built-in mods > Metroid Prime 2: Echoes: the Varia, Dark and Light Suit bodies
+from your own Echoes GameCube disc image (tested with USA `G2ME01`), as Prime's Varia, Gravity and Phazon
+Suits, in cutscenes, the Morph Ball transitions, the third-person camera and the pause screen's
+doll and the first-person arms (right, and the left grapple arm); and their Morph Balls, with the
+Dark Spider Ball as Gravity's Spider Ball. Echoes has no Varia or Light Spider Ball (its Spider
+Ball keeps the suit's ball), so the Varia and Phazon Spider Balls are the Varia and Light balls. The
+Power Suit stays Prime's.
+
+- It is the mod `echoes-suits`. Its bodies carry their own arm cannon, so Prime's is not drawn on
+  them. They are skinned onto Prime's skeleton: joints Prime lacks fold into their nearest parent
+  Prime has.
+- It replaces the same body models as `dread-samus`: switch one of the two off.
+- A Metroid Prime Trilogy (Wii) image works as the Echoes image: its `MP2` folder holds the same
+  PAKs. Playing from a Trilogy disc, the page has no disc picker: Import reads the running disc.
+- From a terminal: `--import-echoes-suits <Echoes disc image>` (the Prime disc from `MP_DISC`).
+- The first-person arm cannon is Echoes' too, for every suit: Power, Ice, Wave, Plasma and Phazon
+  Beam take its Power, Dark, Annihilator, Light and fifth look, moved by Prime's gun animations
+  (the two guns share one skeleton). "Echoes arm cannon in first person"
+  (`echoes_first_person_cannon`, on by default; console `echoescannon 0|1`) switches it, from the
+  next beam selected.
+- "Play as Dark Samus" (`echoes_dark_samus`, off by default; console `darksamus 0|1`) puts Echoes'
+  Dark Samus body in place of every suit's, in third person, cutscenes and the pause screen, from
+  the next mod reload. Her skeleton and bind pose are Echoes Samus's, so she is fitted like the
+  suits. The first-person arm and the Morph Ball stay the suit's (Echoes has neither for her).
+
 ## Texture packs
 
 Texture packs replace the game's textures with Aurora-format images named
@@ -317,7 +344,8 @@ Texture packs replace the game's textures with Aurora-format images named
   one (`<executable dir>/textures`); both are the layer under your pack, and whatever else a build
   carries inside the executable is only the button-prompt icons.
 - **Your own pack:** put it in `user_textures` in the [user folder](#installing-mods), or wherever
-  `MP_USER_TEXTURES` points, so updates never touch it. It is layered over the folder above, with
+  `MP_USER_TEXTURES` points, so updates never touch it; the game creates the folder on start,
+  as it does `mods/`. It is layered over the folder above, with
   the same folder rules. The overlay's Mods page has a Reload button.
   Its Import texture pack .zip button extracts a `.zip`'s `.png`/`.dds` files (keeping its
   folders) over the current pack, which is swapped in once the copy finishes.
@@ -384,6 +412,8 @@ What the importer gets:
 | `MP_DUMP_TEXTURES` | off | `1` dumps every source texture to `<cachePath>/texture_dumps`. |
 | `MP_TEXTURE_MAX_DIM` | 0 (1024 on Android) | Caps the size a native `.dds` texture is loaded at, in px; 0 = no limit. |
 | `MP_TEXTURE_CACHE_MB` | 4096 (1024 on Android) | Memory the loaded `.dds` textures may keep cached. |
+| `MP_TEXTURE_PRESSURE_MIB` | 1024 | Below this much memory headroom (free RAM; on Windows also free commit and the GPU's budget), idle texture replacements are freed sooner and new ones load at most 2048 px; 0 = off. |
+| `MP_TEXTURE_PRESSURE_SEVERE_MIB` | 512 | Below this, replacements idle for a second are freed, new ones load at most 1024 px and drawn larger ones reload at that size; 0 = off. |
 | `MP_MEM1_MB` | 24 | Emulated MEM1 arena and game heap in MB (capped at 1024), for heavy mods. |
 | `MP_HD_FONT` | on | `0` turns HD `.sdfont` fonts off. |
 | `MP_ROOM_LIQUID` | on | `0` draws the retail liquid planes instead of a mod's. |

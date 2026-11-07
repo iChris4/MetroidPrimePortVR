@@ -2036,30 +2036,44 @@ TEST_F(GXFifoTest, PBRLightScale_PropagatesAndResets) {
   EXPECT_EQ(g_gxState.pbrLightScale.w(), 0.f);
 }
 
-// An HDR light lands in its own light's three rows (colour with falloff + 1, position with r0,
-// r1); a repeat is dropped, and off clears the rows.
+// An HDR light lands in its own light's four rows (colour with falloff + 1, position with r0,
+// r1 with widen and the cone, the spot's way to the light); a repeat is dropped, and off clears
+// the rows.
 TEST_F(GXFifoTest, PBRLightHdr_PropagatesAndTurnsOff) {
   const f32 color[3] = {9.f, 3.5f, 0.1f};
   const f32 pos[3] = {1.f, -2.f, -5.f};
-  GXSetPBRLightHdr(GX_LIGHT2, color, pos, 0.f, 2.3f, 2);
+  GXSetPBRLightHdr(GX_LIGHT2, color, pos, 0.f, 2.3f, 2, 0.75f, nullptr, 0.f, 0.f);
   auto bytes = capture_fifo();
   EXPECT_TRUE(has_aurora_cmd(bytes, GX_AURORA_SET_PBR_LIGHT_HDR));
   reset_gx_state();
   decode_fifo(bytes);
-  EXPECT_EQ(g_gxState.pbrLightHdr[6].x(), 9.f);
-  EXPECT_EQ(g_gxState.pbrLightHdr[6].w(), 3.f);
-  EXPECT_EQ(g_gxState.pbrLightHdr[7].y(), -2.f);
-  EXPECT_EQ(g_gxState.pbrLightHdr[7].w(), 0.f);
-  EXPECT_EQ(g_gxState.pbrLightHdr[8].x(), 2.3f);
+  EXPECT_EQ(g_gxState.pbrLightHdr[8].x(), 9.f);
+  EXPECT_EQ(g_gxState.pbrLightHdr[8].w(), 3.f);
+  EXPECT_EQ(g_gxState.pbrLightHdr[9].y(), -2.f);
+  EXPECT_EQ(g_gxState.pbrLightHdr[9].w(), 0.f);
+  EXPECT_EQ(g_gxState.pbrLightHdr[10].x(), 2.3f);
+  EXPECT_EQ(g_gxState.pbrLightHdr[10].y(), 0.75f);
+  // A point light (null toLight) is cone scale 0, bias 1 whatever is passed.
+  EXPECT_EQ(g_gxState.pbrLightHdr[10].z(), 0.f);
+  EXPECT_EQ(g_gxState.pbrLightHdr[10].w(), 1.f);
   EXPECT_EQ(g_gxState.pbrLightHdr[0].w(), 0.f);
 
-  GXSetPBRLightHdr(GX_LIGHT2, color, pos, 0.f, 2.3f, 2);
+  GXSetPBRLightHdr(GX_LIGHT2, color, pos, 0.f, 2.3f, 2, 0.75f, nullptr, 0.f, 0.f);
   EXPECT_FALSE(has_aurora_cmd(capture_fifo(), GX_AURORA_SET_PBR_LIGHT_HDR));
 
-  GXSetPBRLightHdr(GX_LIGHT2, nullptr, nullptr, 0.f, 0.f, 0);
+  const f32 toLight[3] = {0.f, 0.f, 1.f};
+  GXSetPBRLightHdr(GX_LIGHT2, color, pos, 0.f, 2.3f, 2, 0.75f, toLight, 3.5f, -2.5f);
   decode_fifo(capture_fifo());
-  EXPECT_EQ(g_gxState.pbrLightHdr[6].w(), 0.f);
-  EXPECT_EQ(g_gxState.pbrLightHdr[8].x(), 0.f);
+  EXPECT_EQ(g_gxState.pbrLightHdr[10].z(), 3.5f);
+  EXPECT_EQ(g_gxState.pbrLightHdr[10].w(), -2.5f);
+  EXPECT_EQ(g_gxState.pbrLightHdr[11].z(), 1.f);
+
+  GXSetPBRLightHdr(GX_LIGHT2, nullptr, nullptr, 0.f, 0.f, 0, 0.f, nullptr, 0.f, 0.f);
+  decode_fifo(capture_fifo());
+  EXPECT_EQ(g_gxState.pbrLightHdr[8].w(), 0.f);
+  EXPECT_EQ(g_gxState.pbrLightHdr[10].x(), 0.f);
+  EXPECT_EQ(g_gxState.pbrLightHdr[10].y(), 0.f);
+  EXPECT_EQ(g_gxState.pbrLightHdr[11].z(), 0.f);
 }
 
 // The baked-light modulation propagates, a repeat is dropped, and null is white.
@@ -2161,6 +2175,45 @@ TEST_F(GXFifoTest, PBRThermal_PropagatesDedupsAndResets) {
   // Off again with other values is the same write.
   GXSetPBRThermal(GX_FALSE, 0.5f, 0.5f, GX_FALSE);
   EXPECT_FALSE(has_aurora_cmd(capture_fifo(), GX_AURORA_SET_PBR_THERMAL));
+}
+
+// The colour matrix (GXSetColorMatrix) carries its rows while on and the glow-only mode in w of row 0;
+// a repeat is dropped, a mode change is not, and null is off with zero rows. On and off change the
+// shader config, so they dirty the pipeline; new rows alone only the uniform.
+TEST_F(GXFifoTest, ColorMatrix_PropagatesDedupsAndResets) {
+  EXPECT_FALSE(g_gxState.colorMatrixOn);
+  const f32 rows[3][3] = {{0.f, 1.f, 0.f}, {0.f, 0.f, 1.f}, {1.f, 0.f, 0.5f}};
+  GXSetColorMatrix(rows, GX_FALSE);
+  auto bytes = capture_fifo();
+  EXPECT_TRUE(has_aurora_cmd(bytes, GX_AURORA_SET_COLOR_MATRIX));
+  reset_gx_state();
+  g_gxState.dirty = 0;
+  decode_fifo(bytes);
+  EXPECT_TRUE(g_gxState.colorMatrixOn);
+  EXPECT_NE(g_gxState.dirty & aurora::gx::DirtyPipeline, 0u);
+  EXPECT_EQ(g_gxState.colorMatrix[0], (aurora::Vec4<float>{0.f, 1.f, 0.f, 0.f}));
+  EXPECT_EQ(g_gxState.colorMatrix[2], (aurora::Vec4<float>{1.f, 0.f, 0.5f, 0.f}));
+
+  GXSetColorMatrix(rows, GX_FALSE);
+  EXPECT_FALSE(has_aurora_cmd(capture_fifo(), GX_AURORA_SET_COLOR_MATRIX));
+
+  GXSetColorMatrix(rows, GX_TRUE);
+  g_gxState.dirty = 0;
+  decode_fifo(capture_fifo());
+  EXPECT_TRUE(g_gxState.colorMatrixOn);
+  EXPECT_EQ(g_gxState.dirty & aurora::gx::DirtyPipeline, 0u);
+  EXPECT_NE(g_gxState.dirty & aurora::gx::DirtyUniform, 0u);
+  EXPECT_EQ(g_gxState.colorMatrix[0], (aurora::Vec4<float>{0.f, 1.f, 0.f, 1.f}));
+  EXPECT_EQ(g_gxState.colorMatrix[1], (aurora::Vec4<float>{0.f, 0.f, 1.f, 0.f}));
+
+  GXSetColorMatrix(nullptr, GX_FALSE);
+  g_gxState.dirty = 0;
+  decode_fifo(capture_fifo());
+  EXPECT_FALSE(g_gxState.colorMatrixOn);
+  EXPECT_NE(g_gxState.dirty & aurora::gx::DirtyPipeline, 0u);
+  EXPECT_EQ(g_gxState.colorMatrix[0], (aurora::Vec4<float>{}));
+  GXSetColorMatrix(nullptr, GX_FALSE);
+  EXPECT_FALSE(has_aurora_cmd(capture_fifo(), GX_AURORA_SET_COLOR_MATRIX));
 }
 
 // The character backlight's plane, back direction and strengths propagate, a repeat is

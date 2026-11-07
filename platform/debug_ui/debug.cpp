@@ -4,6 +4,7 @@
 #include "debug_ui_internal.h"
 
 #include "port_debug.h"
+#include "port_disc.h"
 #include "port_disc_replace.h"
 #include "port_disc_verify.h"
 #include "port_log.h"
@@ -61,6 +62,9 @@ void DrawDiscCheckSection() {
   if (const std::string image = PortDiscVerify::ImagePath(); !image.empty()) {
     ImGui::TextWrapped("Disc image: %s", image.c_str());
   }
+  if (const PortDisc::Version version = PortDisc::Current(); version != PortDisc::Version::Unknown) {
+    ImGui::TextWrapped("Version: Metroid Prime %s (%s)", PortDisc::Name(version), PortDisc::GameCode(version));
+  }
   ImGui::BeginDisabled(running || replacing);
   if (ImGui::Button("Check disc image")) {
     PortDiscVerify::Start();
@@ -75,8 +79,6 @@ void DrawDiscCheckSection() {
   }
   switch (r.state) {
   case State::Idle:
-    ImGui::TextWrapped("Compares the whole disc image with the original release to find damage. "
-                       "Runs in the background and takes a minute or two.");
     break;
   case State::Running:
     ImGui::TextWrapped("Checking the disc image (%.0f%%)...", r.Progress() * 100.0);

@@ -570,8 +570,9 @@ AlphaCompareExpr alpha_compare_xnor(const AlphaCompareExpr& lhs, const AlphaComp
   return {fmt::format("({} == {})", lhs.expr, rhs.expr), -1};
 }
 
-AlphaCompareExpr alpha_compare(GXCompare comp, u8 ref) {
-  const auto iref = static_cast<u32>(ref);
+// ref is the pipeline's (pipeline_alpha_ref): AlphaRefUniform reads it from alpha_ref.x (comp0) or .y.
+AlphaCompareExpr alpha_compare(GXCompare comp, u32 ref, char slot) {
+  const auto iref = ref == AlphaRefUniform ? fmt::format("ubuf.alpha_ref.{}", slot) : fmt::format("{}u", ref);
   switch (comp) {
     DEFAULT_FATAL("invalid alpha comp {}", underlying(comp));
   case GX_NEVER:
@@ -580,26 +581,26 @@ AlphaCompareExpr alpha_compare(GXCompare comp, u8 ref) {
     if (ref == 0) {
       return alpha_compare_const(false);
     }
-    return {fmt::format("(alphaCompare < {}u)", iref), -1};
+    return {fmt::format("(alphaCompare < {})", iref), -1};
   case GX_LEQUAL:
     if (ref == 255) {
       return alpha_compare_const(true);
     }
-    return {fmt::format("(alphaCompare <= {}u)", iref), -1};
+    return {fmt::format("(alphaCompare <= {})", iref), -1};
   case GX_EQUAL:
-    return {fmt::format("(alphaCompare == {}u)", iref), -1};
+    return {fmt::format("(alphaCompare == {})", iref), -1};
   case GX_NEQUAL:
-    return {fmt::format("(alphaCompare != {}u)", iref), -1};
+    return {fmt::format("(alphaCompare != {})", iref), -1};
   case GX_GEQUAL:
     if (ref == 0) {
       return alpha_compare_const(true);
     }
-    return {fmt::format("(alphaCompare >= {}u)", iref), -1};
+    return {fmt::format("(alphaCompare >= {})", iref), -1};
   case GX_GREATER:
     if (ref == 255) {
       return alpha_compare_const(false);
     }
-    return {fmt::format("(alphaCompare > {}u)", iref), -1};
+    return {fmt::format("(alphaCompare > {})", iref), -1};
   case GX_ALWAYS:
     return alpha_compare_const(true);
   }
@@ -607,8 +608,8 @@ AlphaCompareExpr alpha_compare(GXCompare comp, u8 ref) {
 
 // When the alpha compare drops a pixel, in terms of alphaCompare (the alpha as 0-255).
 AlphaCompareExpr alpha_compare_discard(const ShaderConfig& config) {
-  const auto comp0 = alpha_compare(config.alphaCompare.comp0, config.alphaCompare.ref0);
-  const auto comp1 = alpha_compare(config.alphaCompare.comp1, config.alphaCompare.ref1);
+  const auto comp0 = alpha_compare(config.alphaCompare.comp0, config.alphaCompare.ref0, 'x');
+  const auto comp1 = alpha_compare(config.alphaCompare.comp1, config.alphaCompare.ref1, 'y');
   AlphaCompareExpr pass;
   switch (config.alphaCompare.op) {
     DEFAULT_FATAL("invalid alpha compare op {}", underlying(config.alphaCompare.op));
@@ -1068,6 +1069,7 @@ struct PbrGen {
   void layeredKinds3();
   void layeredKinds4();
   void liquidSurface();
+  void skyFlow();
   void normalMaps();
   void layeredGlass1();
   void layeredGlass2();
@@ -1206,6 +1208,20 @@ void PbrGen::vertexOutputs() {
                                  vtx_attr(config, GX_VA_CLR0));
     }
   }
+  if (config.pbrKind == PbrKind::ThermalHeatMask) {
+    // c928a6c5's vertex stage takes the heat per vertex (kb material/c928a6c5.md): with r the
+    // colour's red, c0 = CCH0 and c1 = CCH1 (shield rows 0-1),
+    //   o = (h + s (1 - h)) c0.y, h = r c0.x, s = clamp(c0.z c1.y, 0, 1) r,
+    // quadratic in r once the gun's heat (c1.y) is up, so it is interpolated, not r. A model
+    // without colours reads the missing attribute's default red, 0 (as kind 9's).
+    vtxOutAttrs += fmt::format("\n    @location({}) pbr_vthm: f32,", vtxOutIdx++);
+    vtxXfrAttrs += fmt::format(
+        "\n    let pbr_thr = {};"
+        "\n    let pbr_thh = pbr_thr * ubuf.pbr_shield[0].x;"
+        "\n    let pbr_ths = clamp(ubuf.pbr_shield[0].z * ubuf.pbr_shield[1].y, 0.0, 1.0) * pbr_thr;"
+        "\n    out.pbr_vthm = (pbr_thh + pbr_ths * (1.0 - pbr_thh)) * ubuf.pbr_shield[0].y;",
+        config.attrs[GX_VA_CLR0].attrType != GX_NONE ? vtx_attr(config, GX_VA_CLR0) + ".r" : std::string("0.0"));
+  }
   if (config.pbrKind == PbrKind::HoloGlassB) {
     // And takes the depth factor per vertex: the near plane over the view depth, capped by
     // vp_c1[0].x (shield row 4 y and z).
@@ -1280,8 +1296,9 @@ void PbrGen::layerPrologue() {
       // 32768 = the vertex shader's procedural wind (Remastered's USE_PROCEDURAL_WIND_ANIMATION);
       // the fragment ignores it.
       // 65536 = the opacity is the vertex alpha alone (495899e7: o0.w = v5.w * DIFC.a, DIFC.a = 1).
-      // 262144 = flat ambient only: no baked lobes, grid volume or lightmap, and no BLCM (4bc890c1
-      // LambertFx, whose perms sample none of them and seed the light sum with the flat constant).
+      // 262144 = flat ambient only: no baked lobes, grid volume or lightmap, and no BLCM (the
+      // flat perms of LambertFx 7126ca03 042-057; the converter no longer emits it, since rooms
+      // with probe data take the BLPD / volume perms instead).
       // 524288 = the vertex colour is used raw (premultiplied glass 941068bf / bcc73459, whose
       // vertex shader has no log2/exp2 decode).
       // The mode word is a whole number (CCubeModel strips 32 and 64, which the shader never sees).
@@ -1889,6 +1906,41 @@ void PbrGen::liquidSurface() {
                            mapOf(2), uv);
     }
   }
+}
+
+void PbrGen::skyFlow() {
+  // Kind 49, the sky's flow-map clouds (Remastered's cd033236): map 0 is read twice, pushed
+  // along a world direction (pbr_param.yzw, in view space, times the strength) by the mask in
+  // map 3's red, in two phases half a period apart (pbr_param.x the time over the period), and
+  // blended as each wraps. The push is the direction on the surface's B = cross(N, T) and T.
+  if (config.pbrKind != PbrKind::SkyFlow || layered || mapStage[0] == -1 || mapStage[3] == -1) {
+    return;
+  }
+  const auto map0 = underlying(config.tevStages[mapStage[0]].texMapId);
+  const auto uv = underlying(config.tevStages[mapStage[0]].texCoordId);
+  layer += fmt::format(R"""(
+      let pbr_sfd1 = dpdx(tex{0}_uv);
+      let pbr_sfd2 = dpdy(tex{0}_uv);)""",
+                       uv);
+  if (tangents) {
+    layer += R"""(
+      let pbr_sft = normalize(in.pbr_tan.xyz);)""";
+  } else {
+    // The direction U grows in, from the derivatives as tangentFrame takes it.
+    layer += R"""(
+      let pbr_sfp2 = -dpdy(in.pbr_pos);
+      let pbr_sft0 = cross(pbr_sfp2, pbr_ngs) * pbr_sfd1.x + cross(pbr_ngs, dpdx(in.pbr_pos)) * -pbr_sfd2.x;
+      let pbr_sft = pbr_sft0 * inverseSqrt(max(dot(pbr_sft0, pbr_sft0), 1e-30));)""";
+  }
+  layer += fmt::format(R"""(
+      let pbr_sfo = sampled{1}.r * vec2f(dot(cross(pbr_ngs, pbr_sft), ubuf.pbr_param.yzw), dot(pbr_sft, ubuf.pbr_param.yzw));
+      let pbr_sfp1 = fract(ubuf.pbr_param.x);
+      let pbr_sfp0 = fract(ubuf.pbr_param.x + 0.5);
+      let pbr_sfs0 = textureSampleGrad(tex{2}, tex{2}_samp, tex{0}_uv + pbr_sfo * pbr_sfp0, pbr_sfd1, pbr_sfd2).rgb;
+      let pbr_sfs1 = textureSampleGrad(tex{2}, tex{2}_samp, tex{0}_uv + pbr_sfo * pbr_sfp1, pbr_sfd1, pbr_sfd2).rgb;
+      let pbr_sfb = vec4f(pbr_sfs1 + 2.0 * abs(pbr_sfp1 - 0.5) * (pbr_sfs0 - pbr_sfs1), 1.0);)""",
+                       uv, mapStage[3], map0);
+  base = "pbr_sfb";
 }
 
 void PbrGen::normalMaps() {
@@ -2962,8 +3014,8 @@ void PbrGen::buildSource() {
           let light = ubuf.lights[i];
           // A Remastered HDR light (GXSetPBRLightHdr) brings its own colour, position and
           // falloff.
-          let hdr_c = ubuf.pbr_light_hdr[i * 3u];
-          let hdr_p = ubuf.pbr_light_hdr[i * 3u + 1u];
+          let hdr_c = ubuf.pbr_light_hdr[i * 4u];
+          let hdr_p = ubuf.pbr_light_hdr[i * 4u + 1u];
           let hdr_on = hdr_c.w > 0.5;
           var ldir = select(light.pos, hdr_p.xyz, hdr_on) - in.pbr_pos;
           let dist2 = dot(ldir, ldir);
@@ -2973,16 +3025,22 @@ void PbrGen::buildSource() {
           let h = normalize(ldir + pbr_v);
           let nh = max(dot(pbr_n, h), 0.0);
           let vh = max(dot(pbr_v, h), 0.0);
-          let dd = nh * nh * (pbr_a2 - 1.0) + 1.0;
-          let d = pbr_a2 / max(pbr_pi * dd * dd, 1e-6 * pbr_a2);
-          let vis = 0.25 / (max(pbr_nv * (1.0 - pbr_k) + pbr_k, 1e-4) * max(nl * (1.0 - pbr_k) + pbr_k, 1e-4));
+          // Remastered widens an HDR light's lobe by its LSPS (SCachedLight +0xc).
+          let l_w = select(0.0, ubuf.pbr_light_hdr[i * 4u + 2u].y, hdr_on);
+          let l_r = pbr_rough + (1.0 - pbr_rough) * l_w;
+          let l_a2 = pow(l_r, 4.0);
+          let l_k = l_r * l_r * 0.5;
+          let dd = nh * nh * (l_a2 - 1.0) + 1.0;
+          let d = l_a2 / max(pbr_pi * dd * dd, 1e-6 * l_a2);
+          let vis = 0.25 / (max(pbr_nv * (1.0 - l_k) + l_k, 1e-4) * max(nl * (1.0 - l_k) + l_k, 1e-4));
           let f = pbr_f0 + (1.0 - pbr_f0) * pow(1.0 - vh, 5.0);
           let spec = d * vis * f;
           // GX lights are unnormalised (colour * N.L is full brightness), so Lambert has no
           // 1/pi and the specular lobe is scaled by pi to match.
           var rad = ubuf.pbr_light_color[i].rgb * attn{16};
           if (hdr_on) {{
-              let hdr_r1 = ubuf.pbr_light_hdr[i * 3u + 2u].x;
+              let hdr_q = ubuf.pbr_light_hdr[i * 4u + 2u];
+              let hdr_r1 = hdr_q.x;
               let hdr_t = clamp((dist - hdr_p.w) / max(hdr_r1 - hdr_p.w, 1e-4), 0.0, 1.0);
               var hdr_fa = 1.0;
               if (hdr_c.w > 3.5) {{
@@ -2992,6 +3050,8 @@ void PbrGen::buildSource() {
               }} else if (hdr_c.w > 1.5) {{
                   hdr_fa = 1.0 - hdr_t;
               }}
+              // A spot's cone (SCachedLight +0x1c/+0x20/+0x2c; a point light is 0, 1).
+              hdr_fa *= clamp(dot(ldir, ubuf.pbr_light_hdr[i * 4u + 3u].xyz) * hdr_q.z + hdr_q.w, 0.0, 1.0);
               rad = hdr_c.rgb * hdr_fa{16};
           }}
           // pbr-sun-light
@@ -3375,7 +3435,8 @@ R"""(      // Encoded as Remastered's sRGB swapchain does it: the exact piecewis
                      // A sky's ICAN is its base map (the converter writes a black emissive map where
                      // it copies the base), and its glow ICAN x ICNC is most of what it shows. The
                      // map's last mip, its mean, tells that black map from one with dark texels.
-                     mapStage[3] == -1 || config.pbrKind == PbrKind::VertexBlend || config.pbrKind == PbrKind::DecalCut || config.pbrKind == PbrKind::DecalAlpha
+                     mapStage[3] == -1 || config.pbrKind == PbrKind::VertexBlend || config.pbrKind == PbrKind::DecalCut || config.pbrKind == PbrKind::DecalAlpha ||
+                             config.pbrKind == PbrKind::SkyFlow
                          ? "vec4f(0.0)"s
                          : fmt::format("select({0}, {1}, pbr_sky && dot(textureSampleLevel(tex3, tex3_samp, "
                                        "vec2f(0.5), 16.0).rgb, vec3f(1.0)) < 0.004)",
@@ -3512,6 +3573,16 @@ void PbrGen::patchSource() {
       cut(fmt::format("textureSampleLevel({}, pbr_cube_samp, pbr_vuv, 0.0)", t), "(vec4f(0.3, 0.2, 0.6, 0.5) + pbr_vuv.xyzx * 0.01)");
     }
   }
+  if (config.colorMatrix) {
+    // GXSetColorMatrix's glow-only mode (w of row 0): the matrix on the glow term alone, every addition to it
+    // made; the lit surface keeps its colour. The full mode is applied to the shaded colour later.
+    const size_t at = find_anchor(source, "      let pbr_out = max(pbr_lo + pbr_glow, vec3f(0.0))");
+    source.insert(at, R"""(      if (ubuf.color_matrix[0].w > 0.5) {
+          pbr_glow = vec3f(dot(ubuf.color_matrix[0].xyz, pbr_glow), dot(ubuf.color_matrix[1].xyz, pbr_glow),
+                           dot(ubuf.color_matrix[2].xyz, pbr_glow));
+      }
+)""");
+  }
 }
 
 // ShaderConfig::pbrPlain and pbrNoDebug (pbr_static_flags): the runtime tests they stand for become
@@ -3643,7 +3714,21 @@ void PbrGen::patchSceneHdr() {
          fmt::format("let pbr_xw = {} * pbr_xv3.w;\n", xbase) +
          "          pbr_keep = pbr_xw * pbr_xscene;\n"
          "          pbr_vfw = vec3f(1.0) - pbr_xw;\n          pbr_vfk = true;");
-    if (config.pbrThermal && !layered) {
+    if (config.pbrThermal && !layered && config.pbrKind == PbrKind::ThermalHeatMask) {
+      // c928a6c5 MDL_ThermalHeatMask (kb material/c928a6c5.md), the arm cannon's thermal model:
+      // its own heat, not Model_ThermalOverride. c0 = CCH0, c1 = CCH1 (pbr_shield rows 0-1), the
+      // mask TCH0 in map 1, the vertex stage's heat o (pbr_vthm), c1.y the gun's heat (HTRN). Then
+      //   t = clamp(clamp(mask.r (1 + c1.y), 0, 1) c0.w + o, 0, 1), rgb = t (1 - c1.x) + c1.x,
+      // alpha mask.a, times the inverse exposure, which the HDR scene's exposure cancels.
+      put("prev = vec4f(pbr_lin + pbr_pass + pbr_keep, pbr_alpha);",
+          fmt::format("prev = vec4f(pbr_lin + pbr_pass + pbr_keep, pbr_alpha);\n"
+                      "      let thm_c0 = ubuf.pbr_shield[0];\n"
+                      "      let thm_c1 = ubuf.pbr_shield[1];\n"
+                      "      let thm_mask = {0};\n"
+                      "      let thm_t = clamp(clamp(thm_mask.r * (1.0 + thm_c1.y), 0.0, 1.0) * thm_c0.w + in.pbr_vthm, 0.0, 1.0);\n"
+                      "      prev = vec4f(vec3f(thm_t * (1.0 - thm_c1.x) + thm_c1.x), thm_mask.a);",
+                      sampled(1, "vec4f(0.0)")));
+    } else if (config.pbrThermal && !layered) {
       // The thermal visor's hot pass (GXSetPBRThermal): Remastered draws a mesh whose shader has no
       // thermal technique with 02c254b6 Model_ThermalOverride (kb topic/thermal-model-render.md),
       // which binds the mesh's own BCLR (no DIFC) and rebuilds the normal from its normal map:
@@ -3714,6 +3799,7 @@ auto pbr_func(const ShaderConfig& config, const ShaderInfo& info, std::string& v
   g.layeredKinds3();
   g.layeredKinds4();
   g.liquidSurface();
+  g.skyFlow();
   g.normalMaps();
   g.layeredGlass1();
   g.layeredGlass2();
@@ -4421,9 +4507,22 @@ std::string build_shader_source(const ShaderConfig& config) noexcept {
         "\n    out.pos = vec4f(clip.xy + offset_ndc * clip.w, clip.zw);";
   } else {
     // GX_LINES / GX_LINESTRIP: expand line segment perpendicular to direction
+    // Port: GX clips a line at the near plane before widening it. An endpoint behind the eye has a
+    // negative w, so its NDC flips to the far side and the widened quad spans the screen: move it
+    // onto w = eps along the segment first, and drop a segment with both ends behind (z = -2w is
+    // clipped).
     vtxXfrAttrsPre +=
-        "\n    let clip_a = vec4f(mv_pos_a, 1.0) * ubuf.proj;"
-        "\n    let clip_b = vec4f(mv_pos_b, 1.0) * ubuf.proj;"
+        "\n    var clip_a = vec4f(mv_pos_a, 1.0) * ubuf.proj;"
+        "\n    var clip_b = vec4f(mv_pos_b, 1.0) * ubuf.proj;"
+        "\n    let line_near_w = 1e-4;"
+        "\n    if (clip_a.w < line_near_w && clip_b.w < line_near_w) {"
+        "\n        clip_a = vec4f(0.0, 0.0, -2.0, 1.0);"
+        "\n        clip_b = clip_a;"
+        "\n    } else if (clip_a.w < line_near_w) {"
+        "\n        clip_a = mix(clip_a, clip_b, (line_near_w - clip_a.w) / (clip_b.w - clip_a.w));"
+        "\n    } else if (clip_b.w < line_near_w) {"
+        "\n        clip_b = mix(clip_b, clip_a, (line_near_w - clip_b.w) / (clip_a.w - clip_b.w));"
+        "\n    }"
         "\n    let ndc_a = clip_a.xy / clip_a.w;"
         "\n    let ndc_b = clip_b.xy / clip_b.w;"
         "\n    let viewport_scale = ubuf.render_viewport_size / max(ubuf.logical_viewport_size, vec2f(1.0));"
@@ -4741,11 +4840,14 @@ std::string build_shader_source(const ShaderConfig& config) noexcept {
     if (tcg.type == GX_TG_MTX2x4 || tcg.type == GX_TG_MTX3x4) {
       if (info.indexAttr.test(GX_VA_TEX0MTXIDX + i)) {
         vtxXfrAttrs += fmt::format("\n    var tc{0}_tmp = tc{0} * ubuf.postex_mtx[in_texmtxidx{0} / 3u];", i);
-      } else if (tcg.mtx == GX_IDENTITY) {
-        vtxXfrAttrs += fmt::format("\n    var tc{0}_tmp = tc{0}.xyz;", i);
       } else {
-        u32 texMtxIdx = (tcg.mtx) / 3;
-        vtxXfrAttrs += fmt::format("\n    var tc{0}_tmp = tc{0} * ubuf.postex_mtx[{1}];", i, texMtxIdx);
+        // The matrix from the uniform (texcoord_scale[i].z, TexMtxIdentity for GX_IDENTITY), so the
+        // pipeline does not key it (pipeline_unused_inputs).
+        vtxXfrAttrs += fmt::format(
+            "\n    var tc{0}_tmp = tc{0}.xyz;"
+            "\n    let tc{0}_mtx = u32(ubuf.texcoord_scale[{0}].z);"
+            "\n    if (tc{0}_mtx < {1}u) {{ tc{0}_tmp = tc{0} * ubuf.postex_mtx[tc{0}_mtx]; }}",
+            i, TexMtxIdentity);
       }
       if (tcg.type == GX_TG_MTX2x4) {
         vtxXfrAttrs += fmt::format("\n    tc{0}_tmp.z = 1.0f;", i);
@@ -5169,7 +5271,7 @@ fn vf_apply_hdr(c: vec4f, fog: vec4f, w: f32) -> vec4f {
     uniBufAttrs += "\n    pbr_light_skip: vec4f,";
     uniBufAttrs += "\n    pbr_light_scale: vec4f,";
     uniBufAttrs += fmt::format("\n    pbr_light_color: array<vec4f, {}>,", GX::MaxLights);
-    uniBufAttrs += fmt::format("\n    pbr_light_hdr: array<vec4f, {}>,", GX::MaxLights * 3);
+    uniBufAttrs += fmt::format("\n    pbr_light_hdr: array<vec4f, {}>,", GX::MaxLights * 4);
     uniBufAttrs += "\n    pbr_shield: array<vec4f, 8>,";
     uniBufAttrs += "\n    pbr_lmap_rect: vec4f,";
     uniBufAttrs += "\n    pbr_lmap_axes: array<vec4f, 3>,";
@@ -5348,6 +5450,15 @@ fn vf_apply_hdr(c: vec4f, fog: vec4f, w: f32) -> vec4f {
   if (info.usesPTTexMtx.any()) {
     uniBufAttrs += fmt::format("\n    postmtx: array<mat3x4f, {}>,", MaxPTTexMtx);
   }
+  if (info.usesColorMatrix) {
+    // GXSetColorMatrix: the shaded colour, before fog and the HDR conversion. The glow-only mode (w of
+    // row 0) is applied by the PBR source to its glow term; a non-PBR draw takes nothing from it.
+    fragmentFn += "\n    // Colour matrix"
+                  "\n    if (ubuf.color_matrix[0].w < 0.5) {"
+                  "\n        prev = vec4f(dot(ubuf.color_matrix[0].xyz, prev.rgb), dot(ubuf.color_matrix[1].xyz, prev.rgb),"
+                  "\n                     dot(ubuf.color_matrix[2].xyz, prev.rgb), prev.a);"
+                  "\n    }";
+  }
   if (info.usesFog) {
     uniformPre +=
         "\n"
@@ -5356,47 +5467,35 @@ fn vf_apply_hdr(c: vec4f, fog: vec4f, w: f32) -> vec4f {
         "    a: f32,\n"
         "    b: f32,\n"
         "    c: f32,\n"
-        "    range_center: f32,\n"
-        "    range_k: array<vec4f, 3>,\n"
+        "    kind: u32,\n"
         "}";
     uniBufAttrs += "\n    fog: Fog,";
 
     const std::string_view fogDepth = UseReversedZ ? "(1.0 - in.pos.z)" : "in.pos.z";
-    if ((config.fogType & 0x08) != 0) {
-      fragmentFn += fmt::format("\n    // Orthographic fog\n    var fogBase = ubuf.fog.a * {};", fogDepth);
-    } else {
-      fragmentFn +=
-          fmt::format("\n    // Perspective fog\n    var fogBase = ubuf.fog.a / (ubuf.fog.b - {});", fogDepth);
-    }
+    // The GXFogType from the uniform: one pipeline for every fog type, GX_FOG_NONE (0) included
+    // (pipeline_fog).
+    fragmentFn += fmt::format(
+        "\n    if (ubuf.fog.kind != 0u) {{"
+        "\n    var fogBase: f32;"
+        "\n    if ((ubuf.fog.kind & 8u) != 0u) {{"
+        "\n        fogBase = ubuf.fog.a * {0};"
+        "\n    }} else {{"
+        "\n        fogBase = ubuf.fog.a / (ubuf.fog.b - {0});"
+        "\n    }}",
+        fogDepth);
     if (config.fogRangeEnabled) {
       fragmentFn += "\n        fogBase *= bitcast<f32>(abuf[imm.fog_range_base + u32(in.pos.x)]);";
     }
-    fragmentFn += "\n    var fogF = clamp(fogBase - ubuf.fog.c, 0.0, 1.0);";
-    switch (config.fogType) {
-      DEFAULT_FATAL("invalid fog type {}", config.fogType);
-    case GX_FOG_PERSP_LIN:
-    case GX_FOG_ORTHO_LIN:
-      fragmentFn += "\n    var fogZ = fogF;";
-      break;
-    case GX_FOG_PERSP_EXP:
-    case GX_FOG_ORTHO_EXP:
-      fragmentFn += "\n    var fogZ = 1.0 - exp2(-8.0 * fogF);";
-      break;
-    case GX_FOG_PERSP_EXP2:
-    case GX_FOG_ORTHO_EXP2:
-      fragmentFn += "\n    var fogZ = 1.0 - exp2(-8.0 * fogF * fogF);";
-      break;
-    case GX_FOG_PERSP_REVEXP:
-    case GX_FOG_ORTHO_REVEXP:
-      fragmentFn += "\n    var fogZ = exp2(-8.0 * (1.0 - fogF));";
-      break;
-    case GX_FOG_PERSP_REVEXP2:
-    case GX_FOG_ORTHO_REVEXP2:
-      fragmentFn +=
-          "\n    fogF = 1.0 - fogF;"
-          "\n    var fogZ = exp2(-8.0 * fogF * fogF);";
-      break;
-    }
+    fragmentFn +=
+        "\n    var fogF = clamp(fogBase - ubuf.fog.c, 0.0, 1.0);"
+        "\n    var fogZ = fogF;" // GX_FOG_PERSP_LIN, GX_FOG_ORTHO_LIN
+        "\n    switch ubuf.fog.kind & 7u {"
+        "\n        case 4u: { fogZ = 1.0 - exp2(-8.0 * fogF); }"
+        "\n        case 5u: { fogZ = 1.0 - exp2(-8.0 * fogF * fogF); }"
+        "\n        case 6u: { fogZ = exp2(-8.0 * (1.0 - fogF)); }"
+        "\n        case 7u: { fogZ = exp2(-8.0 * (1.0 - fogF) * (1.0 - fogF)); }"
+        "\n        default: {}"
+        "\n    }";
     if (pbrThermalEmitted) {
       // Model_ThermalOverride has no fog.
     } else if (config.sceneHdr && pbrEmitted) {
@@ -5408,6 +5507,7 @@ fn vf_apply_hdr(c: vec4f, fog: vec4f, w: f32) -> vec4f {
     } else {
       fragmentFn += "\n    prev = vec4f(mix(prev.rgb, ubuf.fog.color.rgb, clamp(fogZ, 0.0, 1.0)), prev.a);";
     }
+    fragmentFn += "\n    }";
   }
   if (info.usesVolFog) {
     uniBufAttrs += "\n    volfog: vec4f,";
@@ -5446,6 +5546,12 @@ fn vf_apply_hdr(c: vec4f, fog: vec4f, w: f32) -> vec4f {
     uniBufAttrs += "\n    shadow_color: vec4f,";
     uniBufAttrs += "\n    shadow_splits: vec4f,";
     uniBufAttrs += "\n    shadow_fade: vec4f,";
+  }
+  if (info.usesAlphaRef) {
+    uniBufAttrs += "\n    alpha_ref: vec4u,"; // the alpha compare references (pipeline_alpha_ref)
+  }
+  if (info.usesColorMatrix) {
+    uniBufAttrs += "\n    color_matrix: array<vec4f, 3>,"; // GXSetColorMatrix's rows
   }
   // HDR PBR light above 1 is light, not a TEV byte overflow: only its alpha wraps.
   const bool hdrPbrColor = config.sceneHdr && pbrEmitted;

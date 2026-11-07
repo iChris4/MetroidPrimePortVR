@@ -82,6 +82,10 @@ struct PBRLightHdrWrite {
   f32 r0;
   f32 r1;
   u32 falloff;
+  f32 widen;
+  f32 toLight[3];
+  f32 coneScale;
+  f32 coneBias;
 };
 struct PBRMaterialWrite {
   f32 emissive[3];
@@ -102,6 +106,8 @@ f32 sPostAdd[4] = {};
 // GXPortPostCompositeRadial's c0, c1, c2, likewise; sPostRadialOn false: none.
 f32 sPostRadial[3][4] = {};
 bool sPostRadialOn = false;
+// GXPortPostCompositeMultiply's colour; sPostMultiply[3] 0: none.
+f32 sPostMultiply[4] = {};
 
 aurora::gfx::bloom::Params post_process_params(GXBool bloom, f32 threshold, const f32 tints[5][3],
                                                const f32 tone[3][4], u32 gradeA, u32 gradeB, f32 gradeWeight,
@@ -137,8 +143,8 @@ bool write_post_process(const aurora::gfx::bloom::Params& params) {
   }
   // Through the FIFO: recording it directly would first wait for the FIFO thread to finish
   // everything the frame has drawn so far.
-  static_assert(sizeof(params) == 49 * sizeof(u32));
-  u32 words[49];
+  static_assert(sizeof(params) == 53 * sizeof(u32));
+  u32 words[53];
   std::memcpy(words, &params, sizeof(words));
   GX_WRITE_AURORA(GX_AURORA_PORT_POST_PROCESS);
   for (const u32 word : words) {
@@ -169,6 +175,15 @@ void GXPortPostCompositeRadial(const f32 c0[4], const f32 c1[4], const f32 c2[4]
   sPostRadialOn = true;
 }
 
+void GXPortPostCompositeMultiply(const f32 rgb[3]) {
+  if (rgb == nullptr) {
+    std::memset(sPostMultiply, 0, sizeof(sPostMultiply));
+    return;
+  }
+  std::memcpy(sPostMultiply, rgb, 3 * sizeof(f32));
+  sPostMultiply[3] = 1.f;
+}
+
 GXBool GXPortPostProcessScene(GXBool bloom, f32 threshold, const f32 tints[5][3], const f32 tone[3][4], u32 gradeA,
                               u32 gradeB, f32 gradeWeight, f32 exposure) {
   // The EFB the copies saw is about to change target (the HDR scene ends here).
@@ -180,6 +195,9 @@ GXBool GXPortPostProcessScene(GXBool bloom, f32 threshold, const f32 tints[5][3]
   std::memcpy(radial, sPostRadial, sizeof(radial));
   const bool radialOn = sPostRadialOn;
   GXPortPostCompositeRadial(nullptr, nullptr, nullptr);
+  f32 mul[4];
+  std::memcpy(mul, sPostMultiply, sizeof(mul));
+  GXPortPostCompositeMultiply(nullptr);
   if (sDrawIdMode) {
     return true;
   }
@@ -190,6 +208,7 @@ GXBool GXPortPostProcessScene(GXBool bloom, f32 threshold, const f32 tints[5][3]
   std::memcpy(params.add, add, sizeof(add));
   std::memcpy(params.radial, radial, sizeof(radial));
   params.radialOn = radialOn ? 1 : 0;
+  std::memcpy(params.mul, mul, sizeof(mul));
   return write_post_process(params);
 }
 
@@ -894,6 +913,29 @@ void GXSetPBRThermal(GXBool on, f32 x, f32 y, GXBool blended) {
   GX_WRITE_U32(now.on);
 }
 
+void GXSetColorMatrix(const f32 rows[3][3], GXBool glowOnly) {
+  struct Write {
+    u32 on;
+    f32 rows[3][3];
+  };
+  static LastPBRWrite<Write> sLast;
+  Write now{};
+  if (rows != nullptr) {
+    now.on = glowOnly ? 2 : 1;
+    std::memcpy(now.rows, rows, sizeof(now.rows));
+  }
+  if (sLast.repeats(now)) {
+    return;
+  }
+  GX_WRITE_AURORA(GX_AURORA_SET_COLOR_MATRIX);
+  GX_WRITE_U32(now.on);
+  for (const auto& row : now.rows) {
+    for (f32 v : row) {
+      GX_WRITE_F32(v);
+    }
+  }
+}
+
 void GXSetPBRBacklight(const f32 plane[4], const f32 backDir[3], f32 back, f32 top, f32 bindScale, f32 bindOffset) {
   struct Write {
     f32 values[11];
@@ -931,7 +973,8 @@ void GXSetPBRShield(const f32 rows[8][4]) {
   }
 }
 
-void GXSetPBRLightHdr(GXLightID light, const f32 color[3], const f32 viewPos[3], f32 r0, f32 r1, u32 falloff) {
+void GXSetPBRLightHdr(GXLightID light, const f32 color[3], const f32 viewPos[3], f32 r0, f32 r1, u32 falloff,
+                      f32 widen, const f32 toLight[3], f32 coneScale, f32 coneBias) {
   const u32 bit = static_cast<u32>(light) & 0xFF;
   if (bit == 0) {
     return;
@@ -939,7 +982,15 @@ void GXSetPBRLightHdr(GXLightID light, const f32 color[3], const f32 viewPos[3],
   const u32 idx = static_cast<u32>(std::countr_zero(bit));
   PBRLightHdrWrite now{};
   if (color != nullptr && viewPos != nullptr && r1 > 0.f) {
-    now = {{color[0], color[1], color[2]}, {viewPos[0], viewPos[1], viewPos[2]}, r0, r1, falloff};
+    now = {{color[0], color[1], color[2]}, {viewPos[0], viewPos[1], viewPos[2]}, r0, r1, falloff, widen,
+           {0.f, 0.f, 0.f}, 0.f, 1.f};
+    if (toLight != nullptr) {
+      now.toLight[0] = toLight[0];
+      now.toLight[1] = toLight[1];
+      now.toLight[2] = toLight[2];
+      now.coneScale = coneScale;
+      now.coneBias = coneBias;
+    }
   }
   static LastPBRWrite<PBRLightHdrWrite> sLast[8];
   if (sLast[idx].repeats(now)) {
@@ -956,6 +1007,12 @@ void GXSetPBRLightHdr(GXLightID light, const f32 color[3], const f32 viewPos[3],
   GX_WRITE_F32(now.r0);
   GX_WRITE_F32(now.r1);
   GX_WRITE_U32(now.falloff);
+  GX_WRITE_F32(now.widen);
+  for (f32 v : now.toLight) {
+    GX_WRITE_F32(v);
+  }
+  GX_WRITE_F32(now.coneScale);
+  GX_WRITE_F32(now.coneBias);
 }
 
 void GXSetPBRLightScale(f32 diffuse, f32 f0, f32 alpha, GXBool alphaReplaces) {

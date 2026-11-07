@@ -33,7 +33,7 @@ constexpr std::string_view kPadAxisNames[] = {"leftx", "lefty", "rightx", "right
                                               "righttrigger"};
 constexpr std::string_view kGyroNames[] = {"pitch", "yaw", "roll"};
 // Touch codes: the overlay's control ids (TouchControlsView.CONTROL_IDS, the names
-// its saved layout uses), then the overlay's own signals at 32..34, its Morph Ball
+// its saved layout uses), then the overlay's own signals at 32..35, its Morph Ball
 // page's buttons at 40..44, then the buttons added in its layout editor at 64..127
 // (their layout ids, k0..k63).
 constexpr std::string_view kTouchNames[] = {
@@ -41,7 +41,7 @@ constexpr std::string_view kTouchNames[] = {
     "z",      "visor",  "beam",    "start", "menu", "map", "eye",        "rstick",     "jump",
     "fire",   "morph",  "missile", "lt",    "lb",   "rt",  "rb",         "tz",         "tr",
     "turbo",  "tturbo", "",        "",      "",     "beam_shift", "turbo_held", "map_tap",
-    "", "", "", "", "", "bbomb", "bboost", "bpbomb", "bspider", "bunmorph",
+    "menu_back", "", "", "", "", "bbomb", "bboost", "bpbomb", "bspider", "bunmorph",
     "", "", "", "", "", "", "", "", "", "",
     "", "", "", "", "", "", "", "", "", "k0",
     "k1", "k2", "k3", "k4", "k5", "k6", "k7", "k8", "k9", "k10",
@@ -57,7 +57,7 @@ constexpr std::string_view kTouchNames[] = {
 constexpr int kMouseAim = 0, kMouseState = 8, kMouseMenu = 16, kMouseHeld = 24;
 
 constexpr std::string_view kContextNames[16] = {
-    "gameplay", "morphball", "map", "menu", "scan", "", "", "",
+    "gameplay", "morphball", "map", "menu", "scan", "lockon", "", "",
     "layer1",   "layer2",    "layer3", "layer4", "", "", "", "",
 };
 
@@ -1058,6 +1058,40 @@ const BallRow* FindBallRow(Action a) {
   return nullptr;
 }
 
+const MapRow* FindMapRow(Action a) {
+  for (const MapRow& r : kMapRows)
+    if (r.row == a)
+      return &r;
+  return nullptr;
+}
+
+void ApplyMapRows(Profile& profile) {
+  for (Binding& b : profile.bindings) {
+    if (FindMapRow(b.action) == nullptr)
+      continue;
+    b.contexts = kCtxMap;
+    b.blocked = 0;
+  }
+  // Every binding, scoped or not: an input bound to a map row does only that on the map.
+  BlockRowInputs(
+      profile, [](const Binding& b) { return FindMapRow(b.action) != nullptr && BindingFamily(b) != Family::Touch; },
+      kCtxMap, false);
+}
+
+bool IsTargetRow(Action a) { return a == Action::TargetNext || a == Action::TargetPrev; }
+
+void ApplyTargetRows(Profile& profile) {
+  for (Binding& b : profile.bindings) {
+    if (!IsTargetRow(b.action))
+      continue;
+    b.contexts = kCtxLockOn;
+    b.blocked = 0;
+  }
+  BlockRowInputs(
+      profile, [](const Binding& b) { return IsTargetRow(b.action) && BindingFamily(b) != Family::Touch; },
+      kCtxLockOn, false);
+}
+
 const BallRow* BallRowForGame(Action game) {
   for (const BallRow& r : kBallRows)
     if (r.game == game)
@@ -1156,6 +1190,36 @@ std::vector<TouchButton> ParseTouchButtons(std::string_view layout) {
       out.push_back({slot, slots[slot]});
   }
   return out;
+}
+
+bool StockTouchInput(const Input& in) {
+  if (in.device != Device::Touch) return false;
+  if (in.code == kTouchTurboCode) return true;
+  return std::any_of(std::begin(kTouchStockControls), std::end(kTouchStockControls),
+                     [&](const TouchStockControl& c) { return c.control == in.code; });
+}
+
+UserProfile WithoutStockTouch(const UserProfile& user) {
+  UserProfile out = user;
+  std::erase_if(out.bindings, [](const Binding& b) {
+    return std::any_of(b.inputs.begin(), b.inputs.begin() + b.count, StockTouchInput);
+  });
+  return out;
+}
+
+void BindStockTouch(Profile& profile, uint16_t turboHz) {
+  auto bind = [&](Action action, int code, uint16_t contexts, uint16_t hz) {
+    Binding b;
+    b.action = action;
+    b.inputs[0] = Input{Device::Touch, 0, 50, uint16_t(code)};
+    b.count = 1;
+    b.contexts = contexts;
+    b.turboHz = hz;
+    profile.bindings.push_back(b);
+  };
+  for (const TouchStockControl& c : kTouchStockControls)
+    bind(c.action, c.control, c.contexts, 0);
+  bind(Action::PadA, kTouchTurboCode, kCtxAll, turboHz);
 }
 
 void BindTouchButtons(Profile& profile, std::string_view layout) {

@@ -1193,7 +1193,7 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u32 vtxCount, gfx::Rang
                              cache.config.shaderConfig.sceneHdr == gfx::scene_hdr_pass_active() &&
                              // A lit config made before aurora_set_per_pixel_lighting changed.
                              cache.config.shaderConfig.perPixelLight ==
-                                 wants_per_pixel_light(cache.config.shaderConfig) &&
+                                 config_per_pixel_light(cache.config.shaderConfig) &&
                              // A PBR config made before its static flags (tone, BRDF table, debug view) changed.
                              (cache.config.shaderConfig.pbr == 0 ||
                               (cache.config.shaderConfig.pbrPlain | cache.config.shaderConfig.pbrNoDebug << 1) ==
@@ -2818,7 +2818,7 @@ void handle_aurora(ByteReader& reader) noexcept {
       g_gxState.dirty |= DirtyUniform;
     }
   } else if (subCmd == GX_AURORA_PORT_POST_PROCESS) {
-    u32 words[49];
+    u32 words[53];
     for (u32& word : words) {
       word = reader.read<u32>();
     }
@@ -3090,17 +3090,23 @@ void handle_aurora(ByteReader& reader) noexcept {
       f = reader.read<f32>();
     }
     const u32 falloff = std::min(reader.read<u32>(), 3u);
+    const f32 widen = reader.read<f32>();
+    f32 cone[5];
+    for (f32& f : cone) {
+      f = reader.read<f32>();
+    }
     if (bit != 0) {
       const u32 idx = static_cast<u32>(std::countr_zero(bit));
       const bool on = v[7] > 0.f;
-      const std::array<Vec4<float>, 3> rows{
+      const std::array<Vec4<float>, 4> rows{
           on ? Vec4<float>{v[0], v[1], v[2], static_cast<f32>(falloff + 1)} : Vec4<float>{},
           on ? Vec4<float>{v[3], v[4], v[5], v[6]} : Vec4<float>{},
-          on ? Vec4<float>{v[7], 0.f, 0.f, 0.f} : Vec4<float>{},
+          on ? Vec4<float>{v[7], widen, cone[3], cone[4]} : Vec4<float>{},
+          on ? Vec4<float>{cone[0], cone[1], cone[2], 0.f} : Vec4<float>{},
       };
-      for (u32 row = 0; row < 3; ++row) {
-        if (g_gxState.pbrLightHdr[idx * 3 + row] != rows[row]) {
-          g_gxState.pbrLightHdr[idx * 3 + row] = rows[row];
+      for (u32 row = 0; row < 4; ++row) {
+        if (g_gxState.pbrLightHdr[idx * 4 + row] != rows[row]) {
+          g_gxState.pbrLightHdr[idx * 4 + row] = rows[row];
           g_gxState.dirty |= DirtyUniform;
         }
       }
@@ -3141,6 +3147,27 @@ void handle_aurora(ByteReader& reader) noexcept {
     const Vec4<float> value = on ? Vec4<float>{x, y, blended, 1.f} : Vec4<float>{};
     if (g_gxState.pbrThermal != value) {
       g_gxState.pbrThermal = value;
+      g_gxState.dirty |= DirtyUniform;
+    }
+  } else if (subCmd == GX_AURORA_SET_COLOR_MATRIX) {
+    const u32 mode = reader.read<u32>();
+    const bool on = mode != 0;
+    std::array<Vec4<float>, 3> rows{};
+    for (auto& row : rows) {
+      const f32 r = reader.read<f32>();
+      const f32 g = reader.read<f32>();
+      const f32 b = reader.read<f32>();
+      row = {r, g, b, 0.f};
+    }
+    rows[0].w() = mode == 2 ? 1.f : 0.f; // glow only
+    if (g_gxState.colorMatrixOn != on || g_gxState.colorMatrix != rows) {
+      // On or off is ShaderConfig::colorMatrix: two draws with the same TEV state either side of
+      // the switch would otherwise share the first one's pipeline.
+      if (g_gxState.colorMatrixOn != on) {
+        g_gxState.dirty |= DirtyPipeline;
+      }
+      g_gxState.colorMatrixOn = on;
+      g_gxState.colorMatrix = rows;
       g_gxState.dirty |= DirtyUniform;
     }
   } else if (subCmd == GX_AURORA_SET_PBR_MATERIAL) {

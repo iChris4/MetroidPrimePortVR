@@ -95,7 +95,7 @@ void TestFile() {
   bad[4] = 9;
   CHECK_MSG(!PortRoomEffects::Parse(bad, out, error), "version");
   // Write writes version 4 with no barriers, placements or patterned records.
-  CHECK(data[4] == 4 && data[5] == 0 && PortRoomEffects::kFileVersion == 9);
+  CHECK(data[4] == 4 && data[5] == 0 && PortRoomEffects::kFileVersion == 18);
 
   // An object outside the add-on range, or on another layer than its own, is refused.
   File wrong;
@@ -402,6 +402,427 @@ void TestFileActorSlots() {
   CHECK(!PortRoomEffects::Parse(bad, out, error));
   in.actorSlots.clear();
   CHECK(PortRoomEffects::Write(in)[4] == 4);
+}
+
+// Version 10 appends the drives of connected add-ons: each names one of the file's own objects,
+// a retail sender and state, an Activate, Deactivate or ToggleActive, and a delay.
+void TestFileDrives() {
+  File in;
+  PortRoomEffects::Layer layer;
+  layer.layer = 1;
+  PortRoomEffects::AppendEffect(MakeEffect(1, 0), layer.objects);
+  layer.count = 1;
+  in.layers.push_back(layer);
+  const uint32_t target = MakeEffect(1, 0).id;
+  in.drives.push_back({target, 0x041A0010, 0, 1, 0.f});
+  in.drives.push_back({target, 0x041A0011, 9, 4, 2.5f});
+  in.drives.push_back({target, 0x041A0012, 5, 17, 0.f});
+  const auto data = PortRoomEffects::Write(in);
+  File out;
+  std::string error;
+  REQUIRE(data[4] == 10);
+  REQUIRE_MSG(PortRoomEffects::Parse(data, out, error), error.c_str());
+  REQUIRE(out.drives.size() == 3 && out.layers.size() == 1);
+  CHECK(out.drives[1].target == target && out.drives[1].sender == 0x041A0011 && out.drives[1].state == 9 &&
+        out.drives[1].message == 4 && out.drives[1].delay == 2.5f);
+  CHECK(out.drives[2].message == 17);
+  for (size_t cut = 1; cut <= 20; ++cut) {
+    auto bad = data;
+    bad.resize(bad.size() - cut);
+    CHECK(!PortRoomEffects::Parse(bad, out, error));
+  }
+  const auto refused = [&](PortRoomEffects::Drive d, const char* what) {
+    File f = in;
+    f.drives = {d};
+    CHECK_MSG(!PortRoomEffects::Parse(PortRoomEffects::Write(f), out, error), what);
+  };
+  refused({target + 1, 0x041A0010, 0, 1, 0.f}, "a target not in the file");
+  refused({target, 0x041A0010, 0x100, 1, 0.f}, "a state past 0xff");
+  refused({target, 0x041A0010, 0, 11, 0.f}, "another message");
+  refused({target, 0x041A0010, 0, 1, -1.f}, "a negative delay");
+  refused({target, 0x041A0010, 0, 1, PortRoomEffects::kMaxDriveDelay * 2}, "a delay past the cap");
+  in.drives.clear();
+  CHECK(PortRoomEffects::Write(in)[4] == 4);
+}
+
+// Version 11 adds generators, each naming its templates among the file's own objects, and a
+// flags word per drive: a drive may target a generator by index, with SetToZero too.
+void TestFileGenerators() {
+  File in;
+  PortRoomEffects::Layer layer;
+  layer.layer = 1;
+  PortRoomEffects::AppendEffect(MakeEffect(1, 0), layer.objects);
+  PortRoomEffects::AppendEffect(MakeEffect(1, 1), layer.objects);
+  layer.count = 2;
+  in.layers.push_back(layer);
+  const uint32_t a = MakeEffect(1, 0).id, b = MakeEffect(1, 1).id;
+  PortRoomEffects::Generator g;
+  g.flags = PortRoomEffects::kGeneratorActive | PortRoomEffects::kGeneratorNoInheritXf;
+  g.offset[1] = 2.5f;
+  g.templates = {a, b};
+  in.generators.push_back(g);
+  in.drives.push_back({a, 0x041A0010, 0, 1, 0.f});
+  in.drives.push_back({0, 0x041A0011, 9, 13, 0.f, PortRoomEffects::kDriveToGenerator});
+  in.drives.push_back({0, 0x041A0012, 5, 4, 1.5f, PortRoomEffects::kDriveToGenerator | PortRoomEffects::kDriveRelayed});
+  const auto data = PortRoomEffects::Write(in);
+  File out;
+  std::string error;
+  REQUIRE(data[4] == 11);
+  REQUIRE_MSG(PortRoomEffects::Parse(data, out, error), error.c_str());
+  REQUIRE(out.generators.size() == 1 && out.drives.size() == 3);
+  CHECK(out.generators[0].flags == g.flags && out.generators[0].offset[1] == 2.5f &&
+        out.generators[0].templates == g.templates);
+  CHECK(out.drives[0].flags == 0 && out.drives[1].flags == PortRoomEffects::kDriveToGenerator &&
+        out.drives[1].message == 13 && out.drives[2].delay == 1.5f &&
+        out.drives[2].flags == (PortRoomEffects::kDriveToGenerator | PortRoomEffects::kDriveRelayed));
+  for (size_t cut = 1; cut <= 24; ++cut) {
+    auto bad = data;
+    bad.resize(bad.size() - cut);
+    CHECK(!PortRoomEffects::Parse(bad, out, error));
+  }
+  const auto refusedDrive = [&](PortRoomEffects::Drive d, const char* what) {
+    File f = in;
+    f.drives = {d};
+    CHECK_MSG(!PortRoomEffects::Parse(PortRoomEffects::Write(f), out, error), what);
+  };
+  refusedDrive({1, 0x041A0010, 0, 13, 0.f, PortRoomEffects::kDriveToGenerator}, "a generator not in the file");
+  refusedDrive({a, 0x041A0010, 0, 13, 0.f}, "SetToZero to an effect");
+  refusedDrive({0, 0x041A0010, 0, 13, 0.f, 4}, "an unknown flag");
+  const auto refusedGenerator = [&](PortRoomEffects::Generator bad, const char* what) {
+    File f = in;
+    f.generators = {bad};
+    CHECK_MSG(!PortRoomEffects::Parse(PortRoomEffects::Write(f), out, error), what);
+  };
+  PortRoomEffects::Generator bad = g;
+  bad.templates = {a + 7};
+  refusedGenerator(bad, "a template not in the file");
+  bad.templates.clear();
+  refusedGenerator(bad, "no templates");
+  bad = g;
+  bad.flags |= 8;
+  refusedGenerator(bad, "an unknown flag");
+  bad = g;
+  bad.offset[0] = NAN;
+  refusedGenerator(bad, "a NaN offset");
+  // Without generators or drive flags it stays version 10.
+  in.generators.clear();
+  in.drives = {{a, 0x041A0010, 0, 1, 0.f}};
+  CHECK(PortRoomEffects::Write(in)[4] == 10);
+}
+
+// Version 12 adds retail Timers: drives may start, stop or reset one, and one may be a sender.
+void TestFileTimers() {
+  File in;
+  PortRoomEffects::Layer layer;
+  layer.layer = 1;
+  PortRoomEffects::AppendEffect(MakeEffect(1, 0), layer.objects);
+  layer.count = 1;
+  in.layers.push_back(layer);
+  const uint32_t a = MakeEffect(1, 0).id, t = PortRoomEffects::AddOnId(0, 0x1A, 1);
+  in.timers.push_back({t, 2.5f, 0.5f, PortRoomEffects::kTimerAutoStart | PortRoomEffects::kTimerActive});
+  in.drives.push_back({t, 0x041A0010, 9, 11, 0.f});
+  in.drives.push_back({a, t, 0, 1, 0.f});
+  const auto data = PortRoomEffects::Write(in);
+  File out;
+  std::string error;
+  REQUIRE(data[4] == 12);
+  REQUIRE_MSG(PortRoomEffects::Parse(data, out, error), error.c_str());
+  REQUIRE(out.timers.size() == 1 && out.drives.size() == 2);
+  CHECK(out.timers[0].id == t && out.timers[0].startTime == 2.5f && out.timers[0].maxRandDelay == 0.5f &&
+        out.timers[0].flags == in.timers[0].flags && out.drives[0].message == 11);
+  for (size_t cut = 1; cut <= 16; ++cut) {
+    auto bad = data;
+    bad.resize(bad.size() - cut);
+    CHECK(!PortRoomEffects::Parse(bad, out, error));
+  }
+  const auto refused = [&](PortRoomEffects::Timer bad, const char* what) {
+    File f = in;
+    f.timers = {bad};
+    CHECK_MSG(!PortRoomEffects::Parse(PortRoomEffects::Write(f), out, error), what);
+  };
+  refused({0x00000005, 1.f, 0.f}, "a retail id");
+  refused({a, 1.f, 0.f}, "an effect's id");
+  refused({PortRoomEffects::AddOnId(0, 0x1A, 0), 1.f, 0.f}, "an effect's id on another layer");
+  refused({t, -1.f, 0.f}, "a negative time");
+  refused({t, 1.f, NAN}, "a NaN delay");
+  refused({t, 601.f, 0.f}, "too long");
+  refused({t, 1.f, 0.f, 8}, "an unknown flag");
+  File f = in;
+  f.timers.push_back(in.timers[0]);
+  CHECK_MSG(!PortRoomEffects::Parse(PortRoomEffects::Write(f), out, error), "two timers, one id");
+  f = in;
+  f.drives = {{a, 0x041A0010, 0, 11, 0.f}};
+  CHECK_MSG(!PortRoomEffects::Parse(PortRoomEffects::Write(f), out, error), "ResetAndStart to an effect");
+}
+
+// Version 14 adds retail Triggers: drives may activate, deactivate or toggle one, and its
+// Entered and Exited may send drives.
+void TestFileTriggers() {
+  File in;
+  PortRoomEffects::Layer layer;
+  layer.layer = 1;
+  PortRoomEffects::AppendEffect(MakeEffect(1, 0), layer.objects);
+  layer.count = 1;
+  in.layers.push_back(layer);
+  const uint32_t a = MakeEffect(1, 0).id, t = PortRoomEffects::AddOnId(0, 0x1A, 1);
+  PortRoomEffects::Trigger trigger;
+  trigger.id = t;
+  trigger.pos[0] = -10.f;
+  trigger.pos[2] = 3.5f;
+  trigger.extent[0] = 4.f;
+  trigger.extent[1] = 2.f;
+  trigger.extent[2] = 8.f;
+  trigger.triggerFlags = 0x1001;
+  trigger.flags = PortRoomEffects::kTriggerActive | PortRoomEffects::kTriggerDeactivateOnEntered;
+  in.triggers.push_back(trigger);
+  in.drives.push_back({t, 0x041A0010, 9, 17, 0.f});
+  in.drives.push_back({a, t, 3, 1, 0.f});
+  const auto data = PortRoomEffects::Write(in);
+  File out;
+  std::string error;
+  REQUIRE(data[4] == 14);
+  REQUIRE_MSG(PortRoomEffects::Parse(data, out, error), error.c_str());
+  REQUIRE(out.triggers.size() == 1 && out.drives.size() == 2);
+  const PortRoomEffects::Trigger& o = out.triggers[0];
+  CHECK(o.id == t && o.pos[0] == -10.f && o.pos[1] == 0.f && o.pos[2] == 3.5f && o.extent[0] == 4.f &&
+        o.extent[1] == 2.f && o.extent[2] == 8.f && o.triggerFlags == 0x1001 && o.flags == trigger.flags);
+  for (size_t cut = 1; cut <= 36; ++cut) {
+    auto bad = data;
+    bad.resize(bad.size() - cut);
+    CHECK(!PortRoomEffects::Parse(bad, out, error));
+  }
+  const auto refused = [&](const auto& change, const char* what) {
+    File f = in;
+    change(f.triggers[0]);
+    CHECK_MSG(!PortRoomEffects::Parse(PortRoomEffects::Write(f), out, error), what);
+  };
+  using T = PortRoomEffects::Trigger;
+  refused([](T& b) { b.id = 5; }, "a retail id");
+  refused([&](T& b) { b.id = a; }, "an effect's id");
+  refused([](T& b) { b.pos[1] = NAN; }, "a NaN position");
+  refused([](T& b) { b.extent[2] = -1.f; }, "a negative extent");
+  refused([](T& b) { b.triggerFlags |= PortRoomEffects::kTriggerKillOnEnter; }, "KillOnEnter");
+  refused([](T& b) { b.triggerFlags |= PortRoomEffects::kTriggerDetectCamera; }, "a camera trigger");
+  refused([](T& b) { b.flags |= 8; }, "an unknown flag");
+  File f = in;
+  f.triggers.push_back(in.triggers[0]);
+  CHECK_MSG(!PortRoomEffects::Parse(PortRoomEffects::Write(f), out, error), "two triggers, one id");
+  f = in;
+  f.timers.push_back({t, 1.f, 0.f});
+  CHECK_MSG(!PortRoomEffects::Parse(PortRoomEffects::Write(f), out, error), "a trigger and a timer, one id");
+  f = in;
+  f.drives = {{t, 0x041A0010, 9, 11, 0.f}};
+  CHECK_MSG(!PortRoomEffects::Parse(PortRoomEffects::Write(f), out, error), "ResetAndStart to a trigger");
+}
+
+// Version 15 adds retail Relays: drives may set one to zero (it relays), activate, deactivate or
+// toggle it, and its Zero may send drives.
+void TestFileRelays() {
+  File in;
+  PortRoomEffects::Layer layer;
+  layer.layer = 1;
+  PortRoomEffects::AppendEffect(MakeEffect(1, 0), layer.objects);
+  layer.count = 1;
+  in.layers.push_back(layer);
+  const uint32_t a = MakeEffect(1, 0).id, r = PortRoomEffects::AddOnId(0, 0x1A, 1);
+  in.relays.push_back({r, 0});
+  in.drives.push_back({r, 0x041A0010, 9, 13, 0.f});
+  in.drives.push_back({r, 0x041A0011, 9, 1, 0.f});
+  in.drives.push_back({a, r, 9, 4, 0.5f});
+  const auto data = PortRoomEffects::Write(in);
+  File out;
+  std::string error;
+  REQUIRE(data[4] == 15);
+  REQUIRE_MSG(PortRoomEffects::Parse(data, out, error), error.c_str());
+  REQUIRE(out.relays.size() == 1 && out.drives.size() == 3);
+  CHECK(out.relays[0].id == r && out.relays[0].flags == 0);
+  for (size_t cut = 1; cut <= 8; ++cut) {
+    auto bad = data;
+    bad.resize(bad.size() - cut);
+    CHECK(!PortRoomEffects::Parse(bad, out, error));
+  }
+  const auto refused = [&](const auto& change, const char* what) {
+    File f = in;
+    change(f);
+    CHECK_MSG(!PortRoomEffects::Parse(PortRoomEffects::Write(f), out, error), what);
+  };
+  refused([](File& f) { f.relays[0].id = 5; }, "a retail id");
+  refused([&](File& f) { f.relays[0].id = a; }, "an effect's id");
+  refused([](File& f) { f.relays[0].flags |= 2; }, "an unknown flag");
+  refused([&](File& f) { f.relays.push_back(f.relays[0]); }, "two relays, one id");
+  refused([&](File& f) { f.triggers.push_back({}); f.triggers.back().id = r; }, "a relay and a trigger, one id");
+  refused([&](File& f) { f.drives = {{r, 0x041A0010, 9, 11, 0.f}}; }, "ResetAndStart to a relay");
+}
+
+// Version 16 adds AmbientParticleEffects: points spawned near the camera into this file's
+// effects or retail ones it matched.
+void TestFileAmbients() {
+  File in;
+  PortRoomEffects::Layer layer;
+  layer.layer = 1;
+  PortRoomEffects::AppendEffect(MakeEffect(1, 0), layer.objects);
+  PortRoomEffects::AppendEffect(MakeEffect(1, 1), layer.objects);
+  layer.count = 2;
+  in.layers.push_back(layer);
+  const uint32_t a = MakeEffect(1, 0).id, b = MakeEffect(1, 1).id;
+  PortRoomEffects::Ambient amb;
+  amb.rate = 2.5f;
+  amb.owner = a;
+  amb.weights = {100, 50};
+  amb.emitters = {{0, a}, {1, b}};
+  PortRoomEffects::AmbientShape box;
+  box.center[0] = 3.f;
+  box.half[0] = box.half[1] = box.half[2] = 4.f;
+  PortRoomEffects::AmbientShape cyl = box;
+  cyl.type = PortRoomEffects::kAmbientCylinder;
+  amb.shapes = {box, cyl};
+  in.ambients.push_back(amb);
+  const auto data = PortRoomEffects::Write(in);
+  File out;
+  std::string error;
+  REQUIRE(data[4] == 16);
+  REQUIRE_MSG(PortRoomEffects::Parse(data, out, error), error.c_str());
+  REQUIRE(out.ambients.size() == 1);
+  const PortRoomEffects::Ambient& o = out.ambients[0];
+  CHECK(o.rate == 2.5f && o.owner == a && o.offset[1] == 10.f && o.radius == 15.f && o.weights == amb.weights);
+  CHECK(o.emitters.size() == 2 && o.emitters[1].index == 1 && o.emitters[1].id == b);
+  CHECK(o.shapes.size() == 2 && o.shapes[1].type == PortRoomEffects::kAmbientCylinder && o.shapes[0].center[0] == 3.f &&
+        o.shapes[0].half[2] == 4.f && o.shapes[0].axes[1][1] == 1.f);
+  for (size_t cut = 1; cut <= 20; ++cut) {
+    auto bad = data;
+    bad.resize(bad.size() - cut);
+    CHECK(!PortRoomEffects::Parse(bad, out, error));
+  }
+  const auto refused = [&](auto change, const char* what) {
+    File f = in;
+    change(f.ambients[0]);
+    CHECK_MSG(!PortRoomEffects::Parse(PortRoomEffects::Write(f), out, error), what);
+  };
+  refused([](PortRoomEffects::Ambient& x) { x.rate = -1.f; }, "a negative rate");
+  refused([](PortRoomEffects::Ambient& x) { x.radius = 0.f; }, "no radius");
+  refused([](PortRoomEffects::Ambient& x) { x.owner = MakeEffect(1, 5).id; }, "an owner add-on not in the file");
+  refused([](PortRoomEffects::Ambient& x) { x.emitters[0].id = MakeEffect(1, 5).id; }, "an emitter add-on not in the file");
+  {
+    // Retail effects it matched stand in for add-ons.
+    File f = in;
+    f.ambients[0].owner = f.ambients[0].emitters[0].id = 0x041A0020;
+    REQUIRE_MSG(PortRoomEffects::Parse(PortRoomEffects::Write(f), out, error), error.c_str());
+    CHECK(out.ambients[0].owner == 0x041A0020 && out.ambients[0].emitters[0].id == 0x041A0020);
+  }
+  refused([](PortRoomEffects::Ambient& x) { x.emitters[1].index = 2; }, "an index without a weight");
+  refused([](PortRoomEffects::Ambient& x) { x.emitters.clear(); }, "no emitter");
+  refused([](PortRoomEffects::Ambient& x) { x.shapes[0].type = 3; }, "an unknown shape");
+  refused([](PortRoomEffects::Ambient& x) { x.shapes[0].half[0] = -1.f; }, "a negative extent");
+  refused([](PortRoomEffects::Ambient& x) { x.shapes[0].center[0] = NAN; }, "a NaN");
+  refused([](PortRoomEffects::Ambient& x) { x.weights.assign(PortRoomEffects::kMaxAmbientWeights + 1, 1); },
+          "too many weights");
+  // Without ambients it stays version 15 or older.
+  File f = in;
+  f.ambients.clear();
+  CHECK(PortRoomEffects::Write(f)[4] < 16);
+
+  // Version 17 adds hidden retail effects; the ambients ride along.
+  f = in;
+  f.hidden = {0x041A0020, 0x04190034};
+  const auto withHidden = PortRoomEffects::Write(f);
+  REQUIRE(withHidden[4] == 17);
+  REQUIRE_MSG(PortRoomEffects::Parse(withHidden, out, error), error.c_str());
+  CHECK(out.hidden == f.hidden && out.ambients.size() == 1);
+  auto cut = withHidden;
+  cut.resize(cut.size() - 4);
+  CHECK_MSG(!PortRoomEffects::Parse(cut, out, error), "a truncated hidden list");
+  f.hidden = {a};
+  CHECK_MSG(!PortRoomEffects::Parse(PortRoomEffects::Write(f), out, error), "a hidden add-on");
+  f.ambients.clear();
+  f.hidden = {0x041A0020};
+  REQUIRE(PortRoomEffects::Write(f)[4] == 17);
+  REQUIRE_MSG(PortRoomEffects::Parse(PortRoomEffects::Write(f), out, error), error.c_str());
+  CHECK(out.hidden == f.hidden && out.ambients.empty());
+
+  // Version 18 adds FishClouds' Remastered swimming; the hidden list rides along.
+  PortRoomEffects::FishCloud fc;
+  fc.id = 0x041A0021;
+  fc.speedVariance = 0.5f;
+  fc.turn[0] = 30.f;
+  fc.turn[1] = 90.f;
+  fc.slowAngle[1] = 60.f;
+  fc.dartInterval[0] = 1.f;
+  fc.dartInterval[1] = 3.f;
+  fc.wobbleLength = 2.f;
+  fc.flags = PortRoomEffects::kFishCloudDart | PortRoomEffects::kFishCloudWobble;
+  f.fishClouds = {fc, PortRoomEffects::FishCloud{0x04190035}};
+  const auto withFish = PortRoomEffects::Write(f);
+  REQUIRE(withFish[4] == 18);
+  REQUIRE_MSG(PortRoomEffects::Parse(withFish, out, error), error.c_str());
+  REQUIRE(out.fishClouds.size() == 2 && out.hidden == f.hidden);
+  const PortRoomEffects::FishCloud& g = out.fishClouds[0];
+  CHECK(g.id == fc.id && g.speedVariance == 0.5f && g.turn[0] == 30.f && g.turn[1] == 90.f &&
+        g.slowAngle[0] == 0.f && g.slowAngle[1] == 60.f && g.dartInterval[1] == 3.f && g.minSpeed == 0.1f &&
+        g.wobbleLength == 2.f && g.flags == fc.flags);
+  CHECK(out.fishClouds[1].id == 0x04190035 && out.fishClouds[1].flags == PortRoomEffects::kFishCloudSmoothTurn);
+  cut = withFish;
+  cut.resize(cut.size() - 4);
+  CHECK_MSG(!PortRoomEffects::Parse(cut, out, error), "a truncated fish cloud");
+  auto refusedFish = [&](auto change, const char* what) {
+    File x = f;
+    change(x.fishClouds[0]);
+    CHECK_MSG(!PortRoomEffects::Parse(PortRoomEffects::Write(x), out, error), what);
+  };
+  refusedFish([&](PortRoomEffects::FishCloud& x) { x.id = a; }, "a fish cloud add-on");
+  refusedFish([](PortRoomEffects::FishCloud& x) { x.wobbleAngle = NAN; }, "a NaN fish cloud");
+  refusedFish([](PortRoomEffects::FishCloud& x) { x.flags = 16; }, "an unknown fish cloud flag");
+}
+
+// Version 13 adds ObjectFollowLocators: a retail SpecialFunction that moves one of this file's
+// effects (or a retail object) to a retail actor's locator.
+void TestFileFollows() {
+  File in;
+  PortRoomEffects::Layer layer;
+  layer.layer = 1;
+  PortRoomEffects::AppendEffect(MakeEffect(1, 0), layer.objects);
+  layer.count = 1;
+  in.layers.push_back(layer);
+  const uint32_t a = MakeEffect(1, 0).id, s = PortRoomEffects::AddOnId(1, 0x1A, 1);
+  in.follows.push_back({s, 0x041A0020, a, PortRoomEffects::kFollowActive, "lockon_target_LCTR"});
+  const auto data = PortRoomEffects::Write(in);
+  File out;
+  std::string error;
+  REQUIRE(data[4] == 13);
+  REQUIRE_MSG(PortRoomEffects::Parse(data, out, error), error.c_str());
+  REQUIRE(out.follows.size() == 1);
+  CHECK(out.follows[0].id == s && out.follows[0].followed == 0x041A0020 && out.follows[0].follower == a &&
+        out.follows[0].flags == PortRoomEffects::kFollowActive && out.follows[0].locator == "lockon_target_LCTR");
+  for (size_t cut = 1; cut <= 20; ++cut) {
+    auto bad = data;
+    bad.resize(bad.size() - cut);
+    CHECK(!PortRoomEffects::Parse(bad, out, error));
+  }
+  const auto refused = [&](PortRoomEffects::Follow bad, const char* what) {
+    File f = in;
+    f.follows = {bad};
+    CHECK_MSG(!PortRoomEffects::Parse(PortRoomEffects::Write(f), out, error), what);
+  };
+  refused({0x00000005, 0x041A0020, a, 0, "L"}, "a retail id");
+  refused({a, 0x041A0020, a, 0, "L"}, "an effect's id");
+  refused({s, a, 0x041A0021, 0, "L"}, "following an add-on");
+  refused({s, 0x041A0020, 0x041A0020, 0, "L"}, "following itself");
+  refused({s, 0x041A0020, PortRoomEffects::AddOnId(1, 0x1A, 7), 0, "L"}, "moving an unknown add-on");
+  refused({s, 0x041A0020, a, 0, ""}, "no locator");
+  refused({s, 0x041A0020, a, 0, "a b"}, "a space in the locator");
+  refused({s, 0x041A0020, a, 0, std::string(PortRoomEffects::kMaxLocatorName + 1, 'x')}, "too long a locator");
+  refused({s, 0x041A0020, a, 2, "L"}, "an unknown flag");
+  File f = in;
+  f.follows.push_back(in.follows[0]);
+  CHECK_MSG(!PortRoomEffects::Parse(PortRoomEffects::Write(f), out, error), "two follows, one id");
+  // A retail follower, inactive, is fine.
+  f = in;
+  f.follows[0].follower = 0x041A0021;
+  f.follows[0].flags = 0;
+  CHECK(PortRoomEffects::Parse(PortRoomEffects::Write(f), out, error));
+  // Without follows it stays version 12 or older.
+  f = in;
+  f.follows.clear();
+  CHECK(PortRoomEffects::Write(f)[4] < 13);
 }
 
 // Version 4 carries a room's barrier: a controller retail Effect object, its duration, and five
@@ -737,6 +1158,13 @@ int main() {
   TestFilePatches();
   TestFileSteams();
   TestFileActorSlots();
+  TestFileDrives();
+  TestFileGenerators();
+  TestFileTimers();
+  TestFileTriggers();
+  TestFileRelays();
+  TestFileAmbients();
+  TestFileFollows();
   TestFileBarriers();
   TestExternalVariables();
   uint32_t id = 0;

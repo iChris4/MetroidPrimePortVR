@@ -10,6 +10,11 @@
 #include <types.h>
 
 class CDecalDescription;
+#ifdef TARGET_PC
+namespace PortProjectedDecal {
+struct Mesh;
+}
+#endif
 class CDecal {
   static CRandom16 sDecalRandom;
   static bool sMoveRedToAlphaBuffer;
@@ -39,6 +44,36 @@ public:
   static void SetGlobalSeed(ushort seed);
   static void SetMoveRedToAlphaBuffer(const bool move) { sMoveRedToAlphaBuffer = move; }
   CDecal(const TToken< CDecalDescription >& desc, const CTransform4f& xf);
+#ifdef TARGET_PC
+  // Remastered's CDecal (ctor 0xb7ca04) for a description with xPortRemastered: its own random
+  // seeded by the manager, MSTL lifetime, MSTR rotation and the MSTW/MSTH box.
+  CDecal(const TToken< CDecalDescription >& desc, uint seed, const CTransform4f& xf);
+  bool IsPortRemastered() const { return xPortRemastered; }
+  // Remastered's done state: lifetime and model life both over (flags == 3).
+  bool IsPortRemasteredDone() const { return xPortFlags == 3; }
+  int GetPortFrame() const { return xPortFrame; }
+  int GetPortLifetime() const { return xPortLifetime; }
+  float GetPortAngle() const { return xPortAngle; }
+  // The projection box: half-extents along the decal's local X and Z (MSTW, MSTH) and its depth
+  // along local Y (skDecalBoxHeight).
+  float GetPortWidth() const { return xPortWidth; }
+  float GetPortHeight() const { return xPortHeight; }
+  float GetPortBoxDepth() const { return xPortBoxDepth; }
+  // Remastered's decal transform (+0x4c): the spawn transform times RotateZ(MSTR).
+  const CTransform4f& GetPortTransform() const { return xPortTransform; }
+  const CDecalDescription& GetDescription() const { return *x0_description.operator->(); }
+  // A material slot's draw data at the current frame (UpdateMaterialData 0xb7d07c): the MATI's
+  // DIFC/CCH0/CCH1 with the SMTR writes, the material alpha (DUL) and the TMTR's TRSS(A..F).
+  struct SPortSlotData {
+    float xAlpha;
+    float xParams[3][4];
+    float xTrss[6];
+  };
+  void PortUpdateMaterialData(int slot, SPortSlotData& out) const;
+  // RenderDecalGeometry 0xb386a8's draw of this decal's clipped mesh (world-space triangles with
+  // their box UV) into the HDR scene: each loaded material slot of the pass, slot 0 then 1.
+  void PortRenderProjected(const PortProjectedDecal::Mesh& mesh, int pass) const;
+#endif
 
   void RenderQuad(CQuadDecal& quad, const CDecalDescription::SQuadDescr& quadDesc) const;
   void RenderMdl() const;
@@ -61,6 +96,23 @@ private:
   // frame, so x58_frameIdx is derived from this rather than incremented per
   // tick; at a raised simulation rate the decal keeps its authored duration.
   float x6c_elapsedTime;
+#ifdef TARGET_PC
+  bool xPortRemastered;
+  CRandom16 xPortRandom;
+  CTransform4f xPortBaseTransform;
+  CTransform4f xPortTransform;
+  float xPortWidth;
+  float xPortHeight;
+  float xPortBoxDepth;
+  int xPortLifetime;
+  int xPortModelLifetime;
+  int xPortFrame;
+  double xPortTime;
+  float xPortAngle;
+  uint xPortFlags;
+
+  void PortRemasteredUpdate(float dt);
+#endif
 
   void InitQuad(CQuadDecal& quad, const CDecalDescription::SQuadDescr& desc, int flag) {
     if (!desc.x14_TEX.null()) {

@@ -52,7 +52,7 @@ int PbrMode(const RemMaterial& m);
 // or glass, whose first three floats are a tint.
 bool ExposedGlow(const RemMaterial& m) {
   return !m.glowLinear && m.maps[kEmissive].has && m.kind != 7 && m.kind != 20 &&
-         m.kind != 8 && m.kind != 11 && m.kind != 14 && m.kind != 21 && m.kind != 24;
+         m.kind != 8 && m.kind != 11 && m.kind != 14 && m.kind != 21 && m.kind != 24 && m.kind != 49;
 }
 
 // A glow strength of a kind below 5 (the parallax's inside), exposed at run time like the
@@ -69,10 +69,6 @@ bool VfxBase(const RemMaterial& m) {
 bool PureLambert(const RemMaterial& m) {
   return (VfxBase(m) || (m.family == kShaderLambertFx && !m.unlit && !ColorUnlitDraw(m) && m.kind == 0));
 }
-// LambertFx's fragment perms (042-057) sample no lightmap, probe volume or BLCM: the light sum starts
-// from the flat ambient constant alone (mode bit 262144; kb material/4bc890c1.md, perms 000/001 have no
-// fragment shader, they are the depth pass).
-bool FlatAmbient(const RemMaterial& m) { return m.family == kShaderLambertFx && PureLambert(m); }
 bool NoEnvSpec(const RemMaterial& m) { return (m.noRefl || PureLambert(m)) && !m.unlit && !ColorUnlitDraw(m) && m.kind == 0; }
 
 bool SurfaceUnlit(const RemMaterial& m) {
@@ -85,10 +81,14 @@ int PbrMode(const RemMaterial& m) {
   return (m.unlit ? 1 : 0) + (m.mask ? 2 : 0) + (m.tinted ? 4 : 0) + (ColorUnlitDraw(m) ? 8 : 0) +
          (ExposedGlow(m) ? 32 : 0) + (ExposedStrength(m) ? 64 : 0) +
          (m.tinted && m.tintF0 && !ColorUnlitDraw(m) ? 128 : 0) + (NoEnvSpec(m) ? 256 : 0) +
-         (m.cutExact ? 512 : 0) + (PureLambert(m) ? 1024 : 0) + (VfxBase(m) ? 2048 + 4096 : 0) +
+         (m.cutExact ? 512 : 0) + (PureLambert(m) ? 1024 : 0) + (VfxBase(m) ? 2048 : 0) +
+         // Pure Lambert takes the baked probe (BLPD record or volume) times BLCM over ambient and
+         // lights alike, and the flat ambient, without BLCM, where the room has no probe data
+         // (LambertFx 7126ca03 perms 002-041 vs 042-057, 29d9fdfb 002-021 vs 022-025).
+         (PureLambert(m) ? 4096 : 0) +
          (m.indirect ? 8192 : 0) + (m.macro || m.macroLayered ? 16384 : 0) +
          (m.wind ? 32768 : 0) + (m.wind && m.shader == kShaderVertexAlpha ? 65536 : 0) +
-         (SurfaceUnlit(m) ? 131072 : 0) + (FlatAmbient(m) ? 262144 : 0) +
+         (SurfaceUnlit(m) ? 131072 : 0) +
          (std::find(std::begin(kShaderRawVertex), std::end(kShaderRawVertex), m.shader) != std::end(kShaderRawVertex) ? 524288 : 0);
 }
 
@@ -158,7 +158,7 @@ void PbrRecord(Blob& b, const RemMaterial& m, uint32_t wrap, uint32_t cube) {
     P32(b, cube);
   }
   b.insert(b.end(), tag, tag + 4);
-  if ((m.kind >= 14 && m.kind <= 19) || m.kind == 21 || m.kind == 22 || m.kind == 32 || m.kind == 35 || m.kind == 25 || m.kind == 28 || m.kind == 29 || m.kind == 11 || m.kind == 31 || m.kind == 33 || (m.kind >= 38 && m.kind <= 46) || m.kind == 48 || m.wind) {
+  if ((m.kind >= 14 && m.kind <= 19) || m.kind == 21 || m.kind == 22 || m.kind == 32 || m.kind == 35 || m.kind == 25 || m.kind == 28 || m.kind == 29 || m.kind == 11 || m.kind == 31 || m.kind == 33 || (m.kind >= 38 && m.kind <= 46) || m.kind == 48 || m.kind == 50 || m.wind) {
     // The boundary shield's (or pickup's) constants follow the record, as a trailer the reader strips first.
     // A swaying leaf's is the model's SWindSet (v1, v2, rate, b, c) in the first nine.
     for (double v : m.shieldRows) {

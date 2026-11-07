@@ -31,7 +31,9 @@ enum Feature : uint32_t {
   OpacityFade = 2048,   // a *= S(sat(-p.x / (p.y - p.x))), p = fadeX/fadeY
   ColorRgbOnly = 4096,  // with ColorTex: the map's alpha is not opacity (a stays 1)
   Pyro = 8192,          // VFX_Pyro: colorSlot = P, rampSlot = gradient LUT read at (P.r, 0), (P.g, 0); e = extra[1]:
-                        // rgb = P.b * (P.r*e.x*G(P.r) + P.g*e.y*G(P.g)) / exposure, a = S(sat((P.a - e.w)/(1 - e.w))) * e.z
+                        // rgb = P.b * (P.r*e.x*G(P.r) + P.g*e.y*G(P.g)) / exposure, a = S(sat((P.a - e.w)/(1 - e.w))) * e.z;
+                        // plus the lit term vc (lit per vertex by lit + cluster) * extra[0] * (1 + params[0].w * (D - 1)),
+                        // D the normalSlot Light map weighted by the squared normal vec (CCH0 in the quad's basis)
   Disintegration = 16384, // VFX_Disintegration: colorSlot = mask, s = t.x^2, extra[0..2] = A, B, edge E, extra[3] = (thr,
                           // edge width, alpha lo, alpha hi): m = sat(s - thr), q = sat(1 - m - width), e = q - q^2,
                           // rgb = mix(A, B, s) * vc.rgb + e * E, a = sat(m * (e > 0 ? hi : lo))
@@ -128,10 +130,20 @@ enum Feature : uint32_t {
   // modular simulation time. rgb = rim x gain x vec3(k 1.125, k 7.5 - .5 mc.r + 1.4 p + .5,
   // k 30 - .9 mc.r + 3 p + .9) x vc.rgb x PCMD, alpha vc.a. Unfogged: perm 000 has DFOG 1 and no fog code.
   BarrierGlow = 1u << 30,
+  // BarrierShield | BarrierGlow together (no bit is left) is VFX_BarrierShield's exterior shader
+  // (b46bb66d, MATI flag MFC1 IS_SHIELD_EXTERIOR: Intro_Reactor's and the Phendrana cave's shields; FS
+  // perm 000, fog perm 001; kb vfx/b46bb66d.md): a model particle with no scene copy whose CPU feed
+  // (AddBarrierExterior) is BarrierShield's plus the VS's band w = 1 - .2 min(|255 mc.g + mod(75 time,
+  // 60) - 44|, 5), which pushes the vertex out along its normal (by .4 w, .02 w more on Remastered +Y)
+  // unless 0 < mc.r < .5, and rides in Vertex::mesh.w. colorSlot = TCH1 (read at (-u, v) twice),
+  // params = CCH0 (.x breakup), time = the modular simulation time. Fogged unless DFOG 1, by the tail.
   // Not a shader feature: a VMAT blob's exposure policy, carried in its features word. The loader moves
   // it to DrawDesc::alreadyExposed; a draw ignores it in `features` (no shader or pipeline key sees it).
   AlreadyExposed = 1u << 31
 };
+inline constexpr bool is_barrier_exterior(uint32_t features) {
+  return (features & (BarrierShield | BarrierGlow)) == (BarrierShield | BarrierGlow);
+}
 // Multiply is port-only: the stand-in for the FrameBuffer_* shaders without a SceneWarp recipe
 // (3db95827). The warp is dropped and the target is multiplied by mix(1, rgb, a) instead.
 // AdditiveOne is the wave orb's model blend: RGB One/One, alpha Zero/One, drawn with depth write off.
@@ -139,6 +151,26 @@ enum Feature : uint32_t {
 // 0x1d0cc48/0x1d0cd38): One/InvSrcAlpha and SrcAlpha/One for colour and alpha alike, where the PBDM rows
 // Premultiplied and Additive keep the target's alpha (Zero/One).
 // The values are serialised in VMAT blobs (0..4 older, 5..7 new) and form part of the pipeline key.
+// DualSource is Remastered's EBlendMode 10 (the scorch decal's MATI): colour One/InvSrc1Color, alpha
+// One/InvSrcAlpha, the second source being the shader's o1. Never in a VMAT blob; drawn only where the
+// device has dual-source blending (dual_source_supported()).
+// Remastered's projected decals (CDecal, RenderDecalGeometry 0xb386a8; mpr-tools kb topic/projected-decals.md):
+// triangles clipped to the decal's box, uv0 = the box uv after the slot's TMTR, color = c4[0] (the decal colour,
+// rgb x the material alpha), extra[0].x = the box fade. params = DIFC, CCH0, CCH1 (the MATI's, SMTR-animated);
+// colorSlot = the MATI's texture, read at layer 0. Unfogged (none of the three has fog), drawn into the HDR
+// scene only. Selected by DrawDesc::decal, not a feature bit (none is left).
+enum class Decal : uint8_t {
+  None = 0,
+  // DecalColorErosion (e37ab789, perm 000_0): rgb = t.rgb x DIFC.rgb x c.rgb, a = max(0, t.a - CCH0.x) x DIFC.a x
+  // c.a x fade.
+  ColorErosion = 1,
+  // DecalIce (05ae8d81, perm 000_0): ColorErosion's colour plus itself x CCH0.y / exposure; alpha the same.
+  Ice = 2,
+  // DecalScorch (a19fec01, perm 000_0), drawn with Blend::DualSource: s = t.x x CCH0.w, e = t.y x CCH1.w;
+  // o0 = (e x CCH1.rgb, 1), o1 = (fade x s x (1 - CCH0.rgb x c.rgb), 1). Needs dual-source blending.
+  Scorch = 3
+};
+
 enum class Blend : uint32_t {
   Alpha = 0,
   Premultiplied = 1,
@@ -147,11 +179,14 @@ enum class Blend : uint32_t {
   Multiply = 4,
   AdditiveOne = 5,
   PremultipliedAlpha = 6,
-  AdditiveAlpha = 7
+  AdditiveAlpha = 7,
+  DualSource = 8
 };
 
 // The highest Blend value a VMAT blob may carry.
 inline constexpr uint32_t MaxBlend = uint32_t(Blend::AdditiveAlpha);
+// Whether the device can draw Blend::DualSource. A DualSource draw is dropped where it can't.
+bool dual_source_supported();
 
 // A model draw of this blend never writes depth and always depth-tests (LEqual), whatever its generator asked for.
 inline constexpr bool forces_depth_write_off(Blend blend) { return blend == Blend::AdditiveOne; }
@@ -279,6 +314,10 @@ struct DrawDesc {
   float modulate = 1.f;
   float depthSoften = 0.f; // DepthSoften's softness (SFTD): the view-space distance the fade spans; <= 0: none
   float opacityGain = 1.f, opacityBias = 0.f; // gain * clamp(smooth3(f) - bias, 0, 1)
+  float alphaGamma = 0.f; // ColorTex: the map's alpha is pow(|a|, alphaGamma); <= 0: as sampled
+  // ParticleLit lit per vertex, no N.L (header shader 52d26efe's VS 040_1): the vertex colour x ((AMBS + the
+  // probe's midpoint) x BLCM + the clustered lights at the vertex) / pi; the fragment takes it unchanged.
+  bool litPerVertex = false;
   int8_t rampRow[2] = {0, 1}; // extra[] rows read whole as the ramp colours c0, c1
   int8_t addRow = 0;          // AddColor: the extra[] row (add.rgb, scale)
   Src erosion;
@@ -304,6 +343,11 @@ struct DrawDesc {
   ClusterView cluster;
   // IceChargeCollisionLit, ParticleLit: the baked ambient and probe (see LitAmbient). Ignored by every other feature.
   LitAmbient lit;
+  // Cull back faces, with GX's winding (clockwise front, as gx::to_primitive_state): Remastered's MATI cull 2.
+  // Off: nothing is culled.
+  bool cullBack = false;
+  // A projected decal's shader (see Decal); features stay 0 for one.
+  Decal decal = Decal::None;
 };
 
 // Records quadCount quads (4 vertices each, drawn as two triangles) into the current pass with the
@@ -329,6 +373,12 @@ void draw_indexed_triangles(const DrawDesc& desc, const Vertex* verts, uint32_t 
 // silhouettes, RenderPauseScreenElements, flags 1); draws recorded after it read the new one, its
 // top level alone.
 void capture_scene(bool again = false);
+// Remastered's RenderVisorEffects, after the post and the camera filters: copies the display output
+// (half size, no mips, decoded to linear) and makes the draws recorded until end_visor_effects visor
+// effects, which read that copy and write linear light encoded, with no exposure, tone or fog. False
+// (and draws as before) into an offscreen pass or the HDR scene. Game thread.
+bool begin_visor_effects();
+void end_visor_effects();
 // Whether draws recorded now would read this frame's copy (capture_scene ran this frame, into the
 // current target, in the same HDR state). Game thread.
 bool scene_copy_available();

@@ -21,6 +21,7 @@
 #ifdef TARGET_PC
 #include "MetroidPrime/CActor.hpp"
 #include "MetroidPrime/Cameras/CCameraManager.hpp"
+#include "port_beam_colours.h"
 #include "port_debug.h"
 #include "Kyoto/Particles/CParticleElectric2Port.hpp"
 #include "port_fx_debug.h"
@@ -42,6 +43,61 @@ void CParticleElectric::PortElc2Step(bool emitting) {
   ctx.fvel = x1a8_overrideFVel ? &*x1a8_overrideFVel : nullptr;
   xPortElc2->Step(x28_currentFrame, emitting, ctx);
   PortElc2PlaceChildren();
+  if (x450_27_haveSSWH) {
+    PortElc2Swooshes();
+  }
+}
+
+// The SSWH half of CreateNewParticles 0xb76508 and UpdateElectricalEffects 0xb757a4. A new bolt
+// takes the first swoosh no live bolt holds and re-inits it (HACK_ReInitForElectric 0x27ed0c),
+// sets it at the owner's transform (SetExternalDataSet) and fills its points, in ring order from
+// the one after the current, with the primary line (owner space, unscaled); every live bolt's
+// swoosh is modulated by COLR at the bolt's age.
+void CParticleElectric::PortElc2Swooshes() {
+  std::vector< CParticleElectric2Port::Bolt >& bolts = xPortElc2->Bolts();
+  const size_t created = bolts.size() - size_t(xPortElc2->Created());
+  for (size_t i = created; i < bolts.size(); ++i) {
+    CParticleElectric2Port::Bolt& bolt = bolts[i];
+    for (int s = 0; s < x154_SCNT && bolt.swoosh == -1; ++s) {
+      bool taken = false;
+      for (size_t k = 0; k < i; ++k) {
+        taken = taken || bolts[k].swoosh == s;
+      }
+      if (!taken) {
+        bolt.swoosh = s;
+      }
+    }
+    if (bolt.swoosh == -1) {
+      continue;
+    }
+    CParticleSwoosh& swoosh = *x1e0_swooshGenerators[bolt.swoosh];
+    swoosh.PortReInitForElectric();
+    swoosh.SetGlobalTranslation(xf8_cachedXf.GetTranslation());
+    swoosh.SetGlobalOrientation(xf8_cachedXf.GetRotation());
+    swoosh.SetGlobalScale(xe0_globalScale);
+    swoosh.SetLocalScale(xec_localScale);
+    const int count = swoosh.x15c_swooshes.size();
+    int cur = swoosh.x158_curParticle;
+    for (int j = 0; j < count && j < int(bolt.primary.size()); ++j) {
+      cur = (cur + 1) % count;
+      const PortElectric2::V3& p = bolt.primary[j];
+      swoosh.x15c_swooshes[cur].mTranslation = CVector3f(p.x, p.y, p.z);
+    }
+  }
+  for (size_t i = 0; i < bolts.size(); ++i) {
+    const CParticleElectric2Port::Bolt& bolt = bolts[i];
+    if (bolt.swoosh == -1) {
+      continue;
+    }
+    const int frame = x28_currentFrame - bolt.startFrame;
+    CParticleGlobals::SetParticleLifetime(bolt.life);
+    CParticleGlobals::UpdateParticleLifetimeTweenValues(frame);
+    CColor color = CColor::White();
+    if (x1c_elecDesc->x14_COLR) {
+      x1c_elecDesc->x14_COLR->GetValue(frame, color);
+    }
+    x1e0_swooshGenerators[bolt.swoosh]->SetModulationColor(CColor::Modulate(color, x1b8_moduColor));
+  }
 }
 
 // The GPSM/EPSM half of CreateNewParticles 0xb76508 and UpdateElectricalEffects 0xb757a4: a
@@ -142,6 +198,51 @@ void CParticleElectric::PortBeamReset() {
     x410_epsmGenerators[i]->PortDoShutdownBehavior(1);
   }
 }
+
+void CParticleElectric::ShutdownEffect() {
+  if (!x1c_elecDesc->xPortIrnd) {
+    SetParticleEmission(false);
+    return;
+  }
+  PortDoShutdownBehavior(0xff);
+}
+
+// The base half (0x27b88c) stops the emission for modes 0 and 1; an electric's DestroyParticles is
+// empty (0x286554, 0xb78e8c). Then the same mode reaches the swoosh of every live line (ELSM) or
+// bolt (ELC2) and every GPSM and EPSM child. ELSM's LWD1-3 swoosh arrays (gated by desc+0x150/
+// 0x158/0x160) have no generators here: the port draws those lines with CLineManager.
+void CParticleElectric::PortDoShutdownBehavior(u32 mode) {
+  if ((mode == 0xff ? PortShutdownMode() : (mode & 0xff)) < 2) {
+    SetParticleEmission(false);
+  }
+  if (!x1c_elecDesc->xPortIrnd) {
+    return;
+  }
+  if (x450_27_haveSSWH) {
+    if (xPortElc2) {
+      const std::vector< CParticleElectric2Port::Bolt >& bolts = xPortElc2->Bolts();
+      for (size_t i = 0; i < bolts.size(); ++i) {
+        if (bolts[i].swoosh != -1) {
+          x1e0_swooshGenerators[bolts[i].swoosh]->PortDoShutdownBehavior(mode);
+        }
+      }
+    } else {
+      for (AUTO(it, x3e8_electricManagers.begin()); it != x3e8_electricManagers.end(); ++it) {
+        x1e0_swooshGenerators[it->x0_idx]->PortDoShutdownBehavior(mode);
+      }
+    }
+  }
+  if (x450_25_haveGPSM) {
+    for (int i = 0; i < x400_gpsmGenerators.size(); ++i) {
+      x400_gpsmGenerators[i]->PortDoShutdownBehavior(mode);
+    }
+  }
+  if (x450_26_haveEPSM) {
+    for (int i = 0; i < x410_epsmGenerators.size(); ++i) {
+      x410_epsmGenerators[i]->PortDoShutdownBehavior(mode);
+    }
+  }
+}
 #endif
 
 CParticleElectric::CParticleElectric(TToken< CElectricDescription > desc)
@@ -209,6 +310,16 @@ CParticleElectric::CParticleElectric(TToken< CElectricDescription > desc)
       for (int i = 0; i < x154_SCNT; ++i) {
         x410_epsmGenerators.push_back(rs_new CElementGen(x1c_elecDesc->x60_EPSM->GetToken()));
         x410_epsmGenerators.back()->SetParticleEmission(false);
+      }
+    }
+    // SCNT swooshes, a point per bolt node (the ctor's ++LENG), made electric
+    // (HACK_InitForElectric 0x27ebfc); each new bolt takes the first free one.
+    if (x1c_elecDesc->x40_SSWH) {
+      x450_27_haveSSWH = true;
+      for (int i = 0; i < x154_SCNT; ++i) {
+        x1e0_swooshGenerators.push_back(
+            rs_new CParticleSwoosh(x1c_elecDesc->x40_SSWH->GetToken(), xPortElc2->NodeCount() - 1));
+        x1e0_swooshGenerators.back()->PortInitForElectric();
       }
     }
     return;
@@ -505,6 +616,17 @@ const bool CParticleElectric::Update(double dt) {
     evalTime += 1.0 / 60.0;
     ++x28_currentFrame;
   }
+#ifdef TARGET_PC
+  // Each live bolt's swoosh runs once per Update with the whole dt, after the steps.
+  if (xPortElc2 && x450_27_haveSSWH) {
+    const std::vector< CParticleElectric2Port::Bolt >& bolts = xPortElc2->Bolts();
+    for (size_t i = 0; i < bolts.size(); ++i) {
+      if (bolts[i].swoosh != -1) {
+        x1e0_swooshGenerators[bolts[i].swoosh]->Update(dt);
+      }
+    }
+  }
+#endif
   if (updated) {
     BuildBounds();
   }
@@ -514,13 +636,22 @@ const bool CParticleElectric::Update(double dt) {
 void CParticleElectric::Render() {
 #ifdef TARGET_PC
   PortFx::RenderScope fxScope;
+  PortBeamColours::Scope beamScope(xPortBeamTint);
   if (PortFx::gMuteActive && PortFx::IsMuted(*this)) {
     return;
   }
 #endif
   const float startTime = CStopwatch::GetGlobalTime();
 #ifdef TARGET_PC
-  if (xPortElc2) {
+  if (xPortElc2 && x450_27_haveSSWH) {
+    // With an SSWH the bolts draw only as their swooshes.
+    const std::vector< CParticleElectric2Port::Bolt >& bolts = xPortElc2->Bolts();
+    for (size_t i = 0; i < bolts.size(); ++i) {
+      if (bolts[i].swoosh != -1) {
+        x1e0_swooshGenerators[bolts[i].swoosh]->Render();
+      }
+    }
+  } else if (xPortElc2) {
     if (x450_29_transformDirty) {
       UpdateCachedTransform();
     }
@@ -808,6 +939,20 @@ void CParticleElectric::UpdateLine(int idx, int frame) {
 
 void CParticleElectric::BuildBounds() {
 #ifdef TARGET_PC
+  if (xPortElc2 && x450_27_haveSSWH) {
+    x160_systemBounds = CAABox::MakeMaxInvertedBox();
+    const std::vector< CParticleElectric2Port::Bolt >& bolts = xPortElc2->Bolts();
+    for (size_t i = 0; i < bolts.size(); ++i) {
+      if (bolts[i].swoosh == -1) {
+        continue;
+      }
+      rstl::optional_object< CAABox > bounds = x1e0_swooshGenerators[bolts[i].swoosh]->GetBounds();
+      if (bounds) {
+        x160_systemBounds.Include(*bounds);
+      }
+    }
+    return;
+  }
   if (xPortElc2) {
     x160_systemBounds = xPortElc2->BoltCount() > 0 ? xPortElc2->Bounds() : CAABox::MakeMaxInvertedBox();
     return;
@@ -900,6 +1045,25 @@ bool CParticleElectric::IsSystemDeletable() const {
   return true;
 }
 
+#ifdef TARGET_PC
+bool CParticleElectric::PortHasAnyParticlesRecursive() const {
+  if (xPortElc2 ? xPortElc2->BoltCount() != 0 : !x3e8_electricManagers.empty()) {
+    return true;
+  }
+  for (int i = 0; i < x400_gpsmGenerators.size(); ++i) {
+    if (x400_gpsmGenerators[i]->GetParticleCountAll() > 0) {
+      return true;
+    }
+  }
+  for (int i = 0; i < x410_epsmGenerators.size(); ++i) {
+    if (x410_epsmGenerators[i]->GetParticleCountAll() > 0) {
+      return true;
+    }
+  }
+  return false;
+}
+#endif
+
 int CParticleElectric::GetParticleCount() const {
 #ifdef TARGET_PC
   if (xPortElc2) {
@@ -943,6 +1107,9 @@ void CParticleElectric::ForceParticleCreation(int count) {
     ctx.modu = x1b8_moduColor;
     xPortElc2->Create(x28_currentFrame, count, ctx);
     PortElc2PlaceChildren();
+    if (x450_27_haveSSWH) {
+      PortElc2Swooshes();
+    }
     return;
   }
 #endif

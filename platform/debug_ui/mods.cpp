@@ -9,7 +9,11 @@
 #include "port_mods.h"
 #include "port_importers.h"
 #include "port_remastered_import.h"
+#include "port_remastered_storage.h"
+#include "port_disc.h"
+#include "port_disc_verify.h"
 #include "port_dread_samus_mod.h"
+#include "port_echoes_suits_mod.h"
 #include "port_remastered_text.h"
 #include "port_savestate.h"
 
@@ -20,6 +24,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <mutex>
 #include <string>
@@ -35,6 +40,72 @@ char sKeys[1024] = "";
 #if defined(__ANDROID__)
 std::string sKeysName;
 #endif
+
+// The name an Android pick shows when its file no longer opens: moved, renamed or deleted since
+// it was picked, or its permission gone.
+constexpr const char* kPickGone = "could not be opened";
+
+enum class ImportFile { Ok, NotChosen, Gone, NotFound };
+
+// Whether one of an import's files can be used. On Android a pick that no longer opens leaves an
+// empty descriptor and kPickGone as its name (`known`). On desktop the typed path is looked at,
+// at most once a second per path since this runs every frame; a missing one that is the path
+// remembered from before (`known`) was moved, any other was mistyped.
+ImportFile CheckImportFile(const char* path, const std::string& known) {
+#if defined(__ANDROID__)
+  if (path[0] == '\0') {
+    return known == kPickGone ? ImportFile::Gone : ImportFile::NotChosen;
+  }
+  return ImportFile::Ok;
+#else
+  if (path[0] == '\0') {
+    return ImportFile::NotChosen;
+  }
+  struct Checked {
+    std::string path;
+    double time;
+    bool exists;
+  };
+  static std::vector<Checked> sChecked;
+  const double now = ImGui::GetTime();
+  auto it = std::find_if(sChecked.begin(), sChecked.end(), [&](const Checked& c) { return c.path == path; });
+  if (it == sChecked.end()) {
+    if (sChecked.size() >= 8) {
+      sChecked.erase(sChecked.begin());
+    }
+    it = sChecked.insert(sChecked.end(), Checked{path, -1.0, false});
+  }
+  if (it->time < 0.0 || now - it->time >= 1.0) {
+    std::error_code error;
+    it->exists = std::filesystem::is_regular_file(PortRemasteredStorage::PathFromUtf8(path), error);
+    it->time = now;
+  }
+  return it->exists ? ImportFile::Ok : known == path ? ImportFile::Gone : ImportFile::NotFound;
+#endif
+}
+
+// Says, under an import's button, why it can't start: a file never chosen, or one chosen before
+// and since moved, which must be chosen again (the button alone would only gray out).
+void DrawImportFileProblem(ImportFile file, const char* what) {
+  if (file == ImportFile::NotChosen) {
+    ImGui::TextDisabled("Choose %s to import.", what);
+  } else if (file == ImportFile::Gone) {
+    ImGui::PushStyleColor(ImGuiCol_Text, ThemeWarnColor());
+    ImGui::TextWrapped("Can't find %s: it was moved, renamed or deleted since it was chosen. "
+                       "Choose it again.", what);
+    ImGui::PopStyleColor();
+  } else if (file == ImportFile::NotFound) {
+    ImGui::TextColored(ThemeWarnColor(), "No file at the path given for %s.", what);
+  }
+}
+
+ImportFile CheckImportKeys() {
+#if defined(__ANDROID__)
+  return CheckImportFile(sKeys, sKeysName);
+#else
+  return CheckImportFile(sKeys, sRemasteredKeysPath);
+#endif
+}
 } // namespace
 
 // The key file row: both imports use the same prod.keys, so the page draws it once, above both
@@ -57,7 +128,7 @@ void DrawImportKeys() {
     if (!sRemasteredKeysPath.empty()) {
       const std::string opened = OpenRemasteredPick(1, sRemasteredKeysPath);
       std::snprintf(sKeys, sizeof(sKeys), "%s", opened.c_str());
-      sKeysName = opened.empty() ? "could not be opened" : RemasteredPickName(sRemasteredKeysPath);
+      sKeysName = opened.empty() ? kPickGone : RemasteredPickName(sRemasteredKeysPath);
     }
 #else
     // The default key file when the player never picked one.
@@ -80,7 +151,7 @@ void DrawImportKeys() {
 #if defined(__ANDROID__)
       const std::string opened = OpenRemasteredPick(1, path);
       std::snprintf(sKeys, sizeof(sKeys), "%s", opened.c_str());
-      sKeysName = opened.empty() ? "could not be opened" : RemasteredPickName(path);
+      sKeysName = opened.empty() ? kPickGone : RemasteredPickName(path);
       if (!opened.empty() && sRemasteredKeysPath != path) {
         sRemasteredKeysPath = path;
         MarkDirty();
@@ -148,7 +219,7 @@ void DrawRemasteredImport() {
     for (const auto& [which, path] : sRemasteredPicks) {
       const std::string opened = OpenRemasteredPick(which, path);
       std::snprintf(which == 0 ? sImage : sKeys, sizeof(sImage), "%s", opened.c_str());
-      (which == 0 ? sImageName : sKeysName) = opened.empty() ? "could not be opened" : RemasteredPickName(path);
+      (which == 0 ? sImageName : sKeysName) = opened.empty() ? kPickGone : RemasteredPickName(path);
       if (!opened.empty()) {
         remember(which, path);
       }
@@ -256,7 +327,13 @@ void DrawRemasteredImport() {
       ImGui::TextDisabled("Applies to the next import.");
       ImGui::TreePop();
     }
-    ImGui::BeginDisabled(sImage[0] == '\0' || sKeys[0] == '\0');
+#if defined(__ANDROID__)
+    const ImportFile image = CheckImportFile(sImage, sImageName);
+#else
+    const ImportFile image = CheckImportFile(sImage, sRemasteredImagePath);
+#endif
+    const ImportFile keys = CheckImportKeys();
+    ImGui::BeginDisabled(image != ImportFile::Ok || keys != ImportFile::Ok);
 #if !defined(__ANDROID__)
     // A typed path is kept once it is used (Android keeps what was picked).
     const auto rememberTyped = [&] {
@@ -281,6 +358,8 @@ void DrawRemasteredImport() {
     }
     ItemHelp("Converts everything again instead of reusing the previous import, so it takes as "
              "long as the first. Lasts until the game is closed.");
+    DrawImportFileProblem(image, "the Metroid Prime Remastered .nsp or .xci");
+    DrawImportFileProblem(keys, "the prod.keys file");
     if (state.finished && state.ok) {
       ImGui::PushStyleColor(ImGuiCol_Text, ThemeGoodColor(ImVec4(0.5f, 1.f, 0.5f, 1.f)));
       ImGui::TextWrapped("%s", state.message.c_str());
@@ -351,7 +430,7 @@ void DrawDreadSamusImport() {
     if (!sDreadPick.empty()) {
       const std::string opened = OpenRemasteredPick(kDreadPick, sDreadPick);
       std::snprintf(sImage, sizeof(sImage), "%s", opened.c_str());
-      sImageName = opened.empty() ? "could not be opened" : RemasteredPickName(sDreadPick);
+      sImageName = opened.empty() ? kPickGone : RemasteredPickName(sDreadPick);
       sDreadPick.clear();
     }
   }
@@ -399,7 +478,14 @@ void DrawDreadSamusImport() {
     OpenRemasteredDialog(kDreadPick);
   }
 #endif
-  ImGui::BeginDisabled(sImage[0] == '\0' || sDreadKeys[0] == '\0');
+#if defined(__ANDROID__)
+  const ImportFile image = CheckImportFile(sImage, sImageName);
+  const ImportFile keys = CheckImportFile(sDreadKeys, sKeysName);
+#else
+  const ImportFile image = CheckImportFile(sImage, {});
+  const ImportFile keys = CheckImportKeys();
+#endif
+  ImGui::BeginDisabled(image != ImportFile::Ok || keys != ImportFile::Ok);
   if (ImGui::Button("Import##dread")) {
     // A start refused for a missing mods folder or file says why in the shared state; one refused
     // because the Remastered import runs leaves that import's state, which is not this one's.
@@ -414,6 +500,10 @@ void DrawDreadSamusImport() {
   }
   ImGui::EndDisabled();
   ImGui::EndDisabled();
+  if (!state.running) {
+    DrawImportFileProblem(image, "the Metroid Dread .nsp or .xci");
+    DrawImportFileProblem(keys, "the prod.keys file");
+  }
   if (!sStarted) {
     return;
   }
@@ -438,6 +528,110 @@ void DrawDreadSamusImport() {
     ImGui::PopStyleColor();
   }
   if (!state.lines.empty() && ImGui::TreeNode("dread-log", "%d notes", int(state.lines.size()))) {
+    for (const std::string& line : state.lines) {
+      ImGui::TextWrapped("%s", line.c_str());
+    }
+    ImGui::TreePop();
+  }
+}
+
+// The Echoes suits import (port_echoes_suits.h): the Varia, Dark and Light Suit bodies from the
+// player's own Metroid Prime 2: Echoes GameCube or Metroid Prime Trilogy disc into the echoes-suits mod. Same progress, notes
+// and mods reload as the Dread import, with which it shares the one import worker.
+void DrawEchoesSuitsImport() {
+  static char sImage[1024] = "";
+  static bool sStarted = false;  // the shared state is this import's
+  {
+    std::lock_guard lock(sRemasteredPickMutex);
+#if defined(__ANDROID__)
+    // A pick the previous process never saw (the game was killed behind the picker). The content
+    // URI goes to the disc reader as is, as the Flaahgra theme's does.
+    static bool sTookFile = false;
+    if (!sTookFile) {
+      sTookFile = true;
+      std::ifstream in(RemasteredPickFile(kEchoesPick));
+      std::string uri;
+      if (sEchoesPick.empty() && std::getline(in, uri) && !uri.empty()) {
+        sEchoesPick = uri;
+      }
+    }
+#endif
+    if (!sEchoesPick.empty()) {
+      std::snprintf(sImage, sizeof(sImage), "%s", sEchoesPick.c_str());
+      sEchoesPick.clear();
+    }
+  }
+  const PortRemastered::ImportState state = PortRemastered::ImportStatus();
+  // Trilogy's MP2 folder holds Echoes' PAKs: playing from a Trilogy disc, it is the Echoes image.
+  const std::string trilogyDisc = PortDisc::IsTrilogy(PortDisc::Current()) ? PortDiscVerify::ImagePath() : "";
+  if (!trilogyDisc.empty()) {
+    ImGui::TextWrapped(
+        "Puts the Varia, Dark and Light Suit bodies from Metroid Prime 2: Echoes, on this Trilogy disc, in place "
+        "of Prime's Varia, Gravity and Phazon Suits; the Power Suit stays. It is the echoes-suits mod: switch it "
+        "off above.");
+    ImGui::BeginDisabled(state.running);
+    if (ImGui::Button("Import##echoes")) {
+      sStarted = StartEchoesSuitsImport(trilogyDisc) || !state.running;
+    }
+    ImGui::EndDisabled();
+  } else {
+    ImGui::TextWrapped(
+        "Puts the Varia, Dark and Light Suit bodies from your own Metroid Prime 2: Echoes (GameCube) in place of "
+        "Prime's Varia, Gravity and Phazon Suits; the Power Suit stays. Needs the game's disc image, or Metroid "
+        "Prime Trilogy's. It is the echoes-suits mod: switch it off above.");
+    ImGui::BeginDisabled(state.running);
+#if defined(__ANDROID__)
+    if (ImGui::Button("Load Echoes disc image##echoes-image")) {
+      OpenRemasteredDialog(kEchoesPick);
+    }
+    ImGui::SameLine();
+    ImGui::TextUnformatted(sImage[0] == '\0' ? "Metroid Prime 2: Echoes disc image"
+                                             : RemasteredPickName(sImage).c_str());
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    ImGui::TextWrapped("Android may close the game while you pick a file. The pick is kept: open this page again.");
+    ImGui::PopStyleColor();
+#else
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const float avail = ImGui::GetContentRegionAvail().x;
+    const float buttonWidth = ImGui::CalcTextSize("Load Echoes disc image").x + style.FramePadding.x * 2.f;
+    ImGui::SetNextItemWidth(std::max(120.f, std::min(avail * 0.6f, avail - buttonWidth - style.ItemSpacing.x)));
+    ImGui::InputTextWithHint("##echoes-image", "Metroid Prime 2: Echoes disc image", sImage, sizeof(sImage));
+    ImGui::SameLine();
+    if (ImGui::Button("Load Echoes disc image##echoes-image")) {
+      OpenRemasteredDialog(kEchoesPick);
+    }
+#endif
+    ImGui::BeginDisabled(sImage[0] == '\0');
+    if (ImGui::Button("Import##echoes")) {
+      sStarted = StartEchoesSuitsImport(sImage) || !state.running;
+    }
+    ImGui::EndDisabled();
+    ImGui::EndDisabled();
+  }
+  if (!sStarted) {
+    return;
+  }
+  if (state.running) {
+    const float fraction = state.total > 0 ? float(state.done) / float(state.total) : 0.f;
+    ImGui::ProgressBar(fraction, ImVec2(-1.f, 0.f), state.cancelling ? "Cancelling..." : state.message.c_str());
+    ImGui::BeginDisabled(state.cancelling || state.installing);
+    if (ImGui::Button("Cancel##echoes")) {
+      PortRemastered::CancelImport();
+    }
+    ImGui::EndDisabled();
+  } else if (state.finished && state.ok) {
+    ImGui::PushStyleColor(ImGuiCol_Text, ThemeGoodColor(ImVec4(0.5f, 1.f, 0.5f, 1.f)));
+    ImGui::TextWrapped("%s", state.message.c_str());
+    ImGui::PopStyleColor();
+    DrawModReloadMessage();
+  } else if (state.finished && state.cancelled) {
+    ImGui::TextDisabled("The import was cancelled.");
+  } else if (state.finished) {
+    ImGui::PushStyleColor(ImGuiCol_Text, ThemeBadColor());
+    ImGui::TextWrapped("The import failed: %s", state.message.c_str());
+    ImGui::PopStyleColor();
+  }
+  if (!state.lines.empty() && ImGui::TreeNode("echoes-log", "%d notes", int(state.lines.size()))) {
     for (const std::string& line : state.lines) {
       ImGui::TextWrapped("%s", line.c_str());
     }
