@@ -34,6 +34,7 @@ struct StereoUniformLayout {
   uint32_t normalOffset = 0;     // kStereoPositionMatrices Mat3x4 normal matrices
   uint32_t lightsOffset = 0;     // kStereoLights lights, 0 when the shader has none
   uint32_t size = 0;             // the whole uniform
+  uint32_t clipPlaneOffset = 0;  // optional view-space covector; 0 when absent
   // The one position (and normal) matrix slot the draw can index, when its
   // vertices carry no matrix index (gx/shader.cpp: in_pnmtxidx is the current
   // one); -1 composes all of them.
@@ -62,7 +63,8 @@ struct StereoUniformLayout {
     const uint32_t normalEnd = normalOffset + kStereoPositionMatrices * static_cast<uint32_t>(sizeof(Mat3x4<float>));
     const uint32_t lightsEnd = lightsOffset != 0 ? lightsOffset + kStereoLights * kStereoLightBytes : 0;
     return size >= 16 && projectionOffset + static_cast<uint32_t>(sizeof(Mat4x4<float>)) <= size &&
-           normalEnd <= size && lightsEnd <= size;
+           normalEnd <= size && lightsEnd <= size &&
+           (clipPlaneOffset == 0 || clipPlaneOffset + sizeof(Vec4<float>) <= size);
   }
 };
 
@@ -104,6 +106,26 @@ inline void compose_stereo_uniform(uint8_t* uniform, const StereoUniformLayout& 
   std::memcpy(&projection, uniform + layout.projectionOffset, sizeof(projection));
   projection = stereo_replay::compose_projection(*eye.projection, projection);
   std::memcpy(uniform + layout.projectionOffset, &projection, sizeof(projection));
+
+  if (layout.clipPlaneOffset != 0 && eye.positionScaleXY != 0.f && eye.positionScaleZ != 0.f) {
+    // Position is transformed by R*S then t. The clip-plane covector takes its
+    // inverse transpose, including eye translation; copying the mono equation
+    // unchanged clips the same weapon at different places in the two eyes.
+    Vec4<float> plane;
+    std::memcpy(&plane, uniform + layout.clipPlaneOffset, sizeof(plane));
+    const float x = plane[0] / eye.positionScaleXY;
+    const float y = plane[1] / eye.positionScaleXY;
+    const float z = plane[2] / eye.positionScaleZ;
+    const auto& view = *eye.viewFromCenter;
+    const Vec4<float> transformed{
+        view.m0[0]*x + view.m0[1]*y + view.m0[2]*z,
+        view.m1[0]*x + view.m1[1]*y + view.m1[2]*z,
+        view.m2[0]*x + view.m2[1]*y + view.m2[2]*z, 0.f};
+    const float constant = plane[3];
+    plane = transformed;
+    plane[3] = constant - (plane[0]*view.m0[3] + plane[1]*view.m1[3] + plane[2]*view.m2[3]);
+    std::memcpy(uniform + layout.clipPlaneOffset, &plane, sizeof(plane));
+  }
 
   const bool oneSlot = layout.fixedPositionSlot >= 0 &&
                        static_cast<uint32_t>(layout.fixedPositionSlot) < kStereoPositionMatrices;

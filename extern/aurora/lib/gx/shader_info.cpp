@@ -476,7 +476,7 @@ void pipeline_unused_inputs(ShaderConfig& config) noexcept {
   }
 }
 
-static void fill_uniform(ByteBuffer& buf, const ShaderInfo& info) noexcept {
+static void fill_uniform(ByteBuffer& buf, const ShaderInfo& info, uint32_t* clipPlaneOffset = nullptr) noexcept {
   buf.reserve_extra(info.uniformSize);
 
   buf.append<f32>(g_gxState.renderViewport.width);
@@ -645,6 +645,7 @@ static void fill_uniform(ByteBuffer& buf, const ShaderInfo& info) noexcept {
     buf.append(g_gxState.hudDyin);
   }
   if (info.usesClipPlane) {
+    if (clipPlaneOffset != nullptr) *clipPlaneOffset = static_cast<uint32_t>(buf.size());
     buf.append(g_gxState.clipPlaneEq);
   }
   if (info.usesShell) {
@@ -757,10 +758,12 @@ gfx::Range build_uniform(const ShaderInfo& info, std::array<uint32_t, 2>& stereo
   static ByteBuffer scratch;
   ByteBuffer& buf = snapshot != nullptr ? *snapshot : scratch;
   buf.clear();
-  fill_uniform(buf, info);
+  uint32_t clipPlaneOffset = 0;
+  fill_uniform(buf, info, &clipPlaneOffset);
   const auto range = gfx::push_uniform(buf.data(), buf.size());
   auto layout = gfx::StereoUniformLayout::for_gx(info.lineMode, info.lightingEnabled,
                                                  static_cast<uint32_t>(info.loadsTevReg.count()), range.size);
+  layout.clipPlaneOffset = clipPlaneOffset;
   // Vertices without a matrix index all take the current position matrix
   // (shader.cpp), so only that one needs its eye copies.
   if (!info.indexAttr.test(GX_VA_PNMTXIDX)) {

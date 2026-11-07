@@ -1,3 +1,59 @@
+## VR: leave the four original barrel wings untouched (2026-11-07)
+
+Nozzle wing bones 19..22 are excluded from mirroring, cutting, welding and bone
+remapping. BOTH original sides are emitted as authored. Keep their exact vertex
+and normal float bits during deduplication/output rather than rounding or
+normalizing them. These parts were already complete: only the body and other
+incomplete components need reconstruction. All 176 original wing triangles
+(44 per wing) match the disc's positions, normals, UVs, weights and material
+assignments exactly in an independent local comparison. The optional retail
+fixture regression also compares every original wing position by bone.
+
+## VR: preserve opening panels and stereo beam-change wipe (2026-11-07)
+
+Do NOT average paired bones at the cannon mirror seam. Nozzle corners intentionally
+cross X=0; clipping those moving pieces and welding them ties the opening flaps
+together and retains slivers of the bad-side component. Mirror whole good-side
+hinged components by bone ownership, with their original single-bone weights;
+discard their entire opposite-side counterparts. Only fixed/centre pieces and
+rigid suit arms are clipped/welded. Updated cannon: 2,140 triangles, 2,072 vertices,
+70 fixed-body seam vertices; every vertex retains a single original bone influence.
+
+In immersive VR use the complementary solid/hologram clip-plane transition for
+original visuals too. The legacy screen-copy/clip-cube wipe is view-dependent.
+During InWipeDone keep the last LOCAL wipe distance, following the tracked gun's
+current pose rather than leaving the plane fixed in world space.
+
+IMPORTANT stereo uniform rule: a GX view-space clip plane must follow each eye's
+position transform with its inverse transpose (including eye translation and
+head-locked scales). StereoUniformLayout carries the optional clip-plane byte
+offset captured by fill_uniform. Copying the mono equation unchanged clips the
+eyes differently. Uniform sizes, shader configuration and eye projections do
+not change. Regression checks compare signed distances for both eyes under
+rotation, translation and nonuniform head-locked scale.
+
+## VR: rigid suit-arm half-mirror and beta.8 (2026-11-07)
+
+The forearm behind the cannon is a rigid CMDL attached to the cannon's animated
+elbow locator; it has no independent CSKR. Extend the canonical-resource mirror
+conversion to Power, Varia, Gravity, Phazon and all four Fusion arm variants.
+Retain the good -X half, clip crossing faces, replace +X with its reflected copy,
+and share centreline vertices. Original suit material/texture bytes and elbow
+attachment are unchanged. Geometry fingerprints leave replacement arms alone.
+
+IMPORTANT: retail arms use signed-short normals and VAT1 display-list commands.
+The rebuilt normals are float: clear CMDL's short-normal bit AND use VAT0 in the
+generated lists. Changing only the array stride or flag reads float bytes as
+shorts and corrupts lighting. Expanded symmetric model/surface bounds must cover
+the mirrored half. Cache arms independently and clear them with mods reload.
+
+Windows launcher/game and Quest source version are 2.0.0-beta.8; Quest versionCode
+is 13. Windows build and 28 focused regressions pass. Local independent checks
+verify all eight arms' mirrored winding/normals, shared seams, material bytes,
+bounds and VAT0 layout; all source arm resources match PAL and USA Rev2 exactly.
+Headset visuals and animation still require player testing. No beta.8 APK built
+or release published as part of this change.
+
 ## VR: original cannon full half-mirror (2026-11-07)
 
 Supersedes the experimental 199-triangle draw-time underside patch. The entire

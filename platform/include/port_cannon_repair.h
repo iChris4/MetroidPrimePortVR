@@ -11,6 +11,8 @@ struct Result {
 // Fingerprints exclude replacement models/skins/skeletons. No game geometry is bundled.
 bool Build(const std::vector< uint8_t >& model, const std::vector< uint8_t >& skin,
            const std::vector< uint8_t >& skeleton, Result& result);
+// Rigid suit arms retain their original animated elbow-locator attachment.
+bool BuildArm(uint32_t id, const std::vector< uint8_t >& model, Result& result);
 bool IsResource(uint32_t id);
 const PortCustomRes::Resource* Find(uint32_t id, const PortCustomRes::DiscReader& read);
 void Reset();

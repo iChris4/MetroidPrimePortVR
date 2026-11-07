@@ -38,6 +38,7 @@ static inline int align_size(const int size) { return (size + 31) & ~31; }
 namespace {
 thread_local bool sReadingOriginalCannon = false;
 bool sCannonMirrorReported = false;
+bool sArmMirrorReported = false;
 // A custom resource is already in memory, so its "read" is done at once.
 class CPortReadyDvdRequest : public CDvdRequest {
 public:
@@ -137,6 +138,7 @@ const std::map< uint, PortDiscResource >& PortDiscIndex() {
 void PortForgetDiscReads() {
   PortCannonRepair::Reset();
   sCannonMirrorReported = false;
+  sArmMirrorReported = false;
   {
     std::lock_guard< std::mutex > lock(sDiscIndexMutex);
     sDiscIndex.clear();
@@ -188,9 +190,13 @@ const PortCustomRes::Resource* CResLoader::PortCustomResource(const CAssetId ass
           delete[] buf;
           return ok;
         })) {
-      if (!sCannonMirrorReported) {
+      const bool cannon = asset == PortCannonRepair::kModel || asset == PortCannonRepair::kSkin;
+      if (cannon && !sCannonMirrorReported) {
         PortLog::Write("VR cannon: replaced incomplete half, mirrored paired bones, welded centre seam\n");
         sCannonMirrorReported = true;
+      } else if (!cannon && !sArmMirrorReported) {
+        PortLog::Write("VR suit arm: replaced incomplete half, welded seam, original elbow attachment preserved\n");
+        sArmMirrorReported = true;
       }
       return repaired;
     }

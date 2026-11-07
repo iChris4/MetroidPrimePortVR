@@ -642,6 +642,39 @@ int main() {
           "canted eye displays preserve the actual head centre");
   }
 
+  // A beam-change split must classify the same point identically in both eyes,
+  // including a rotated headset, IPD/translation and head-locked scaling.
+  {
+    auto clipped = layout;
+    clipped.clipPlaneOffset = 2304;
+    Check(clipped.valid(), "optional clip-plane uniform fits");
+    auto invalid = clipped;
+    invalid.clipPlaneOffset = invalid.size - 4;
+    Check(!invalid.valid(), "clip plane past the uniform is rejected");
+    const Vec4<float> plane{.6f, .8f, .3f, -.1f};
+    for (float eyeX : {-.032f, .032f}) {
+      const auto eyeView = Affine(0, 0, -1, eyeX, 0, 1, 0, .17f, 1, 0, 0, -.23f);
+      for (float scale : {1.f, 1.4f}) {
+        auto bytes = uniform;
+        std::memcpy(bytes.data()+clipped.clipPlaneOffset, &plane, sizeof(plane));
+        compose_stereo_uniform(bytes.data(), clipped,
+                              StereoEyeCompose{&eyeProjection, &eyeView, scale, .8f, 1.f, 1.f});
+        Vec4<float> eyePlane;
+        std::memcpy(&eyePlane, bytes.data()+clipped.clipPlaneOffset, sizeof(eyePlane));
+        for (const Vec4<float> p : {Vec4<float>{.05f,.02f,-.5f},
+                                   Vec4<float>{.3f,.2f,-.2f},
+                                   Vec4<float>{.1f,.05f,-.7f}}) {
+          const float x=p[0]*scale, y=p[1]*scale, z=p[2]*.8f;
+          const Vec4<float> q{eyeView.m0[0]*x+eyeView.m0[1]*y+eyeView.m0[2]*z+eyeView.m0[3],
+                               eyeView.m1[0]*x+eyeView.m1[1]*y+eyeView.m1[2]*z+eyeView.m1[3],
+                               eyeView.m2[0]*x+eyeView.m2[1]*y+eyeView.m2[2]*z+eyeView.m2[3]};
+          const float expected=plane[0]*p[0]+plane[1]*p[1]+plane[2]*p[2]+plane[3];
+          const float actual=eyePlane[0]*q[0]+eyePlane[1]*q[1]+eyePlane[2]*q[2]+eyePlane[3];
+          Check(Near(expected,actual), "solid/hologram split distance is eye invariant");
+        }
+      }
+    }
+  }
   std::puts("port_vr_stereo_tests: ok");
   return 0;
 }

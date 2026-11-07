@@ -954,12 +954,17 @@ void CPlayerGun::Render(const CStateManager& mgr, const CVector3f& pos,
 #ifdef TARGET_PC
     // Remastered (Render 0xc926d4) draws the hand in the hologram states only in X-ray.
     drawHoloHand = !sPortRemasteredGun || visor == CPlayerState::kPV_XRay;
-    if (sPortRemasteredGun) {
+    // Original VR visuals need the plane split too: the old screen-copy/clip-cube
+    // wipe is tied to the simulation camera and does not line up between eyes.
+    if (sPortRemasteredGun || PortVr::VrImmersive()) {
       // Remastered has no screen copy or clip cube: the gun is split at a plane across its
       // forward axis through the holo generator's point (ProcessGunMorph 0xc96708 keeps it
       // from the last wipe frame through InWipeDone).
       static CVector3f sHoloClipPoint(CVector3f::Zero());
+      static float sHoloClipLocalY = 0.f;
       if (gunState != CGunMorph::kGS_InWipeDone) {
+        sHoloClipLocalY = x678_morph.GetYLerp() -
+                            0.4f * (1.f - x678_morph.GetTransitionFactor());
         sHoloClipPoint =
             modelWorldXf * CVector3f(0.f,
                                       x678_morph.GetYLerp() -
@@ -975,7 +980,10 @@ void CPlayerGun::Render(const CStateManager& mgr, const CVector3f& pos,
                                                 2.15f);
       }
       x72c_currentBeam->PortDrawHologramTransition(mgr, modelWorldXf,
-                                                   modelWorldXf.GetColumn(kDY), sHoloClipPoint,
+                                                   modelWorldXf.GetColumn(kDY),
+                                                   PortVr::VrImmersive()
+                                                       ? modelWorldXf * CVector3f(0.f, sHoloClipLocalY, 0.f)
+                                                       : sHoloClipPoint,
                                                    beamFlags, &x0_lights);
       DrawArm(mgr, pos, flags);
       x82c_shadow->DisableModelProjectedShadow();

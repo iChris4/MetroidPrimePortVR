@@ -127,17 +127,29 @@ Weights ReflectWeights(const Weights& in) {
     out[MirrorBone(w.first)] += w.second;
   return out;
 }
+int MovingSide(uint32_t bone) {
+  if (bone == 20 || bone == 22 || (bone >= 27 && bone <= 36) || bone == 38 || bone == 39)
+    return -1;
+  if (bone == 19 || bone == 21 || (bone >= 40 && bone <= 49) || bone == 50 || bone == 51)
+    return 1;
+  return 0;
+}
 struct Vertex {
   Vec p, n;
   std::array< std::array< float, 2 >, 3 > uv{};
   Weights weights;
 };
+bool OriginalWing(const Weights& weights) {
+  return weights.size() == 1 && weights.begin()->first >= 19 && weights.begin()->first <= 22;
+}
 void Seam(Vertex& v) {
-  // Shared weights as well as a shared point keep the join closed during asymmetric animations.
+  // Join fixed/centre pieces only. Opposite nozzle/panel bones must remain independent:
+  // averaging their weights ties together the very flaps a beam-change animation opens.
   v.p.x = 0;
-  v.n.x = 0;
-  v.n = Normalize(v.n);
-  v.weights = BlendWeights(v.weights, ReflectWeights(v.weights), .5f);
+  if (v.weights == ReflectWeights(v.weights)) {
+    v.n.x = 0;
+    v.n = Normalize(v.n);
+  }
 }
 Vertex Interpolate(const Vertex& a, const Vertex& b, float t) {
   Vertex v;
@@ -167,12 +179,18 @@ Key WeightKey(const Weights& w) {
 Key VertexKey(const Vertex& v) {
   Key k = WeightKey(v.weights);
   k.push_back(-1);
-  for (float f : {v.p.x, v.p.y, v.p.z, v.n.x, v.n.y, v.n.z})
-    k.push_back(std::llround(f * 1000000));
+  for (float f : {v.p.x, v.p.y, v.p.z, v.n.x, v.n.y, v.n.z}) {
+    if (OriginalWing(v.weights)) {
+      uint32_t bits;
+      std::memcpy(&bits, &f, 4);
+      k.push_back(bits);
+    } else
+      k.push_back(std::llround(f * 1000000));
+  }
   return k;
 }
 
-bool Rebuild(const Bytes& model, const Bytes& skin, Result& result) {
+bool Rebuild(const Bytes& model, const Bytes& skin, Result& result, bool arm = false) {
   const size_t count = U32(model, 36), matSets = U32(model, 40);
   size_t offset = (44 + count * 4 + 31) & ~size_t(31);
   std::vector< Bytes > parts;
@@ -183,14 +201,17 @@ bool Rebuild(const Bytes& model, const Bytes& skin, Result& result) {
     parts.emplace_back(model.begin() + offset, model.begin() + offset + len);
     offset += len;
   }
-  if (matSets != 5 || parts.size() != 19 || U32(model, 8) != 5)
+  const auto flags = U32(model, 8);
+  if ((!arm && (matSets != 5 || parts.size() != 19 || flags != 5)) ||
+      (arm && (matSets != 1 || (parts.size() != 8 && parts.size() != 9) || flags != 6)))
     return false;
-  const size_t si = 10, ns = U32(parts[si], 0);
-  if (ns != 8)
+  const size_t posPart = matSets, normPart = matSets + 1, uvPart = matSets + 3;
+  const size_t si = matSets + 4 + ((flags & 4) != 0), ns = U32(parts[si], 0);
+  if ((!arm && ns != 8) || (arm && (ns < 1 || ns > 2)))
     return false;
   std::vector< Weights > skinWeights;
   size_t sp = 4;
-  for (size_t i = 0; i < U32(skin, 0); ++i) {
+  for (size_t i = 0; !arm && i < U32(skin, 0); ++i) {
     const size_t n = U32(skin, sp);
     sp += 4;
     Weights w;
@@ -203,7 +224,8 @@ bool Rebuild(const Bytes& model, const Bytes& skin, Result& result) {
     sp += 4;
     skinWeights.insert(skinWeights.end(), len, w);
   }
-  if (skinWeights.size() != 1920 || parts[5].size() != 1920 * 12 || parts[6].size() != 1920 * 12)
+  if (!arm && (skinWeights.size() != 1920 || parts[posPart].size() != 1920 * 12 ||
+               parts[normPart].size() != 1920 * 12))
     return false;
   const auto& mats = parts[0];
   size_t mp = 4 + U32(mats, 0) * 4;
@@ -250,18 +272,28 @@ bool Rebuild(const Bytes& model, const Bytes& skin, Result& result) {
     auto load = [&](size_t corner) {
       Vertex v;
       const size_t pi = U16(data, corner), ni = U16(data, corner + 2);
-      if (pi >= skinWeights.size() || ni >= skinWeights.size() ||
-          skinWeights[pi] != skinWeights[ni])
+      if (!arm && (pi >= skinWeights.size() || ni >= skinWeights.size() ||
+                   skinWeights[pi] != skinWeights[ni]))
         throw std::runtime_error("cannon position/normal bone mismatch");
       const size_t p = pi * 12, n = ni * 12;
-      v.p = {F32(parts[5], p), F32(parts[5], p + 4), F32(parts[5], p + 8)};
-      v.n = {F32(parts[6], n), F32(parts[6], n + 4), F32(parts[6], n + 8)};
-      v.weights = skinWeights[pi];
+      v.p = {F32(parts[posPart], p), F32(parts[posPart], p + 4), F32(parts[posPart], p + 8)};
+      if (arm) {
+        // Retail rigid arms use signed 16-bit normals. Convert rebuilt normals to floats
+        // and clear the short-normal flag below; UVs/materials retain their layouts.
+        const size_t at = ni * 6;
+        v.n = Normalize({float(int16_t(U16(parts[normPart], at))),
+                         float(int16_t(U16(parts[normPart], at + 2))),
+                         float(int16_t(U16(parts[normPart], at + 4)))});
+        v.weights = {{0, 1.f}}; // Deduplication only; no CSKR is emitted for rigid arms.
+      } else {
+        v.n = {F32(parts[normPart], n), F32(parts[normPart], n + 4), F32(parts[normPart], n + 8)};
+        v.weights = skinWeights[pi];
+      }
       for (size_t j = 0; j < nuv; ++j) {
         const size_t uv = U16(data, corner + 4 + j * 2) * 8;
-        v.uv[j] = {F32(parts[8], uv), F32(parts[8], uv + 4)};
+        v.uv[j] = {F32(parts[uvPart], uv), F32(parts[uvPart], uv + 4)};
       }
-      if (std::abs(v.p.x) < 1.e-6f)
+      if (std::abs(v.p.x) < 1.e-6f && v.weights == ReflectWeights(v.weights))
         Seam(v);
       return v;
     };
@@ -269,8 +301,35 @@ bool Rebuild(const Bytes& model, const Bytes& skin, Result& result) {
       std::vector< Vertex > poly = {load(begin + a * stride), load(begin + b * stride),
                                     load(begin + c * stride)},
                             clipped;
+      // The four nozzle wings are already complete in retail. Retain BOTH sides,
+      // original corners, normals, UVs and bone assignments: no mirror or seam edit.
+      if (OriginalWing(poly[0].weights)) {
+        if (poly[1].weights != poly[0].weights || poly[2].weights != poly[0].weights)
+          throw std::runtime_error("mixed original nozzle wing");
+        const Vec cross = Cross(poly[1].p - poly[0].p, poly[2].p - poly[0].p);
+        if (Dot(cross, cross) >= 1.e-18f)
+          output.push_back({{poly[0], poly[1], poly[2]}, surf, format});
+        return;
+      }
+      int movingSide = 0;
+      for (const auto& v : poly)
+        for (const auto& w : v.weights) {
+          const int side = MovingSide(w.first);
+          if (side != 0) {
+            if (movingSide != 0 && movingSide != side)
+              throw std::runtime_error("mixed cannon hinge sides");
+            movingSide = side;
+          }
+        }
+      // A moving panel is a complete component, not a half of the fixed body. Some
+      // nozzle corners deliberately cross X=0. Cutting/welding them creates a web
+      // between opening flaps; retaining the bad-side sliver duplicates its geometry.
+      if (movingSide > 0)
+        return;
+      if (movingSide < 0)
+        clipped = poly;
       // Clip crossing triangles instead of keeping whole triangles from the bad half.
-      for (size_t i = 0; i < poly.size(); ++i) {
+      for (size_t i = 0; movingSide == 0 && i < poly.size(); ++i) {
         const auto& v = poly[i];
         const auto& prev = poly[(i + poly.size() - 1) % poly.size()];
         const bool inside = v.p.x <= 0, was = prev.p.x <= 0;
@@ -298,7 +357,9 @@ bool Rebuild(const Bytes& model, const Bytes& skin, Result& result) {
       }
     };
     while (at < end && data[at]) {
-      const uint8_t op = data[at] & 0xf8, format = data[at] & 7;
+      const uint8_t op = data[at] & 0xf8;
+      // The rebuilt rigid arms use float normals: VAT0, not the original VAT1 S16 layout.
+      const uint8_t format = arm ? 0 : data[at] & 7;
       const size_t n = U16(data, at + 1);
       at += 3;
       if (n > (end - at) / stride)
@@ -334,14 +395,14 @@ bool Rebuild(const Bytes& model, const Bytes& skin, Result& result) {
     indices[item.first] = ordered.size();
     ordered.push_back(item.second);
   }
-  parts[5].clear();
-  parts[6].clear();
-  parts[8].clear();
+  parts[posPart].clear();
+  parts[normPart].clear();
+  parts[uvPart].clear();
   Bytes newSkin;
   std::vector< std::pair< Weights, size_t > > groups;
   for (const auto& v : ordered) {
-    AddVec(parts[5], v.p);
-    AddVec(parts[6], Normalize(v.n));
+    AddVec(parts[posPart], v.p);
+    AddVec(parts[normPart], OriginalWing(v.weights) ? v.n : Normalize(v.n));
     if (groups.empty() || WeightKey(groups.back().first) != WeightKey(v.weights))
       groups.push_back({v.weights, 0});
     ++groups.back().second;
@@ -361,8 +422,8 @@ bool Rebuild(const Bytes& model, const Bytes& skin, Result& result) {
   Add32(newSkin, uint32_t(ordered.size()));
   Add32(newSkin, 0xffffffff);
   Add32(newSkin, uint32_t(ordered.size()));
-  Pad(parts[5]);
-  Pad(parts[6]);
+  Pad(parts[posPart]);
+  Pad(parts[normPart]);
   std::vector< Bytes > lists(ns);
   std::map< std::array< uint32_t, 2 >, size_t > uvIndices;
   auto uvIndex = [&](const std::array< float, 2 >& uv) {
@@ -371,10 +432,10 @@ bool Rebuild(const Bytes& model, const Bytes& skin, Result& result) {
     const auto found = uvIndices.find(key);
     if (found != uvIndices.end())
       return found->second;
-    const size_t index = parts[8].size() / 8;
+    const size_t index = parts[uvPart].size() / 8;
     uvIndices[key] = index;
-    AddFloat(parts[8], uv[0]);
-    AddFloat(parts[8], uv[1]);
+    AddFloat(parts[uvPart], uv[0]);
+    AddFloat(parts[uvPart], uv[1]);
     return index;
   };
   for (const auto& t : output) {
@@ -390,7 +451,15 @@ bool Rebuild(const Bytes& model, const Bytes& skin, Result& result) {
         Add16(list, uvIndex(v.uv[i]));
     }
   }
-  Pad(parts[8]);
+  Pad(parts[uvPart]);
+  Vec low = ordered.front().p, high = low;
+  for (const auto& v : ordered) {
+    low = {std::min(low.x, v.p.x), std::min(low.y, v.p.y), std::min(low.z, v.p.z)};
+    high = {std::max(high.x, v.p.x), std::max(high.y, v.p.y), std::max(high.z, v.p.z)};
+  }
+  Bytes bounds;
+  AddVec(bounds, low);
+  AddVec(bounds, high);
   size_t cumulative = 0;
   for (size_t i = 0; i < ns; ++i) {
     auto& s = parts[si + 1 + i];
@@ -401,23 +470,39 @@ bool Rebuild(const Bytes& model, const Bytes& skin, Result& result) {
     Put32(s, 16, uint32_t(lists[i].size()));
     if (U32(s, 28) >= 24)
       for (size_t j = 0; j < 6; ++j)
-        Put32(s, 44 + j * 4, U32(model, 12 + j * 4));
+        Put32(s, 44 + j * 4, U32(bounds, j * 4));
     cumulative += s.size();
     Put32(parts[si], 4 + i * 4, uint32_t(cumulative));
   }
   Bytes rebuilt(model.begin(), model.begin() + ((44 + count * 4 + 31) & ~size_t(31)));
+  if (arm)
+    Put32(rebuilt, 8, flags & ~uint32_t(2));
+  for (size_t j = 0; j < 6; ++j)
+    Put32(rebuilt, 12 + j * 4, U32(bounds, j * 4));
   for (size_t i = 0; i < parts.size(); ++i) {
     Put32(rebuilt, 44 + i * 4, uint32_t(parts[i].size()));
     rebuilt.insert(rebuilt.end(), parts[i].begin(), parts[i].end());
   }
   result.model = {0x434d444c, std::move(rebuilt)};
-  result.skin = {0x43534b52, std::move(newSkin)};
+  if (!arm)
+    result.skin = {0x43534b52, std::move(newSkin)};
   result.triangles = output.size();
-  return result.triangles > 2000 && result.seamVertices > 0;
+  return result.triangles > (arm ? 100 : 2000) && result.seamVertices > 0;
 }
+const std::map< uint32_t, uint64_t > armHashes = {
+    {0x07111aa7, UINT64_C(0x6792a11272965d6b)}, // Power
+    {0x81856809, UINT64_C(0x38250519a5a717e9)}, // Gravity
+    {0x4ad9bbac, UINT64_C(0xa9d71cdf25b18e14)}, // Varia
+    {0x57dc8b14, UINT64_C(0x4fa8a7b79b95066f)}, // Phazon
+    {0x9c8058b1, UINT64_C(0xccb023eda5023762)}, // Fusion
+    {0xd148f9ba, UINT64_C(0x1a0814da3a1c7ef6)}, // Fusion Gravity
+    {0x1a142a1f, UINT64_C(0xf9bef35e3fbe0fcb)}, // Fusion Varia
+    {0x201e4b6f, UINT64_C(0xe2a4e8367c50daef)}, // Fusion Phazon
+};
 std::mutex mutex;
 bool attempted = false;
 Result cached;
+std::map< uint32_t, Result > arms;
 } // namespace
 bool Build(const Bytes& model, const Bytes& skin, const Bytes& skeleton, Result& result) {
   result = Result{};
@@ -434,11 +519,37 @@ bool Build(const Bytes& model, const Bytes& skin, const Bytes& skeleton, Result&
     return false;
   }
 }
-bool IsResource(uint32_t id) { return id == kModel || id == kSkin; }
+bool BuildArm(uint32_t id, const Bytes& model, Result& result) {
+  result = Result{};
+  const auto it = armHashes.find(id);
+  if (it == armHashes.end() || Hash(model) != it->second)
+    return false;
+  try {
+    Result rebuilt;
+    if (!Rebuild(model, {}, rebuilt, true))
+      return false;
+    result = std::move(rebuilt);
+    return true;
+  } catch (const std::exception&) {
+    return false;
+  }
+}
+bool IsResource(uint32_t id) { return id == kModel || id == kSkin || armHashes.count(id) != 0; }
 const PortCustomRes::Resource* Find(uint32_t id, const PortCustomRes::DiscReader& read) {
   if (!IsResource(id))
     return nullptr;
   std::lock_guard< std::mutex > lock(mutex);
+  if (armHashes.count(id)) {
+    auto it = arms.find(id);
+    if (it == arms.end()) {
+      Result result;
+      Bytes model;
+      if (read(id, model))
+        BuildArm(id, model, result);
+      it = arms.emplace(id, std::move(result)).first;
+    }
+    return it->second.model.data.empty() ? nullptr : &it->second.model;
+  }
   if (!attempted) {
     attempted = true;
     Bytes m, s, b;
@@ -453,5 +564,6 @@ void Reset() {
   std::lock_guard< std::mutex > lock(mutex);
   cached = Result{};
   attempted = false;
+  arms.clear();
 }
 } // namespace PortCannonRepair
