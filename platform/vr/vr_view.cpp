@@ -308,9 +308,9 @@ CTransform4f VrHeadViewTransform(const CTransform4f& cameraXf) noexcept {
     return CTransform4f(VrHeadViewRotation(cameraXf), origin);
 }
 
-CMatrix3f VrHeadViewRotation(const CTransform4f& cameraXf) noexcept {
+static CMatrix3f HeadViewRotation(const CTransform4f& cameraXf, bool pausedMap) noexcept {
     const CMatrix3f body = cameraXf.BuildMatrix3f();
-    if (!ImmersiveNow()) {
+    if (!ImmersiveNow() && !(pausedMap && OpenXRIsRunning())) {
         return body;
     }
     OpenXRFrameRequest request{};
@@ -333,6 +333,24 @@ CMatrix3f VrHeadViewRotation(const CTransform4f& cameraXf) noexcept {
     right.Normalize();
     return CTransform4f::FromColumns(right, forward, CVector3f::Cross(right, forward), CVector3f::Zero())
         .BuildMatrix3f();
+}
+
+CMatrix3f VrHeadViewRotation(const CTransform4f& cameraXf) noexcept {
+    return HeadViewRotation(cameraXf, false);
+}
+
+bool VrMapPlayerYaw(const CTransform4f& cameraXf, float& yaw) noexcept {
+    OpenXRFrameRequest request{};
+    if (!OpenXRIsRunning() || !OpenXRLatestFrameRequest(request) || !request.head_valid) {
+        return false;
+    }
+    const CVector3f right = HeadViewRotation(cameraXf, true).GetColumn(kDX);
+    if (!std::isfinite(right.GetX()) || !std::isfinite(right.GetY()) ||
+        right.GetX() * right.GetX() + right.GetY() * right.GetY() < 1.e-6f) {
+        return false;
+    }
+    yaw = std::atan2(right.GetY(), right.GetX());
+    return true;
 }
 
 bool VrCullingFrustum(const CTransform4f& cameraXf, float nearZ, CFrustumPlanes& frustum) noexcept {

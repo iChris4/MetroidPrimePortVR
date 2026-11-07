@@ -1441,6 +1441,11 @@ void CAutoMapper::Draw(const CStateManager& mgr, const CTransform4f& xf, float a
       CEulerAngles eulers =
           CEulerAngles::FromTransform(mgr.GetCameraManager()->GetCurrentCameraTransform(mgr));
       float angle = CMath::ClampRadians(eulers.GetZ());
+#ifdef TARGET_PC
+      // The marker lives in world/map space. Use the tracked world heading,
+      // not the frozen body camera or the user's rotation of the map itself.
+      PortVr::VrMapPlayerYaw(mgr.GetCameraManager()->GetCurrentCameraTransform(mgr), angle);
+#endif
 
       const CVector3f& playerPos =
           CMapArea::GetAreaPostTranslate(*x24_world, mgr.GetNextAreaId().value) +
@@ -2189,12 +2194,10 @@ CQuaternion CAutoMapper::GetMiniMapCameraOrientation(const CStateManager& stateM
   float miniCamXAngle = gpTweakAutoMapper->x2c_miniCamXAngle;
   const CGameCamera& cam = stateMgr.GetCameraManager()->GetCurrentCamera(stateMgr);
 #ifdef TARGET_PC
-  if (PortVr::VrImmersive()) {
-    const CMatrix3f head = PortVr::VrHeadViewRotation(
-        stateMgr.GetCameraManager()->GetCurrentCameraTransform(stateMgr));
-    // The level right axis retains yaw even when looking straight up/down.
-    const CVector3f right = head.GetColumn(kDX);
-    return CQuaternion::ZRotation(CMath::ClampRadians(atan2(right.GetY(), right.GetX()))) *
+  float headYaw = 0.f;
+  if (PortVr::VrImmersive() && PortVr::VrMapPlayerYaw(
+          stateMgr.GetCameraManager()->GetCurrentCameraTransform(stateMgr), headYaw)) {
+    return CQuaternion::ZRotation(CMath::ClampRadians(headYaw)) *
            CQuaternion::XRotation(CRelAngle::FromDegrees(miniCamXAngle));
   }
 #endif
