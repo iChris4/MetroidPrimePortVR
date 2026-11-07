@@ -1325,7 +1325,8 @@ void CParticleSwoosh::Render2SidedNoSplineNoGaps() {
               .GetInverse();
       const CTransform4f camera = inverse *
 #ifdef TARGET_PC
-          PortVr::VrHeadViewTransform(CGraphics::GetViewMatrix());
+          (PortVr::VrParticlesFaceHead() ? PortVr::VrHeadViewTransform(CGraphics::GetViewMatrix())
+                                         : CGraphics::GetViewMatrix());
 #else
           CGraphics::GetViewMatrix();
 #endif

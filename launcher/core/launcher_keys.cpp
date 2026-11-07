@@ -143,6 +143,9 @@ constexpr KeyInfo kKeys[] = {
     // leaves it with the files it describes.
     {"vr_cannon_texture_slot", K::Int, "0", 0.0f, 5.0f, 1.0f, true, false},
     // Port Config: display (not PrimedGun settings, so Reset All leaves them)
+    // The F1 Video page's Graphics API, read at the next start: every name the game
+    // offers on Windows (PortGraphicsBackend::Choices, port_launcher_tests checks it).
+    {"graphics_backend", K::Choice, "auto", 0, 0, 0, true, false, "auto,d3d12,vulkan,d3d11,opengl"},
     {"fullscreen", K::Bool, "0", 0, 0, 0, true, false},
     {"vsync", K::Bool, "0", 0, 0, 0, true, false},
     {"msaa", K::Int, "1", 1.0f, 4.0f, 3.0f, true, false},

@@ -58,6 +58,24 @@ CMatrix3f VrHeadViewRotation(const CTransform4f& cameraXf) noexcept;
 // remains unchanged so stereo replay does not apply head tracking twice.
 CTransform4f VrHeadViewTransform(const CTransform4f& cameraXf) noexcept;
 
+// Visor effects (CHUDBillboardEffect: water running off the visor, rain
+// splashes, goo, frost, hits on the visor) belong to the helmet. Placed in the
+// game camera's space as on the TV and drawn between these two on
+// AURORA_STEREO_ROUTE_VISOR, the eyes see them head-locked: they follow the
+// head exactly, roll included, with no pose lag, at the depth
+// VrApplyStereoVisor sets. End returns to AURORA_STEREO_ROUTE_WORLD, the
+// route the world's particles draw under. Game thread; no-ops unless immersive.
+void VrBeginVisorDraw() noexcept;
+void VrEndVisorDraw() noexcept;
+// Whether particles turn toward the head (VrParticleBillboard and the oriented
+// particle paths): immersive and not inside a visor draw, whose camera space
+// is already the head's, so turning it toward the head would do it twice.
+bool VrParticlesFaceHead() noexcept;
+// The widest half-angle tangents the eyes see from the head's forward: the
+// largest left/right and up/down of both eyes' fields of view. False when not
+// immersive or unknown. Visor effects spread their spawns over it.
+bool VrEyeTangents(float& tanHalfWidth, float& tanHalfHeight) noexcept;
+
 // Replaces `frustum` with the head-facing cone of the settings' culling angle
 // when immersive and culling is enabled; false leaves it alone.
 bool VrCullingFrustum(const CTransform4f& cameraXf, float nearZ, CFrustumPlanes& frustum) noexcept;

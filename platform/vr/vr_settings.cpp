@@ -361,6 +361,17 @@ void PushVrSettingsToAurora() noexcept {
     // PrimedGun's HUD distance and size: in the native build both are factors
     // of the HUD frame's authored distance and size (0.75 each by default).
     aurora_set_stereo_head_locked(settings.metroid_hud_size, settings.metroid_hud_distance);
+    {
+        // Visor effects (AURORA_STEREO_ROUTE_VISOR: water off the visor, rain splashes, goo) are
+        // drawn 0.21 units out (the first-person near plane 0.2, CCameraManager::sNearPlane, plus
+        // CHUDBillboardEffect's 0.01), some 14 cm from the eyes: too near to fuse. Their eye
+        // offset is scaled so they read at the HUD's distance, the HUD being shown on the same
+        // visor: the combat HUD's body at ~20 units (DolphinXR's measure) times its factor.
+        constexpr float kVisorEffectDistance = 0.21f;
+        constexpr float kHudBodyDistance = 20.f;
+        const float hudDistance = kHudBodyDistance * settings.metroid_hud_distance;
+        aurora_set_stereo_visor(hudDistance > kVisorEffectDistance ? kVisorEffectDistance / hudDistance : 1.f);
+    }
     // The floating morph-ball HUD uses the menu screen's size and distance,
     // with its own delayed headset pose (AURORA_STEREO_ROUTE_FLOATING_HUD).
     aurora_set_stereo_screen_2d(settings.screen_width_meters, settings.screen_distance_meters, settings.world_scale);

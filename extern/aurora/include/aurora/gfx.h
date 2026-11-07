@@ -213,12 +213,23 @@ typedef enum AuroraStereoDrawRoute {
   // AURORA_STEREO_ROUTE_ANCHORED_3D through AURORA_STEREO_ROUTE_FLOATING_HUD's easing pose instead of the held
   // anchor (a 3D model standing on the floating plane's screen).
   AURORA_STEREO_ROUTE_FLOATING_3D = 11,
+  // A camera-space draw attached to the helmet's visor (Metroid Prime's water running off the visor, rain splashes,
+  // goo, frost): like AURORA_STEREO_ROUTE_HEAD_LOCKED it follows the head exactly, seen with only this eye's
+  // offset from the head centre, but without the HUD's scales, so it keeps its size and depth. That offset is scaled
+  // by aurora_set_stereo_visor's factor: such draws sit just past the camera's near plane, a few centimetres from
+  // the eyes, too near to fuse, and the smaller offset shows them at a distance the eyes can converge on while
+  // their depth (in front of everything) stays the game's.
+  AURORA_STEREO_ROUTE_VISOR = 12,
 } AuroraStereoDrawRoute;
 // AURORA_STEREO_ROUTE_HEAD_LOCKED draws are scaled about the camera origin
 // before the eye offset: sizeScale sets their angular size, distanceScale
 // their distance (0.75 and 0.75: the HUD at three quarters of its authored
 // size and distance). Read at frame begin.
 void aurora_set_stereo_head_locked(float sizeScale, float distanceScale);
+// AURORA_STEREO_ROUTE_VISOR draws see each eye's offset from the head centre
+// times eyeOffsetScale (1 by default: true depth). A draw at distance d is then
+// seen at d / eyeOffsetScale. Read at frame begin.
+void aurora_set_stereo_visor(float eyeOffsetScale);
 // The virtual screen AURORA_STEREO_ROUTE_SCREEN_2D draws are laid on: widthMeters across and distanceMeters
 // ahead of the game camera, its height following the picture's aspect, the game drawing unitsPerMeter units to
 // the metre. A zero turns it off. Read at frame begin.

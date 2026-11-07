@@ -1,11 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-#if defined(MP_ENABLE_OPENXR) && defined(__ANDROID__)
+#if defined(MP_ENABLE_OPENXR) && (defined(__ANDROID__) || defined(_WIN32))
 
-// OpenXR's Vulkan structures are selected when openxr_platform.h is parsed.
-#define VK_USE_PLATFORM_ANDROID_KHR
+// OpenXR's Vulkan structures are selected when openxr_platform.h is parsed. The Vulkan binding
+// itself needs no window-system types, so the PC defines none.
 #define XR_USE_GRAPHICS_API_VULKAN
+#if defined(__ANDROID__)
+#define VK_USE_PLATFORM_ANDROID_KHR
 #define XR_USE_PLATFORM_ANDROID
+#elif !defined(NOMINMAX)
+#define NOMINMAX
+#endif
 
 #include "vr/openxr_vulkan_direct.h"
 #include "vr/openxr_diagnostics.h"
@@ -15,7 +20,9 @@
 
 #include <aurora/vulkan_direct_interop.h>
 
+#if defined(__ANDROID__)
 #include <jni.h>
+#endif
 #include <vulkan/vulkan.h>
 #include <openxr/openxr_platform.h>
 
@@ -79,8 +86,13 @@ uint32_t PresentationTargetCount(const OpenXRPresentation& presentation) noexcep
     return presentation.mode == OpenXRFrameMode::VirtualScreen ? 1u : kOpenXREyeCount;
 }
 
+#if defined(__ANDROID__)
 const OpenXRVulkanGraphicsRequirements kNoRequirements{};
 const std::string kNoBackend = "the Quest's OpenXR Vulkan backend was not set up";
+constexpr const char* kPatchedDawnScript = "quest/Build-QuestDawn.ps1";
+#else
+constexpr const char* kPatchedDawnScript = "tools/Build-WindowsDawn.ps1";
+#endif
 
 } // namespace
 
@@ -216,7 +228,8 @@ public:
             return Fail("Vulkan graphics requirements were already queried from another OpenXR instance");
         }
         if (!aurora_vulkan_direct_available()) {
-            return Fail("direct presentation needs PrimedGun's patched Dawn (quest/Build-QuestDawn.ps1)");
+            return Fail(std::string("direct presentation needs PrimedGun's patched Dawn (") + kPatchedDawnScript +
+                        "); this one cannot create its Vulkan device through OpenXR");
         }
         const auto& extensions = runtime.EnabledExtensions();
         if (std::find(extensions.begin(), extensions.end(), std::string(XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME)) ==
@@ -1591,6 +1604,7 @@ const OpenXRVulkanGraphicsRequirements& OpenXRVulkanDirectBackend::GraphicsRequi
 int64_t OpenXRVulkanDirectBackend::SwapchainFormat() const { return m_impl->SwapchainFormat(); }
 const std::string& OpenXRVulkanDirectBackend::LastError() const { return m_impl->LastError(); }
 
+#if defined(__ANDROID__)
 // ---- OpenXRQuestVulkanBackend --------------------------------------------------------------------
 
 OpenXRQuestVulkanBackend::OpenXRQuestVulkanBackend(OpenXRLogCallback logger) : logger_(std::move(logger)) {}
@@ -1690,7 +1704,8 @@ const std::string& OpenXRQuestVulkanBackend::LastError() const {
 }
 
 #undef PG_QUEST_BACKEND_CALL
+#endif // defined(__ANDROID__)
 
 } // namespace PortVr
 
-#endif // defined(MP_ENABLE_OPENXR) && defined(__ANDROID__)
+#endif // defined(MP_ENABLE_OPENXR) && (defined(__ANDROID__) || defined(_WIN32))

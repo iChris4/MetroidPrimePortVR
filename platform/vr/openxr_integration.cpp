@@ -41,7 +41,7 @@
 #include "vr/openxr_input.h"
 #include "vr/openxr_runtime.h"
 #if defined(_WIN32)
-#include "vr/openxr_d3d12.h"
+#include "vr/openxr_windows.h"
 #define MP_OPENXR_GRAPHICS_BACKEND 1
 #elif defined(__ANDROID__)
 #include "vr/openxr_android.h"
@@ -84,8 +84,8 @@ void ConfigurePolicy(bool enabled) noexcept {
 #if MP_OPENXR_GRAPHICS_BACKEND
 
 #if defined(_WIN32)
-// TODO(phase 5): the Vulkan binding through the openxr_windows.h variant wrapper.
-using GraphicsBackend = OpenXRD3D12Backend;
+// D3D12, or Vulkan through direct presentation, as the graphics_backend setting asks.
+using GraphicsBackend = OpenXRWindowsBackend;
 inline constexpr const char* kFallbackNote = "; continuing on the mirror output";
 
 #else
@@ -356,7 +356,11 @@ public:
         }
 #endif
         runtime_ = std::make_unique<OpenXRRuntime>(logger_);
+#if defined(_WIN32)
+        backend_ = std::make_unique<GraphicsBackend>(logger_, kRequiredAuroraBackend == BACKEND_VULKAN);
+#else
         backend_ = std::make_unique<GraphicsBackend>(logger_);
+#endif
 
         OpenXRConfig config{};
         config.application_name = aurora_config.appName != nullptr ? aurora_config.appName
@@ -682,15 +686,19 @@ private:
 
     bool BackendMatchesConfiguredGraphicsApi(const AuroraConfig& aurora_config) {
 #if defined(_WIN32)
-        kRequiredAuroraBackend = BACKEND_D3D12;
-        kGraphicsBackendName = "D3D12";
+        // PC VR runs on D3D12 (Auto too), or on Vulkan when that is the API asked for.
+        const bool vulkan = aurora_config.desiredBackend == BACKEND_VULKAN;
+        kRequiredAuroraBackend = vulkan ? BACKEND_VULKAN : BACKEND_D3D12;
+        kGraphicsBackendName = vulkan ? "Vulkan" : "D3D12";
+        constexpr const char* kSupportedApis = "D3D12 or Vulkan graphics backend";
+#else
+        constexpr const char* kSupportedApis = "Vulkan graphics backend";
 #endif
         if (aurora_config.desiredBackend == BACKEND_AUTO ||
             aurora_config.desiredBackend == kRequiredAuroraBackend) {
             return true;
         }
-        SetError(std::string("OpenXR requires the ") + kGraphicsBackendName +
-                 " graphics backend on this platform");
+        SetError(std::string("OpenXR requires the ") + kSupportedApis + " on this platform");
         return false;
     }
 
@@ -708,8 +716,9 @@ private:
         }
 #endif
 #if defined(_WIN32)
+        // Vulkan's GPU is the runtime's through Dawn's device hooks (openxr_vulkan_direct.cpp).
         if (kRequiredAuroraBackend != BACKEND_D3D12) return;
-        const auto& requirements = backend_->GraphicsRequirements();
+        const auto& requirements = backend_->D3D12GraphicsRequirements();
         aurora_config.hasD3D12AdapterLuid = true;
         aurora_config.d3d12AdapterLuidLow = requirements.adapter_luid_low;
         aurora_config.d3d12AdapterLuidHigh = requirements.adapter_luid_high;

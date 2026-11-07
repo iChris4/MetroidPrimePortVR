@@ -187,6 +187,35 @@ int main() {
             Near(outPosition.m0[2], -1.f),
         "a sky draw is rotated into the eye without the eye's offset");
 
+  // A visor draw (AURORA_STEREO_ROUTE_VISOR): head-locked, with the eye's
+  // offset (half a 64 mm IPD at 1.5 units a metre) scaled by near / far. A
+  // drop 0.21 units ahead lands in the eye where the same direction 2 units
+  // ahead (the HUD's distance) would with the whole offset, at its own depth.
+  {
+    const auto headLockedEye = Affine(1, 0, 0, 0.048f, 0, 1, 0, 0, 0, 0, 1, 0);
+    const float nearDepth = 0.21f;
+    const float hudDepth = 2.f;
+    const auto visorEye = stereo_replay::scaled_translation(headLockedEye, nearDepth / hudDepth);
+    Check(Near(visorEye.m0[3], 0.048f * nearDepth / hudDepth) && Near(visorEye.m0[0], 1.f) &&
+              Near(visorEye.m2[3], 0.f),
+          "the visor view scales the eye offset and keeps the rotation");
+    // Ahead is -z; the eye's x in clip over w.
+    const auto ndcX = [&](const Mat3x4<float>& eyeView, float depth) {
+      const float x = eyeView.m0[3];
+      const float z = -depth + eyeView.m2[3];
+      return (eyeProjection.m0[0] * x + eyeProjection.m0[2] * z) / -z;
+    };
+    Check(Near(ndcX(visorEye, nearDepth), ndcX(headLockedEye, hudDepth)),
+          "a visor draw at the near plane shows the disparity of the HUD's distance");
+    auto visor = uniform;
+    const auto drop = Affine(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, -nearDepth);
+    std::memcpy(visor.data() + layout.positionOffset, &drop, sizeof(drop));
+    compose_stereo_uniform(visor.data(), layout, StereoEyeCompose{&eyeProjection, &visorEye, 1.f, 1.f, 1.f, 1.f});
+    std::memcpy(&outPosition, visor.data() + layout.positionOffset, sizeof(outPosition));
+    Check(Near(outPosition.m2[3], -nearDepth) && Near(outPosition.m0[3], 0.048f * nearDepth / hudDepth),
+          "a visor draw keeps its depth (in front of the world) and takes the scaled offset");
+  }
+
   // An orthographic projection is 2D content: identical in both eyes.
   auto ortho = uniform;
   Mat4x4<float> orthoProjection{};

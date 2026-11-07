@@ -123,6 +123,52 @@ CQuaternion Nlerp(const CQuaternion& from, CQuaternion to, float t) noexcept {
 
 bool VrImmersive() noexcept { return ImmersiveNow(); }
 
+namespace {
+bool s_visorDraw = false; // game thread, between VrBeginVisorDraw and VrEndVisorDraw
+} // namespace
+
+void VrBeginVisorDraw() noexcept {
+    if (s_visorDraw || !ImmersiveNow()) {
+        return;
+    }
+    s_visorDraw = true;
+    AuroraSetStereoDrawRoute(AURORA_STEREO_ROUTE_VISOR);
+}
+
+void VrEndVisorDraw() noexcept {
+    if (!s_visorDraw) {
+        return;
+    }
+    s_visorDraw = false;
+    AuroraSetStereoDrawRoute(AURORA_STEREO_ROUTE_WORLD);
+}
+
+bool VrParticlesFaceHead() noexcept { return !s_visorDraw && ImmersiveNow(); }
+
+bool VrEyeTangents(float& tanHalfWidth, float& tanHalfHeight) noexcept {
+    OpenXRFrameRequest request{};
+    if (!ImmersiveNow() || !OpenXRLatestFrameRequest(request)) {
+        return false;
+    }
+    // eye_fov: left, right, up, down angles; kept short of 90 degrees.
+    const auto tangent = [](float angle) {
+        const float maxAngle = 85.f * kDegreesToRadians;
+        return std::tan(std::min(std::fabs(angle), maxAngle));
+    };
+    float width = 0.f;
+    float height = 0.f;
+    for (const auto& fov : request.eye_fov) {
+        width = std::max({width, tangent(fov[0]), tangent(fov[1])});
+        height = std::max({height, tangent(fov[2]), tangent(fov[3])});
+    }
+    if (!(width > 0.f && height > 0.f)) {
+        return false;
+    }
+    tanHalfWidth = width;
+    tanHalfHeight = height;
+    return true;
+}
+
 CTransform4f VrRoomScaleCameraTransform(const CTransform4f& cameraXf) noexcept {
     OpenXRFrameRequest request{};
     if (!ImmersiveNow() || !OpenXRLatestFrameRequest(request)) {

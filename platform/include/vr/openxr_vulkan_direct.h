@@ -2,11 +2,14 @@
 
 #pragma once
 
-#if defined(MP_ENABLE_OPENXR) && defined(__ANDROID__)
+#if defined(MP_ENABLE_OPENXR) && (defined(__ANDROID__) || defined(_WIN32))
 
 #include "vr/openxr_backend.h"
 #include "vr/openxr_runtime.h"
+#include "vr/openxr_vulkan_requirements.h"
+#if defined(__ANDROID__)
 #include "vr/openxr_vulkan.h"
+#endif
 
 #include <cstdint>
 #include <memory>
@@ -14,8 +17,9 @@
 
 namespace PortVr {
 
-// Same-device Dawn/OpenXR Vulkan backend for the Quest (direct presentation), after
-// Wiicompiled_VR's Windows Vulkan backend. It needs PrimedGun's patched Dawn (quest/dawn).
+// Same-device Dawn/OpenXR Vulkan backend (direct presentation), after Wiicompiled_VR's Windows
+// Vulkan backend: the Quest's, and PC VR's on Vulkan (openxr_windows.h). It needs PrimedGun's
+// patched Dawn (quest/dawn; built by quest/Build-QuestDawn.ps1 and tools/Build-WindowsDawn.ps1).
 //
 // QueryGraphicsRequirements() runs after OpenXRRuntime::Initialize() and before
 // aurora_initialize(): it installs the hooks through which Dawn creates its Vulkan instance and
@@ -87,6 +91,7 @@ private:
     std::unique_ptr<Impl> m_impl;
 };
 
+#if defined(__ANDROID__)
 // The Quest's graphics backend: direct presentation (OpenXRVulkanDirectBackend) when the
 // direct_present setting asks for it and Aurora's Dawn offers it, otherwise the AHardwareBuffer
 // bridge (OpenXRVulkanBackend). The choice is made in QueryGraphicsRequirements(), before Aurora
@@ -136,7 +141,8 @@ private:
     std::unique_ptr<OpenXRVulkanDirectBackend> direct_;
     std::unique_ptr<OpenXRVulkanBackend> shared_;
 };
+#endif // defined(__ANDROID__)
 
 } // namespace PortVr
 
-#endif // defined(MP_ENABLE_OPENXR) && defined(__ANDROID__)
+#endif // defined(MP_ENABLE_OPENXR) && (defined(__ANDROID__) || defined(_WIN32))

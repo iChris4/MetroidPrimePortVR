@@ -74,6 +74,11 @@ CHUDBillboardEffect::CHUDBillboardEffect(
   ++g_BillboardCount;
   xe8_generator->SetModulationColor(color);
   xe8_generator->SetLocalScale(xf8_localScale);
+#ifdef TARGET_PC
+  // PortVr: drawn between VrBeginVisorDraw and VrEndVisorDraw (vr/vr_view.h), by the renderer's
+  // sorted list (AddToRenderer) or by Render below.
+  xe8_generator->PortSetVisor(true);
+#endif
 }
 
 CHUDBillboardEffect::~CHUDBillboardEffect() {
@@ -95,7 +100,11 @@ void CHUDBillboardEffect::PreRender(CStateManager& mgr, const CFrustumPlanes& fr
       !PortDebug::HideVisorEffects()) {
     CTransform4f camXf = mgr.GetCameraManager()->GetCurrentCameraTransform(mgr);
 #ifdef TARGET_PC
-    camXf = PortVr::VrHeadViewTransform(camXf);
+    // PortVr: the effect stays in the game camera's space, as on the TV, and is drawn on the visor
+    // route (the generator is marked in the ctor), which the eyes see head-locked: it follows the
+    // head exactly, roll included. Placed ahead of a CPU head pose instead, it lagged the eyes,
+    // dropped the head's roll and, 0.01 units past the near plane, was clipped by a few
+    // millimetres of head movement.
     if (xPortManagedType == 4) {
       // Remastered places the goo manager's effect in HUD space (CHUDVisorEffectData): x right
       // and y up on the plane D ahead of the eye, scaled per frame by GetHUDVisorEffectScale
@@ -161,34 +170,58 @@ void CHUDBillboardEffect::PreRender(CStateManager& mgr, const CFrustumPlanes& fr
 
 void CHUDBillboardEffect::Render(const CStateManager& mgr) const {
   if (x104_25_enableRender && !x104_24_renderAsParticleGen) {
+#ifdef TARGET_PC
+    PortVr::VrBeginVisorDraw();
+#endif
     xe8_generator->Render();
+#ifdef TARGET_PC
+    PortVr::VrEndVisorDraw();
+#endif
   }
 }
 
 #ifdef TARGET_PC
 // Port: the effects are authored to fill a 4:3 view (GetScaleForPOV). Wider screens keep the
-// vertical FOV and extend sideways, narrower ones extend vertically (Vert+), so spread where the
-// particles and bolts spawn along the extended axis. Scaling the system instead would stretch
-// every sprite and bolt with it. The visor goo manager places its splats itself. Remastered's
-// HUD-space effects are authored for 16:9, with HUD y up.
+// vertical FOV and extend sideways, narrower ones extend vertically (Vert+), and the headset's
+// eyes see wider still, so spread where the particles and bolts spawn along the extended axes.
+// Scaling the system instead would stretch every sprite and bolt with it. The visor goo manager
+// places its splats itself. Remastered's HUD-space effects are authored for 16:9, with HUD y up.
 void CHUDBillboardEffect::PortUpdateSpawnSpread(const CStateManager& mgr) {
   CVector3f spread(1.f, 1.f, 1.f);
   if (xPortManagedType == 4) {
     // Placed by PortAddVisorGooSplat.
-  } else if (PortIsRemasteredHUD()) {
-    const float aspect = mgr.GetCameraManager()->GetCurrentCamera(mgr).GetAspectRatio();
-    if (aspect > kPortHUDAspect) {
-      spread.SetX(aspect / kPortHUDAspect);
-    } else if (aspect > 0.f) {
-      spread.SetY(kPortHUDAspect / aspect);
-    }
   } else {
-    const float kMinAspect = 4.f / 3.f;
-    const float aspect = mgr.GetCameraManager()->GetCurrentCamera(mgr).GetAspectRatio();
-    if (aspect > kMinAspect) {
-      spread.SetX(aspect / kMinAspect);
+    // The frame the effect is authored for: 4:3 at the camera's unwidened FOV (16:9 for
+    // Remastered's), whose half height is this tangent from the eye.
+    const bool remastered = PortIsRemasteredHUD();
+    const float frameAspect = remastered ? kPortHUDAspect : 4.f / 3.f;
+    const CGameCamera& cam = mgr.GetCameraManager()->GetCurrentCamera(mgr);
+    const float aspect = cam.GetAspectRatio();
+    float across = 1.f;
+    float up = 1.f;
+    if (aspect > frameAspect) {
+      across = aspect / frameAspect;
     } else if (aspect > 0.f) {
-      spread.SetZ(kMinAspect / aspect);
+      up = frameAspect / aspect;
+    }
+    // PortVr: the eyes see far more than the game camera, so in the headset the effect spreads
+    // over their whole view, as it covers the screen on the TV, instead of a box ahead.
+    float eyeTanWidth;
+    float eyeTanHeight;
+    if (PortVr::VrEyeTangents(eyeTanWidth, eyeTanHeight)) {
+      const float frameTan = std::tan(cam.GetRenderFov() * (M_PIF / 180.f) * 0.5f) *
+                             rstl::min_val(1.f, aspect / frameAspect);
+      if (frameTan > 0.f) {
+        across = rstl::max_val(across, eyeTanWidth / (frameAspect * frameTan));
+        up = rstl::max_val(up, eyeTanHeight / frameTan);
+      }
+    }
+    // Remastered's HUD space has y up, retail's camera space z.
+    spread.SetX(across);
+    if (remastered) {
+      spread.SetY(up);
+    } else {
+      spread.SetZ(up);
     }
   }
   PortApplySpawnSpread(spread);

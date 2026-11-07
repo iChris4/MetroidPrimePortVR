@@ -3608,7 +3608,7 @@ void CElementGen::RenderParticles() {
       CVector3f fwd = systemViewCopy.GetForward();
       CVector3f origin = systemViewCopy.GetTranslation();
 #ifdef TARGET_PC
-      const bool vrOriented = PortVr::VrImmersive();
+      const bool vrOriented = PortVr::VrParticlesFaceHead();
       if (vrOriented) {
         origin = CGraphics::GetModelMatrix().GetInverse() *
                  PortVr::VrHeadViewTransform(CGraphics::GetViewMatrix()).GetTranslation();

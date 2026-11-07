@@ -89,6 +89,15 @@ void BuildPortConfigTab(TabContext& ctx, QTabWidget* tabs) {
 
   ctx.Separator(layout);
   layout->addWidget(ctx.Section(QObject::tr("Display")));
+  ctx.Combo(layout, QObject::tr("Graphics API"), "graphics_backend",
+            {{QObject::tr("Auto (Direct3D 12)"), QStringLiteral("auto")},
+             {QObject::tr("Direct3D 12"), QStringLiteral("d3d12")},
+             {QObject::tr("Vulkan"), QStringLiteral("vulkan")},
+             {QObject::tr("Direct3D 11 (no VR)"), QStringLiteral("d3d11")},
+             {QObject::tr("OpenGL (no VR)"), QStringLiteral("opengl")}})
+      ->setToolTip(QObject::tr("The renderer the game starts on; takes effect at the next start. VR runs on "
+                               "Direct3D 12 (Auto picks it) or Vulkan; Direct3D 11 and OpenGL start the game "
+                               "on the desktop only. The first start after a change compiles its shaders again."));
   ctx.Check(layout, QObject::tr("Fullscreen"), "fullscreen");
   ctx.Check(layout, QObject::tr("VSync"), "vsync",
             QObject::tr("Holds frames to the display's refresh rate. "
