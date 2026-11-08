@@ -34,6 +34,12 @@
 #include <sys/file.h>
 #include <unistd.h>
 #endif
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#if TARGET_OS_IPHONE
+#include <thread>
+#endif
+#endif
 #if defined(__ANDROID__)
 #include <android/log.h>
 #include <thread>
@@ -279,6 +285,36 @@ void ToFile(void* context, const char* data, size_t size) {
   sFileLines.Flush(); // a last line without its newline, as before an abort
   _exit(0);
 }
+
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+// The iOS family (iPhone, iPad, Apple Vision Pro) forbids fork(), which left the log file with its
+// header alone there. The copier is a thread of the game's own instead: a crash can then lose what
+// was still in the pipe, which the separate process would have drained.
+int sThreadFile = -1;
+
+void CopyInThread(int in, int terminal, bool terminalSocket, int file) {
+  sThreadFile = file;
+  sFileLines.rules = &sRules;
+  sFileLines.sink = ToFile;
+  sFileLines.context = &sThreadFile;
+  char buffer[8192];
+  for (;;) {
+    const ssize_t n = read(in, buffer, sizeof(buffer));
+    if (n < 0 && errno == EINTR) {
+      continue;
+    }
+    if (n <= 0) {
+      break;
+    }
+    WriteTerminal(terminal, buffer, n, terminalSocket);
+    sFileLines.Feed(buffer, static_cast< size_t >(n));
+  }
+  sFileLines.Flush();
+  close(in);
+  close(file);
+  close(terminal);
+}
+#endif
 #endif
 
 #if defined(__ANDROID__)
@@ -758,6 +794,10 @@ bool Start() {
     return false;
   }
   sRules = MakeRules();
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+  std::thread([in = fds[0], terminal, terminalSocket, out] { CopyInThread(in, terminal, terminalSocket, out); })
+      .detach();
+#else
   long maxFd = sysconf(_SC_OPEN_MAX);
   maxFd = maxFd < 256 ? 256 : maxFd > 65536 ? 65536 : maxFd;
   const pid_t child = fork();
@@ -772,6 +812,7 @@ bool Start() {
     close(fds[1]);
     return false;
   }
+#endif
   dup2(fds[1], STDOUT_FILENO);
   dup2(fds[1], STDERR_FILENO);
   close(fds[1]);
