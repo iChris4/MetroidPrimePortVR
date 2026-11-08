@@ -18,6 +18,10 @@
 #include <aurora/gfx.hpp>
 #include <aurora/imgui.h>
 
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -403,7 +407,9 @@ void shutdown() noexcept {
 }
 
 bool headset_owns_display() noexcept {
-#if defined(__ANDROID__)
+#if defined(__ANDROID__) || (defined(__APPLE__) && TARGET_OS_VISION)
+  // The Quest and Apple Vision Pro have no screen beside the headset: the window is never shown
+  // (an offscreen one on visionOS), so presenting it would be wasted work.
   return g_provider != nullptr && g_sink != nullptr;
 #else
   // The desktop window mirrors the game for whoever watches.
@@ -414,7 +420,7 @@ bool headset_owns_display() noexcept {
 int mirror_view() noexcept { return g_mirrorView.load(std::memory_order_relaxed); }
 
 bool mirror_skips_mono() noexcept {
-#if defined(__ANDROID__)
+#if defined(__ANDROID__) || (defined(__APPLE__) && TARGET_OS_VISION)
   return false;
 #else
   return g_provider != nullptr && g_sink != nullptr && mirror_view() != AURORA_STEREO_MIRROR_NORMAL;

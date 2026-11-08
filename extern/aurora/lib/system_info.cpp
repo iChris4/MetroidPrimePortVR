@@ -257,12 +257,15 @@ uint64_t GetMemoryAmount() {
 }
 
 std::string GetOSVersion() {
-#if TARGET_OS_MAC
-  constexpr auto name = "macOS";
+  // TARGET_OS_MAC is set on every Darwin, so the specific ones come first.
+#if TARGET_OS_VISION
+  constexpr auto name = "visionOS";
 #elif TARGET_OS_IOS
   constexpr auto name = "iOS";
 #elif TARGET_OS_TV
   constexpr auto name = "tvOS";
+#elif TARGET_OS_MAC
+  constexpr auto name = "macOS";
 #else
   constexpr auto name = Unknown;
 #endif

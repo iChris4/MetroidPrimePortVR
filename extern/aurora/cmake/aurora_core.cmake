@@ -33,7 +33,8 @@ elseif (APPLE)
     target_sources(aurora_core PRIVATE lib/system_info_mac.mm)
 endif ()
 
-if (IOS)
+# visionOS too: SDL defines SDL_PLATFORM_IOS there, so device.cpp leaves rumble to this file.
+if (IOS OR CMAKE_SYSTEM_NAME STREQUAL "visionOS")
     find_library(COREHAPTICS_FRAMEWORK CoreHaptics REQUIRED)
     target_sources(aurora_core PRIVATE lib/device_ios.mm)
     set_source_files_properties(lib/device_ios.mm PROPERTIES COMPILE_FLAGS -fobjc-arc)
@@ -98,6 +99,9 @@ if (AURORA_ENABLE_GX)
     endif ()
     # Fragment density maps for foveated eye rendering, through the same patched Dawn. Stubs elsewhere.
     target_sources(aurora_core PRIVATE lib/webgpu/fdm.cpp)
+    # The Apple Vision Pro stereo bridge (eyes shared with the visionOS OpenXR provider through
+    # IOSurfaces, ordered by MTLSharedEvents; aurora/metal_interop.h). Stubs elsewhere.
+    target_sources(aurora_core PRIVATE lib/webgpu/metal_interop.cpp)
     if (ANDROID)
         target_link_libraries(aurora_core PRIVATE android)
     endif ()
@@ -113,6 +117,13 @@ if (AURORA_ENABLE_GX)
         target_sources(aurora_core PRIVATE lib/dawn/MetalBinding.mm)
         set_source_files_properties(lib/dawn/MetalBinding.mm PROPERTIES COMPILE_FLAGS -fobjc-arc)
         target_link_options(aurora_core PUBLIC "LINKER:-weak_framework,Metal")
+        # metal_interop.cpp retains IOSurfaces and MTLSharedEvents through CoreFoundation.
+        target_link_libraries(aurora_core PUBLIC "-framework IOSurface" "-framework CoreFoundation"
+                                                 "-framework QuartzCore")
+    endif ()
+    if (APPLE AND CMAKE_SYSTEM_NAME STREQUAL "visionOS")
+        # MetalBinding.mm makes its own CAMetalLayer there (no UIKit window exists).
+        target_compile_definitions(aurora_core PRIVATE AURORA_VISIONOS=1)
     endif ()
     if (DAWN_ENABLE_D3D11)
         target_compile_definitions(aurora_core PRIVATE DAWN_ENABLE_BACKEND_D3D11)

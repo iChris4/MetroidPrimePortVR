@@ -1,4 +1,8 @@
 #include "input.hpp"
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
+#include <cstring>
 #include "device.hpp"
 #include "internal.hpp"
 #include "io.hpp"
@@ -451,6 +455,20 @@ SDL_JoystickID add_controller(SDL_JoystickID which) noexcept {
       SDL_CloseGamepad(ctrl);
       return -1;
     }
+#if defined(__APPLE__) && TARGET_OS_VISION
+    // Apple Vision Pro: the PlayStation VR2 Sense controllers are the VR layer's tracked controllers
+    // (the visionOS OpenXR provider reads them through GameController and ARKit). SDL's MFi driver
+    // would also offer each as a gamepad of its own, so every button would reach the game twice.
+    // The DualSense keeps its own name ("DualSense Wireless Controller") and stays a gamepad.
+    if (const char* name = SDL_GetGamepadName(ctrl); name != nullptr &&
+        (std::strstr(name, "VR2") != nullptr || std::strstr(name, "Sense Controller") != nullptr ||
+         std::strstr(name, "Spatial") != nullptr)) {
+      Log.info("Leaving '{}' to the VR controllers (vid {:04x}, pid {:04x})", name, controller.m_vid,
+               controller.m_pid);
+      SDL_CloseGamepad(ctrl);
+      return -1;
+    }
+#endif
     controller.m_isGameCube = controller.m_vid == 0x057E && controller.m_pid == 0x0337;
     if (controller.m_isGameCube ||
         (SDL_GetGamepadType(ctrl) == SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_PRO && controller.m_pid == 0x2073)) {
