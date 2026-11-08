@@ -132,6 +132,14 @@ Other platform details:
   BC, which hid it. `tools/Build-VisionOSDawn.sh` patches the mapping for the iOS family.
 - **Empty log.** The log file was filled by a forked copier process; the iOS family forbids
   `fork()`, so only its header was written. There the copier is a thread.
+- **The room through the game.** The provider drew the eye images with their alpha, which keeps the
+  GameCube framebuffer's (Metroid Prime's effects leave it below 1), and a mixed-immersion drawable
+  takes alpha as coverage: the room showed through immersive play at about half opacity. Layers
+  without OpenXR's alpha-blend flag (the game, the virtual screen) are now written opaque; the VR
+  menu keeps its transparency. Mario Kart's alpha stays at 1, so Wiicompiled never showed it.
+- **Crash on a pause.** When the layer paused between a frame's start and its drawable (the Digital
+  Crown, the headset taken off), the provider still ended the frame's submission, which
+  CompositorServices aborts on ("BUG IN CLIENT"). Such a frame is now dropped.
 
 ## Known gaps
 

@@ -151,6 +151,15 @@ fragment float4 layer_fragment(VertexOut in [[stage_in]], texture2d<float> image
                                sampler s [[sampler(0)]]) {
     return image.sample(s, in.uv);
 }
+
+// A layer without XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT is opaque whatever its
+// texture's alpha holds. The game's eye images keep the GameCube framebuffer's alpha (Metroid
+// Prime's effects leave it well below 1), which a mixed-immersion drawable would otherwise take as
+// coverage and show the room through the game at half opacity.
+fragment float4 layer_fragment_opaque(VertexOut in [[stage_in]], texture2d<float> image [[texture(0)]],
+                                      sampler s [[sampler(0)]]) {
+    return float4(image.sample(s, in.uv).rgb, 1.0);
+}
 )MSL";
 
 struct Uniforms {
@@ -291,7 +300,7 @@ bool Compositor::EnsurePipelines(MTLPixelFormat color, MTLPixelFormat depth) {
     }
     MTLRenderPipelineDescriptor* descriptor = [MTLRenderPipelineDescriptor new];
     descriptor.vertexFunction = [library newFunctionWithName:@"layer_vertex"];
-    descriptor.fragmentFunction = [library newFunctionWithName:@"layer_fragment"];
+    descriptor.fragmentFunction = [library newFunctionWithName:@"layer_fragment_opaque"];
     descriptor.colorAttachments[0].pixelFormat = color;
     descriptor.depthAttachmentPixelFormat = depth;
     descriptor.label = @"PrimedGun layer (opaque)";
@@ -301,7 +310,9 @@ bool Compositor::EnsurePipelines(MTLPixelFormat color, MTLPixelFormat depth) {
                      (error != nil ? error.localizedDescription.UTF8String : "unknown"));
         return false;
     }
-    // Premultiplied source-alpha blending, the OpenXR layer flag's semantics.
+    // Premultiplied source-alpha blending, the OpenXR layer flag's semantics: the texture's alpha
+    // is the layer's coverage there.
+    descriptor.fragmentFunction = [library newFunctionWithName:@"layer_fragment"];
     descriptor.colorAttachments[0].blendingEnabled = YES;
     descriptor.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorOne;
     descriptor.colorAttachments[0].sourceAlphaBlendFactor = MTLBlendFactorOne;
@@ -652,8 +663,10 @@ bool Compositor::BeginFrame() {
     std::lock_guard lock(m_mutex);
     m_drawable = drawable;
     if (drawable == nullptr) {
-        // The layer paused between the two calls. The frame is ended without content.
-        cp_frame_end_submission(frame);
+        // The layer paused between the two calls (the Digital Crown, the headset taken off, a
+        // system overlay). A frame without a drawable is dropped as it is: ending its submission
+        // aborts the app ("BUG IN CLIENT" in cp_frame_end_submission), as Apple's own Metal
+        // sample avoids too.
         m_frame = nullptr;
         m_timing = nullptr;
         return false;
@@ -720,7 +733,7 @@ void Compositor::EndFrame(const std::vector<ComposedLayer>& layers, bool alphaBl
         cp_frame_start_submission(frame);
         drawable = FirstDrawable(frame);
         if (drawable == nullptr) {
-            cp_frame_end_submission(frame);
+            // No drawable: the frame is dropped, never ended (see BeginFrame).
             return;
         }
         timing = cp_drawable_get_frame_timing(drawable);
