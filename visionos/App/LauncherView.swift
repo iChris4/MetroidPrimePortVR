@@ -268,8 +268,8 @@ private struct AboutView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 Text(GameInfo.title).font(.largeTitle.bold())
-                Text("PrimedGun's VR experience and controls: Nobbie and iChris4. The native port: Odrannnn and its contributors, from the PrimeDecomp decompilation. The Apple Vision Pro layer comes from Wiicompiled VR.")
-                Text("No game content is included: the game reads your own disc image and ships none of its assets. Metroid Prime is a trademark of Nintendo; this project is unaffiliated with Nintendo and Retro Studios.")
+                Text(GameInfo.credits)
+                Text("No game content is included: the game reads your own disc image and ships none of its assets. \(GameInfo.gameName) is a trademark of Nintendo; this project is unaffiliated with Nintendo and Retro Studios.")
                 Text("Your files: Files app > On My Apple Vision Pro > \(GameInfo.title). The settings, memory card saves and the log (the .log file) are there.")
                     .foregroundStyle(.secondary)
             }

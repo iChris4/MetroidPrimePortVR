@@ -24,8 +24,8 @@ enum GameStorage {
         documents.appendingPathComponent(String(cString: mp_visionos_settings_file_name()))
     }
 
-    /// The extensions the port opens (launcher/core/disc_probe.h).
-    static let discExtensions: Set<String> = ["iso", "gcm", "rvz", "wbfs", "ciso", "nkit"]
+    /// The extensions the port opens (launcher/core/disc_probe.cpp).
+    static var discExtensions: Set<String> { GameInfo.discExtensions }
 
     static func prepare() -> String? {
         do {

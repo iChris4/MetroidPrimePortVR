@@ -16,6 +16,11 @@
 #include <string>
 #include <unordered_map>
 
+// The game, as the launcher's messages name it (Echoes' CMakeLists.txt defines its own).
+#ifndef MP_VISIONOS_GAME_NAME
+#define MP_VISIONOS_GAME_NAME "Metroid Prime"
+#endif
+
 namespace {
 
 std::mutex g_mutex;
@@ -55,13 +60,13 @@ int mp_launcher_probe_disc(const char* path, char* game_id, size_t game_id_size,
 const char* mp_launcher_disc_check_message(int check) {
     switch (check) {
     case MP_DISC_OK:
-        return "Metroid Prime (USA or PAL), ready to play.";
+        return MP_VISIONOS_GAME_NAME ", ready to play.";
     case MP_DISC_WRONG_GAME:
-        return "This image is not Metroid Prime for the GameCube.";
+        return "This image is not " MP_VISIONOS_GAME_NAME " for the GameCube.";
     case MP_DISC_WRONG_REVISION:
-        return "This is a later revision of Metroid Prime; the port plays the first release (1.00) or PAL.";
+        return "This revision of " MP_VISIONOS_GAME_NAME " is not one the port plays (see the supported discs).";
     case MP_DISC_UNSUPPORTED_FORMAT:
-        return "This image format is not supported. Use .iso, .gcm, .nkit.iso, .rvz, .ciso or .wbfs.";
+        return "This image format is not one the port opens (see the supported discs).";
     case MP_DISC_UNVERIFIED:
         return "This image's header cannot be checked here; the game checks it when it starts.";
     default:
