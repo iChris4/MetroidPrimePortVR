@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// From Wiicompiled VR (https://github.com/iChris4/Wiicompiled_VR), branch vision-pro.
+
 #ifndef AURORA_METAL_INTEROP_H
 #define AURORA_METAL_INTEROP_H
 
