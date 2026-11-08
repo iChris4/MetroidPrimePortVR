@@ -11,6 +11,7 @@ CompositorServices and ARKit drives the headset. The visionOS layer comes from W
 |---|---|
 | Build for the device and the simulator | Works. |
 | Signing, installing on the headset, copying a disc image to it | Works (`--install`, `devicectl device copy to`). |
+| Game start on the headset | Works: the disc mounts, the session reaches FOCUSED, the first screens run at the headset's 90 fps, and a quit is clean (read from the log of an unattended run). |
 | Launcher, disc import, disc check | Works in the simulator. |
 | Game start, OpenXR session, title screen on the virtual screen | Works in the simulator (head tracking only). |
 | Quit and return to the launcher | Works in the simulator. |
@@ -122,6 +123,15 @@ Other platform details:
   (Documents as the user folder, memory caps) apply. CMake sets no `IOS` there: the build uses
   `MP_VISIONOS`, and the code `MP_PLATFORM_VISIONOS` or `TARGET_OS_VISION`.
 - Aurora does not link its SDL `main` on visionOS: SwiftUI owns the process.
+
+## Fixed on the first headset run
+
+- **Crash at Play.** This Dawn reports BC texture compression on iOS-family GPUs that have it, the
+  headset's included, but mapped the BC formats to Metal only on macOS, so the first BC texture
+  (the game's compressed textures) aborted in `MetalPixelFormat`. The simulator's GPU reports no
+  BC, which hid it. `tools/Build-VisionOSDawn.sh` patches the mapping for the iOS family.
+- **Empty log.** The log file was filled by a forked copier process; the iOS family forbids
+  `fork()`, so only its header was written. There the copier is a thread.
 
 ## Known gaps
 

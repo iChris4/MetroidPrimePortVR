@@ -20,7 +20,17 @@ the eyes into IOSurfaces ordered by MTLSharedEvents.
   world tracking), answering the Touch profile. Aurora leaves them out of SDL's gamepads, which
   would otherwise read every button a second time.
 - Checked in the visionOS simulator: NKit disc mounted, session FOCUSED, title screen on the
-  virtual screen, clean quit back to the launcher. Unchecked: everything on a headset.
+  virtual screen, clean quit back to the launcher.
+- First headset run crashed at Play in Dawn's MetalPixelFormat (DAWN_UNREACHABLE): the Metal
+  backend enables TextureCompressionBC on the iOS family (`supportsBCTextureCompression`, iOS 16.4+)
+  but maps BC to MTLPixelFormat only under DAWN_PLATFORM_IS(MACOS). The simulator reports no BC.
+  tools/Build-VisionOSDawn.sh widens both guards (UtilsMetal.mm, TextureMTL.mm) to the iOS family.
+  The prebuilt ios-arm64 package likely has the same fault on BC-capable iPhones.
+- port_log_file.cpp forked its copier; fork() fails on the iOS family, so the log held its header
+  only. There the copier is a thread (a crash can lose what is still in the pipe).
+- After both fixes: on the headset the session reaches FOCUSED, 1920x1824 eyes, about 90 fps on the
+  title screen, DualSense Edge seen by SDL, clean quit. Unchecked: gameplay in stereo, the Sense
+  controllers, comfort.
 
 ## VR: leave the four original barrel wings untouched (2026-11-07)
 
