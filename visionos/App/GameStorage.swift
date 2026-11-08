@@ -25,7 +25,7 @@ enum GameStorage {
     }
 
     /// The extensions the port opens (launcher/core/disc_probe.h).
-    static let discExtensions: Set<String> = ["iso", "gcm", "rvz", "wbfs", "ciso", "nkit", "wia", "gcz"]
+    static let discExtensions: Set<String> = ["iso", "gcm", "rvz", "wbfs", "ciso", "nkit"]
 
     static func prepare() -> String? {
         do {

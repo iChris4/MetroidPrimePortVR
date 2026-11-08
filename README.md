@@ -5,13 +5,14 @@
 > This independent project is not affiliated with or endorsed by PrimeDecomp.
 > Please report port issues here rather than to the decompilation project.
 
-PrimedGun 2.0 brings **Metroid Prime** to native VR on Windows PC and standalone
-Meta Quest. It builds on the controls and VR experience of
+PrimedGun 2.0 brings **Metroid Prime** to native VR on Windows PC, standalone
+Meta Quest and Apple Vision Pro. It builds on the controls and VR experience of
 [the original PrimedGun](https://github.com/Nobbie248/PrimedGun), with a native
 game engine based on [PrimeDecomp](https://github.com/PrimeDecomp/prime),
 Odran's MetroidPrimePort, and Aurora rendering.
 
-This fork targets Windows PC VR and standalone Meta Quest.
+This fork targets Windows PC VR, standalone Meta Quest and Apple Vision Pro
+(branch `VisionPro`, see [docs/VISIONOS.md](docs/VISIONOS.md)).
 
 **No game content is included.** You need your own copy of the game: the port
 reads it from a disc image and never ships any of its assets. This repository
@@ -20,6 +21,7 @@ ships no disc image, and neither does any package or release built from it.
 ## Features
 
 - Native OpenXR VR on PC (Direct3D 12, or Vulkan for SteamVR headsets such as PSVR2) and standalone Meta Quest (tested on Quest 3).
+- Apple Vision Pro (visionOS 26+, Metal) with PlayStation VR2 Sense controllers or a gamepad; see [docs/VISIONOS.md](docs/VISIONOS.md).
 - Room-scale movement with a modern VR control scheme, snap or smooth turning.
 - 6DOF arm cannon tracking for aiming, grapple, lock-on and left-handed play.
 - One-click height calibration and adjustable cannon position and rotation.
@@ -239,6 +241,20 @@ Ninja, Git, and Rust configured for Android ARM64. Then run:
 Add `-Install` to install on an ADB-connected headset. The script builds the
 Quest Gradle project and its OpenXR native library. See the prerequisite and
 signing notes in [quest/Build-Quest.ps1](quest/Build-Quest.ps1).
+
+### Apple Vision Pro
+
+On a Mac with Apple silicon, install Xcode with the visionOS platform, CMake
+3.28+, Ninja, and Rust nightly with `rust-src` (the disc reader builds its
+standard library for visionOS). Then run:
+
+```sh
+visionos/Build-VisionOS.sh --team <TEAMID> --install
+```
+
+It builds Dawn for visionOS, the game as a framework and the SwiftUI launcher
+app, and installs it on the paired headset. `--simulator` builds for the
+visionOS simulator. See [docs/VISIONOS.md](docs/VISIONOS.md).
 
 ### Desktop Native Port
 
