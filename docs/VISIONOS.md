@@ -16,8 +16,8 @@ CompositorServices and ARKit drives the headset. The visionOS layer comes from W
 | Game start, OpenXR session, title screen on the virtual screen | Works in the simulator (head tracking only). |
 | Quit and return to the launcher | Works in the simulator. |
 | Stereo gameplay, frame pacing, comfort | Not yet checked on a headset. |
-| PlayStation VR2 Sense controllers | Written against the visionOS 26 SDK; not yet checked on a headset. |
-| DualSense and other gamepads | Through SDL as on iPhone; not yet checked on a headset. |
+| PlayStation VR2 Sense controllers | Played on a headset (the Frigate and beyond); calibration not checked. |
+| DualSense and other gamepads | Played on a headset. Look to lock-on and the lock's aim for a gamepad (below) not yet checked there. |
 
 The simulator has no hand tracking and no accessory tracking, so everything about hands and
 controllers is checked on a headset only.
@@ -85,9 +85,12 @@ The script runs three stages, each kept when up to date:
   hand. Cross and Circle are A and B; Square and Triangle are X and Y; Create is the menu
   button.
 - **DualSense or another gamepad.** It plays the original controls; the headset still looks
-  around.
+  around. The view stays level, so the head picks what L locks on to (look to lock-on and look to
+  grapple, on by default), and while L holds a target the arm cannon turns to it, as the TV
+  camera did, so the shots go to it.
 - **Hands.** With nothing in hand, look at a menu item and pinch to press it. Playing needs
-  controllers or a gamepad.
+  controllers or a gamepad. Hands holding a gamepad are not controllers to the game: they never
+  move the cannon or press its buttons.
 
 ### Settings and files
 
@@ -140,6 +143,26 @@ Other platform details:
 - **Crash on a pause.** When the layer paused between a frame's start and its drawable (the Digital
   Crown, the headset taken off), the provider still ended the frame's submission, which
   CompositorServices aborts on ("BUG IN CLIENT"). Such a frame is now dropped.
+
+## Fixed after the first play sessions
+
+- **No lock-on aim with a gamepad.** The cannon follows the camera when no controller tracks it,
+  and the headset's camera stays level and on the heading a lock started from, so the cannon
+  pointed past a locked target, further than the game's aim assist turns a shot, and a target
+  up high (the Frigate's first room) could not be hit. While L holds an object, the cannon now
+  turns about the camera toward it over a sixth of a second, as the TV camera turned to the
+  target, and the assist finishes the aim (`PortVr::VrLockAimTurn`, `platform/vr/vr_view.cpp`).
+  This applies to every headset, whenever no controller tracks the cannon.
+- **Look to lock-on did nothing with a gamepad.** With cannon targeting on (the default), the
+  cannon's ray picked the lock target and nothing did without a tracked cannon. The head's gaze
+  now picks then, by the look to lock-on and look to grapple settings
+  (`platform/vr/vr_look_scan.cpp`).
+- **Bare hands as controllers.** The provider answers the action bindings from bare hands too
+  (pinches, the look-and-pinch ray), for the VR menu. The game read hands holding a gamepad as
+  Touch controllers: a pinch would have aimed the cannon along a fixed ray, and a curled hand
+  could press grip buttons. The game's controller snapshot now counts a hand as connected only
+  while a Sense controller is in it (`xr_visionos_hand_has_controller`); the VR menu still reads
+  the hands.
 
 ## Known gaps
 

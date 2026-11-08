@@ -98,6 +98,13 @@ void xr_visionos_spatial_event(uint64_t event_id, int phase, int chirality, bool
                                float origin_y, float origin_z, float direction_x, float direction_y,
                                float direction_z, bool has_pose, float pose_x, float pose_y, float pose_z);
 
+// Provider -> game: whether a PlayStation VR2 Sense controller is in this hand
+// (0 left, 1 right) rather than the bare hand. Bare hands still answer the
+// action bindings (pinches as buttons, poses from the joints or the
+// look-and-pinch ray), which the in-headset menu uses, but they are no
+// controllers to play with. Any thread.
+bool xr_visionos_hand_has_controller(uint32_t hand);
+
 // Diagnostics for the app: the last error the provider logged, or "".
 const char* xr_visionos_last_error(void);
 

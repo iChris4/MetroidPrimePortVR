@@ -483,4 +483,14 @@ void ControllerHapticStop(uint32_t hand) noexcept {
     }
 }
 
+bool HandHasController(uint32_t hand) noexcept {
+    if (hand > 1) {
+        return false;
+    }
+    std::lock_guard lock(g_mutex);
+    return AssignLocked()[hand] != nullptr;
+}
+
 } // namespace PortVr::visionos
+
+bool xr_visionos_hand_has_controller(uint32_t hand) { return PortVr::visionos::HandHasController(hand); }

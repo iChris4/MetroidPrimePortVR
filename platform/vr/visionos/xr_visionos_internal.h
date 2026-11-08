@@ -432,5 +432,7 @@ bool ControllerPose(uint32_t hand, bool aim, int64_t timeNanos, simd_float4x4& w
 // Rumble on the controller in `hand`: `amplitude` 0..1 for `durationNanos`.
 void ControllerHaptic(uint32_t hand, float amplitude, int64_t durationNanos) noexcept;
 void ControllerHapticStop(uint32_t hand) noexcept;
+// Whether a controller is in `hand` now (xr_visionos_hand_has_controller).
+bool HandHasController(uint32_t hand) noexcept;
 
 } // namespace PortVr::visionos

@@ -796,7 +796,13 @@ void CPlayer::UpdateGunTransform(const CVector3f& gunPos, CStateManager& mgr) {
 #ifdef TARGET_PC
   // PortVr: the arm cannon follows the tracked controller (6DOF), holster lift
   // included; the aim prediction and assist below then work from that pose.
-  PortVr::VrCannonTransform(mgr, *this, camXf, gunXf);
+  // Without one (a gamepad), an L lock turns the cannon to the target as the
+  // TV camera did, which the level headset view no longer does.
+  CTransform4f portVrLockTurn = CTransform4f::Identity();
+  if (!PortVr::VrCannonTransform(mgr, *this, camXf, gunXf) &&
+      PortVr::VrLockAimTurn(mgr, *this, camXf, portVrLockTurn)) {
+    gunXf = portVrLockTurn * gunXf;
+  }
   // Port: pointer aim. The gun sits off to the side of the eye, so a shot parallel to the
   // ray through the pointer would miss what the pointer is on. Shots and the gun model aim
   // from the gun at the point the ray hits instead (or a far point when it hits nothing);

@@ -787,6 +787,71 @@ bool VrCannonTransform(const CStateManager& mgr, const CPlayer& player, const CT
 
 bool VrCannonTracked() noexcept { return s_cannon.tracked; }
 
+namespace {
+// The gamepad's lock-on aim: how far the cannon has turned from the camera's
+// facing to the target's (0 to 1), advanced once per tick, and the last
+// direction to the target, which the cannon eases back from when the lock ends.
+struct LockAimState {
+    bool stamped = false;
+    unsigned int stamp = 0;
+    float weight = 0.f;
+    CVector3f toTarget = CVector3f(0.f, 1.f, 0.f);
+};
+LockAimState s_lockAim;
+// A tenth per tick: a sixth of a second each way at 60 ticks a second, about
+// as long as the TV camera took to turn to a target.
+constexpr float kLockAimStep = 0.1f;
+} // namespace
+
+bool VrLockAimTurn(const CStateManager& mgr, const CPlayer& player, const CTransform4f& cameraXf,
+                   CTransform4f& turn) noexcept {
+    if (!ImmersiveNow()) {
+        s_lockAim.weight = 0.f;
+        return false;
+    }
+    const CVector3f pivot = cameraXf.GetTranslation();
+    bool locked = false;
+    const CPlayer::EPlayerOrbitState orbit = player.GetOrbitState();
+    if (player.GetMorphballTransitionState() == CPlayer::kMS_Unmorphed &&
+        (orbit == CPlayer::kOS_OrbitObject || orbit == CPlayer::kOS_ForcedOrbitObject) &&
+        mgr.GetObjectById(player.GetOrbitTargetId()) != nullptr) {
+        const CVector3f toTarget = player.GetOrbitPoint() - pivot;
+        if (toTarget.CanBeNormalized()) {
+            s_lockAim.toTarget = toTarget.AsNormalized();
+            locked = true;
+        }
+    }
+    // The gun is placed several times in some ticks; it turns once per tick.
+    const unsigned int stamp = mgr.GetUpdateFrameIndex();
+    if (!s_lockAim.stamped || stamp != s_lockAim.stamp) {
+        s_lockAim.stamped = true;
+        s_lockAim.stamp = stamp;
+        s_lockAim.weight = std::clamp(s_lockAim.weight + (locked ? kLockAimStep : -kLockAimStep), 0.f, 1.f);
+    }
+    if (s_lockAim.weight <= 0.f) {
+        return false;
+    }
+
+    CVector3f forward = cameraXf.GetForward();
+    if (!forward.CanBeNormalized()) {
+        return false;
+    }
+    forward.Normalize();
+    const float w = s_lockAim.weight;
+    const float eased = w * w * (3.f - 2.f * w);
+    CVector3f aim = forward * (1.f - eased) + s_lockAim.toTarget * eased;
+    if (!aim.CanBeNormalized()) {
+        aim = s_lockAim.toTarget;
+    }
+    // The camera's frame turned to face `aim`, upright as the TV camera was,
+    // about the camera's position: what was placed from the camera keeps its
+    // place and tilt in the turned frame.
+    const CTransform4f aimFrame = CTransform4f::LookAt(CVector3f::Zero(), aim.AsNormalized());
+    turn = aimFrame * cameraXf.GetRotation().GetQuickInverse();
+    turn.SetTranslation(pivot - turn.Rotate(pivot));
+    return true;
+}
+
 bool VrMirrorWeaponModels() noexcept { return ImmersiveNow() && !GetVrSettings().use_right_hand; }
 
 CTransform4f VrWeaponModelTransform(const CTransform4f& pose) noexcept {

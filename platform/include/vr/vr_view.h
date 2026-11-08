@@ -208,6 +208,18 @@ bool VrCannonTransform(const CStateManager& mgr, const CPlayer& player, const CT
                        CTransform4f& gunXf) noexcept;
 // Whether the last VrCannonTransform placed the cannon.
 bool VrCannonTracked() noexcept;
+// The gamepad's lock-on aim, for CPlayer::UpdateGunTransform when
+// VrCannonTransform did not place the cannon. While immersive and the L lock
+// holds an object, `turn` is a rotation about the camera's position (cameraXf's
+// translation) that takes the camera's facing to the orbit point, as the TV
+// camera turned to the target; the gun, placed from the camera, is multiplied
+// by it and so turns with it, and the aim assist finishes the aim as on the
+// TV. The headset keeps the view level and on the heading the lock started
+// from, so the cannon would otherwise point past the target, beyond the reach
+// of the assist's angle limits. The turn eases in and out over a few ticks;
+// false (no turn) once it is out.
+bool VrLockAimTurn(const CStateManager& mgr, const CPlayer& player, const CTransform4f& cameraXf,
+                   CTransform4f& turn) noexcept;
 // Reflect only model geometry; tracked poses and projectile aim stay rigid.
 bool VrMirrorWeaponModels() noexcept;
 CTransform4f VrWeaponModelTransform(const CTransform4f& pose) noexcept;
