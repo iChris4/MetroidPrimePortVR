@@ -52,6 +52,14 @@
 #define XR_USE_TIMESPEC
 #include <openxr/openxr_platform.h>
 #define MP_OPENXR_GRAPHICS_BACKEND 1
+#elif defined(MP_PLATFORM_VISIONOS)
+// Apple Vision Pro: the OpenXR provider in platform/vr/visionos (CompositorServices), Dawn Metal.
+#include "visionos/visionos_host.h"
+#include "vr/openxr_metal.h"
+#include <time.h>
+#define XR_USE_TIMESPEC
+#include <openxr/openxr_platform.h>
+#define MP_OPENXR_GRAPHICS_BACKEND 1
 #else
 #define MP_OPENXR_GRAPHICS_BACKEND 0
 #endif
@@ -87,6 +95,12 @@ void ConfigurePolicy(bool enabled) noexcept {
 // D3D12, or Vulkan through direct presentation, as the graphics_backend setting asks.
 using GraphicsBackend = OpenXRWindowsBackend;
 inline constexpr const char* kFallbackNote = "; continuing on the mirror output";
+
+#elif defined(MP_PLATFORM_VISIONOS)
+using GraphicsBackend = OpenXRMetalBackend;
+// No desktop to fall back to either: a failed session ends the game (OpenXRRequestAppQuit).
+inline constexpr const char* kFallbackNote = "";
+inline constexpr const char* kGraphicsBackendName = "Metal";
 
 #else
 // Direct presentation when Aurora's Dawn offers it, else the AHardwareBuffer bridge.
@@ -374,6 +388,11 @@ public:
         config.required_extensions = {kRequiredAuroraBackend == BACKEND_VULKAN ? "XR_KHR_vulkan_enable2" : "XR_KHR_D3D12_enable"};
         config.optional_extensions = {"XR_KHR_win32_convert_performance_counter_time",
                                       "XR_FB_display_refresh_rate", "XR_EXT_performance_settings"};
+#elif defined(MP_PLATFORM_VISIONOS)
+        // The provider binds Metal through its own graphics binding (vr/visionos/xr_visionos.h), so
+        // nothing is required; it offers the timespec clock and the refresh rate.
+        config.required_extensions = {};
+        config.optional_extensions = {"XR_KHR_convert_timespec_time", "XR_FB_display_refresh_rate"};
 #else
         // Either Vulkan binding extension is acceptable; the backend picks
         // whichever the runtime enabled, preferring enable2.
@@ -666,6 +685,8 @@ private:
 #if defined(_WIN32)
     AuroraBackend kRequiredAuroraBackend = BACKEND_D3D12;
     const char* kGraphicsBackendName = "D3D12";
+#elif defined(MP_PLATFORM_VISIONOS)
+    static constexpr AuroraBackend kRequiredAuroraBackend = BACKEND_METAL;
 #else
     static constexpr AuroraBackend kRequiredAuroraBackend = BACKEND_VULKAN;
 #endif
@@ -691,6 +712,8 @@ private:
         kRequiredAuroraBackend = vulkan ? BACKEND_VULKAN : BACKEND_D3D12;
         kGraphicsBackendName = vulkan ? "Vulkan" : "D3D12";
         constexpr const char* kSupportedApis = "D3D12 or Vulkan graphics backend";
+#elif defined(MP_PLATFORM_VISIONOS)
+        constexpr const char* kSupportedApis = "Metal graphics backend";
 #else
         constexpr const char* kSupportedApis = "Vulkan graphics backend";
 #endif
@@ -1249,12 +1272,11 @@ private:
         aurora_set_stereo_panel_layer(false);
         running_.store(false, std::memory_order_release);
         PrimeVRPolicySetSessionActive(false);
-#if defined(__ANDROID__)
+#if defined(__ANDROID__) || defined(MP_PLATFORM_VISIONOS)
         // A standalone headset has no desktop to continue on: whatever ended the
         // session ends the app, and the launcher shows an error if there was one.
         if (!stop_.load(std::memory_order_acquire)) {
-            OpenXRAndroidRequestQuit(exit_requested_.load(std::memory_order_acquire) ? std::string()
-                                                                                      : LastError());
+            OpenXRRequestAppQuit(exit_requested_.load(std::memory_order_acquire) ? std::string() : LastError());
         }
 #endif
         if (!stop_.load(std::memory_order_acquire)) {
@@ -2417,7 +2439,7 @@ std::string OpenXRLastError() {
 }
 
 bool OpenXRHeadsetIsOnlyDisplay() noexcept {
-#if defined(MP_ENABLE_OPENXR) && defined(__ANDROID__)
+#if defined(MP_ENABLE_OPENXR) && (defined(__ANDROID__) || defined(MP_PLATFORM_VISIONOS))
     return true;
 #else
     return false;
@@ -2427,6 +2449,9 @@ bool OpenXRHeadsetIsOnlyDisplay() noexcept {
 void OpenXRRequestAppQuit(const std::string& error) {
 #if defined(MP_ENABLE_OPENXR) && defined(__ANDROID__)
     OpenXRAndroidRequestQuit(error);
+#elif defined(MP_ENABLE_OPENXR) && defined(MP_PLATFORM_VISIONOS)
+    // The app's launcher window comes back with the error (visionos/App/GameModel.swift).
+    mp_visionos_request_quit_with_error(error.c_str());
 #else
     (void)error;
 #endif
