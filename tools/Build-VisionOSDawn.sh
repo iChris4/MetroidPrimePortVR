@@ -10,6 +10,11 @@
 # Dawn patches (quest/dawn) are Vulkan-only and are not applied. The flags are Wiicompiled VR's
 # (visionos/Build-VisionOSDawn.sh there), which were proven on the headset.
 #
+# One fix is applied (apply_visionos_fixes below): this Dawn reports BC texture compression on any
+# iOS-family GPU that has it, Apple Vision Pro's included, but maps the BC formats to Metal only on
+# macOS, so the first BC texture Aurora made (the game's CMPR textures) aborted in MetalPixelFormat.
+# The simulator's GPU reports no BC, which is why it ran there. The BC formats exist on visionOS.
+#
 #   tools/Build-VisionOSDawn.sh [--simulator] [--work DIR] [--jobs N] [--force]
 #
 # Prints the package path last, and its SHA-256 on the line before (for AURORA_DAWN_PACKAGE_SHA256,
@@ -97,11 +102,33 @@ flags=(
     -DDAWN_BUILD_PROTOBUF=OFF
 )
 
+# Dawn source fixes for the iOS family's Metal backend; bump fixes_level when they change so cached
+# sources and packages are made again. Each edit is anchored on Dawn's text and must match once.
+fixes_level=1
+apply_visionos_fixes() {
+    python3 -I - "$1" <<'PY'
+import pathlib, sys
+root = pathlib.Path(sys.argv[1])
+def widen(rel, anchor):
+    path = root / rel
+    text = path.read_text()
+    old = "#if DAWN_PLATFORM_IS(MACOS)\n" + anchor
+    new = "#if DAWN_PLATFORM_IS(MACOS) || DAWN_PLATFORM_IS(IOS)\n" + anchor
+    if new in text:
+        return
+    assert text.count(old) == 1, f"{rel}: anchor not found once"
+    path.write_text(text.replace(old, new))
+# BC formats to MTLPixelFormat, and their sRGB view reinterpretations (iOS 16.4+, visionOS).
+widen("src/dawn/native/metal/UtilsMetal.mm", "        case wgpu::TextureFormat::BC1RGBAUnorm:\n")
+widen("src/dawn/native/metal/TextureMTL.mm", "            SRGB_PAIR(MTLPixelFormatBC1_RGBA, MTLPixelFormatBC1_RGBA_sRGB);\n")
+PY
+}
+
 mkdir -p "${work_dir}"
 package_dir="${work_dir}/package-${flavour}"
 package_path="${work_dir}/dawn-${flavour}.tar.gz"
 manifest="${package_dir}/aurora-dawn.json"
-cache_key="$(printf '%s|%s|%s\n' "${dawn_revision}" "${sdk_path##*/}" "${flags[*]}" | shasum -a 256 | awk '{print $1}')"
+cache_key="$(printf '%s|%s|%s|%s\n' "${dawn_revision}" "${fixes_level}" "${sdk_path##*/}" "${flags[*]}" | shasum -a 256 | awk '{print $1}')"
 
 if [[ ${force} -eq 0 && -f "${manifest}" && -f "${package_path}" ]] &&
    grep -q "\"CacheKey\": \"${cache_key}\"" "${manifest}"; then
@@ -124,12 +151,14 @@ if [[ "${actual_sha256}" != "${dawn_source_sha256}" ]]; then
 fi
 
 source_dir="${work_dir}/src"
+source_marker="${dawn_revision}+fixes${fixes_level}"
 if [[ ! -f "${source_dir}/.primedgun-revision" ]] ||
-   [[ "$(cat "${source_dir}/.primedgun-revision")" != "${dawn_revision}" ]]; then
+   [[ "$(cat "${source_dir}/.primedgun-revision")" != "${source_marker}" ]]; then
     rm -rf "${source_dir}"
     mkdir -p "${source_dir}"
     tar -xzf "${source_archive}" --strip-components=1 -C "${source_dir}"
-    echo "${dawn_revision}" > "${source_dir}/.primedgun-revision"
+    apply_visionos_fixes "${source_dir}"
+    echo "${source_marker}" > "${source_dir}/.primedgun-revision"
 fi
 
 build_dir="${work_dir}/build-${flavour}"
@@ -152,6 +181,7 @@ cat > "${manifest}" <<EOF
 {
   "SourceRevision": "${dawn_revision}",
   "SourceSha256": "${dawn_source_sha256}",
+  "Fixes": ${fixes_level},
   "Sdk": "${sdk_path##*/}",
   "Flags": "${flags[*]}",
   "CacheKey": "${cache_key}",
