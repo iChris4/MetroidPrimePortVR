@@ -124,6 +124,10 @@ if (AURORA_ENABLE_GX)
     if (APPLE AND CMAKE_SYSTEM_NAME STREQUAL "visionOS")
         # MetalBinding.mm makes its own CAMetalLayer there (no UIKit window exists).
         target_compile_definitions(aurora_core PRIVATE AURORA_VISIONOS=1)
+        # input.cpp leaves the PS VR2 Sense controllers to the VR layer.
+        target_sources(aurora_core PRIVATE lib/input_visionos.mm)
+        set_source_files_properties(lib/input_visionos.mm PROPERTIES COMPILE_FLAGS -fobjc-arc)
+        target_link_libraries(aurora_core PUBLIC "-framework GameController")
     endif ()
     if (DAWN_ENABLE_D3D11)
         target_compile_definitions(aurora_core PRIVATE DAWN_ENABLE_BACKEND_D3D11)

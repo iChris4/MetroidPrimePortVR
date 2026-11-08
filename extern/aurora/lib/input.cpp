@@ -439,6 +439,10 @@ static void map_digital_triggers(SDL_Gamepad* ctrl) noexcept {
 }
 #endif
 
+#if defined(__APPLE__) && TARGET_OS_VISION
+bool visionos_is_spatial_controller(const char* name) noexcept; // lib/input_visionos.mm
+#endif
+
 SDL_JoystickID add_controller(SDL_JoystickID which) noexcept {
   auto* ctrl = SDL_OpenGamepad(which);
   if (ctrl != nullptr) {
@@ -459,10 +463,11 @@ SDL_JoystickID add_controller(SDL_JoystickID which) noexcept {
     // Apple Vision Pro: the PlayStation VR2 Sense controllers are the VR layer's tracked controllers
     // (the visionOS OpenXR provider reads them through GameController and ARKit). SDL's MFi driver
     // would also offer each as a gamepad of its own, so every button would reach the game twice.
-    // The DualSense keeps its own name ("DualSense Wireless Controller") and stays a gamepad.
+    // GameController says which devices are spatial controllers (lib/input_visionos.mm); the names
+    // are a fallback. The DualSense ("DualSense Wireless Controller") stays a gamepad.
     if (const char* name = SDL_GetGamepadName(ctrl); name != nullptr &&
-        (std::strstr(name, "VR2") != nullptr || std::strstr(name, "Sense Controller") != nullptr ||
-         std::strstr(name, "Spatial") != nullptr)) {
+        (visionos_is_spatial_controller(name) || std::strstr(name, "VR2") != nullptr ||
+         std::strstr(name, "Sense Controller") != nullptr || std::strstr(name, "Spatial") != nullptr)) {
       Log.info("Leaving '{}' to the VR controllers (vid {:04x}, pid {:04x})", name, controller.m_vid,
                controller.m_pid);
       SDL_CloseGamepad(ctrl);
