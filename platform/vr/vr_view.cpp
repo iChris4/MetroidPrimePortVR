@@ -25,6 +25,7 @@
 #include "WorldFormat/CMetroidAreaCollider.hpp"
 #include "MetroidPrime/Cameras/CCameraManager.hpp"
 #include "MetroidPrime/Player/CPlayer.hpp"
+#include "MetroidPrime/Tweaks/CTweakPlayer.hpp"
 
 #include <algorithm>
 #include <array>
@@ -788,67 +789,101 @@ bool VrCannonTransform(const CStateManager& mgr, const CPlayer& player, const CT
 bool VrCannonTracked() noexcept { return s_cannon.tracked; }
 
 namespace {
-// The gamepad's lock-on aim: how far the cannon has turned from the camera's
-// facing to the target's (0 to 1), advanced once per tick, and the last
-// direction to the target, which the cannon eases back from when the lock ends.
-struct LockAimState {
+// The gamepad's aim (VrPadAimTurn): where the cannon points in the camera's
+// frame (x right, y forward, z up), moved toward the wanted direction once per
+// tick, and the ray it gave last, for the crosshair.
+struct PadAimState {
     bool stamped = false;
     unsigned int stamp = 0;
-    float weight = 0.f;
-    CVector3f toTarget = CVector3f(0.f, 1.f, 0.f);
+    CVector3f local = CVector3f(0.f, 1.f, 0.f);
+    bool active = false;
+    CVector3f origin = CVector3f::Zero();
+    CVector3f direction = CVector3f(0.f, 1.f, 0.f);
 };
-LockAimState s_lockAim;
-// A tenth per tick: a sixth of a second each way at 60 ticks a second, about
-// as long as the TV camera took to turn to a target.
-constexpr float kLockAimStep = 0.1f;
+PadAimState s_padAim;
+// At most 9 degrees a tick (540 a second at 60 ticks): a lock a quarter turn
+// away is reached in a sixth of a second, about as long as the TV camera took,
+// and R's free aim, slower than that, is followed without lag.
+constexpr float kPadAimMaxStep = 9.f * kDegreesToRadians;
+
+// `from` turned toward `to` (both unit vectors) by at most `maxAngle`.
+CVector3f TurnToward(const CVector3f& from, const CVector3f& to, float maxAngle) noexcept {
+    const float cosine = std::clamp(CVector3f::Dot(from, to), -1.f, 1.f);
+    const float angle = std::acos(cosine);
+    if (angle <= maxAngle) {
+        return to;
+    }
+    CVector3f across = to - from * cosine;
+    if (!across.CanBeNormalized()) {
+        // Opposite: turn through the vertical plane.
+        across = CVector3f(0.f, 0.f, 1.f) - from * from.GetZ();
+        if (!across.CanBeNormalized()) {
+            return to;
+        }
+    }
+    across.Normalize();
+    return from * std::cos(maxAngle) + across * std::sin(maxAngle);
+}
 } // namespace
 
-bool VrLockAimTurn(const CStateManager& mgr, const CPlayer& player, const CTransform4f& cameraXf,
-                   CTransform4f& turn) noexcept {
+bool VrPadAimTurn(const CStateManager& mgr, const CPlayer& player, const CTransform4f& cameraXf,
+                  CTransform4f& turn) noexcept {
     if (!ImmersiveNow()) {
-        s_lockAim.weight = 0.f;
+        s_padAim.local = CVector3f(0.f, 1.f, 0.f);
+        s_padAim.active = false;
         return false;
     }
     const CVector3f pivot = cameraXf.GetTranslation();
-    bool locked = false;
-    const CPlayer::EPlayerOrbitState orbit = player.GetOrbitState();
-    if (player.GetMorphballTransitionState() == CPlayer::kMS_Unmorphed &&
-        (orbit == CPlayer::kOS_OrbitObject || orbit == CPlayer::kOS_ForcedOrbitObject) &&
-        mgr.GetObjectById(player.GetOrbitTargetId()) != nullptr) {
+    const CTransform4f cameraRotation = cameraXf.GetRotation();
+
+    // Where the TV camera would look, in the camera's frame: an L lock's orbit
+    // point first (CFirstPersonCamera's orbit cases override free look), else
+    // R's free look (its pitch and yaw as CFirstPersonCamera builds them), else
+    // straight ahead.
+    CVector3f wanted(0.f, 1.f, 0.f);
+    if (player.GetMorphballTransitionState() == CPlayer::kMS_Unmorphed) {
+        const CPlayer::EPlayerOrbitState orbit = player.GetOrbitState();
         const CVector3f toTarget = player.GetOrbitPoint() - pivot;
-        if (toTarget.CanBeNormalized()) {
-            s_lockAim.toTarget = toTarget.AsNormalized();
-            locked = true;
+        if ((orbit == CPlayer::kOS_OrbitObject || orbit == CPlayer::kOS_ForcedOrbitObject) &&
+            mgr.GetObjectById(player.GetOrbitTargetId()) != nullptr && toTarget.CanBeNormalized()) {
+            wanted = cameraRotation.TransposeRotate(toTarget.AsNormalized());
+        } else if (player.IsInFreeLook()) {
+            const float limit = gpTweakPlayer->GetVerticalFreeLookAngleVel();
+            const float pitch = std::clamp(player.GetFreeLookAngleX(), -limit, limit);
+            const float yaw = player.GetFreeLookAngleZ();
+            wanted = CVector3f(std::sin(-yaw) * std::cos(pitch), std::cos(-yaw) * std::cos(pitch), std::sin(pitch));
         }
     }
+
     // The gun is placed several times in some ticks; it turns once per tick.
     const unsigned int stamp = mgr.GetUpdateFrameIndex();
-    if (!s_lockAim.stamped || stamp != s_lockAim.stamp) {
-        s_lockAim.stamped = true;
-        s_lockAim.stamp = stamp;
-        s_lockAim.weight = std::clamp(s_lockAim.weight + (locked ? kLockAimStep : -kLockAimStep), 0.f, 1.f);
+    if (!s_padAim.stamped || stamp != s_padAim.stamp) {
+        s_padAim.stamped = true;
+        s_padAim.stamp = stamp;
+        s_padAim.local = TurnToward(s_padAim.local, wanted, kPadAimMaxStep);
     }
-    if (s_lockAim.weight <= 0.f) {
+    s_padAim.active = s_padAim.local.GetY() < 1.f - 1.e-6f;
+    if (!s_padAim.active) {
         return false;
     }
 
-    CVector3f forward = cameraXf.GetForward();
-    if (!forward.CanBeNormalized()) {
-        return false;
-    }
-    forward.Normalize();
-    const float w = s_lockAim.weight;
-    const float eased = w * w * (3.f - 2.f * w);
-    CVector3f aim = forward * (1.f - eased) + s_lockAim.toTarget * eased;
-    if (!aim.CanBeNormalized()) {
-        aim = s_lockAim.toTarget;
-    }
-    // The camera's frame turned to face `aim`, upright as the TV camera was,
+    // The camera's frame turned to face the aim, upright as the TV camera was,
     // about the camera's position: what was placed from the camera keeps its
     // place and tilt in the turned frame.
-    const CTransform4f aimFrame = CTransform4f::LookAt(CVector3f::Zero(), aim.AsNormalized());
-    turn = aimFrame * cameraXf.GetRotation().GetQuickInverse();
+    const CVector3f aim = cameraRotation.Rotate(s_padAim.local).AsNormalized();
+    turn = CTransform4f::LookAt(CVector3f::Zero(), aim) * cameraRotation.GetQuickInverse();
     turn.SetTranslation(pivot - turn.Rotate(pivot));
+    s_padAim.origin = pivot;
+    s_padAim.direction = aim;
+    return true;
+}
+
+bool VrPadAimRay(const CStateManager& mgr, CVector3f& origin, CVector3f& direction) noexcept {
+    if (!s_padAim.active || !s_padAim.stamped || mgr.GetUpdateFrameIndex() - s_padAim.stamp > 2u) {
+        return false;
+    }
+    origin = s_padAim.origin;
+    direction = s_padAim.direction;
     return true;
 }
 

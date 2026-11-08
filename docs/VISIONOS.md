@@ -17,7 +17,7 @@ CompositorServices and ARKit drives the headset. The visionOS layer comes from W
 | Quit and return to the launcher | Works in the simulator. |
 | Stereo gameplay, frame pacing, comfort | Not yet checked on a headset. |
 | PlayStation VR2 Sense controllers | Played on a headset (the Frigate and beyond); calibration not checked. |
-| DualSense and other gamepads | Played on a headset. Look to lock-on and the lock's aim for a gamepad (below) not yet checked there. |
+| DualSense and other gamepads | Played on a headset. Look to lock-on and the lock's aim (below) work there; R's free aim is not yet checked. |
 
 The simulator has no hand tracking and no accessory tracking, so everything about hands and
 controllers is checked on a headset only.
@@ -87,7 +87,9 @@ The script runs three stages, each kept when up to date:
 - **DualSense or another gamepad.** It plays the original controls; the headset still looks
   around. The view stays level, so the head picks what L locks on to (look to lock-on and look to
   grapple, on by default), and while L holds a target the arm cannon turns to it, as the TV
-  camera did, so the shots go to it.
+  camera did, so the shots go to it. Holding R aims the cannon with the stick (free aim), up and
+  down as on the TV, for missiles and anything that cannot be locked; the view does not move, and
+  the crosshair marks where the cannon points.
 - **Hands.** With nothing in hand, look at a menu item and pinch to press it. Playing needs
   controllers or a gamepad. Hands holding a gamepad are not controllers to the game: they never
   move the cannon or press its buttons.
@@ -150,9 +152,14 @@ Other platform details:
   and the headset's camera stays level and on the heading a lock started from, so the cannon
   pointed past a locked target, further than the game's aim assist turns a shot, and a target
   up high (the Frigate's first room) could not be hit. While L holds an object, the cannon now
-  turns about the camera toward it over a sixth of a second, as the TV camera turned to the
-  target, and the assist finishes the aim (`PortVr::VrLockAimTurn`, `platform/vr/vr_view.cpp`).
+  turns about the camera toward it, at up to 540 degrees a second, as the TV camera turned to the
+  target, and the assist finishes the aim (`PortVr::VrPadAimTurn`, `platform/vr/vr_view.cpp`).
   This applies to every headset, whenever no controller tracks the cannon.
+- **No free aim with a gamepad.** R's free look pitched the camera, which the headset keeps level,
+  and the cannon follows the camera, so it never tilted. The same turn (`PortVr::VrPadAimTurn`)
+  now tilts the cannon by the free look's angle while the view stays level (the headset ignores
+  free look in `CFirstPersonCamera`); a lock still comes first, as on the TV. The crosshair sits
+  on the cannon's ray (`VrPadAimRay`, `VrCannonTargetPoint`).
 - **Look to lock-on did nothing with a gamepad.** With cannon targeting on (the default), the
   cannon's ray picked the lock target and nothing did without a tracked cannon. The head's gaze
   now picks then, by the look to lock-on and look to grapple settings

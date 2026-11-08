@@ -388,13 +388,18 @@ bool VrCannonTargetPoint(const CStateManager& mgr, CVector3f& point) noexcept {
     const PortVrSettings settings = GetVrSettings();
     const CPlayer& player = *mgr.GetPlayer();
     const bool scanVisor = mgr.GetPlayerState()->GetCurrentVisor() == CPlayerState::kPV_Scan;
-    if (!settings.CannonTargetingForVisor(scanVisor) || !VrImmersive() ||
-        player.GetMorphballTransitionState() != CPlayer::kMS_Unmorphed) {
+    if (!VrImmersive() || player.GetMorphballTransitionState() != CPlayer::kMS_Unmorphed) {
         return false;
     }
+    // The tracked cannon's ray with cannon targeting on. Without a tracked
+    // cannon (a gamepad), the ray the cannon was turned along by a lock or R's
+    // free aim: the level view would put the crosshair straight ahead of the
+    // body rather than where the shots go.
     CVector3f origin;
     CVector3f direction;
-    if (!VrCannonAim(player, mgr.GetCameraManager()->GetCurrentCameraTransform(mgr), origin, direction)) {
+    const bool cannon = settings.CannonTargetingForVisor(scanVisor) &&
+                        VrCannonAim(player, mgr.GetCameraManager()->GetCurrentCameraTransform(mgr), origin, direction);
+    if (!cannon && (scanVisor || !VrPadAimRay(mgr, origin, direction))) {
         return false;
     }
     const float distance = LookScan::MaxAlong(settings.gun_targeting_distance);
