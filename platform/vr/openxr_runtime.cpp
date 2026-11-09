@@ -578,13 +578,21 @@ void OpenXRRuntime::UseLevelSpaceIfLocalIsTilted(XrReferenceSpaceCreateInfo& app
 // area, which on SteamVR is what leaves LOCAL unreliable (see above). Nothing
 // depends on it; a standing-only setup legitimately has no bounds either.
 // Asked once the session runs, when the runtime has tracking to answer from.
+// Looked up through xrGetInstanceProcAddr, quietly: a provider linked in place
+// of the loader (the visionOS one) need not define it, and then answers
+// XR_ERROR_FUNCTION_UNSUPPORTED, which only skips this line.
 void OpenXRRuntime::LogPlayAreaState() {
     if (!Contains(m_supported_reference_spaces, XR_REFERENCE_SPACE_TYPE_STAGE)) {
         return;
     }
+    PFN_xrVoidFunction function = nullptr;
+    if (XR_FAILED(xrGetInstanceProcAddr(m_instance, "xrGetReferenceSpaceBoundsRect", &function)) ||
+        function == nullptr) {
+        return;
+    }
     XrExtent2Df bounds{};
-    const XrResult result =
-        xrGetReferenceSpaceBoundsRect(m_session, XR_REFERENCE_SPACE_TYPE_STAGE, &bounds);
+    const XrResult result = reinterpret_cast<PFN_xrGetReferenceSpaceBoundsRect>(function)(
+        m_session, XR_REFERENCE_SPACE_TYPE_STAGE, &bounds);
     char message[320];
     if (result == XR_SPACE_BOUNDS_UNAVAILABLE) {
         std::snprintf(message, sizeof(message),
