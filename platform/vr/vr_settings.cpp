@@ -294,6 +294,7 @@ const Field kFields[] = {
     VR_FLOAT(directional_movement_speed, 1.0f, 60.0f),
     VR_FLOAT(directional_movement_accel, 1.0f, 120.0f),
     VR_FLOAT(directional_movement_air_accel, 0.0f, 60.0f),
+    VR_BOOL(directional_movement_dash_carry),
     VR_FLOAT(look_yaw_sensitivity, 0.2f, 3.0f),
     VR_BOOL(snap_turn_enabled),
     VR_INT(snap_turn_degrees, 15, 90),

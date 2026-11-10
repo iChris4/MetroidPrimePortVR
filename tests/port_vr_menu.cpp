@@ -174,7 +174,7 @@ void TestRows() {
   s.control_page = 1;
   Check(ItemCount(s, View{}) == 8, "control page 2");
   s.tab = kMovementTab;
-  Check(ItemCount(s, View{}) == 11, "movement");
+  Check(ItemCount(s, View{}) == 12, "movement");
   s.tab = kTexturesTab;
   Check(ItemCount(s, View{}) == 6, "textures");
   s.tab = kStatesTab;
