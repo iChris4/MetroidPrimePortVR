@@ -106,7 +106,13 @@ void CFirstPersonCamera::UpdateTransform(CStateManager& mgr, float dt) {
     const float yaw = PortDebug::AimYaw();
     const float pitch = PortDebug::AimPitch();
     lookDir = CVector3f(sinf(-yaw) * cosf(pitch), cosf(-yaw) * cosf(pitch), sinf(pitch));
-  } else if (player->IsInFreeLook()) {
+  } else if (player->IsInFreeLook()
+#ifdef TARGET_PC
+             // PortVr: in the headset R's free look aims the cannon alone
+             // (PortVr::VrPadAimTurn); the view stays on the body's facing.
+             && !PortVr::VrFlattenLookPitch()
+#endif
+  ) {
     CRelAngle angle(player->GetFreeLookAngleX());
     const CRelAngle maxAngle(gpTweakPlayer->GetVerticalFreeLookAngleVel() -
                              CMath::AbsF(x1c0_pitch));

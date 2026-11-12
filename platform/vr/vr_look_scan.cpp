@@ -19,7 +19,8 @@
 // Look to lock-on and look to grapple do the same in the other visors for the
 // orbit target (the L lock), each for its own kind of object: grapple points,
 // and everything else that can be locked. PrimedGun picked those with the
-// cannon's aim ray; the configured cannon or head ray picks, with the scan target's cone and
+// cannon's aim ray; the configured cannon ray picks while a controller tracks
+// the cannon, else the head's (a gamepad), with the scan target's cone and
 // FindBestOrbitableObject's rules (not the current target, the Grapple Beam
 // and the orbit distance for a grapple point, a swing-locked point only from
 // its swing plane, line of sight). Combat and grapple retain native body
@@ -284,8 +285,10 @@ bool GrapplePointUsable(const CStateManager& mgr, const CPlayer& player, const C
     return true;
 }
 
+// `cannonRay`: the tracked cannon's ray picks, every kind of target alike;
+// otherwise the head's gaze picks the kinds the look settings give it.
 void UpdateLock(CStateManager& mgr, const CPlayer& player, const PortVrSettings& settings, const LookScan::Ray& ray,
-                const CVector3f& origin, TUniqueId previous) noexcept {
+                const CVector3f& origin, TUniqueId previous, bool cannonRay) noexcept {
     const float targetingRadius = LookScan::TargetingRadius(settings.gun_targeting_radius);
     const float maxAlong = LookScan::MaxAlong(settings.gun_targeting_distance);
     const float untestedAlong = maxAlong * kUntestedReach;
@@ -306,8 +309,7 @@ void UpdateLock(CStateManager& mgr, const CPlayer& player, const PortVrSettings&
             continue;
         }
         const CScriptGrapplePoint* point = TCastToConstPtr< CScriptGrapplePoint >(actor);
-        if (!(settings.cannon_targeting && settings.gun_targeting_enabled) &&
-            (point != nullptr ? !settings.look_to_grapple : !settings.look_to_lock_on)) {
+        if (!cannonRay && (point != nullptr ? !settings.look_to_grapple : !settings.look_to_lock_on)) {
             continue;
         }
         // The game's own target rules (CPlayer::FindOrbitableObjects).
@@ -351,16 +353,19 @@ void VrLookTargetUpdate(CStateManager& mgr, const CPlayer& player) noexcept {
     }
     const PortVrSettings settings = GetVrSettings();
     const bool scanVisor = mgr.GetPlayerState()->GetCurrentVisor() == CPlayerState::kPV_Scan;
-    const bool cannonTargeting = settings.CannonTargetingForVisor(scanVisor);
+    CVector3f origin;
+    CVector3f direction;
+    const CTransform4f camera = VrRoomScaleCameraTransform(player.GetFirstPersonCameraTransform(mgr));
+    // Cannon targeting needs a tracked cannon. Without one (a gamepad, or
+    // controllers that lost tracking) the head's gaze picks, as the look
+    // settings say, rather than nothing doing so.
+    const bool cannonTargeting =
+        settings.CannonTargetingForVisor(scanVisor) && VrCannonAim(player, camera, origin, direction);
     if (!cannonTargeting &&
         (scanVisor ? !settings.patch_gun_ray_target : (!settings.look_to_lock_on && !settings.look_to_grapple))) {
         return;
     }
-    CVector3f origin;
-    CVector3f direction;
-    const CTransform4f camera = VrRoomScaleCameraTransform(player.GetFirstPersonCameraTransform(mgr));
-    if (!(cannonTargeting ? VrCannonAim(player, camera, origin, direction)
-                         : VrHeadGaze(camera, origin, direction))) {
+    if (!cannonTargeting && !VrHeadGaze(camera, origin, direction)) {
         return;
     }
     s_look.active = scanVisor;
@@ -375,7 +380,7 @@ void VrLookTargetUpdate(CStateManager& mgr, const CPlayer& player) noexcept {
     if (scanVisor) {
         UpdateScan(mgr, player, settings, ray, origin, previousScan);
     } else {
-        UpdateLock(mgr, player, settings, ray, origin, previousLock);
+        UpdateLock(mgr, player, settings, ray, origin, previousLock, cannonTargeting);
     }
 }
 
@@ -383,13 +388,18 @@ bool VrCannonTargetPoint(const CStateManager& mgr, CVector3f& point) noexcept {
     const PortVrSettings settings = GetVrSettings();
     const CPlayer& player = *mgr.GetPlayer();
     const bool scanVisor = mgr.GetPlayerState()->GetCurrentVisor() == CPlayerState::kPV_Scan;
-    if (!settings.CannonTargetingForVisor(scanVisor) || !VrImmersive() ||
-        player.GetMorphballTransitionState() != CPlayer::kMS_Unmorphed) {
+    if (!VrImmersive() || player.GetMorphballTransitionState() != CPlayer::kMS_Unmorphed) {
         return false;
     }
+    // The tracked cannon's ray with cannon targeting on. Without a tracked
+    // cannon (a gamepad), the ray the cannon was turned along by a lock or R's
+    // free aim: the level view would put the crosshair straight ahead of the
+    // body rather than where the shots go.
     CVector3f origin;
     CVector3f direction;
-    if (!VrCannonAim(player, mgr.GetCameraManager()->GetCurrentCameraTransform(mgr), origin, direction)) {
+    const bool cannon = settings.CannonTargetingForVisor(scanVisor) &&
+                        VrCannonAim(player, mgr.GetCameraManager()->GetCurrentCameraTransform(mgr), origin, direction);
+    if (!cannon && (scanVisor || !VrPadAimRay(mgr, origin, direction))) {
         return false;
     }
     const float distance = LookScan::MaxAlong(settings.gun_targeting_distance);

@@ -1,3 +1,37 @@
+## VR: Apple Vision Pro (2026-11-08)
+
+visionOS port, from Wiicompiled VR's (docs/VISIONOS.md). The game cross-compiles with Ninja as
+MetroidPrimeGame.framework; a SwiftUI app (visionos/) links it, imports and checks the disc,
+and runs the game's aurora_main on its own thread once the immersive space exists. OpenXR comes
+from platform/vr/visionos, an OpenXR provider on CompositorServices and ARKit linked in place of
+the loader; openxr_metal.mm is the graphics backend; Aurora's lib/webgpu/metal_interop.cpp copies
+the eyes into IOSurfaces ordered by MTLSharedEvents.
+
+- CMake sets no IOS for CMAKE_SYSTEM_NAME=visionOS, but SDL defines SDL_PLATFORM_IOS there, so
+  main.cpp's iPhone paths apply as they are. The build switch is MP_VISIONOS, the code's
+  MP_PLATFORM_VISIONOS or TARGET_OS_VISION.
+- aurora::main is not linked there: its SDL main would start SDL's UIKit app, and SwiftUI owns
+  the process. SDL runs on the offscreen video driver; Dawn gets a detached CAMetalLayer.
+- nod builds for aarch64-apple-visionos(-sim), a tier-3 Rust target, with nightly -Zbuild-std
+  (AuroraNodProvider.cmake). Corrosion's check that the target is installed is skipped by not
+  resolving rustup toolchains.
+- PS VR2 Sense controllers (xr_visionos_accessories.mm): GameController buttons, ARKit accessory
+  poses in an ARKit session of their own (re-running the compositor's session would restart
+  world tracking), answering the Touch profile. Aurora leaves them out of SDL's gamepads, which
+  would otherwise read every button a second time.
+- Checked in the visionOS simulator: NKit disc mounted, session FOCUSED, title screen on the
+  virtual screen, clean quit back to the launcher.
+- First headset run crashed at Play in Dawn's MetalPixelFormat (DAWN_UNREACHABLE): the Metal
+  backend enables TextureCompressionBC on the iOS family (`supportsBCTextureCompression`, iOS 16.4+)
+  but maps BC to MTLPixelFormat only under DAWN_PLATFORM_IS(MACOS). The simulator reports no BC.
+  tools/Build-VisionOSDawn.sh widens both guards (UtilsMetal.mm, TextureMTL.mm) to the iOS family.
+  The prebuilt ios-arm64 package likely has the same fault on BC-capable iPhones.
+- port_log_file.cpp forked its copier; fork() fails on the iOS family, so the log held its header
+  only. There the copier is a thread (a crash can lose what is still in the pipe).
+- After both fixes: on the headset the session reaches FOCUSED, 1920x1824 eyes, about 90 fps on the
+  title screen, DualSense Edge seen by SDL, clean quit. Unchecked: gameplay in stereo, the Sense
+  controllers, comfort.
+
 ## VR: leave the four original barrel wings untouched (2026-11-07)
 
 Nozzle wing bones 19..22 are excluded from mirroring, cutting, welding and bone

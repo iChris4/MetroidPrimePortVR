@@ -53,6 +53,28 @@ if (_aurora_nod_provider STREQUAL "vendor")
       message(STATUS "aurora: forcing Rust_CARGO_TARGET=${Rust_CARGO_TARGET} for Win32 nod build")
     endif ()
 
+    # Apple Vision Pro: aarch64-apple-visionos(-sim) is a tier-3 Rust target with no prebuilt
+    # standard library, so Cargo builds std itself (-Zbuild-std, nightly Rust with rust-src).
+    # The environment covers Corrosion's configure-time probe of the target's native libraries;
+    # corrosion_set_cargo_flags below covers the build itself.
+    set(_aurora_nod_build_std OFF)
+    if (CMAKE_SYSTEM_NAME STREQUAL "visionOS")
+      if (NOT Rust_CARGO_TARGET)
+        if (CMAKE_OSX_SYSROOT MATCHES "[Ss]imulator")
+          set(Rust_CARGO_TARGET "aarch64-apple-visionos-sim" CACHE STRING "Rust target triple")
+        else ()
+          set(Rust_CARGO_TARGET "aarch64-apple-visionos" CACHE STRING "Rust target triple")
+        endif ()
+      endif ()
+      set(ENV{CARGO_UNSTABLE_BUILD_STD} "std,panic_abort")
+      # rustup lists the target, but cannot install it (no prebuilt std), so Corrosion's check that
+      # it is installed would stop here. Using the rustup proxies as they are skips that check; the
+      # default toolchain must be a nightly with rust-src (docs/VISIONOS.md).
+      set(Rust_RESOLVE_RUSTUP_TOOLCHAINS OFF CACHE BOOL "Resolve rustup toolchains" FORCE)
+      set(_aurora_nod_build_std ON)
+      message(STATUS "aurora: building nod for ${Rust_CARGO_TARGET} with -Zbuild-std")
+    endif ()
+
     # Control whether nod builds shared, static, or both.
     # Save/restore BUILD_SHARED_LIBS to avoid leaking into other subdirectories.
     set(_aurora_nod_saved_bsl "${BUILD_SHARED_LIBS}")
@@ -71,6 +93,9 @@ if (_aurora_nod_provider STREQUAL "vendor")
     )
 
     FetchContent_MakeAvailable(aurora_nod)
+    if (_aurora_nod_build_std)
+      corrosion_set_cargo_flags(nod "-Zbuild-std=std,panic_abort")
+    endif ()
     set(BUILD_SHARED_LIBS "${_aurora_nod_saved_bsl}")
     unset(_aurora_nod_saved_bsl)
     if (NOT TARGET nod::nod)

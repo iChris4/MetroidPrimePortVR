@@ -1437,6 +1437,15 @@ static bool initialize_once(AuroraBackend auroraBackend, bool allowCpu) {
       }
 #endif
 #endif
+#if defined(WEBGPU_DAWN) && defined(__APPLE__)
+      // Apple Vision Pro: the visionOS OpenXR provider shares the eyes through IOSurfaces
+      // ordered by MTLSharedEvents (lib/webgpu/metal_interop.cpp).
+      if (g_config.xrInterop && g_backendType == wgpu::BackendType::Metal &&
+          (feature == wgpu::FeatureName::SharedTextureMemoryIOSurface ||
+           feature == wgpu::FeatureName::SharedFenceMTLSharedEvent)) {
+        requiredFeatures.push_back(feature);
+      }
+#endif
 #ifdef WEBGPU_DAWN
       // The game thread creates textures and buffers (room env volumes, lightmaps, spilled uploads)
       // while the render worker submits. Without this Dawn takes no device lock: its Vulkan memory

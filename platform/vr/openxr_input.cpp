@@ -39,7 +39,11 @@
 #include <sys/system_properties.h>
 #endif
 #if !defined(_WIN32)
+// The Quest, Linux and Apple Vision Pro (its provider offers XR_KHR_convert_timespec_time).
 #include <time.h>
+#endif
+#if defined(MP_PLATFORM_VISIONOS)
+#include "vr/visionos/xr_visionos.h"
 #endif
 
 namespace PortVr {
@@ -273,7 +277,7 @@ bool Injected(const char*) { return false; }
 #if defined(_WIN32)
 using ConvertNowToXrTime = XrResult(XRAPI_PTR*)(XrInstance, const LARGE_INTEGER*, XrTime*);
 #else
-// Linux: XR_KHR_convert_timespec_time, as on the Quest.
+// Linux and Apple Vision Pro: XR_KHR_convert_timespec_time, as on the Quest.
 using ConvertNowToXrTime = XrResult(XRAPI_PTR*)(XrInstance, const struct timespec*, XrTime*);
 #endif
 #endif
@@ -1124,6 +1128,13 @@ void OpenXRInput::PublishSnapshot(XrTime input_time, const std::array<HandInputs
         OpenXRControllerState& state = snapshot.controllers[hand];
         state = m_pending_extra[hand];
         state.connected = connected[hand];
+#if defined(MP_PLATFORM_VISIONOS)
+        // Bare hands answer the bindings too (pinches, the look-and-pinch
+        // ray), which the in-headset menu above still uses. To the game they
+        // are no controllers: with a gamepad in them they must not place the
+        // cannon or press the pad's buttons. Only a Sense controller is one.
+        state.connected = state.connected && xr_visionos_hand_has_controller(hand);
+#endif
         const HandInputs& inputs = hands[hand];
         state.primary = inputs.primary;
         state.secondary = inputs.secondary;
