@@ -15,6 +15,9 @@
 #include "vr/vr_visor_dpad.h"
 #include "vr/vr_wrist_visor.h"
 #include "vr/vr_view.h"
+#if defined(MP_PLATFORM_VISIONOS)
+#include "vr/visionos/xr_visionos.h"
+#endif
 
 #include "MetroidPrime/CStateManager.hpp"
 #include "MetroidPrime/Cameras/CCameraManager.hpp"
@@ -327,8 +330,16 @@ float ApplyGameplay(const OpenXRControllerState& left, const OpenXRControllerSta
         const int part = binding > 0 ? (binding - 1) % 16 + 1 : 0;
         return bound(binding) && !(modifier && part >= 8 && part <= 11);
     };
+    const bool stick_jump = look.thumbstick_y > kJumpStickThreshold && !modifier;
+    // Joy-Cons played as controllers have the buttons to spare: the stick and the weapon hand's
+    // primary button (A) both jump, whatever the primary-button setting says.
+    bool joycons = false;
+#if defined(MP_PLATFORM_VISIONOS)
+    joycons = xr_visionos_hand_tracked_gamepads_claimed();
+#endif
     const bool jump = custom ? (jumpBinding(settings.custom_jump) || jumpBinding(settings.custom_jump_extra))
-                             : a_jump ? weapon.primary : (look.thumbstick_y > kJumpStickThreshold && !modifier);
+                             : joycons ? (weapon.primary || stick_jump)
+                                       : a_jump ? weapon.primary : stick_jump;
     if (jump) {
         pad.button |= PAD_BUTTON_B;
         pad.analogB = kTriggerFull;

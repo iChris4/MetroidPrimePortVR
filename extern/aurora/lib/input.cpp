@@ -17,6 +17,7 @@
 #include <filesystem>
 #include <string>
 #include <utility>
+#include <vector>
 
 using namespace std::string_view_literals;
 
@@ -440,7 +441,10 @@ static void map_digital_triggers(SDL_Gamepad* ctrl) noexcept {
 #endif
 
 #if defined(__APPLE__) && TARGET_OS_VISION
-bool visionos_is_spatial_controller(const char* name) noexcept; // lib/input_visionos.mm
+// lib/input_visionos.mm
+bool visionos_is_spatial_controller(const char* name) noexcept;
+bool visionos_is_claimed_joycon(const char* name) noexcept;
+bool visionos_joycons_claimed() noexcept;
 #endif
 
 SDL_JoystickID add_controller(SDL_JoystickID which) noexcept {
@@ -464,10 +468,13 @@ SDL_JoystickID add_controller(SDL_JoystickID which) noexcept {
     // (the visionOS OpenXR provider reads them through GameController and ARKit). SDL's MFi driver
     // would also offer each as a gamepad of its own, so every button would reach the game twice.
     // GameController says which devices are spatial controllers (lib/input_visionos.mm); the names
-    // are a fallback. The DualSense ("DualSense Wireless Controller") stays a gamepad.
+    // are a fallback. The DualSense ("DualSense Wireless Controller") stays a gamepad. So does a
+    // Joy-Con pair, unless the provider plays it as hand-tracked controllers
+    // (aurora_visionos_set_joycons_claimed; visionos_refresh_vr_controllers follows the changes).
     if (const char* name = SDL_GetGamepadName(ctrl); name != nullptr &&
-        (visionos_is_spatial_controller(name) || std::strstr(name, "VR2") != nullptr ||
-         std::strstr(name, "Sense Controller") != nullptr || std::strstr(name, "Spatial") != nullptr)) {
+        (visionos_is_spatial_controller(name) || visionos_is_claimed_joycon(name) ||
+         std::strstr(name, "VR2") != nullptr || std::strstr(name, "Sense Controller") != nullptr ||
+         std::strstr(name, "Spatial") != nullptr)) {
       Log.info("Leaving '{}' to the VR controllers (vid {:04x}, pid {:04x})", name, controller.m_vid,
                controller.m_pid);
       SDL_CloseGamepad(ctrl);
@@ -507,6 +514,43 @@ void remove_controller(Uint32 instance) noexcept {
     prefer_real_controller_on_first_port();
   }
 }
+
+#if defined(__APPLE__) && TARGET_OS_VISION
+void visionos_refresh_vr_controllers() noexcept {
+  static bool s_claimed = false;
+  const bool claimed = visionos_joycons_claimed();
+  if (claimed == s_claimed) {
+    return;
+  }
+  s_claimed = claimed;
+  if (claimed) {
+    // The pair became the VR layer's: it is no gamepad any more.
+    std::vector<SDL_JoystickID> leaving;
+    for (const auto& [instance, controller] : g_GameControllers) {
+      const char* name = SDL_GetGamepadName(controller.m_controller);
+      if (name != nullptr && visionos_is_claimed_joycon(name)) {
+        leaving.push_back(instance);
+      }
+    }
+    for (SDL_JoystickID instance : leaving) {
+      Log.info("Leaving the Joy-Cons to the VR controllers (instance {})", instance);
+      remove_controller(instance);
+    }
+    return;
+  }
+  // Released: offer again every gamepad SDL has that is not open (add_controller still leaves
+  // out the Sense controllers).
+  int count = 0;
+  if (SDL_JoystickID* ids = SDL_GetGamepads(&count); ids != nullptr) {
+    for (int i = 0; i < count; ++i) {
+      if (!g_GameControllers.contains(ids[i])) {
+        add_controller(ids[i]);
+      }
+    }
+    SDL_free(ids);
+  }
+}
+#endif
 
 bool is_gamecube(Uint32 instance) noexcept {
   if (auto it = g_GameControllers.find(instance); it != g_GameControllers.end()) {

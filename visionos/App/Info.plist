@@ -38,7 +38,7 @@
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
 	<key>NSHandsTrackingUsageDescription</key>
-	<string>With no controller in hand, your hands point at and press the game's menus.</string>
+	<string>With Joy-Cons, your hands aim the arm cannon; with nothing in hand, they point at and press the game's menus.</string>
 	<key>NSWorldSensingUsageDescription</key>
 	<string>The game places its screen and its world in the room around you.</string>
 	<key>NSAccessoryTrackingUsageDescription</key>

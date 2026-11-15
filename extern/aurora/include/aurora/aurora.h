@@ -370,6 +370,10 @@ bool aurora_is_suspended();
 void aurora_set_log_level(AuroraLogLevel level);
 void aurora_set_pause_on_focus_lost(bool value);
 void aurora_set_background_input(bool value);
+/** Apple Vision Pro only (lib/input_visionos.mm): whether the VR layer plays a combined Joy-Con pair
+ * as two hand-tracked controllers. While it does, Aurora offers no Joy-Con as a gamepad, so each
+ * press reaches the game once; a change takes effect at the next event pump. Any thread. */
+void aurora_visionos_set_joycons_claimed(bool claimed);
 void aurora_set_resampler(AuroraSampler sampler);
 /** Sharpens the frame (CAS-style contrast-adaptive, 0 = off, 1 = most) when it is drawn smaller than
  * the window and stretched to it; a frame at or above the window's size is never touched. */

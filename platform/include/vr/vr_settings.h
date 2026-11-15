@@ -134,7 +134,7 @@ struct PortVrSettings {
     float offset_y = 0.0f;
     float offset_z = 0.0f;
     float model_offset_x = 0.0f;
-    float model_offset_y = 0.0f;
+    float model_offset_y = -0.150f; // arm cannon forward/back, metres
     float model_offset_z = 0.0f;
     float rot_offset_x = 0.0f;
     float rot_offset_y = 0.0f;
@@ -148,6 +148,9 @@ struct PortVrSettings {
     float trackpad_press_threshold = 0.5f;
     float index_grip_press_threshold = 0.5f;
     bool combat_jump_use_primary_button = false;
+    // Apple Vision Pro: a combined Joy-Con pair plays as two tracked controllers, each half posed by
+    // the hand holding it (platform/vr/visionos/xr_visionos_hand_controllers.mm). Off, it is a gamepad.
+    bool joycon_hand_tracking = true;
     bool gun_targeting_enabled = true;
     bool cannon_targeting = true;
     float gun_targeting_distance = 60.0f;

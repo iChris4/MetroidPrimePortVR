@@ -255,6 +255,7 @@ const Field kFields[] = {
     VR_FLOAT(trackpad_press_threshold, 0.05f, 1.0f),
     VR_FLOAT(index_grip_press_threshold, 0.05f, 1.0f),
     VR_BOOL(combat_jump_use_primary_button),
+    VR_BOOL(joycon_hand_tracking),
     VR_BOOL(gun_targeting_enabled),
     VR_BOOL(cannon_targeting),
     VR_BOOL(room_scale),
@@ -401,7 +402,8 @@ void PushVrSettingsToAurora() noexcept {
 void ResetVrCalibrationOffsets() noexcept {
     PortVrSettings settings = GetVrSettings();
     settings.offset_x = settings.offset_y = settings.offset_z = 0.0f;
-    settings.model_offset_x = settings.model_offset_y = settings.model_offset_z = 0.0f;
+    settings.model_offset_x = settings.model_offset_z = 0.0f;
+    settings.model_offset_y = PortVrSettings{}.model_offset_y;
     settings.rot_offset_x = settings.rot_offset_y = settings.rot_offset_z = 0.0f;
     settings.world_scale = 1.50f;
     SetVrSettings(settings);

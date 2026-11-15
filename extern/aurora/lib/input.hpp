@@ -1,5 +1,8 @@
 #pragma once
 
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
 #include <string>
 #include "dolphin/pad.h" // For PADDeaZones and PADButtonMapping
 #include "SDL3/SDL_gamepad.h"
@@ -50,6 +53,11 @@ GameController* get_controller_for_player(uint32_t player) noexcept;
 Sint32 get_instance_for_player(uint32_t player) noexcept;
 SDL_JoystickID add_controller(SDL_JoystickID which) noexcept;
 void remove_controller(Uint32 instance) noexcept;
+#if defined(__APPLE__) && TARGET_OS_VISION
+// Apple Vision Pro: drops the Joy-Cons from the gamepads when the VR layer claims them, and offers
+// them again when it lets go (aurora_visionos_set_joycons_claimed). Called after each event pump.
+void visionos_refresh_vr_controllers() noexcept;
+#endif
 Sint32 player_index(Uint32 instance) noexcept;
 void set_player_index(Uint32 instance, Sint32 index) noexcept;
 std::string controller_name(Uint32 instance) noexcept;

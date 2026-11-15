@@ -291,6 +291,7 @@ struct TeleportPlace {
 struct View {
     int state_slot = 1;          // PortSaveState's selected slot
     bool standalone = false;     // a standalone headset (Quest): its own CONFIG rows
+    bool joycons = false;        // Apple Vision Pro: Joy-Cons can play as hand-tracked controllers
     bool foveation_live = false; // this session has density maps: a level applies at once
     bool multiview_available = true; // false on a GPU Aurora keeps on a pass per eye (Adreno 6xx)
     bool in_game = false;        // a game is running (the cheats need one)
@@ -391,6 +392,7 @@ enum class PortItem : uint8_t {
     RoomScale,
     MessageBoxInView,
     FloatingHud,
+    JoyConHandTracking,
     Reset,
 };
 
@@ -438,6 +440,9 @@ inline PortList PortItems(const View& view) {
     add(PortItem::MessageBoxInView);
     add(PortItem::FloatingHud);
     add(PortItem::WristVisor);
+    if (view.joycons) {
+        add(PortItem::JoyConHandTracking);
+    }
 
     add(PortItem::Reset);
     return list;
@@ -872,6 +877,8 @@ inline Row PortRow(const State& s, const PortVrSettings& v, const View& view, Po
         return {"MESSAGE BOX IN VIEW", OnOff(v.message_box_immersive)};
     case PortItem::FloatingHud:
         return {"FLOATING HUD", OnOff(v.floating_hud)};
+    case PortItem::JoyConHandTracking:
+        return {"JOY-CONS AIM WITH THE HANDS", OnOff(v.joycon_hand_tracking)};
     case PortItem::Reset:
         return {"RESET CONFIG", ConfirmText(s, kResetPortConfig)};
     }
@@ -1557,6 +1564,7 @@ inline void ResetPortConfig(PortVrSettings& v) {
     v.room_scale = d.room_scale;
     v.message_box_immersive = d.message_box_immersive;
     v.floating_hud = d.floating_hud;
+    v.joycon_hand_tracking = d.joycon_hand_tracking;
 }
 
 // A CONFIG choice one step on: -1 or +1, clamped at the ends for the
@@ -1759,13 +1767,15 @@ inline void Activate(State& s, PortVrSettings& v, const View& view, double now, 
             break;
         case 19:
             if (ConfirmReset(s, reset_action, now)) {
-                v.model_offset_x = v.model_offset_y = v.model_offset_z = 0.0f;
+                v.model_offset_x = v.model_offset_z = 0.0f;
+                v.model_offset_y = PortVrSettings{}.model_offset_y;
                 v.rot_offset_x = v.rot_offset_y = v.rot_offset_z = 0.0f;
             }
             break;
         case 20: // DEFAULT ARM PRESET
             v.offset_x = v.offset_y = v.offset_z = 0.0f;
-            v.model_offset_x = v.model_offset_y = v.model_offset_z = 0.0f;
+            v.model_offset_x = v.model_offset_z = 0.0f;
+            v.model_offset_y = PortVrSettings{}.model_offset_y;
             v.rot_offset_x = v.rot_offset_y = v.rot_offset_z = 0.0f;
             break;
         case 21: // SAMUS ARM PRESET
@@ -1960,6 +1970,9 @@ inline void Activate(State& s, PortVrSettings& v, const View& view, double now, 
             break;
         case PortItem::FloatingHud:
             v.floating_hud = !v.floating_hud;
+            break;
+        case PortItem::JoyConHandTracking:
+            v.joycon_hand_tracking = !v.joycon_hand_tracking;
             break;
         case PortItem::Reset:
             if (ConfirmReset(s, reset_action, now)) {

@@ -362,6 +362,7 @@ bool Compositor::StartTracking() {
         m_rightHand = ar_hand_anchor_create();
         m_leftHandAt = ar_hand_anchor_create();
         m_rightHandAt = ar_hand_anchor_create();
+        m_handTrackingSupported.store(true);
     }
     m_deviceAnchor = ar_device_anchor_create();
     // Hand tracking asks the wearer once; the answer only decides whether the
@@ -387,14 +388,17 @@ bool Compositor::StartTracking() {
     ar_session_run(m_arSession, providers);
     m_trackingStarted.store(true);
     // The PlayStation VR2 Sense controllers, in an ARKit session of their own
-    // (xr_visionos_accessories.mm).
+    // (xr_visionos_accessories.mm), and the Joy-Cons the hands hold
+    // (xr_visionos_hand_controllers.mm).
     StartAccessoryTracking();
+    StartHandControllers();
     Log("ARKit session running (world tracking %s, hand tracking %s)", m_worldTracking ? "on" : "off",
         m_handTracking ? "requested" : "unsupported");
     return true;
 }
 
 void Compositor::StopTracking() {
+    StopHandControllers();
     StopAccessoryTracking();
     std::lock_guard lock(m_mutex);
     if (m_arSession != nullptr) {
@@ -408,6 +412,7 @@ void Compositor::StopTracking() {
     m_rightHand = nullptr;
     m_leftHandAt = nullptr;
     m_rightHandAt = nullptr;
+    m_handTrackingSupported.store(false);
     m_trackingStarted.store(false);
 }
 

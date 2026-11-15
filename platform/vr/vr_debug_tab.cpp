@@ -275,6 +275,11 @@ void DrawVrDebugTab() {
   changed |= ImGui::SliderFloat("Rumble intensity", &s.rumble_intensity, 0.f, 1.f, "%.2f");
   changed |= ImGui::Checkbox("Grip inputs", &s.grip_inputs_enabled);
   changed |= ImGui::Checkbox("Jump with the primary button", &s.combat_jump_use_primary_button);
+#if defined(MP_PLATFORM_VISIONOS)
+  changed |= ImGui::Checkbox("Joy-Cons aim with the hands", &s.joycon_hand_tracking);
+  ImGui::TextWrapped("A combined Joy-Con pair plays as two tracked controllers, each half posed by the hand "
+                     "holding it. Off, the pair is a gamepad.");
+#endif
   changed |= ImGui::Checkbox("Beam wheel lights the HUD beam box", &s.beam_wheel_hud_highlight);
   ImGui::TextWrapped("While the weapon hand's B holds the beam wheel open, the beam the cannon points at "
                      "has its box on the HUD lit (PrimedGun drew its own panel of icons instead).");

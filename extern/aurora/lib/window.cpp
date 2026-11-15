@@ -341,6 +341,10 @@ const AuroraEvent* poll_events() {
       break;
     }
   }
+#if defined(__APPLE__) && TARGET_OS_VISION
+  // The VR layer may have claimed the Joy-Cons, or let them go, since the last pump.
+  input::visionos_refresh_vr_controllers();
+#endif
   g_events.push_back(AuroraEvent{
       .type = AURORA_NONE,
   });

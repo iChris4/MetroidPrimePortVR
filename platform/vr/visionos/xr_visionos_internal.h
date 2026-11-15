@@ -6,9 +6,11 @@
 // from Wiicompiled VR): xr_visionos_runtime.mm (instance, session, spaces,
 // frames, swapchains, events), xr_visionos_compositor.mm (CompositorServices,
 // ARKit, Metal), xr_visionos_input.mm (actions from tracked hands and spatial
-// controllers), xr_visionos_hand_tracking.mm (XR_EXT_hand_tracking) and
+// controllers), xr_visionos_hand_tracking.mm (XR_EXT_hand_tracking),
 // xr_visionos_accessories.mm (PlayStation VR2 Sense controllers through
-// GameController and ARKit accessory tracking). Objective-C++ only.
+// GameController and ARKit accessory tracking) and
+// xr_visionos_hand_controllers.mm (Joy-Cons played as tracked controllers, posed
+// by the hands that hold them). Objective-C++ only.
 
 #import <ARKit/ARKit.h>
 #import <CompositorServices/CompositorServices.h>
@@ -98,14 +100,25 @@ struct HandJointSample {
 // joint; ReadHand synthesizes it at the middle of the hand.
 inline constexpr size_t kHandJointCount = XR_HAND_JOINT_COUNT_EXT;
 
-// A spatial controller's buttons, as xrSyncActions samples them
-// (xr_visionos_accessories.mm). The PlayStation VR2 Sense controllers answer the
-// Touch profile's components: the face buttons are A/B on the right controller
-// (cross, circle) and X/Y on the left (square, triangle), the menu button is the
-// left's Create and the right's Options.
+// Where a hand's controller comes from.
+enum class ControllerSource {
+    None,
+    // A PlayStation VR2 Sense controller: ARKit tracks the controller itself.
+    Sense,
+    // Half of a Joy-Con pair: ARKit tracks the hand that holds it.
+    HandTracked,
+};
+
+// A controller's buttons, as xrSyncActions samples them
+// (xr_visionos_accessories.mm, xr_visionos_hand_controllers.mm). Both kinds
+// answer the Touch profile's components. On the Sense controllers the face
+// buttons are A/B on the right controller (cross, circle) and X/Y on the left
+// (square, triangle), the menu button is the left's Create and the right's
+// Options; a Joy-Con pair is laid out the same way (MapJoyConPair).
 struct ControllerSample {
-    // A spatial controller is assigned to this hand (held in it, or made for it).
+    // A controller is assigned to this hand (held in it, or made for it).
     bool connected = false;
+    ControllerSource source = ControllerSource::None;
     float trigger = 0.0f;
     bool triggerTouched = false;
     float squeeze = 0.0f;
@@ -205,6 +218,8 @@ public:
     // anchors repeat between ARKit's updates. False when the query fails.
     bool HandsAt(int64_t timeNanos, std::array<HandSample, 2>& hands) noexcept;
     bool HandTrackingAuthorized() const noexcept { return m_handTrackingAuthorized.load(); }
+    // ARKit offers hand tracking here (false in the simulator).
+    bool HandTrackingSupported() const noexcept { return m_handTrackingSupported.load(); }
 
     id<MTLDevice> Device() const noexcept { return m_device; }
     id<MTLCommandQueue> Queue() const noexcept { return m_queue; }
@@ -249,6 +264,7 @@ private:
     ar_hand_anchor_t m_rightHandAt = nullptr;
     std::atomic_bool m_trackingStarted{false};
     std::atomic_bool m_handTrackingAuthorized{false};
+    std::atomic_bool m_handTrackingSupported{false};
 };
 
 // ---------------------------------------------------------------------------
@@ -420,13 +436,15 @@ void DestroySessionHandTrackers(Session& session) noexcept;
 // Idempotent; called when the compositor starts ARKit.
 void StartAccessoryTracking() noexcept;
 void StopAccessoryTracking() noexcept;
-// Changes whenever a controller connects, disconnects or is loaded for tracking.
+// Changes whenever a controller connects, disconnects or is loaded for
+// tracking, and whenever the Joy-Cons start or stop playing as controllers.
 uint64_t ControllerGeneration() noexcept;
-// The buttons of the controller in each hand, now ({} for a hand without one).
+// The buttons of the controller in each hand, now ({} for a hand without one):
+// a Sense controller, else half of a claimed Joy-Con pair.
 void SampleControllers(std::array<ControllerSample, 2>& controllers) noexcept;
-// The aim or grip frame of the controller in `hand` (0 left, 1 right), OpenXR
-// style, predicted to `timeNanos`; false while it is not tracked. `flags` gets
-// the XR_SPACE_LOCATION_* bits the tracking state allows.
+// The aim or grip frame of the Sense controller in `hand` (0 left, 1 right),
+// OpenXR style, predicted to `timeNanos`; false while it is not tracked.
+// `flags` gets the XR_SPACE_LOCATION_* bits the tracking state allows.
 bool ControllerPose(uint32_t hand, bool aim, int64_t timeNanos, simd_float4x4& worldFromPose,
                     XrSpaceLocationFlags& flags, simd_float3* linearVelocity) noexcept;
 // Rumble on the controller in `hand`: `amplitude` 0..1 for `durationNanos`.
@@ -434,5 +452,31 @@ void ControllerHaptic(uint32_t hand, float amplitude, int64_t durationNanos) noe
 void ControllerHapticStop(uint32_t hand) noexcept;
 // Whether a controller is in `hand` now (xr_visionos_hand_has_controller).
 bool HandHasController(uint32_t hand) noexcept;
+
+// Joy-Cons as hand-tracked controllers (xr_visionos_hand_controllers.mm): a
+// combined pair, one half in each hand, its buttons from GameController and
+// each half's pose from the skeleton of the hand holding it, while the setting
+// allows it (xr_visionos_set_hand_tracked_gamepads) and hand tracking runs.
+// Every function is thread-safe.
+//
+// Starts and stops watching for Joy-Cons, with the accessory tracking.
+void StartHandControllers() noexcept;
+void StopHandControllers() noexcept;
+// Changes when a pair connects or disconnects, or starts or stops being claimed.
+uint64_t HandControllerGeneration() noexcept;
+// Fills the hands `controllers` leaves free (no Sense controller in them) from
+// the claimed pair, marked ControllerSource::HandTracked; leaves them alone
+// while the pair is not claimed.
+void SampleHandControllers(std::array<ControllerSample, 2>& controllers) noexcept;
+// Whether half of a claimed pair is in `hand`.
+bool HandControllerInHand(uint32_t hand) noexcept;
+// The aim or grip frame of the Joy-Con in `hand`: the hand's skeleton,
+// predicted to `timeNanos`, in the frame of a fist on an upright controller,
+// smoothed; held a moment through a tracking loss. Called under the instance
+// mutex (reads session.hands when ARKit cannot predict).
+bool HandControllerPose(Session& session, uint32_t hand, bool aim, int64_t timeNanos, simd_float4x4& worldFromPose,
+                        XrSpaceLocationFlags& flags, simd_float3* linearVelocity) noexcept;
+void HandControllerHaptic(uint32_t hand, float amplitude, int64_t durationNanos) noexcept;
+void HandControllerHapticStop(uint32_t hand) noexcept;
 
 } // namespace PortVr::visionos

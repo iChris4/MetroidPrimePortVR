@@ -220,6 +220,7 @@ void TestDefaultsMatchGame() {
       {"vr_vr_menu_hold_left_stick", FormatBool(s.vr_menu_hold_left_stick)},
       {"vr_vr_menu_requires_head_zone", FormatBool(s.vr_menu_requires_head_zone)},
       {"vr_combat_jump_use_primary_button", FormatBool(s.combat_jump_use_primary_button)},
+      {"vr_joycon_hand_tracking", FormatBool(s.joycon_hand_tracking)},
       {"vr_beam_wheel_hud_highlight", FormatBool(s.beam_wheel_hud_highlight)},
       {"vr_rumble_enabled", FormatBool(s.rumble_enabled)},
       {"vr_rumble_hand", hand(s.rumble_hand)},

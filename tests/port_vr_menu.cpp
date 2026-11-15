@@ -248,7 +248,7 @@ void TestClicks() {
   Check(s.reset_confirm == kNoReset, "confirmation expires");
   Click(s, v, view, kLabelX, RowY(kCalibrationTab, 7), now, actions);
   Click(s, v, view, kLabelX, RowY(kCalibrationTab, 7), now + 1.0, actions);
-  Check(s.reset_confirm == kNoReset && Near(v.rot_offset_z, 0.0f) && Near(v.model_offset_y, 0.0f),
+  Check(s.reset_confirm == kNoReset && Near(v.rot_offset_z, 0.0f) && Near(v.model_offset_y, -0.15f),
         "reset confirmed");
   // DETACH VR MENU FROM HAND.
   Click(s, v, view, kLabelX, RowY(kCalibrationTab, 10), now, actions);
@@ -451,6 +451,25 @@ void TestConfig() {
             !v.wrist_visor_enabled && Near(v.wrist_pitch, PortVrSettings{}.wrist_pitch) && v.cannon_targeting && v.room_scale && v.message_box_immersive && !v.floating_hud &&
             Near(v.metroid_hud_size, 2.0f),
         "reset config");
+
+  // Apple Vision Pro: Joy-Cons that aim with the hands, on the last page before the reset.
+  View vision = pc;
+  vision.joycons = true;
+  Check(has(vision, PortItem::JoyConHandTracking) && !has(pc, PortItem::JoyConHandTracking) &&
+            !has(quest, PortItem::JoyConHandTracking),
+        "only Vision Pro has the Joy-Con row");
+  State a{};
+  a.tab = kPortConfigTab;
+  a.port_page = PageCount(kPortConfigTab, vision) - 1;
+  const uint32_t joycon_row = ItemCount(a, vision) - 2;
+  Check(BuildRows(a, v, vision)[joycon_row].label == std::string("JOY-CONS AIM WITH THE HANDS") &&
+            BuildRows(a, v, vision)[joycon_row].value == "ON" &&
+            BuildRows(a, v, vision)[joycon_row + 1].label == std::string("RESET CONFIG"),
+        "the Joy-Con row, on by default, before the reset");
+  Click(a, v, vision, kLabelX, RowY(kPortConfigTab, joycon_row), now, actions);
+  Check(!v.joycon_hand_tracking && BuildRows(a, v, vision)[joycon_row].value == "OFF", "the Joy-Con row toggles");
+  ResetPortConfig(v);
+  Check(v.joycon_hand_tracking, "reset config turns the Joy-Cons back on");
 
   // The Quest: foveation waits for the next start without density maps.
   State q{};

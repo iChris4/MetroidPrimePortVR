@@ -18,6 +18,7 @@ CompositorServices and ARKit drives the headset. The visionOS layer comes from W
 | Stereo gameplay, frame pacing, comfort | Not yet checked on a headset. |
 | PlayStation VR2 Sense controllers | Played on a headset (the Frigate and beyond); calibration not checked. |
 | DualSense and other gamepads | Played on a headset. Look to lock-on and the lock's aim (below) work there; R's free aim is not yet checked. |
+| Nintendo Switch Joy-Cons as hand-tracked controllers | New, not yet checked on a headset. |
 
 The simulator has no hand tracking and no accessory tracking, so everything about hands and
 controllers is checked on a headset only.
@@ -84,6 +85,25 @@ The script runs three stages, each kept when up to date:
   controls, as Touch controllers do on Quest: the arm cannon follows the controller in the gun
   hand. Cross and Circle are A and B; Square and Triangle are X and Y; Create is the menu
   button.
+- **Nintendo Switch Joy-Cons.** Pair both in Settings > General > Game Controllers: visionOS
+  combines a pair into one controller (holding Capture and Home for a few seconds combines or
+  splits it). Hold one upright in each hand and allow hand tracking when asked. The pair then plays
+  the Sense controllers' VR controls: hand tracking places each Joy-Con, so the arm cannon follows
+  the hand that holds the gun hand's Joy-Con. The buttons, by their Nintendo labels:
+
+  | Right Joy-Con | Plays as | Left Joy-Con | Plays as |
+  |---|---|---|---|
+  | ZR | trigger: fire | ZL | trigger: lock-on, scan, grapple |
+  | R | grip: missile | L | grip: map |
+  | A | Cross; also jumps | Y, Down or Left | Square: Morph Ball |
+  | B | Circle: beam wheel | Up, or + | Triangle: pause |
+  | stick | turn, jump (push up) | stick | move, strafe |
+  | stick click | height | stick click, or − | VR menu |
+
+  X and Right do nothing. The pair rumbles at 30% of the rumble setting. **Joy-Cons aim with the hands** (on by default; the launcher's
+  Settings, or CONFIG in the VR menu) turns this off: the pair is then a gamepad and plays the
+  original controls, as below. A single Joy-Con, and a pair without hand tracking (refused, or the
+  simulator), is always a gamepad.
 - **DualSense or another gamepad.** It plays the original controls; the headset still looks
   around. The view stays level, so the head picks what L locks on to (look to lock-on and look to
   grapple, on by default), and while L holds a target the arm cannon turns to it, as the TV
@@ -91,8 +111,8 @@ The script runs three stages, each kept when up to date:
   down as on the TV, for missiles and anything that cannot be locked; the view does not move, and
   the crosshair marks where the cannon points.
 - **Hands.** With nothing in hand, look at a menu item and pinch to press it. Playing needs
-  controllers or a gamepad. Hands holding a gamepad are not controllers to the game: they never
-  move the cannon or press its buttons.
+  Sense controllers, Joy-Cons or a gamepad. Hands holding a gamepad other than Joy-Cons are not
+  controllers to the game: they never move the cannon or press its buttons.
 
 ### Settings and files
 
@@ -114,6 +134,7 @@ The script runs three stages, each kept when up to date:
 |---|---|---|
 | OpenXR provider | `platform/vr/visionos/` | The `xr*` functions the VR layer calls, on CompositorServices (frames, the compositor) and ARKit (head, hands). Linked in place of the Khronos loader as `mp_openxr_visionos`. |
 | Spatial controllers | `platform/vr/visionos/xr_visionos_accessories.mm` | The Sense controllers: buttons from GameController, poses from ARKit's accessory tracking in an ARKit session of its own, rumble through Core Haptics. They answer the Touch profile. |
+| Hand-tracked Joy-Cons | `platform/vr/visionos/xr_visionos_hand_controllers.mm`, `platform/include/vr/vr_hand_controller.h` | A combined Joy-Con pair as two Touch controllers: buttons from GameController in the Sense layout, each half's aim and grip from the skeleton of the hand holding it (predicted by ARKit to the asked-for time, in the frame of a fist on an upright controller, through a One Euro filter), rumble through Core Haptics. Claimed while `vr_joycon_hand_tracking` is on and hand tracking runs; Aurora then leaves the pair out of its gamepads (`aurora_visionos_set_joycons_claimed`, `extern/aurora/lib/input_visionos.mm`). |
 | Metal backend | `platform/vr/openxr_metal.mm` | The VR layer's graphics backend: IOSurface swapchains, the release and acquire fences, the virtual screen and settings panel layers. No pipelined pacing. |
 | Aurora bridge | `extern/aurora/lib/webgpu/metal_interop.cpp` | Aurora's stereo sink: each eye copied into an IOSurface on Dawn's queue, ordered with MTLSharedEvents. |
 | Host glue | `platform/visionos/visionos_host.mm` | Runs the game's `aurora_main` on a thread of its own once the immersive space exists. Sets its folders and switches, and asks it to quit. |
@@ -182,3 +203,12 @@ Other platform details:
   checked on a headset.
 - Connecting a controller after the game started restarts the accessory session; it may take a
   moment before its pose is tracked.
+- The Joy-Cons' hand tracking is unchecked on a headset. The button map, the holding frame
+  (forward from the wrist to the index knuckle, up from the little knuckle to the index knuckle),
+  the filter constants (`kRotationFilter`, `kPositionFilter`) and the aim's pitch
+  (`kHandControllerAimPitchDegrees`, 0) are first guesses; the VR menu's calibration corrects the
+  cannon meanwhile.
+- A hand ARKit loses keeps its Joy-Con's last pose for a quarter second. After that the cannon
+  follows the camera, as with a gamepad, until the hand is seen again; the buttons keep working.
+- Whether visionOS gives a Joy-Con pair haptics, per side or at all, is unchecked; without them the
+  pair does not rumble.

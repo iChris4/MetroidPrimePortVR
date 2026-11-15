@@ -247,13 +247,22 @@ private struct ControlsView: View {
                     .font(.callout)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                GroupBox("Nintendo Switch Joy-Cons") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Pair both in Settings > General > Game Controllers; they combine into one controller (holding Capture and Home for a few seconds combines or splits them). Hold one upright in each hand and allow hand tracking when the game asks. They then play the same VR controls as the Sense controllers: your hands track them, so the arm cannon follows the hand holding the right Joy-Con.")
+                        Text("Right Joy-Con: ZR fires, R fires a missile, A jumps (as does pushing the stick up), B is Circle (hold it and swing for the beam wheel), the stick click sets your height. Left Joy-Con: ZL locks on, L opens the map, Y (or Down, Left) is the Morph Ball, Up or + pauses, - opens the VR menu, the stick moves and strafes.")
+                        Text("Turn off \"Joy-Cons aim with the hands\" in Settings to play the original controls with them instead. A single Joy-Con always plays as a gamepad.")
+                    }
+                    .font(.callout)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
                 GroupBox("DualSense or another gamepad") {
                     Text("A Bluetooth gamepad plays the original controls: the headset still looks around, the stick turns and moves Samus. Pair it in Settings > General > Game Controllers.")
                         .font(.callout)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 GroupBox("Hands") {
-                    Text("With nothing in hand, look at a menu item and pinch to press it. Playing needs controllers or a gamepad.")
+                    Text("With nothing in hand, look at a menu item and pinch to press it. Playing needs controllers, Joy-Cons or a gamepad.")
                         .font(.callout)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }

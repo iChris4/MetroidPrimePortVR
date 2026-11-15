@@ -18,7 +18,9 @@
 // input layer (openxr_input.cpp) already binds: grip and aim poses, trigger,
 // squeeze, stick, A/B and X/Y, menu (xr_visionos_input.mm). The DualSense and
 // other gamepads stay SDL's (Aurora's lib/input.cpp leaves the spatial
-// controllers to this file).
+// controllers to this file). A hand without a Sense controller may hold half of
+// a Joy-Con pair instead (xr_visionos_hand_controllers.mm): the functions below
+// that answer per hand fall through to it.
 
 #include "xr_visionos_internal.h"
 
@@ -352,19 +354,25 @@ void StopAccessoryTracking() noexcept {
     g_generation.fetch_add(1);
 }
 
-uint64_t ControllerGeneration() noexcept { return g_generation.load(); }
+// Both counters only grow, so their sum changes whenever either does.
+uint64_t ControllerGeneration() noexcept { return g_generation.load() + HandControllerGeneration(); }
 
 void SampleControllers(std::array<ControllerSample, 2>& controllers) noexcept {
     controllers = {};
-    std::lock_guard lock(g_mutex);
-    const std::array<Controller*, 2> hands = AssignLocked();
-    for (uint32_t hand = 0; hand < 2; ++hand) {
-        if (hands[hand] == nullptr) {
-            continue;
+    {
+        std::lock_guard lock(g_mutex);
+        const std::array<Controller*, 2> hands = AssignLocked();
+        for (uint32_t hand = 0; hand < 2; ++hand) {
+            if (hands[hand] == nullptr) {
+                continue;
+            }
+            controllers[hand].connected = true;
+            controllers[hand].source = ControllerSource::Sense;
+            ReadButtons(hands[hand]->device, controllers[hand]);
         }
-        controllers[hand].connected = true;
-        ReadButtons(hands[hand]->device, controllers[hand]);
     }
+    // The hands left free may hold a Joy-Con.
+    SampleHandControllers(controllers);
 }
 
 bool ControllerPose(uint32_t hand, bool aim, int64_t timeNanos, simd_float4x4& worldFromPose,
@@ -417,25 +425,34 @@ void ControllerHaptic(uint32_t hand, float amplitude, int64_t durationNanos) noe
         return;
     }
     CHHapticEngine* engine = nil;
+    bool sense = false;
     {
         std::lock_guard lock(g_mutex);
         const std::array<Controller*, 2> hands = AssignLocked();
-        Controller* controller = hands[hand];
-        if (controller == nullptr || controller->hapticsFailed) {
-            return;
-        }
-        if (controller->haptics == nil) {
-            GCDeviceHaptics* haptics = controller->device.haptics;
-            controller->haptics = haptics != nil ? [haptics createEngineWithLocality:GCHapticsLocalityDefault] : nil;
-            if (controller->haptics == nil) {
-                controller->hapticsFailed = true;
-                Log("controller haptics are not available");
+        if (Controller* controller = hands[hand]; controller != nullptr) {
+            sense = true;
+            if (controller->hapticsFailed) {
                 return;
             }
-            controller->haptics.playsHapticsOnly = YES;
-            controller->haptics.autoShutdownEnabled = YES;
+            if (controller->haptics == nil) {
+                GCDeviceHaptics* haptics = controller->device.haptics;
+                controller->haptics =
+                    haptics != nil ? [haptics createEngineWithLocality:GCHapticsLocalityDefault] : nil;
+                if (controller->haptics == nil) {
+                    controller->hapticsFailed = true;
+                    Log("controller haptics are not available");
+                    return;
+                }
+                controller->haptics.playsHapticsOnly = YES;
+                controller->haptics.autoShutdownEnabled = YES;
+            }
+            engine = controller->haptics;
         }
-        engine = controller->haptics;
+    }
+    if (!sense) {
+        // Not a Sense controller's hand: a Joy-Con's, if it holds one.
+        HandControllerHaptic(hand, amplitude, durationNanos);
+        return;
     }
     // OpenXR's minimum duration is -1; a pulse that short still has to be felt.
     const double seconds = std::clamp(durationNanos > 0 ? NanosToSeconds(durationNanos) : 0.02, 0.01, 2.0);
@@ -469,12 +486,18 @@ void ControllerHapticStop(uint32_t hand) noexcept {
         return;
     }
     CHHapticEngine* engine = nil;
+    bool sense = false;
     {
         std::lock_guard lock(g_mutex);
         const std::array<Controller*, 2> hands = AssignLocked();
         if (hands[hand] != nullptr) {
+            sense = true;
             engine = hands[hand]->haptics;
         }
+    }
+    if (!sense) {
+        HandControllerHapticStop(hand);
+        return;
     }
     if (engine != nil) {
         dispatch_async(g_hapticsQueue, ^{
@@ -487,8 +510,13 @@ bool HandHasController(uint32_t hand) noexcept {
     if (hand > 1) {
         return false;
     }
-    std::lock_guard lock(g_mutex);
-    return AssignLocked()[hand] != nullptr;
+    {
+        std::lock_guard lock(g_mutex);
+        if (AssignLocked()[hand] != nullptr) {
+            return true;
+        }
+    }
+    return HandControllerInHand(hand);
 }
 
 } // namespace PortVr::visionos

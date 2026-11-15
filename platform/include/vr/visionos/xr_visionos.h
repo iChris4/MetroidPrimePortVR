@@ -98,12 +98,25 @@ void xr_visionos_spatial_event(uint64_t event_id, int phase, int chirality, bool
                                float origin_y, float origin_z, float direction_x, float direction_y,
                                float direction_z, bool has_pose, float pose_x, float pose_y, float pose_z);
 
-// Provider -> game: whether a PlayStation VR2 Sense controller is in this hand
-// (0 left, 1 right) rather than the bare hand. Bare hands still answer the
-// action bindings (pinches as buttons, poses from the joints or the
+// Provider -> game: whether a controller is in this hand (0 left, 1 right)
+// rather than the bare hand: a PlayStation VR2 Sense controller, or half of a
+// Joy-Con pair played as a tracked controller (below). Bare hands still answer
+// the action bindings (pinches as buttons, poses from the joints or the
 // look-and-pinch ray), which the in-headset menu uses, but they are no
 // controllers to play with. Any thread.
 bool xr_visionos_hand_has_controller(uint32_t hand);
+
+// Game -> provider: whether a combined Joy-Con pair plays as two tracked
+// controllers (the setting vr_joycon_hand_tracking, on by default): each
+// half's buttons as one hand's Touch controller, laid out as the Sense
+// controllers are, and its pose from the skeleton of the hand that holds it.
+// Any thread; read at each xrSyncActions.
+void xr_visionos_set_hand_tracked_gamepads(bool enabled);
+// Provider -> game: whether the pair plays as controllers now (the setting is
+// on, a pair is connected and hand tracking runs). While it does, the pair is
+// no gamepad: Aurora must leave it out (aurora_visionos_set_joycons_claimed).
+// Any thread.
+bool xr_visionos_hand_tracked_gamepads_claimed(void);
 
 // Diagnostics for the app: the last error the provider logged, or "".
 const char* xr_visionos_last_error(void);

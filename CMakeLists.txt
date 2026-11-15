@@ -265,7 +265,8 @@ if(MP_ENABLE_OPENXR)
             platform/vr/visionos/xr_visionos_compositor.mm
             platform/vr/visionos/xr_visionos_input.mm
             platform/vr/visionos/xr_visionos_hand_tracking.mm
-            platform/vr/visionos/xr_visionos_accessories.mm)
+            platform/vr/visionos/xr_visionos_accessories.mm
+            platform/vr/visionos/xr_visionos_hand_controllers.mm)
         target_include_directories(mp_openxr_visionos PUBLIC platform/include)
         target_link_libraries(mp_openxr_visionos PUBLIC mp_openxr_headers)
         target_compile_options(mp_openxr_visionos PRIVATE -fobjc-arc)
@@ -1042,6 +1043,8 @@ if(MP_BUILD_TESTS)
     mp_port_test(port_vr_snap_turn_tests SOURCES tests/port_vr_snap_turn.cpp
         INCLUDES platform/include extern/aurora/include extern/aurora/lib)
     mp_port_test(port_vr_wrist_visor_tests SOURCES tests/port_vr_wrist_visor.cpp
+        INCLUDES platform/include)
+    mp_port_test(port_vr_hand_controller_tests SOURCES tests/port_vr_hand_controller.cpp
         INCLUDES platform/include)
     mp_port_test(port_vr_controller_layout_tests SOURCES tests/port_vr_controller_layout.cpp
         INCLUDES platform/include)

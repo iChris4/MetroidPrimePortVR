@@ -6,8 +6,10 @@
 // A hand holding a Sense controller (xr_visionos_accessories.mm) answers the
 // Touch profile's bindings from the controller: its buttons, trigger, grip and
 // stick through GameController, its aim and grip poses from ARKit's accessory
-// tracking, its rumble through Core Haptics. Each hand reads its own source, so
-// a single controller leaves the other hand to the hand tracking below.
+// tracking, its rumble through Core Haptics. A hand holding half of a Joy-Con
+// pair (xr_visionos_hand_controllers.mm) answers them the same way, its poses
+// from the hand's own skeleton. Each hand reads its own source, so a single
+// controller leaves the other hand to the hand tracking below.
 //
 // Without controllers the action bindings openxr_input.cpp suggests are served
 // from the hands (Wiicompiled VR's design). While the app
@@ -565,9 +567,14 @@ bool LocateActionSpaceInWorld(Session& session, const Space& space, int64_t time
     }
     const bool aim = IsAimAction(instance, *action);
     if (session.controllers[hand].connected) {
-        // A controller in this hand: its own tracked aim or grip, predicted to the asked time.
+        // A controller in this hand: its own tracked aim or grip, predicted to
+        // the asked time. A Sense controller is tracked itself; a Joy-Con
+        // through the hand that holds it (xr_visionos_hand_controllers.mm).
         simd_float4x4 worldFromPose;
-        if (!ControllerPose(hand, aim, timeNanos, worldFromPose, flags, linearVelocity)) {
+        const bool located = session.controllers[hand].source == ControllerSource::HandTracked
+                                 ? HandControllerPose(session, hand, aim, timeNanos, worldFromPose, flags, linearVelocity)
+                                 : ControllerPose(hand, aim, timeNanos, worldFromPose, flags, linearVelocity);
+        if (!located) {
             flags = 0;
             return false;
         }

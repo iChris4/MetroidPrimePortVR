@@ -64,6 +64,7 @@
 // Apple Vision Pro: the OpenXR provider in platform/vr/visionos (CompositorServices), Dawn Metal.
 #include "visionos/visionos_host.h"
 #include "vr/openxr_metal.h"
+#include "vr/visionos/xr_visionos.h"
 #include <time.h>
 #define XR_USE_TIMESPEC
 #include <openxr/openxr_platform.h>
@@ -2377,6 +2378,15 @@ void OpenXRApplyControllerState() noexcept {
         g_headset_input_focus = focus;
         aurora_set_background_input(focus);
     }
+#if defined(MP_PLATFORM_VISIONOS)
+    // Joy-Cons as hand-tracked controllers: the provider claims a combined pair
+    // while the setting allows it and hand tracking runs, and the pair is then
+    // no gamepad of Aurora's, or each press would reach the game twice (once
+    // through the VR pad, once as the physical pad). Aurora follows the claim
+    // at its next event pump.
+    xr_visionos_set_hand_tracked_gamepads(GetVrSettings().joycon_hand_tracking);
+    aurora_visionos_set_joycons_claimed(OpenXRIsRunning() && xr_visionos_hand_tracked_gamepads_claimed());
+#endif
 #endif
 }
 

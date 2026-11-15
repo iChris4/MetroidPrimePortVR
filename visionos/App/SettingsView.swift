@@ -26,13 +26,18 @@ struct SettingsView: View {
                 SettingRow(key: "vr_render_scale", title: "Render scale", unit: "×")
                 SettingRow(key: "vr_world_scale", title: "World scale", unit: "")
             }
-            Section("Controls") {
+            Section {
                 SettingRow(key: "vr_use_right_hand", title: "Arm cannon in the right hand")
+                SettingRow(key: "vr_joycon_hand_tracking", title: "Joy-Cons aim with the hands")
                 SettingRow(key: "vr_directional_movement_enabled", title: "Move where the controller points")
                 SettingRow(key: "vr_snap_turn_enabled", title: "Snap turning")
                 SettingRow(key: "vr_snap_turn_degrees", title: "Snap turn angle", unit: "°")
                 SettingRow(key: "vr_rumble_enabled", title: "Rumble")
                 SettingRow(key: "vr_rumble_intensity", title: "Rumble strength", unit: "")
+            } header: {
+                Text("Controls")
+            } footer: {
+                Text("Joy-Cons aim with the hands: a combined pair of Joy-Cons plays like the Sense controllers, each one placed by the hand that holds it. Needs hand tracking allowed; off, the Joy-Cons are a gamepad.")
             }
             Section {
                 SettingRow(key: "vr_diagnostics_logging", title: "Log VR frame timing")
