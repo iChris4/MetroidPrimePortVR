@@ -43,11 +43,14 @@ final class GameModel: ObservableObject {
 
     init() {
         // visionOS anchors an app's audio to its window scene by default, so the game would fall
-        // silent when the launcher window closes. Its sound belongs to the player: anchor it to
-        // the listener's front, which outlives every scene (Wiicompiled VR found this).
+        // silent when the launcher window closes. Its sound also needs no help from the system:
+        // the game already pans every sound from the head's pose (the listener follows
+        // VrHeadFacingTransform / VrHeadViewTransform in CCameraManager), so head-tracking the
+        // mix again in the room counter-rotated it as the player turned. Bypassing the system's
+        // spatialization plays the game's stereo straight to the ears, like headphones, and is
+        // tied to no scene. (Wiicompiled VR used .headTracked(anchoringStrategy: .front).)
         do {
-            try AVAudioSession.sharedInstance().setIntendedSpatialExperience(
-                .headTracked(soundStageSize: .automatic, anchoringStrategy: .front))
+            try AVAudioSession.sharedInstance().setIntendedSpatialExperience(.bypassed)
         } catch {
             lastError = "Could not set up the game's audio: \(error.localizedDescription)"
         }
