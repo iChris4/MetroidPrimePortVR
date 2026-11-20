@@ -4,6 +4,7 @@
 #include "port_mouse.h"
 #ifdef TARGET_PC
 #include "vr/vr_pad.h"
+#include "vr/vr_settings.h"
 #include "vr/vr_view.h"
 #endif
 
@@ -565,9 +566,14 @@ void CPlayer::ComputeMovement(const CFinalInput& input, CStateManager& mgr, floa
   // points, at PrimedGun's speed and accelerations, in place of the stick's
   // walk; the look stick still turns her and the jump is the game's. The ramp
   // starts from the speed she carries out of the last tick, where PrimedGun
-  // read it at the end of the frame, before this tick's friction.
+  // read it at the end of the frame, before this tick's friction. With SCAN
+  // DASH CARRY on, not for the rest of an airtime that held an orbit
+  // (sOrbitAirCarry): that moves as retail, as under Remastered movement, or
+  // the ramp would cut a scan dash to the walking speed along the stick the
+  // tick its lock let go.
   PortVr::VrMove vrMove;
-  if (PortVrPlayerSteers(mgr)) {
+  if (PortVrPlayerSteers(mgr) &&
+      !(sOrbitAirCarry && PortVr::GetVrSettings().directional_movement_dash_carry)) {
     const CVector3f velocity = GetVelocityWR();
     const float flatSpeed = CVector2f(velocity.GetX(), velocity.GetY()).Magnitude();
     vrMove = PortVr::VrDirectionalMove(flatSpeed, x258_movementState == NPlayer::kMS_OnGround, dt,
