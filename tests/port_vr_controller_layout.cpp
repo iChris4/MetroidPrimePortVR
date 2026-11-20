@@ -46,6 +46,15 @@ int main() {
     hands = {};
     PortVrSettings layout;
     Check(!layout.custom_layout_enabled, "legacy layout remains the default");
+    hands[0].connected = true;
+    hands[0].primary = true;
+    Check(Pressed(hands, layout.custom_map_mark), "Quest X defaults to map marking in custom layouts");
+    layout.custom_map_mark = 23;
+    Check(!Pressed(hands, layout.custom_map_mark), "rebinding map marking releases the old button");
+    hands[1].connected = true;
+    hands[1].trackpad_click = true;
+    Check(Pressed(hands, layout.custom_map_mark), "controllers without face buttons can bind map marking");
+    hands = {};
     hands[1].connected = true;
     hands[1].secondary = true;
     Check(Pressed(hands, layout.custom_beam), "default beam hold is the right upper button");

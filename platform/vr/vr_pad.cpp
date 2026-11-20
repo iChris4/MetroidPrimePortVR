@@ -248,6 +248,8 @@ void ApplyClassic(const OpenXRControllerState& left, const OpenXRControllerState
         } else {
             if (bound(settings.custom_confirm)) pad.button |= PAD_BUTTON_A;
             if (bound(settings.custom_back)) pad.button |= PAD_BUTTON_B;
+            // The map consumes GameCube X independently of Confirm/Back.
+            if (bound(settings.custom_map_mark)) pad.button |= PAD_BUTTON_X;
             if (bound(settings.custom_lock)) { pad.button |= PAD_TRIGGER_L; pad.triggerLeft = 255; }
             if (bound(settings.custom_shoot)) { pad.button |= PAD_TRIGGER_R; pad.triggerRight = 255; }
             if (bound(settings.custom_missile)) pad.button |= PAD_BUTTON_Y;
