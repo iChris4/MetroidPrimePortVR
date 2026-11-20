@@ -8,7 +8,7 @@ The stock prebuilt Dawn cannot create its Vulkan device through OpenXR, which Vu
 uses (the runtime creates Dawn's VkInstance and VkDevice through XR_KHR_vulkan_enable2, and the eyes
 are drawn straight into the runtime's swapchain images, platform/vr/openxr_vulkan_direct.cpp). This
 script downloads the Dawn source aurora pins (extern/aurora/cmake/AuroraDependencyVersions.cmake,
-AURORA_DAWN_REF on Odrannnn/dawn), applies quest/dawn/apply.py (the same patches as the Quest's
+AURORA_DAWN_REF, recovered through google/dawn), applies quest/dawn/apply.py (the same patches as the Quest's
 Dawn), and builds it the way encounter/dawn's release workflow builds dawn-windows-amd64
 (.github/workflows/release.yml + dawn-ci.cmake: MSVC, Ninja, a shared webgpu_dawn.dll and the DXC it
 builds), so the D3D12 backend behaves as with the stock DLL. The result is a package in the stock
@@ -30,12 +30,17 @@ short, Dawn's paths are deep).
 
 .PARAMETER Force
 Rebuilds even when the cached package matches.
+
+.PARAMETER DxilPath
+Optional path to Microsoft's x64 dxil.dll when the installed Windows SDK omits it.
+Used for both Dawn's copy target and the final package. Defaults to the SDK copy.
 #>
 [CmdletBinding()]
 param(
     [string]$WorkDirectory = '',
     [string]$Python = 'python',
     [int]$Jobs = [Environment]::ProcessorCount,
+    [string]$DxilPath = '',
     [switch]$Force
 )
 $ErrorActionPreference = 'Stop'
@@ -69,8 +74,12 @@ if (-not $sdkPath -or -not $sdkVersion) {
 # dawn-ci.cmake reads these (the release workflow's names).
 $env:WIN10_SDK_PATH = $sdkPath
 $env:WIN10_SDK_VERSION = $sdkVersion
-$dxil = Join-Path $sdkPath "bin\$sdkVersion\x64\dxil.dll"
-if (-not (Test-Path -LiteralPath $dxil)) { throw "dxil.dll not found in the Windows SDK: $dxil" }
+$dxil = if ($DxilPath) { [IO.Path]::GetFullPath($DxilPath) } else {
+    Join-Path $sdkPath "bin\$sdkVersion\x64\dxil.dll"
+}
+if (-not (Test-Path -LiteralPath $dxil -PathType Leaf)) {
+    throw "dxil.dll not found: $dxil. Install a Windows SDK containing it, or pass -DxilPath pointing to Microsoft's x64 dxil.dll (for example from a previous PrimedGun Windows package)."
+}
 # cl prints its banner on stderr, which Windows PowerShell turns into errors when redirected.
 $previousPreference = $ErrorActionPreference
 $ErrorActionPreference = 'Continue'
@@ -115,6 +124,9 @@ $patchHash = Get-TextSha256 (($patchFiles | ForEach-Object {
     (Split-Path -Leaf $_) + "`n" + [IO.File]::ReadAllText($_).Replace("`r`n", "`n")
 }) -join "`n")
 $cacheKey = Get-TextSha256 "$revision|$archiveHash|$patchHash|$compiler|$sdkVersion|$($flags -join ' ')|shader-model-enums-v1"
+if ($DxilPath) {
+    $cacheKey = Get-TextSha256 "$cacheKey|dxil-override|$((Get-FileHash -LiteralPath $dxil -Algorithm SHA256).Hash)"
+}
 
 # The package is named after its content, so a native build's FetchContent extracts it again when
 # it changes (the URL changes with it).
@@ -132,7 +144,7 @@ if (-not $Force -and (Test-Path $manifestPath)) {
 $archive = Join-Path $WorkDirectory "dawn-$($revision.Substring(0, 12)).tar.gz"
 if (-not (Test-Path -LiteralPath $archive)) {
     Write-Host "Downloading Dawn $revision"
-    Invoke-WebRequest "https://github.com/Odrannnn/dawn/archive/$revision.tar.gz" -OutFile $archive -UseBasicParsing
+    Invoke-WebRequest "https://github.com/google/dawn/archive/$revision.tar.gz" -OutFile $archive -UseBasicParsing
 }
 if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $archiveHash) {
     throw 'The Dawn source archive does not match the pinned SHA-256.'
@@ -212,11 +224,29 @@ $sdkCompatScript = Join-Path $WorkDirectory 'sdk-compat.py'
 & $pythonPath $sdkCompatScript $source
 if ($LASTEXITCODE -ne 0) { throw 'Applying Windows SDK compatibility failed.' }
 
+# Some SDK releases omit dxil.dll. Point Dawn's own copy target at the same
+# explicit file as our package step; do not alter the installed Windows SDK.
+$sdkCopyScript = Join-Path $source 'third_party\CopyWindowsSDKDLL.cmake'
+$sdkCopyText = [IO.File]::ReadAllText($sdkCopyScript)
+$sdkCopyAnchor = '    # Copy directly to main build directory'
+$sdkCopyOverride = @'
+    # PrimedGun: optional DXIL file for SDKs that do not ship it.
+    if (dll_name STREQUAL "dxil.dll" AND PRIMEDGUN_DXIL_PATH)
+        set(DLL_PATH "${PRIMEDGUN_DXIL_PATH}")
+    endif()
+
+'@
+if (-not $sdkCopyText.Contains('PrimedGun: optional DXIL file')) {
+    if (-not $sdkCopyText.Contains($sdkCopyAnchor)) { throw 'Dawn SDK DLL copy anchor changed.' }
+    [IO.File]::WriteAllText($sdkCopyScript, $sdkCopyText.Replace($sdkCopyAnchor, $sdkCopyOverride + $sdkCopyAnchor))
+}
+
 $build = Join-Path $WorkDirectory 'b'
 $install = Join-Path $WorkDirectory 'p'
 $ciCache = Join-Path $source '.github\workflows\dawn-ci.cmake'
 & cmake -S $source -B $build -G Ninja "-DCMAKE_MAKE_PROGRAM=$($ninja.Source)" @flags -C $ciCache `
-    "-DPython3_EXECUTABLE=$pythonPath" "-DCMAKE_INSTALL_PREFIX=$install"
+    "-DPython3_EXECUTABLE=$pythonPath" "-DCMAKE_INSTALL_PREFIX=$install" `
+    "-DPRIMEDGUN_DXIL_PATH=$($dxil.Replace('\', '/'))"
 if ($LASTEXITCODE -ne 0) { throw 'Dawn configuration failed.' }
 & cmake --build $build --parallel $Jobs
 if ($LASTEXITCODE -ne 0) { throw 'Dawn build failed.' }

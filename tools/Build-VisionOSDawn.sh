@@ -5,7 +5,7 @@
 #
 # No prebuilt Dawn exists for visionOS, and the ios-arm64 package is a Mach-O for the iOS platform,
 # which the visionOS linker refuses. So Dawn is built from source here: the revision
-# extern/aurora/cmake/AuroraDependencyVersions.cmake pins (AURORA_DAWN_REF on Odrannnn/dawn, the same
+# extern/aurora/cmake/AuroraDependencyVersions.cmake pins (AURORA_DAWN_REF, recovered through google/dawn, the same
 # source quest/Build-QuestDawn.ps1 builds), Metal only, one monolithic static library. The Quest's
 # Dawn patches (quest/dawn) are Vulkan-only and are not applied. The flags are Wiicompiled VR's
 # (visionos/Build-VisionOSDawn.sh there), which were proven on the headset.
@@ -141,7 +141,7 @@ fi
 source_archive="${work_dir}/dawn-${dawn_revision:0:12}.tar.gz"
 if [[ ! -f "${source_archive}" ]]; then
     curl --fail --location --silent --show-error \
-        "https://github.com/Odrannnn/dawn/archive/${dawn_revision}.tar.gz" -o "${source_archive}.part"
+        "https://github.com/google/dawn/archive/${dawn_revision}.tar.gz" -o "${source_archive}.part"
     mv "${source_archive}.part" "${source_archive}"
 fi
 actual_sha256="$(shasum -a 256 "${source_archive}" | awk '{print $1}')"

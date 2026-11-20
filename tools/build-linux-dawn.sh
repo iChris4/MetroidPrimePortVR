@@ -8,7 +8,7 @@
 # runtime creates Dawn's VkInstance and VkDevice through XR_KHR_vulkan_enable2, and the eyes are
 # drawn straight into the runtime's swapchain images, platform/vr/openxr_vulkan_direct.cpp). This
 # script downloads the Dawn source aurora pins (extern/aurora/cmake/AuroraDependencyVersions.cmake,
-# AURORA_DAWN_REF on Odrannnn/dawn), applies quest/dawn/apply.py (the same patches as the Quest's
+# AURORA_DAWN_REF, recovered through google/dawn), applies quest/dawn/apply.py (the same patches as the Quest's
 # Dawn), and builds it the way encounter/dawn's release workflow builds dawn-linux-x86_64
 # (.github/workflows/release.yml + dawn-ci.cmake: clang, lld, a static libwebgpu_dawn.a). The
 # result is a package in the stock layout to hand to a native build as AURORA_DAWN_PACKAGE_URL;
@@ -94,7 +94,7 @@ fi
 archive="$work/dawn-${revision:0:12}.tar.gz"
 if [[ ! -f $archive ]]; then
     echo "Downloading Dawn $revision"
-    curl -fL --retry 3 -o "$archive.partial" "https://github.com/Odrannnn/dawn/archive/$revision.tar.gz"
+    curl -fL --retry 3 -o "$archive.partial" "https://github.com/google/dawn/archive/$revision.tar.gz"
     mv "$archive.partial" "$archive"
 fi
 if [[ $(sha256sum "$archive" | cut -d' ' -f1) != "$archive_sha256" ]]; then

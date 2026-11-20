@@ -39,6 +39,8 @@ jobs:
             msys-install: make diffutils tar xz curl mingw-w64-clang-aarch64-clang
             ffmpeg-args: --cc=clang --cxx=clang++
     runs-on: ${{ matrix.runner }}
+    env:
+      DAWN_CMAKE_PROVIDER: vendor
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -122,6 +124,32 @@ jobs:
             build-win/_deps/*-subbuild
           key: deps-windows${{ matrix.suffix }}-${{ hashFiles('CMakeLists.txt', 'extern/aurora/**/CMakeLists.txt', 'extern/aurora/**/*.cmake') }}
 
+      # Rebuild the pinned Dawn with our Vulkan/OpenXR patches, not the
+      # unavailable upstream release assets. Cache only verified packages.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        if: matrix.arch == 'x64'
+        with:
+          path: |
+            build/wd/dawn-package.json
+            build/wd/dawn-windows-amd64-primedgun-*.tar.gz
+          key: primedgun-dawn-windows-x64-${{ hashFiles('tools/Build-WindowsDawn.ps1', 'quest/dawn/**', 'extern/aurora/include/aurora/dawn*abi.h', 'extern/aurora/cmake/AuroraDependencyVersions.cmake') }}
+
+      - name: Build patched Dawn
+        if: matrix.arch == 'x64'
+        shell: pwsh
+        run: |
+          # The selected SDK may omit dxil.dll even when another installed
+          # SDK supplies it. Use that Microsoft SDK copy without editing SDKs.
+          $dxil = Get-ChildItem "$env:WindowsSdkDir/bin/*/x64/dxil.dll" -ErrorAction SilentlyContinue |
+            Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $dxil) { throw 'No Windows SDK supplies x64 dxil.dll; install an SDK containing it before building Dawn.' }
+          ./tools/Build-WindowsDawn.ps1 -DxilPath $dxil.FullName
+          $manifest = Get-Content build/wd/dawn-package.json -Raw | ConvertFrom-Json
+          $package = (Join-Path "$env:GITHUB_WORKSPACE/build/wd" $manifest.PackageFile).Replace('\', '/')
+          "DAWN_CMAKE_PROVIDER=package" >> $env:GITHUB_ENV
+          "DAWN_PACKAGE_URL=$package" >> $env:GITHUB_ENV
+          "DAWN_PACKAGE_SHA256=$($manifest.PackageSha256)" >> $env:GITHUB_ENV
+
       # No precompiled headers: ccache can hand back a .pch from an earlier run,
       # which clang then rejects because cmake_pch.c is newer than it.
       - name: Configure
@@ -135,6 +163,9 @@ jobs:
           -DCMAKE_C_COMPILER_LAUNCHER=ccache
           -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
           -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON
+          -DAURORA_DAWN_PROVIDER=${{ env.DAWN_CMAKE_PROVIDER }}
+          -DAURORA_DAWN_PACKAGE_URL=${{ env.DAWN_PACKAGE_URL }}
+          -DAURORA_DAWN_PACKAGE_SHA256=${{ env.DAWN_PACKAGE_SHA256 }}
           -DAURORA_ENABLE_TESTS=ON
           -DMP_BUILD_TESTS=ON
           -DBUILD_SHARED_LIBS=OFF

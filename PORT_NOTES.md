@@ -1,3 +1,22 @@
+## 2026-11-20: recover pinned Dawn downloads (issue #19)
+
+The old Dawn source/release host is unavailable. Source downloads now recover the
+same commit through google/dawn, with the original SHA-256 unchanged. This is a
+location change, not a graphics dependency upgrade. Automatic provider selection
+uses an explicitly supplied package, an installed Dawn, or verified source;
+explicit package builds without a URL fail with recovery instructions.
+
+Windows x64 CI builds the existing PrimedGun-patched Dawn package, preserving the
+OpenXR Vulkan hooks. macOS and Windows ARM64 CI build the pinned source directly.
+Quest, Linux and Vision Pro package scripts use the recovered source URL and
+retain their existing patches/checksums. No unavailable release assets are
+silently replaced with an unpatched Windows x64 VR library.
+
+Build-WindowsDawn.ps1 accepts -DxilPath for SDKs that omit dxil.dll, using that
+same file in Dawn's copy target and the package. Windows CI checks other installed
+SDKs before starting the expensive build. Fresh hosted CI and macOS builds still
+need validation after these local changes are pushed.
+
 ## VR: Apple Vision Pro (2026-11-08)
 
 visionOS port, from Wiicompiled VR's (docs/VISIONOS.md). The game cross-compiles with Ninja as

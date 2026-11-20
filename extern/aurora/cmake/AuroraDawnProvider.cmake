@@ -88,8 +88,9 @@ endif ()
 # ── Auto: resolve provider based on platform availability ──
 set(_aurora_dawn_provider "${AURORA_DAWN_PROVIDER}")
 if (_aurora_dawn_provider STREQUAL "auto")
-  # Prebuilt Dawn packages available for: windows-{amd64,arm64}, linux-{x86_64,aarch64}, darwin-{arm64,x86_64}, ios-arm64, android-aarch64
-  if (_has_dawn_package)
+  # The former release host is gone. Only use a prebuilt when the caller
+  # supplies one; fresh builds otherwise use the pinned, verified source.
+  if (AURORA_DAWN_PACKAGE_URL)
     set(_aurora_dawn_provider "package")
   else ()
     set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL ON)
@@ -133,9 +134,15 @@ if (_aurora_dawn_provider STREQUAL "vendor")
       set(ABSL_MSVC_STATIC_RUNTIME ON CACHE INTERNAL "Link static runtime libraries")
     endif ()
 
+    if (AURORA_DAWN_REF STREQUAL "118436b3f8f68583eb86e811ca605dc41637e8cc")
+      set(_aurora_dawn_source_hash URL_HASH SHA256=033b1a2eca2dddc67fd9c1ca88a54b42d727f8a9f765ba669b84d9a77bb02576)
+    else ()
+      message(FATAL_ERROR "Update the Dawn source SHA-256 when changing AURORA_DAWN_REF")
+    endif ()
     include(FetchContent)
     FetchContent_Declare(dawn
-      URL "https://github.com/Odrannnn/dawn/archive/${AURORA_DAWN_REF}.tar.gz"
+      URL "https://github.com/google/dawn/archive/${AURORA_DAWN_REF}.tar.gz"
+      ${_aurora_dawn_source_hash}
       DOWNLOAD_EXTRACT_TIMESTAMP FALSE
       EXCLUDE_FROM_ALL
     )
@@ -183,9 +190,11 @@ elseif (_aurora_dawn_provider STREQUAL "package")
         "No prebuilt Dawn package is available for ${CMAKE_SYSTEM_NAME}/${CMAKE_SYSTEM_PROCESSOR}"
         " with CMAKE_OSX_ARCHITECTURES='${CMAKE_OSX_ARCHITECTURES}'.")
     endif ()
-    set(AURORA_DAWN_PACKAGE_URL
-      "https://github.com/Odrannnn/dawn/releases/download/${AURORA_DAWN_VERSION}/dawn-${_dawn_system}-${_dawn_arch}.tar.gz")
-    aurora_url_hash(_dawn_url_hash dawn "${AURORA_DAWN_VERSION}_${_dawn_system}-${_dawn_arch}" "${AURORA_DAWN_PACKAGE_SHA256}")
+    message(FATAL_ERROR
+      "The former Dawn prebuilt host is unavailable. Supply AURORA_DAWN_PACKAGE_URL and "
+      "AURORA_DAWN_PACKAGE_SHA256, or use AURORA_DAWN_PROVIDER=vendor. "
+      "For Vulkan VR use tools/Build-WindowsDawn.ps1 or tools/build-linux-dawn.sh; "
+      "Quest uses quest/Build-QuestDawn.ps1.")
   else ()
     aurora_url_hash(_dawn_url_hash dawn "custom" "${AURORA_DAWN_PACKAGE_SHA256}")
   endif ()
