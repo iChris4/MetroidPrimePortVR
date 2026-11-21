@@ -303,6 +303,19 @@ void CGunWeapon::Update(float dt, CStateManager& mgr) {
       }
 
       LoadFxIdle(dt, mgr);
+#ifdef TARGET_PC
+      // Readiness below checks the NORMAL gun, even with Thermal/X-ray active.
+      // Touch(mgr) alone requests the active visor's model, so it cannot ensure
+      // that the normal model's textures ever finish loading. Request those
+      // explicitly, from Update rather than relying on a visible render pass.
+      if (x10_solidModelData) {
+        x10_solidModelData->Touch(CModelData::kWM_Normal, x20c_shaderIdx);
+      }
+      if (xb0_suitArmModelData) {
+        xb0_suitArmModelData->Touch(CModelData::kWM_Normal, mPortDreadCannon ? x20c_shaderIdx : 0);
+      }
+      Touch(mgr);
+#endif
       if ((x210_loadFlags & 0x1f) == 0x1f) {
         CSkinnedModel& model = x10_solidModelData->PickAnimatedModel(CModelData::kWM_Normal);
         bool flag1 = model.GetModel()->IsLoaded(x20c_shaderIdx);

@@ -508,6 +508,8 @@ private:
   // bool x835_32_unk : 1;
 
 #ifdef TARGET_PC
+  void PortPrepareBeam(CPlayerState::EBeamId beam, CStateManager& mgr);
+  float mPortBeamLoadWait = 0.f;
   // Port: Remastered's rapid-fire charge (PortDebug::RapidCharge). Latched on
   // the press: the beam's quick shots fired so far and the time since the last.
   void PortStartRapidCharge();

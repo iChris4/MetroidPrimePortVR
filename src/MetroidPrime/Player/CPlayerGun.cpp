@@ -6,6 +6,7 @@
 #include "port_shot_aim.h"
 #include "port_synthetic_effect.h"
 #ifdef TARGET_PC
+#include "port_log.h"
 #include "vr/vr_view.h"
 #include "vr/vr_model_mirror.h"
 #endif
@@ -1127,7 +1128,12 @@ void CPlayerGun::Update(float grappleSwingT, float cameraBobT, float dt, CStateM
   if (mgr.GetPlayerState()->GetCurrentVisor() == CPlayerState::kPV_XRay || inMorph) {
     x6e0_rightHandModel.AdvanceAnimation(switchDt, mgr, kInvalidAreaId, true);
   }
-  if (inMorph && x734_loadingBeam != NULL && x734_loadingBeam != x72c_currentBeam) {
+  if (x734_loadingBeam != NULL && x734_loadingBeam != x72c_currentBeam &&
+      (inMorph
+#ifdef TARGET_PC
+       || x338_nextState == kNS_ChangeWeapon
+#endif
+       )) {
     x744_auxWeapon->LoadIdle();
     x734_loadingBeam->Update(switchDt, mgr);
   }
@@ -2225,15 +2231,34 @@ void CPlayerGun::ResetBeamParams(CStateManager& mgr, const CPlayerState& playerS
   x833_30_canShowAuxMuzzleEffect = true;
 }
 
+#ifdef TARGET_PC
+void CPlayerGun::PortPrepareBeam(CPlayerState::EBeamId beam, CStateManager& mgr) {
+  CGunWeapon* next = x760_selectableBeams[beam];
+  if (next == nullptr || next == x72c_currentBeam || next == x734_loadingBeam) {
+    return;
+  }
+  // Start the asynchronous reads during FromBeam, not once the cannon is
+  // already a hologram. Do not restart Load: it releases the suit-arm model.
+  x734_loadingBeam = next;
+  next->Load(mgr, false);
+  x744_auxWeapon->Load(beam, mgr);
+  mPortBeamLoadWait = 0.f;
+}
+#endif
+
 void CPlayerGun::ChangeWeapon(const CPlayerState& playerState, CStateManager& mgr) {
   if (x730_outgoingBeam != nullptr && x730_outgoingBeam != x72c_currentBeam)
     x730_outgoingBeam->Unload(mgr);
 
+#ifdef TARGET_PC
+  PortPrepareBeam(x314_nextBeam, mgr);
+#else
   x734_loadingBeam = x760_selectableBeams[x314_nextBeam];
   if (x734_loadingBeam != nullptr && x734_loadingBeam != x72c_currentBeam) {
     x734_loadingBeam->Load(mgr, false);
     x744_auxWeapon->Load(x314_nextBeam, mgr);
   }
+#endif
 
   x72c_currentBeam->EnableFx(false);
   x834_28_requestImmediateRecharge = x32c_chargePhase != kCP_NotCharging;
@@ -2361,6 +2386,9 @@ void CPlayerGun::HandleBeamChange(const CFinalInput& input, CStateManager& mgr) 
     x833_25_ = true;
     if (x310_currentBeam != beam && playerState.HasPowerUp(mBeamArr[beam])) {
       x314_nextBeam = static_cast< CPlayerState::EBeamId >(beam);
+#ifdef TARGET_PC
+      PortPrepareBeam(x314_nextBeam, mgr);
+#endif
 
       uint stateFlags = 0;
       if (IsWeaponStateSet(0x10)) {
@@ -3705,6 +3733,13 @@ void CPlayerGun::ProcessGunMorph(float dt, CStateManager& mgr) {
         x734_loadingBeam->Touch(mgr);
       }
       if (x734_loadingBeam->IsLoaded() && x744_auxWeapon->IsLoaded()) {
+#ifdef TARGET_PC
+        if (mPortBeamLoadWait >= 1.f) {
+          PortLog::Write("beam switch: beam %d ready after %.2f seconds waiting for resources\n",
+                         int(x314_nextBeam), mPortBeamLoadWait);
+        }
+        mPortBeamLoadWait = 0.f;
+#endif
         x730_outgoingBeam = x734_loadingBeam != x72c_currentBeam ? x72c_currentBeam : NULL;
         x734_loadingBeam = NULL;
         x310_currentBeam = x314_nextBeam;
@@ -3715,6 +3750,19 @@ void CPlayerGun::ProcessGunMorph(float dt, CStateManager& mgr) {
         x678_morph.SetWeaponChanged();
         playerState->SetCurrentBeam(x314_nextBeam);
       }
+#ifdef TARGET_PC
+      else {
+        const float previous = mPortBeamLoadWait;
+        mPortBeamLoadWait += dt;
+        if (previous < 1.f && mPortBeamLoadWait >= 1.f) {
+          int total = 0, pending = 0;
+          gpResourceFactory->PortLoadListCounts(total, pending);
+          PortLog::Write("beam switch: waiting for beam %d (gun=%d aux=%d queued=%d pendingReads=%d)\n",
+                         int(x314_nextBeam), int(x734_loadingBeam->IsLoaded()),
+                         int(x744_auxWeapon->IsLoaded()), total, pending);
+        }
+      }
+#endif
     }
     break;
   case CGunMorph::kGS_InWipe:

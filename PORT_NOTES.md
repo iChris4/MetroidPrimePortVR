@@ -1,3 +1,21 @@
+## 2026-11-21: beam-switch resource loading
+
+Start loading the selected beam and its auxiliary resources during the outgoing
+FromBeam animation, and keep updating that incoming beam before the wipe begins.
+ChangeWeapon reuses the prepared beam instead of calling Load again (which would
+release its partially prepared suit-arm model).
+
+CGunWeapon's loading update now explicitly touches the normal gun/arm textures,
+as well as the current visor model. The normal-model readiness check must not
+rely on a render pass that may be skipped or may touch only Thermal/X-ray models.
+The existing resource-readiness gate is retained: no timeout forces an unloaded
+beam into use. A wait exceeding one second logs gun/aux readiness and resource
+queue counts, followed by the wait duration when it completes.
+
+This addresses loading paths that can prolong the hologram phase. The reported
+5–15 second stall has not been reproduced on the affected player's machine;
+remaining stalls should be investigated using the new beam-switch diagnostics.
+
 ## 2026-11-20: recover pinned Dawn downloads (issue #19)
 
 The old Dawn source/release host is unavailable. Source downloads now recover the
