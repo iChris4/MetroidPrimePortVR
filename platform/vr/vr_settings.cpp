@@ -279,10 +279,10 @@ const Field kFields[] = {
     VR_FLOAT(frustum_culling_degrees, 70.0f, 175.0f),
     VR_FLOAT(metroid_hud_distance, 0.1f, 3.0f),
     VR_FLOAT(metroid_hud_size, 0.1f, 3.0f),
-    VR_FLOAT(metroid_hud_offset_up, -1.0f, 1.0f),
-    VR_FLOAT(metroid_hud_offset_down, -1.0f, 1.0f),
-    VR_FLOAT(metroid_hud_offset_left, -1.0f, 1.0f),
-    VR_FLOAT(metroid_hud_offset_right, -1.0f, 1.0f),
+    VR_FLOAT(metroid_hud_offset_up, -2.0f, 2.0f),
+    VR_FLOAT(metroid_hud_offset_down, -2.0f, 2.0f),
+    VR_FLOAT(metroid_hud_offset_left, -2.0f, 2.0f),
+    VR_FLOAT(metroid_hud_offset_right, -2.0f, 2.0f),
     VR_BOOL(position_marker_enabled),
     VR_BOOL(xr_dpad_enabled),
     VR_FLOAT(xr_dpad_head_radius, 0.05f, 0.6f),
@@ -362,7 +362,13 @@ void PushVrSettingsToAurora() noexcept {
     PrimeVRPolicyConfigure(policy);
     // PrimedGun's HUD distance and size: in the native build both are factors
     // of the HUD frame's authored distance and size (0.75 each by default).
-    aurora_set_stereo_head_locked(settings.metroid_hud_size, settings.metroid_hud_distance);
+    constexpr float kHudOffsetNdcFullRange = 0.15f;
+    const float hudOffsetX =
+        (settings.metroid_hud_offset_right - settings.metroid_hud_offset_left) * kHudOffsetNdcFullRange;
+    const float hudOffsetY =
+        (settings.metroid_hud_offset_up - settings.metroid_hud_offset_down) * kHudOffsetNdcFullRange;
+    aurora_set_stereo_head_locked(settings.metroid_hud_size, settings.metroid_hud_distance,
+                                   hudOffsetX, hudOffsetY);
     {
         // Visor effects (AURORA_STEREO_ROUTE_VISOR: water off the visor, rain splashes, goo) are
         // drawn 0.21 units out (the first-person near plane 0.2, CCameraManager::sNearPlane, plus

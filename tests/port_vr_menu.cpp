@@ -218,7 +218,7 @@ void TestClicks() {
   Check(!v.cinematic_screen_enabled, "cinema screen toggle");
   // HUD VERTICAL keeps up and down apart.
   Click(s, v, view, kMinusX, RowY(kCalibrationTab, 3), now, actions);
-  Check(Near(v.metroid_hud_offset_down, 0.01f) && Near(v.metroid_hud_offset_up, 0.0f), "HUD vertical split");
+  Check(Near(v.metroid_hud_offset_down, 0.05f) && Near(v.metroid_hud_offset_up, 0.0f), "HUD vertical split");
 
   // Pages: PREVIOUS does nothing on page 1, NEXT turns to page 2 (and lets go
   // of a pending reset); page 3 holds the X-ray blur toggle.

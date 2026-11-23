@@ -546,6 +546,16 @@ void VrHeadLockedScales(float& xy, float& depth) noexcept {
     xy = settings.metroid_hud_size * settings.metroid_hud_distance;
 }
 
+void VrHeadLockedOffsets(float tanHalfWidth, float tanHalfHeight, float distance,
+                         float& offsetX, float& offsetY) noexcept {
+    const PortVrSettings& settings = GetVrSettings();
+    constexpr float kHudOffsetFullRange = 0.15f;
+    offsetX = (settings.metroid_hud_offset_right - settings.metroid_hud_offset_left) *
+              tanHalfWidth * distance * kHudOffsetFullRange;
+    offsetY = (settings.metroid_hud_offset_up - settings.metroid_hud_offset_down) *
+              tanHalfHeight * distance * kHudOffsetFullRange;
+}
+
 void VrResetEyeDepth() noexcept {
     const CGraphics::CProjectionState projection = CGraphics::GetProjectionState();
     const CTransform4f viewPoint = CGraphics::GetViewMatrix();

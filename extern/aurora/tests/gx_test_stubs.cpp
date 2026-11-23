@@ -242,7 +242,8 @@ uint32_t align_uniform(uint32_t value) { return (value + 255u) & ~255u; }
 PipelineRef clear_multiview_pipeline_ref(const clear::PipelineConfig&) noexcept { return 0; }
 void set_stereo_draw_route(uint8_t route) noexcept {}
 uint8_t stereo_draw_route() noexcept { return 0; }
-void set_stereo_head_locked_plane(float tanHalfWidth, float tanHalfHeight, float distance) noexcept {}
+void set_stereo_head_locked_plane(float tanHalfWidth, float tanHalfHeight, float distance, float offsetX,
+                                  float offsetY) noexcept {}
 stereo_replay::HeadLockedPlane stereo_head_locked_plane() noexcept { return {}; }
 void set_stereo_placement_3d(const StereoPlacement3D&) noexcept {}
 StereoPlacement3D stereo_placement_3d() noexcept { return {}; }

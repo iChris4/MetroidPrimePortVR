@@ -188,7 +188,8 @@ inline void compose_stereo_uniform(uint8_t* uniform, const StereoUniformLayout& 
 // the head-locked scales. Rows of the column-vector matrix, as Aurora stores
 // them (the shader computes vec4 * mat).
 inline Mat4x4<float> compose_eye_clip(const Mat4x4<float>& eyeProjection, const Mat3x4<float>& viewFromCenter,
-                                      float positionScaleXY, float positionScaleZ) noexcept {
+                                      float positionScaleXY, float positionScaleZ, float offsetX = 0.0f,
+                                      float offsetY = 0.0f) noexcept {
   // The pose with the scales applied on its right (columns), as a 4x4.
   const float scales[3] = {positionScaleXY, positionScaleXY, positionScaleZ};
   float pose[4][4] = {};
@@ -207,6 +208,15 @@ inline Mat4x4<float> compose_eye_clip(const Mat4x4<float>& eyeProjection, const 
     for (size_t column = 0; column < 4; ++column) {
       dst[column] = projectionRow[0] * pose[0][column] + projectionRow[1] * pose[1][column] +
                     projectionRow[2] * pose[2][column] + projectionRow[3] * pose[3][column];
+    }
+  }
+  // An off-axis shift: clip.x = V . m0 and clip.w = V . m3 (each a dot
+  // product against one whole field), so m0 += offsetX * m3 shifts clip.x by
+  // a constant offsetX*clip.w for every vertex.
+  if (offsetX != 0.0f || offsetY != 0.0f) {
+    for (size_t i = 0; i < 4; ++i) {
+      out.m0[i] += offsetX * out.m3[i];
+      out.m1[i] += offsetY * out.m3[i];
     }
   }
   return out;

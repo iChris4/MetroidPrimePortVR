@@ -266,6 +266,8 @@ struct HudScreen {
   float halfWidth = 0.0f;
   float halfHeight = 0.0f;
   float distance = 0.0f;
+  float offsetX = 0.0f;
+  float offsetY = 0.0f;
 
   [[nodiscard]] bool valid() const noexcept { return halfWidth > 0.0f && halfHeight > 0.0f && distance > 0.0f; }
 };
@@ -362,6 +364,8 @@ inline Mat4x4<float> compose_hud_screen_projection(const Mat4x4<float>& eyeFrust
     screenPoint.m1[i] = frameProjection.m1[i] * screen.halfHeight;
     screenPoint.m2[i] = 0.0f;
   }
+  screenPoint.m0[3] += screen.offsetX;
+  screenPoint.m1[3] += screen.offsetY;
   screenPoint.m2[3] = -screen.distance;
 
   // The same functionals carried into eye view space. viewFromCenter's own
@@ -412,6 +416,8 @@ struct HeadLockedPlane {
   float tanHalfWidth = 0.0f;  // tan of half the view angle the viewport spans across
   float tanHalfHeight = 0.0f; // tan of half the view angle it spans up
   float distance = 0.0f;      // along the view, in the recorded space's units
+  float offsetX = 0.0f;
+  float offsetY = 0.0f;
 
   [[nodiscard]] bool valid() const noexcept {
     return tanHalfWidth > 0.0f && tanHalfHeight > 0.0f && distance > 0.0f;
@@ -429,6 +435,8 @@ inline HudScreen head_locked_plane_screen(const HeadLockedPlane& plane, float sc
       .halfWidth = plane.tanHalfWidth * plane.distance * scaleXY,
       .halfHeight = plane.tanHalfHeight * plane.distance * scaleXY,
       .distance = plane.distance * scaleZ,
+      .offsetX = plane.offsetX * scaleXY,
+      .offsetY = plane.offsetY * scaleXY,
   };
 }
 
@@ -482,7 +490,8 @@ inline EyeUvRect head_locked_plane_uv_rect(const Mat4x4<float>& eyeFrustum,
   // A corner of the rectangle on the plane, into the eye's view space, then
   // through the frustum's four terms into the eye's texture coordinates.
   const auto project = [&](float nx, float ny, float& u, float& v) {
-    const float p[3] = {nx * plane.halfWidth, ny * plane.halfHeight, -plane.distance};
+    const float p[3] = {nx * plane.halfWidth + plane.offsetX, ny * plane.halfHeight + plane.offsetY,
+                        -plane.distance};
     float e[3];
     for (size_t row = 0; row < 3; ++row) {
       const auto& m = *(&headLockedViewFromCenter.m0 + row);

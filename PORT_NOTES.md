@@ -1,3 +1,21 @@
+## 2026-11-23: functional HUD placement controls from Echoes
+
+Ported Echoes' completed HUD-offset rendering changes (Dawid Brüning's
+5d7a3407b, 3d333b2f2, 40457c11d, 38e1e821c and subsequent cleanup/range fixes).
+Prime 1 already exposed the saved calibration keys but never applied them.
+The head-locked perspective route now receives an off-axis shift; the 2D HUD
+plane and its per-eye framebuffer-copy rectangle carry the corresponding
+position offset. Keep the whole-vector clip shift: component-wise edits shear
+rather than translate the HUD. World, weapon and visor-effect routes are not
+assigned the HUD calibration offset.
+
+Desktop, Quest launcher and VR Calibration offer HUD vertical/horizontal
+placement over -2..2 in 0.05 steps, with the existing size/distance controls.
+The launcher now marks these keys active. Defaults remain zero and existing
+reset/synchronization paths use the same keys. Added stereo regressions for
+both-eye movement, unchanged depth, zero-offset compatibility, plane scaling
+and uncropped scan-window copies.
+
 ## 2026-11-21: beam-switch resource loading
 
 Start loading the selected beam and its auxiliary resources during the outgoing

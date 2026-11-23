@@ -224,7 +224,8 @@ uint8_t stereo_draw_route() noexcept;
 // The plane AURORA_STEREO_ROUTE_HEAD_LOCKED_2D lays orthographic draws on and
 // takes EFB copies through (stereo_replay.hpp HeadLockedPlane), as the GX FIFO
 // last set it; kept until set again.
-void set_stereo_head_locked_plane(float tanHalfWidth, float tanHalfHeight, float distance) noexcept;
+void set_stereo_head_locked_plane(float tanHalfWidth, float tanHalfHeight, float distance, float offsetX = 0.0f,
+                                  float offsetY = 0.0f) noexcept;
 stereo_replay::HeadLockedPlane stereo_head_locked_plane() noexcept;
 // Where AURORA_STEREO_ROUTE_ANCHORED_3D / FLOATING_3D place a draw's camera space
 // (AuroraSetStereoPlacement3D): scale, then offset, in the anchor's space. Resets at

@@ -157,6 +157,9 @@ void VrMapHologram(float& distance, float& halfHeight, float& clearance, float& 
 // The head-locked route's scales (vr_metroid_hud_size, vr_metroid_hud_distance):
 // a HUD position's x and z (Prime camera space) by `xy`, its depth (y) by `depth`.
 void VrHeadLockedScales(float& xy, float& depth) noexcept;
+// HUD calibration shift in authored plane units, before the size/distance scales.
+void VrHeadLockedOffsets(float tanHalfWidth, float tanHalfHeight, float distance,
+                         float& offsetX, float& offsetY) noexcept;
 // Every eye's depth back to the far plane (an orthographic quad through a
 // far-only depth window, depth written, no colour), keeping the projection,
 // view and model. Draw it on a route that covers the whole eye (WORLD).

@@ -1520,6 +1520,7 @@ static void reconcile_merge_state(GXPrimitive prim, GXVtxFmt fmt) noexcept {
   if (cache.uniformRoute != gfx::stereo_draw_route() ||
       cache.uniformPlane.tanHalfWidth != plane.tanHalfWidth ||
       cache.uniformPlane.tanHalfHeight != plane.tanHalfHeight || cache.uniformPlane.distance != plane.distance ||
+      cache.uniformPlane.offsetX != plane.offsetX || cache.uniformPlane.offsetY != plane.offsetY ||
       cache.uniformScreenTexMtx.texSlot != screen.texSlot || cache.uniformScreenTexMtx.pnSlot != screen.pnSlot ||
       !(cache.uniformPlacement == gfx::stereo_placement_3d())) {
     state.dirty |= DirtyUniform;
@@ -2307,12 +2308,14 @@ void handle_aurora(ByteReader& reader) noexcept {
     const f32 tanHalfWidth = reader.read<f32>();
     const f32 tanHalfHeight = reader.read<f32>();
     const f32 distance = reader.read<f32>();
+    const f32 offsetX = reader.read<f32>();
+    const f32 offsetY = reader.read<f32>();
     const auto current = gfx::stereo_head_locked_plane();
     if (current.tanHalfWidth != tanHalfWidth || current.tanHalfHeight != tanHalfHeight ||
-        current.distance != distance) {
+        current.distance != distance || current.offsetX != offsetX || current.offsetY != offsetY) {
       // The eye copies of a 2D draw on the plane depend on it.
       g_gxState.dirty |= DirtyUniform;
-      gfx::set_stereo_head_locked_plane(tanHalfWidth, tanHalfHeight, distance);
+      gfx::set_stereo_head_locked_plane(tanHalfWidth, tanHalfHeight, distance, offsetX, offsetY);
     }
   } else if (subCmd == GX_AURORA_STEREO_PLACEMENT_3D) {
     gfx::StereoPlacement3D placement;

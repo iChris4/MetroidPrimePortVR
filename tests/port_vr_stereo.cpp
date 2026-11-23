@@ -7,6 +7,7 @@
 #include "gfx/stereo_uniform.hpp"
 #include "gfx/floating_hud.hpp"
 
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -674,6 +675,48 @@ int main() {
         }
       }
     }
+  }
+  // HUD placement must translate every vertex equally in the shader's actual
+  // vec4 * mat convention, without shearing, changing depth or changing IPD.
+  {
+    const auto shaderClip = [](const Mat4x4<float>& m, const float* p, float* out) {
+      for (size_t component = 0; component < 4; ++component) {
+        const auto& column = *(&m.m0 + component);
+        out[component] = 0.f;
+        for (size_t i = 0; i < 4; ++i) out[component] += p[i] * column[i];
+      }
+    };
+    for (float eyeX : {-0.032f, 0.032f}) {
+      const auto eyeView = Affine(1, 0, 0, eyeX, 0, 1, 0, 0, 0, 0, 1, 0);
+      const auto base = compose_eye_clip(projection, eyeView, 0.15f, 0.1f);
+      const auto zero = compose_eye_clip(projection, eyeView, 0.15f, 0.1f, 0.f, 0.f);
+      Check(std::memcmp(&base, &zero, sizeof(base)) == 0, "zero HUD offset preserves the original projection");
+      const auto moved = compose_eye_clip(projection, eyeView, 0.15f, 0.1f, 0.2f, -0.15f);
+      for (const auto& p : {std::array<float, 4>{-2, -1, -4, 1}, {3, 2, -9, 1}, {0, 0, -20, 1}}) {
+        float before[4], after[4];
+        shaderClip(base, p.data(), before);
+        shaderClip(moved, p.data(), after);
+        Check(Near(after[0] / after[3] - before[0] / before[3], 0.2f) &&
+                  Near(after[1] / after[3] - before[1] / before[3], -0.15f),
+              "HUD offset translates both eyes by a constant amount at every depth");
+        Check(Near(after[2], before[2]) && Near(after[3], before[3]), "HUD offset preserves clip depth and w");
+      }
+
+      auto shifted = paneScreen;
+      shifted.offsetX = 0.2f;
+      shifted.offsetY = -0.1f;
+      const auto oldUv = stereo_replay::head_locked_plane_uv_rect(flatFrustum, eyeView, paneScreen, -.5f, .5f, .5f, -.5f);
+      const auto newUv = stereo_replay::head_locked_plane_uv_rect(flatFrustum, eyeView, shifted, -.5f, .5f, .5f, -.5f);
+      Check(newUv.valid() && Near(oldUv.width, newUv.width) && Near(oldUv.height, newUv.height),
+            "moving the scan plane does not crop its copied rectangle");
+      Check(Near(newUv.u - oldUv.u, 0.5f * shifted.offsetX / shifted.distance) &&
+                Near(newUv.v - oldUv.v, -0.5f * shifted.offsetY / shifted.distance),
+            "scan framebuffer copy moves with the HUD in each eye");
+    }
+    const stereo_replay::HeadLockedPlane movedPlane{1.2f, .6f, 20.f, 3.f, -2.f};
+    const auto movedScreen = stereo_replay::head_locked_plane_screen(movedPlane, .3f, .2f);
+    Check(Near(movedScreen.offsetX, .9f) && Near(movedScreen.offsetY, -.6f),
+          "HUD plane offsets use the same size and distance factors as the plane");
   }
   std::puts("port_vr_stereo_tests: ok");
   return 0;

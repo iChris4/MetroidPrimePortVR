@@ -1614,14 +1614,14 @@ inline void Adjust(State& s, PortVrSettings& v, const View& view, int direction)
             break;
         case 3: {
             float value = v.metroid_hud_offset_up - v.metroid_hud_offset_down;
-            step(value, 0.01f, -1.0f, 1.0f);
+            step(value, 0.05f, -2.0f, 2.0f);
             v.metroid_hud_offset_up = std::max(value, 0.0f);
             v.metroid_hud_offset_down = std::max(-value, 0.0f);
             break;
         }
         case 4: {
             float value = v.metroid_hud_offset_right - v.metroid_hud_offset_left;
-            step(value, 0.01f, -1.0f, 1.0f);
+            step(value, 0.05f, -2.0f, 2.0f);
             v.metroid_hud_offset_right = std::max(value, 0.0f);
             v.metroid_hud_offset_left = std::max(-value, 0.0f);
             break;

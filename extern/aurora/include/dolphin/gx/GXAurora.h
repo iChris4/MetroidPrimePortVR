@@ -388,7 +388,8 @@ u8 AuroraSetCullMirrored(u8 mirrored);
 
 /**
  * The plane in front of the head that AURORA_STEREO_ROUTE_HEAD_LOCKED_2D lays orthographic draws on and takes EFB
- * copies through (AuroraSetStereoHeadLockedPlane). Must be followed by three f32.
+ * copies through (AuroraSetStereoHeadLockedPlane). Must be followed by five f32: tanHalfWidth, tanHalfHeight,
+ * distance, offsetX, offsetY.
  */
 #define GX_AURORA_STEREO_HEAD_LOCKED_PLANE 0xF001
 
@@ -493,9 +494,11 @@ void AuroraFreeGeometrySet(u32 set);
  * The plane in front of the head that AURORA_STEREO_ROUTE_HEAD_LOCKED_2D lays orthographic draws on and takes EFB
  * copies through: the tangents of the half angles the mono viewport spans across and up (those of the HUD camera the
  * 2D draws should stay registered with) and the plane's distance along the view, in the game camera's units, before
- * the head-locked scales. Ordered with the draws through the FIFO; kept until set again.
+ * the head-locked scales. Ordered with the draws through the FIFO; offsetX/offsetY shift the HUD; kept until set
+ * again.
  */
-void AuroraSetStereoHeadLockedPlane(f32 tanHalfWidth, f32 tanHalfHeight, f32 distance);
+void AuroraSetStereoHeadLockedPlane(f32 tanHalfWidth, f32 tanHalfHeight, f32 distance, f32 offsetX = 0.0f,
+                                    f32 offsetY = 0.0f);
 
 /**
  * Tells the stereo replay that texture matrix `texMtx` (GX_TEXMTX0..GX_TEXMTX9) of the draws that follow projects

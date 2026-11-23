@@ -59,6 +59,8 @@ std::atomic<float> g_headLockedSize{1.0f};
 std::atomic<float> g_headLockedDistance{1.0f};
 // AURORA_STEREO_ROUTE_VISOR's eye offset factor (aurora_set_stereo_visor).
 std::atomic<float> g_visorEyeOffsetScale{1.0f};
+std::atomic<float> g_headLockedOffsetX{0.0f};
+std::atomic<float> g_headLockedOffsetY{0.0f};
 // AURORA_STEREO_ROUTE_SCREEN_2D's virtual screen, in the recorded space's units.
 std::atomic<float> g_screen2DHalfWidth{0.0f};
 std::atomic<float> g_screen2DDistance{0.0f};
@@ -198,6 +200,8 @@ gfx::StereoFrameState begin_frame(uint64_t contentTag) noexcept {
   const float headLockedDistance = g_headLockedDistance.load(std::memory_order_relaxed);
   state.headLockedScaleXY = g_headLockedSize.load(std::memory_order_relaxed) * headLockedDistance;
   state.headLockedScaleZ = headLockedDistance;
+  state.headLockedOffsetX = g_headLockedOffsetX.load(std::memory_order_relaxed);
+  state.headLockedOffsetY = g_headLockedOffsetY.load(std::memory_order_relaxed);
   state.screen2DHalfWidth = g_screen2DHalfWidth.load(std::memory_order_relaxed);
   state.screen2DDistance = g_screen2DDistance.load(std::memory_order_relaxed);
   for (uint32_t eye = 0; eye < AURORA_STEREO_EYE_COUNT; ++eye) {
@@ -578,9 +582,11 @@ void aurora_imgui_set_stereo_overlay(ImDrawData* /*drawData*/, float /*widthFrac
   // The headset panel's ImGui rendering is not ported yet.
 }
 
-void aurora_set_stereo_head_locked(float sizeScale, float distanceScale) {
+void aurora_set_stereo_head_locked(float sizeScale, float distanceScale, float offsetX, float offsetY) {
   g_headLockedSize.store(sizeScale > 0.0f ? sizeScale : 1.0f, std::memory_order_relaxed);
   g_headLockedDistance.store(distanceScale > 0.0f ? distanceScale : 1.0f, std::memory_order_relaxed);
+  g_headLockedOffsetX.store(offsetX, std::memory_order_relaxed);
+  g_headLockedOffsetY.store(offsetY, std::memory_order_relaxed);
 }
 
 void aurora_set_stereo_visor(float eyeOffsetScale) {

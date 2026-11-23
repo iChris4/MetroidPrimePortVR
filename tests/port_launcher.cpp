@@ -315,6 +315,12 @@ void TestDefaultsMatchGame() {
     checked.insert(key);
   }
   std::set<std::string_view> seen;
+  for (const char* key : {"vr_metroid_hud_offset_up", "vr_metroid_hud_offset_down",
+                          "vr_metroid_hud_offset_left", "vr_metroid_hud_offset_right"}) {
+    const KeyInfo* info = FindKey(key);
+    Check(info && info->active && info->uiMax == 2.f && info->uiStep == .05f,
+          "HUD placement controls are active with the full calibration range");
+  }
   for (const KeyInfo& info : LauncherKeys()) {
     Check(seen.insert(info.key).second, "every launcher key is listed once");
     if (info.key.substr(0, 3) == "vr_" && !checked.count(std::string(info.key))) {
@@ -399,10 +405,10 @@ void TestRangesInsideGameClamps() {
       {"vr_frustum_culling_degrees", 70.0f, 175.0f},
       {"vr_metroid_hud_distance", 0.1f, 3.0f},
       {"vr_metroid_hud_size", 0.1f, 3.0f},
-      {"vr_metroid_hud_offset_up", -1.0f, 1.0f},
-      {"vr_metroid_hud_offset_down", -1.0f, 1.0f},
-      {"vr_metroid_hud_offset_left", -1.0f, 1.0f},
-      {"vr_metroid_hud_offset_right", -1.0f, 1.0f},
+      {"vr_metroid_hud_offset_up", -2.0f, 2.0f},
+      {"vr_metroid_hud_offset_down", -2.0f, 2.0f},
+      {"vr_metroid_hud_offset_left", -2.0f, 2.0f},
+      {"vr_metroid_hud_offset_right", -2.0f, 2.0f},
       {"vr_gun_targeting_distance", 1.0f, 200.0f},
       {"vr_gun_targeting_radius", 0.1f, 25.0f},
       {"vr_offset_x", -2.0f, 2.0f},

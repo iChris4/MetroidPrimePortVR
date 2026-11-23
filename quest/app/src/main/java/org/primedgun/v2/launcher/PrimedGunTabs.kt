@@ -411,7 +411,7 @@ object PrimedGunTabs {
     private fun hudAxis(context: Context, titleId: Int, positive: String, negative: String) =
         PrimedGunItem.Slider(
             title = context.getString(titleId),
-            min = -1f, max = 1f, step = 0.01f,
+            min = -2f, max = 2f, step = 0.05f,
             inactive = inactive(positive),
             get = { LauncherSettings.float(positive) - LauncherSettings.float(negative) },
             set = {

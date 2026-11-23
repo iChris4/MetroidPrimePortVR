@@ -108,11 +108,13 @@ void AuroraSetMapBatch(u8 enabled) {
   GX_WRITE_U8(enabled != 0);
 }
 
-void AuroraSetStereoHeadLockedPlane(f32 tanHalfWidth, f32 tanHalfHeight, f32 distance) {
+void AuroraSetStereoHeadLockedPlane(f32 tanHalfWidth, f32 tanHalfHeight, f32 distance, f32 offsetX, f32 offsetY) {
   GX_WRITE_AURORA(GX_AURORA_STEREO_HEAD_LOCKED_PLANE);
   GX_WRITE_F32(tanHalfWidth);
   GX_WRITE_F32(tanHalfHeight);
   GX_WRITE_F32(distance);
+  GX_WRITE_F32(offsetX);
+  GX_WRITE_F32(offsetY);
 }
 
 void AuroraSetStereoPlacement3D(f32 scale, f32 x, f32 y, f32 z) {

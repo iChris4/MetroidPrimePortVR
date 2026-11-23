@@ -34,7 +34,7 @@ void ResetKeys(TabContext& ctx, std::initializer_list<const char*> keys) {
 void AddHudAxis(TabContext& ctx, QVBoxLayout* layout, const QString& label, const char* positive,
                 const char* negative) {
   ctx.FloatWith(
-      layout, label, -1.0, 1.0, 0.01,
+      layout, label, -2.0, 2.0, 0.05,
       [&ctx, positive, negative] { return ctx.model.Float(positive) - ctx.model.Float(negative); },
       [&ctx, positive, negative](float v) {
         ctx.model.SetFloat(positive, std::max(v, 0.0f));

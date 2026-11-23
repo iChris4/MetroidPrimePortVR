@@ -1358,8 +1358,9 @@ void set_stereo_diagnostics(bool enabled) noexcept {
 
 uint8_t stereo_draw_route() noexcept { return g_recorder.stereoRoute; }
 
-void set_stereo_head_locked_plane(float tanHalfWidth, float tanHalfHeight, float distance) noexcept {
-  g_recorder.headLockedPlane = {tanHalfWidth, tanHalfHeight, distance};
+void set_stereo_head_locked_plane(float tanHalfWidth, float tanHalfHeight, float distance, float offsetX,
+                                  float offsetY) noexcept {
+  g_recorder.headLockedPlane = {tanHalfWidth, tanHalfHeight, distance, offsetX, offsetY};
 }
 
 stereo_replay::HeadLockedPlane stereo_head_locked_plane() noexcept { return g_recorder.headLockedPlane; }
@@ -1548,7 +1549,9 @@ std::array<uint32_t, 2> stage_stereo_uniforms(const uint8_t* mono, Range monoRan
                                               : route == AURORA_STEREO_ROUTE_SKY ? params.skyViewFromCenter
                                                                                  : placedViewFromCenter;
         clips[eye] = compose_eye_clip(stereo_replay::compose_projection(params.projection, monoProjection),
-                                      viewFromCenter, positionScaleXY, positionScaleZ);
+                                      viewFromCenter, positionScaleXY, positionScaleZ,
+                                      headLocked ? state.headLockedOffsetX : 0.0f,
+                                      headLocked ? state.headLockedOffsetY : 0.0f);
       }
     }
     return stage_eye_clips(clips, true);

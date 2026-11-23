@@ -499,8 +499,14 @@ void CInGameGuiManager::Draw(const CStateManager& mgr) const {
     // plane, so it magnifies what is straight ahead of the head.
     if (x14c_basehud_camera != nullptr) {
       static const float kHudBodyDepth = 20.f;
+      float hudOffsetX = 0.f;
+      float hudOffsetY = 0.f;
+      PortVr::VrHeadLockedOffsets(x14c_basehud_camera->GetDrawTanHalfWidth(),
+                                  x14c_basehud_camera->GetDrawTanHalfHeight(), kHudBodyDepth,
+                                  hudOffsetX, hudOffsetY);
       AuroraSetStereoHeadLockedPlane(x14c_basehud_camera->GetDrawTanHalfWidth(),
-                                     x14c_basehud_camera->GetDrawTanHalfHeight(), kHudBodyDepth);
+                                     x14c_basehud_camera->GetDrawTanHalfHeight(), kHudBodyDepth,
+                                     hudOffsetX, hudOffsetY);
     }
 #endif
     CGraphics::SetDepthRange(1.f / 64.f, 1.f / 32.f);
