@@ -1542,6 +1542,11 @@ void CCompoundTargetReticle::PortUpdateRemasteredCrosshair(float dt, const CStat
 void CCompoundTargetReticle::DrawOrbitZoneGroup(const CMatrix3f& rot,
                                                 const CStateManager& mgr) const {
   if (x28_noDrawTicks <= 0 && x1e8_crosshairsScale > 0.f) {
+#ifdef TARGET_PC
+    // PortVr: the VR menu's CROSSHAIR (vr_crosshair) turns it off in the headset.
+    if (PortVr::VrHideCrosshair())
+      return;
+#endif
     const_cast< TCachedToken< CModel >& >(x34_crosshairs).TryCache();
     CTweakTargeting* tweak;
     CModel* const model = x34_crosshairs.GetObject();
@@ -2315,6 +2320,8 @@ void CCompoundTargetReticle::PortTriDrawLocked(const CMatrix3f& rot, const CTran
 void CCompoundTargetReticle::PortTriDrawAiming(const CMatrix3f& rot, const CStateManager& mgr) const {
   // The GameCube style's crosshair (PortTriDrawCrosshairs) replaces the cursor.
   if (PortDebug::CrosshairStyle() == PortDebug::kCrosshairStyle_GameCube) return;
+  // PortVr: the VR menu's CROSSHAIR (vr_crosshair) turns it off in the headset.
+  if (PortVr::VrHideCrosshair()) return;
   const bool remastered = PortDebug::CrosshairStyle() == PortDebug::kCrosshairStyle_Remastered;
   if (!remastered && x258_aimArmAlpha <= 0.f) return;
   const CTransform4f cam = PortReticleCameraXf(mgr);
@@ -2356,6 +2363,8 @@ void CCompoundTargetReticle::PortTriDrawOffScreen(const CMatrix3f& rot, const CS
 // fn_80238C88: retained GC asset, flags7 and replaced alpha, separately from new aiming.
 void CCompoundTargetReticle::PortTriDrawCrosshairs(const CMatrix3f& rot, const CStateManager& mgr) const {
   if (x28_noDrawTicks > 0 || x1e8_crosshairsScale <= 0.f) return;
+  // PortVr: the VR menu's CROSSHAIR (vr_crosshair) turns it off in the headset.
+  if (PortVr::VrHideCrosshair()) return;
   // The Remastered style replaces this model too (PortTriDrawAiming draws it).
   if (PortDebug::CrosshairStyle() == PortDebug::kCrosshairStyle_Remastered) return;
   CTransform4f xf(rot, xf4_targetPos);

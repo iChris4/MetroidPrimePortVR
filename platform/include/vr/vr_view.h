@@ -116,6 +116,9 @@ bool VrSkyAtInfinity() noexcept;
 // The headset is running and the settings turn the space warp off
 // (CStateManager::DrawSpaceWarp draws nothing).
 bool VrHideSpaceWarp() noexcept;
+// The headset is running and the settings turn the aiming crosshair off
+// (CCompoundTargetReticle draws no crosshair).
+bool VrHideCrosshair() noexcept;
 // Immersive and the settings turn the scan window's zoom off: the window's
 // copy is the pane's own size (CPlayerVisor::DrawScanEffect).
 bool VrScanWindowNoZoom() noexcept;

@@ -496,6 +496,8 @@ bool VrSkyAtInfinity() noexcept { return OpenXRIsRunning() && GetVrSettings().sk
 
 bool VrHideSpaceWarp() noexcept { return OpenXRIsRunning() && !GetVrSettings().space_warp; }
 
+bool VrHideCrosshair() noexcept { return OpenXRIsRunning() && !GetVrSettings().crosshair; }
+
 bool VrScanWindowNoZoom() noexcept { return ImmersiveNow() && !GetVrSettings().scan_zoom; }
 
 namespace {

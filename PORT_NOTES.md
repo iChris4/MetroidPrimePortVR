@@ -1,3 +1,13 @@
+## 2026-11-24: VR menu CROSSHAIR switch
+
+The user asked for a way to turn the aiming crosshair off in the headset (Echoes first; both
+games have it). New VR setting `vr_crosshair` (default on): VR menu CONFIG > CROSSHAIR (page 3,
+after FLOATING HUD) and the F1 VR tab's Camera section. `PortVr::VrHideCrosshair()` (headset
+running and the switch off) makes `CCompoundTargetReticle::DrawOrbitZoneGroup` and Trilogy's
+`PortTriDrawCrosshairs`/`PortTriDrawAiming` draw nothing; the lock-on, scan and grapple reticles
+stay, and the desktop always draws it. The game's own crosshair opacity is left alone. Not in the
+launchers. `port_vr_menu` covers the row, its toggle and the reset.
+
 ## 2026-11-24: merged upstream port c872da704 (0.46.0)
 
 The upstream repository is gone: github.com/Odrannnn/MetroidPrimePort and the

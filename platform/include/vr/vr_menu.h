@@ -392,12 +392,13 @@ enum class PortItem : uint8_t {
     RoomScale,
     MessageBoxInView,
     FloatingHud,
+    Crosshair,
     JoyConHandTracking,
     Reset,
 };
 
 struct PortList {
-    std::array<PortItem, 32> items{};
+    std::array<PortItem, 40> items{};
     uint32_t count = 0;
 };
 
@@ -439,6 +440,7 @@ inline PortList PortItems(const View& view) {
     add(PortItem::RoomScale);
     add(PortItem::MessageBoxInView);
     add(PortItem::FloatingHud);
+    add(PortItem::Crosshair);
     add(PortItem::WristVisor);
     if (view.joycons) {
         add(PortItem::JoyConHandTracking);
@@ -877,6 +879,8 @@ inline Row PortRow(const State& s, const PortVrSettings& v, const View& view, Po
         return {"MESSAGE BOX IN VIEW", OnOff(v.message_box_immersive)};
     case PortItem::FloatingHud:
         return {"FLOATING HUD", OnOff(v.floating_hud)};
+    case PortItem::Crosshair:
+        return {"CROSSHAIR", OnOff(v.crosshair)};
     case PortItem::JoyConHandTracking:
         return {"JOY-CONS AIM WITH THE HANDS", OnOff(v.joycon_hand_tracking)};
     case PortItem::Reset:
@@ -1508,6 +1512,7 @@ inline void ResetAll(PortVrSettings& v) {
     v.game_menu_screen_enabled = d.game_menu_screen_enabled;
     v.message_box_immersive = d.message_box_immersive;
     v.floating_hud = d.floating_hud;
+    v.crosshair = d.crosshair;
     v.frustum_culling_enabled = d.frustum_culling_enabled;
     v.frustum_culling_degrees = d.frustum_culling_degrees;
     v.metroid_hud_distance = d.metroid_hud_distance;
@@ -1566,6 +1571,7 @@ inline void ResetPortConfig(PortVrSettings& v) {
     v.room_scale = d.room_scale;
     v.message_box_immersive = d.message_box_immersive;
     v.floating_hud = d.floating_hud;
+    v.crosshair = d.crosshair;
     v.joycon_hand_tracking = d.joycon_hand_tracking;
 }
 
@@ -1975,6 +1981,9 @@ inline void Activate(State& s, PortVrSettings& v, const View& view, double now, 
             break;
         case PortItem::FloatingHud:
             v.floating_hud = !v.floating_hud;
+            break;
+        case PortItem::Crosshair:
+            v.crosshair = !v.crosshair;
             break;
         case PortItem::JoyConHandTracking:
             v.joycon_hand_tracking = !v.joycon_hand_tracking;

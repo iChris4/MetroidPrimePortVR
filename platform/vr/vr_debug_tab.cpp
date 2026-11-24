@@ -255,6 +255,9 @@ void DrawVrDebugTab() {
   changed |= ImGui::Checkbox("Space warp", &s.space_warp);
   ImGui::TextWrapped("The distortion around charged shots (also Flickerbats, Chozo Ghosts and Metroid Prime). "
                      "Off, it is not drawn in the headset.");
+  changed |= ImGui::Checkbox("Crosshair", &s.crosshair);
+  ImGui::TextWrapped("The aiming crosshair. Off, it is not drawn in the headset; the lock-on, scan and "
+                     "grapple reticles stay.");
 
   ImGui::SeparatorText("Controls");
   int mode = static_cast< int >(s.controller_mode);

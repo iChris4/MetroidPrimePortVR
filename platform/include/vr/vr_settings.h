@@ -175,6 +175,10 @@ struct PortVrSettings {
     // Chozo Ghosts and Metroid Prime's second form) in the headset. Off, it is
     // not drawn while the headset runs; the desktop always draws it.
     bool space_warp = true;
+    // The aiming crosshair in the headset (the VR menu's CROSSHAIR). Off, it is not drawn while
+    // the headset runs; the lock-on, scan and grapple reticles stay, and the desktop always
+    // draws it.
+    bool crosshair = true;
     // The scan visor window's zoom in the headset. The window copies the view
     // behind its centre and stretches it over its pane, which magnifies each
     // eye's view; off, the pane shows exactly the view behind it,
