@@ -25,13 +25,16 @@
 #include <cstdlib>
 #include <cstring>
 #include <type_traits>
+#include <unordered_map>
 #include <vector>
 
 // The kTagFields block: a script object's own fields (enemies, cutscene actors, keyframes,
 // fades...), read and written through the generated schema (port_entity_schema.h) instead
 // of per-class code. EntityFieldsSaved says which objects get one, SavedField which fields.
-// Per class of the entity's chain, most derived first: its fingerprint, the payload length,
-// then each saved field in table order. A reader skips a class whose fingerprint it does not have (the headers changed)
+// Per class of the entity's chain, most derived first: its block fingerprint (the class's
+// layout and the fields saved of it), the payload length, then each saved field in table
+// order. A reader skips a class whose fingerprint it does not have (the headers or the
+// saved fields changed)
 // and the whole block when the policy below differs, so an old save falls back to the
 // restore the other tags do.
 //
@@ -416,8 +419,11 @@ struct PortStateCodec {
     // Counted only when it changes (GetField): an idle actor's animation usually still matches.
     bool changed = ad.x220_25_loop != ((bits & 1) != 0) || ad.x220_24_animating != ((bits & 2) != 0) ||
                    ad.x200_speedScale != speed;
+    // Without a transition (noTrans): the rebuilt actor's own animation must not blend into the saved
+    // one, as a transition tree that is not animating (a finished one-shot) stays at its start, near
+    // the old pose, and its phase is not the saved animation's.
     if (anim >= 0 && anim != ad.x208_currentAnim) {
-      ad.SetAnimation(CAnimPlaybackParms(anim, -1, 1.f, (bits & 2) != 0), false);
+      ad.SetAnimation(CAnimPlaybackParms(anim, -1, 1.f, (bits & 2) != 0), true);
       changed = true;
     }
     ad.x220_25_loop = (bits & 1) != 0;
@@ -437,8 +443,10 @@ struct PortStateCodec {
 namespace PortSaveState {
 namespace {
 
-// Bump when what SavedField picks or how a kind is written changes.
-constexpr uint32_t kFieldPolicy = 8;
+// Bump when what SavedField picks or how a kind is written changes. 9: each class's block
+// is fingerprinted with the fields it saved too (BlockFingerprint), so a SavedField change
+// without a bump skips the classes it touched instead of reading them one field off.
+constexpr uint32_t kFieldPolicy = 9;
 
 constexpr uint32_t kUidNone = 0xFFFFFFFFu;    // kInvalidUniqueId
 constexpr uint32_t kUidDynamic = 0xFFFFFFFEu; // an object without an editor id: left alone
@@ -499,13 +507,15 @@ bool SavedField(const PortSchemaClass& cls, const PortSchemaField& f) {
   if (std::strcmp(cls.name, "CAi") == 0)
     return std::strcmp(f.name, "x258_healthInfo") != 0;
   // Script objects' state tied to something the save does not keep: a trigger's player
-  // inside (its inhabitants list) and the phazon damage it pushed on the player, a
-  // special function's area damage. A timer is kTagTimer's, which holds a running one
-  // stopped until every saved area is in.
+  // inside (its inhabitants list), its camera inside (the camera manager's fluid counter,
+  // which a water raises only when the camera goes in: restored, the loaded game never
+  // goes underwater, #279) and the phazon damage it pushed on the player, a special
+  // function's area damage. A timer is kTagTimer's, which holds a running one stopped
+  // until every saved area is in.
   if (std::strcmp(cls.name, "CScriptTimer") == 0)
     return false;
   if (std::strcmp(cls.name, "CScriptTrigger") == 0)
-    return !Named(f.name, {"x148_28_playerTriggerProc", "x148_29_didPhazonDamage"});
+    return !Named(f.name, {"x148_25_camSubmerged", "x148_28_playerTriggerProc", "x148_29_didPhazonDamage"});
   if (std::strcmp(cls.name, "CScriptSpecialFunction") == 0)
     return std::strcmp(f.name, "x1e4_31_inAreaDamage") != 0;
   // Music, reverb, player actors' model loads and world teleports act on the engine or
@@ -672,10 +682,15 @@ void PutField(const CStateManager& mgr, CEntity& ent, const PortSchemaField& f, 
       // A script generator's copy carries its template's editor id: not a name for it.
       const CEntity* target = mgr.GetObjectById(uid);
       const TEditorId eid = mgr.GetEditorIdForUniqueId(uid);
+      // An editor id several live objects share names none of them: on load it would
+      // resolve to the first for every owner. The rebuilt owner made its own again.
+      const CStateManager::TIdListResult copies = mgr.GetIdListForScript(eid);
+      CStateManager::TIdList::const_iterator second = copies.first;
+      const bool shared = second != copies.second && ++second != copies.second;
       if (target != nullptr && target == mgr.GetPlayer())
         id = kUidPlayer;
       else
-        id = target != nullptr && eid != kInvalidEditorId &&
+        id = target != nullptr && eid != kInvalidEditorId && !shared &&
                      !IsScriptGeneratedCopy(mgr, const_cast< CEntity& >(*target))
                  ? eid.Value()
                  : kUidDynamic;
@@ -791,6 +806,43 @@ bool GetField(CStateManager& mgr, CEntity& ent, const PortSchemaField& f, BlockR
   }
 }
 
+// A class's block fingerprint: the class's layout (the schema's fingerprint) and the names
+// and kinds of the fields SavedField keeps, in order. A block's fields go by position, so a
+// block written while that list differed must not be read with this one.
+uint64_t ComputeBlockFingerprint(const PortSchemaClass& cls) {
+  uint64_t h = cls.fingerprint ^ 0xcbf29ce484222325ull;
+  const auto mix = [&h](unsigned char c) {
+    h ^= c;
+    h *= 0x100000001b3ull;
+  };
+  for (int i = 0; i < cls.fieldCount; ++i) {
+    const PortSchemaField& f = cls.fields[i];
+    if (!SavedField(cls, f))
+      continue;
+    for (const char* c = f.name; *c != '\0'; ++c)
+      mix(static_cast< unsigned char >(*c));
+    mix(static_cast< unsigned char >(f.kind));
+    mix(0xff); // between names
+  }
+  return h;
+}
+
+// ComputeBlockFingerprint, taken once per class: every block compares each class of its
+// chain in every pass, and SavedField walks names with strcmp/strstr.
+uint64_t BlockFingerprint(const PortSchemaClass& cls) {
+  static const std::unordered_map< const PortSchemaClass*, uint64_t > sFingerprints = [] {
+    std::unordered_map< const PortSchemaClass*, uint64_t > table;
+    int count = 0;
+    const PortSchemaClass* const* classes = PortEntitySchema::Classes(count);
+    table.reserve(count);
+    for (int i = 0; i < count; ++i)
+      table.emplace(classes[i], ComputeBlockFingerprint(*classes[i]));
+    return table;
+  }();
+  const auto found = sFingerprints.find(&cls);
+  return found != sFingerprints.end() ? found->second : ComputeBlockFingerprint(cls);
+}
+
 // One pass over the classes of a kTagFields block (GetField's `pass`).
 int ApplyClasses(CStateManager& mgr, CEntity& ent, const std::vector< const PortSchemaClass* >& chain,
                  int classes, BlockReader& r, int pass) {
@@ -803,7 +855,7 @@ int ApplyClasses(CStateManager& mgr, CEntity& ent, const std::vector< const Port
       break;
     const PortSchemaClass* cls = nullptr;
     for (const PortSchemaClass* k : chain)
-      if (k->fingerprint == fingerprint)
+      if (BlockFingerprint(*k) == fingerprint)
         cls = k;
     const size_t end = r.pos + len;
     if (cls != nullptr) {
@@ -852,8 +904,9 @@ bool CaptureEntityFields(const CStateManager& mgr, CEntity& ent, std::string& ou
     for (int i = 0; i < cls->fieldCount; ++i)
       if (SavedField(*cls, cls->fields[i]))
         PutField(mgr, ent, cls->fields[i], body);
-    w.U32(static_cast< uint32_t >(cls->fingerprint));
-    w.U32(static_cast< uint32_t >(cls->fingerprint >> 32));
+    const uint64_t fingerprint = BlockFingerprint(*cls);
+    w.U32(static_cast< uint32_t >(fingerprint));
+    w.U32(static_cast< uint32_t >(fingerprint >> 32));
     w.U32(static_cast< uint32_t >(body.bytes.size()));
     w.bytes += body.bytes;
   }
@@ -903,7 +956,7 @@ bool EntityFieldsCover(CEntity& ent, const std::string& data) {
     if (!r.ok || r.bytes.size() - r.pos < len)
       return false;
     for (const PortSchemaClass* k : chain)
-      if (k->fingerprint == fingerprint)
+      if (BlockFingerprint(*k) == fingerprint)
         ++matched;
     r.pos += len;
   }

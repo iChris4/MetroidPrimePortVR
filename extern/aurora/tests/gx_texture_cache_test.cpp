@@ -141,6 +141,43 @@ TEST_F(GxTextureCacheTest, PaletteContentIncludesTlutBytesAndMetadata) {
   EXPECT_EQ(testing::texture_allocations(), 3);
 }
 
+TEST_F(GxTextureCacheTest, AlternatingPalettesDoNotHashAgain) {
+  std::array<uint8_t, 32> indices{};
+  std::array<uint8_t, 32> paletteA{};
+  std::array<uint8_t, 32> paletteB{};
+  paletteB[1] = 1;
+  const auto obj = make_texture(indices.data(), 1, GX_TF_C4, 4, 4);
+  auto tlutA = make_tlut(paletteA.data(), 1);
+  auto tlutB = make_tlut(paletteB.data(), 2);
+  const auto first = texture::resolve_static_palette_texture(obj, tlutA);
+  const auto second = texture::resolve_static_palette_texture(obj, tlutB);
+  ASSERT_NE(first, second);
+  const uint64_t hashedBytes = texture_stats().hashedBytes;
+
+  for (int i = 0; i < 3; ++i) {
+    EXPECT_EQ(texture::resolve_static_palette_texture(obj, tlutA), first);
+    EXPECT_EQ(texture::resolve_static_palette_texture(obj, tlutB), second);
+  }
+  EXPECT_EQ(texture_stats().hashedBytes, hashedBytes);
+  EXPECT_EQ(texture_stats().objectHits, 6);
+
+  // A palette edit misses its kept variant.
+  paletteA[1] = 2;
+  ++tlutA.tlutDataVersion;
+  const auto edited = texture::resolve_static_palette_texture(obj, tlutA);
+  EXPECT_NE(edited, first);
+  EXPECT_GT(texture_stats().hashedBytes, hashedBytes);
+
+  // A destroyed TLUT forgets its variant: a reused id with other data must not get it.
+  texture::resolve_static_palette_texture(obj, tlutB);
+  evict_tlut_object(1);
+  std::array<uint8_t, 32> paletteC{};
+  paletteC[1] = 3;
+  const auto reused = texture::resolve_static_palette_texture(obj, make_tlut(paletteC.data(), 1));
+  EXPECT_NE(reused, edited);
+  EXPECT_NE(reused, second);
+}
+
 TEST_F(GxTextureCacheTest, StaticClearReresolvesBoundTextureButRetainsContent) {
   std::array<uint8_t, 16> pixels{};
   g_gxState.loadedTextures[0] = make_texture(pixels.data(), 1);

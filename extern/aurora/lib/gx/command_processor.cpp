@@ -600,6 +600,51 @@ gfx::BindGroupRef cached_multiview_bind_group(const ShaderInfo& info, uint64_t s
   return entry->multiview;
 }
 
+// Port (from MP2 653e85a27): a vertex array is copied into a frame's storage once, not once per
+// slot and bind. The game sets a model's arrays again for each of its draws that follows another
+// model's, and CCubeModel binds one UV array to all eight TEX slots, so the per-slot copy
+// (AttrArray::cachedRange) put the same bytes into a frame many times. Keyed by pointer and size;
+// it lasts until the frame's recording ends (clear_frame_arrays) or a GXInvalidateVtxCache (MP1
+// issues it at frame start and when it loads a model or an area, whose memory may be a freed one's).
+// Data written in place mid-frame is picked up by clearing the array first (CGX::ClearArray): the
+// array next set on that attribute is copied again. The skinned workspaces do that each draw.
+// MP_GX_ARRAY_REUSE=0 copies per slot again (A/B).
+struct FrameArrayKey {
+  const void* data;
+  u32 size;
+  bool operator==(const FrameArrayKey&) const = default;
+  template <typename H>
+  friend H AbslHashValue(H h, const FrameArrayKey& key) {
+    return H::combine(std::move(h), key.data, key.size);
+  }
+};
+absl::flat_hash_map<FrameArrayKey, gfx::Range> sFrameArrays;
+// Per attribute: cleared since its last array, so the next one set there is copied afresh.
+bool sArrayFresh[GX_VA_MAX_ATTR] = {};
+
+bool frame_array_reuse() noexcept {
+  static const bool enabled = [] {
+    const char* value = std::getenv("MP_GX_ARRAY_REUSE");
+    return value == nullptr || std::strcmp(value, "0") != 0;
+  }();
+  return enabled;
+}
+
+// The frame's copy of the array, made now if this frame has none; an overflowed range is not kept.
+gfx::Range frame_array_range(const void* data, u32 size) noexcept {
+  const bool reuse = frame_array_reuse();
+  if (reuse) {
+    if (const auto it = sFrameArrays.find(FrameArrayKey{data, size}); it != sFrameArrays.end()) {
+      return it->second;
+    }
+  }
+  const gfx::Range range = gfx::push_storage(static_cast<const uint8_t*>(data), size);
+  if (reuse && range.size != 0 && !gfx::overflowed(range)) {
+    sFrameArrays.emplace(FrameArrayKey{data, size}, range);
+  }
+  return range;
+}
+
 FogRangeLutKey fog_range_lut_key() noexcept {
   const auto& state = g_gxState.fog;
   const f32 logicalWidth = std::max(g_gxState.logicalViewport.width, 1.f);
@@ -750,6 +795,7 @@ ProcessResult process(const u8* data, u32 size) noexcept {
       for (auto& array : g_gxState.arrays) {
         array.cachedRange = {};
       }
+      sFrameArrays.clear();
       g_gxState.dirty |= DirtyImmediates;
       break;
     }
@@ -1176,7 +1222,7 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u32 vtxCount, gfx::Rang
     }
     auto& array = state.arrays[i];
     if (array.cachedRange.size == 0 && !resident::array_range(array.data, array.size, array.cachedRange)) {
-      array.cachedRange = gfx::push_storage(static_cast<const uint8_t*>(array.data), array.size);
+      array.cachedRange = frame_array_range(array.data, array.size);
       if (drop_overflowed_draw(array.cachedRange, "storage")) {
         array.cachedRange = {};
         return;
@@ -2360,6 +2406,15 @@ void handle_aurora(ByteReader& reader) noexcept {
         // Endianness is baked into the shader
         g_gxState.dirty |= DirtyPipeline;
       }
+      if (newData == nullptr) {
+        // CGX::ClearArray: this array and the next one set here are copied again, even within
+        // the frame (the skinned workspaces keep their pointer and are rewritten per draw).
+        sFrameArrays.erase(FrameArrayKey{array.data, array.size});
+        sArrayFresh[attrIdx] = true;
+      } else if (sArrayFresh[attrIdx]) {
+        sFrameArrays.erase(FrameArrayKey{newData, arraySize});
+        sArrayFresh[attrIdx] = false;
+      }
       array.data = newData;
       array.size = arraySize;
       array.le = le;
@@ -3201,6 +3256,8 @@ void handle_aurora(ByteReader& reader) noexcept {
     Log.error("Unknown Aurora subcommand: {:04X}", subCmd);
   }
 }
+
+void clear_frame_arrays() noexcept { sFrameArrays.clear(); }
 
 void clear_draw_cache() noexcept {
   staging_report();

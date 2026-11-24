@@ -69,6 +69,7 @@
 #include "port_custom_res.h"
 #include "port_map_marks.h"
 #include "port_map_pickups.h"
+#include "port_text.h"
 #include "port_automapper.h"
 
 #ifdef TARGET_PC
@@ -371,14 +372,14 @@ rstl::wstring PortLegendText() {
   };
   if (mode == PortDebug::kMapPickups_Seen || mode == PortDebug::kMapPickups_All) {
     if (PortDebug::MapPickupKinds()) {
-      entry(PortCustomRes::kLegendDotTxtr, L"Major");
-      entry(PortCustomRes::kLegendRingTxtr, L"Minor");
-      entry(PortCustomRes::kLegendCrossTxtr, L"Collected");
+      entry(PortCustomRes::kLegendDotTxtr, PortText::Get(PortText::kLegendMajor));
+      entry(PortCustomRes::kLegendRingTxtr, PortText::Get(PortText::kLegendMinor));
+      entry(PortCustomRes::kLegendCrossTxtr, PortText::Get(PortText::kLegendCollected));
     } else {
-      entry(PortCustomRes::kLegendDotTxtr, L"Pickup");
+      entry(PortCustomRes::kLegendDotTxtr, PortText::Get(PortText::kLegendPickup));
     }
   }
-  entry(PortCustomRes::kLegendMarkTxtr, L"Marked");
+  entry(PortCustomRes::kLegendMarkTxtr, PortText::Get(PortText::kLegendMarked));
   return text;
 }
 

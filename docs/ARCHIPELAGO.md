@@ -169,6 +169,31 @@ With the built-in tables, the client does what the AP ISO patch would:
   hints point at the retail item locations. The saved Hint System choice is
   kept for normal games.
 
+### From another app (Android)
+
+An Android app that knows the room, such as an Archipelago companion, can hand
+it over instead of the player typing it. It starts `MetroidPrimeActivity`
+(package `org.metroidprime.port`) with the action
+`org.metroidprime.port.action.ARCHIPELAGO_CONNECT` and three string extras:
+
+| Extra | Value |
+|---|---|
+| `org.metroidprime.port.extra.SERVER` | as typed in the overlay (`host:port`, `ws://`, `wss://`) |
+| `org.metroidprime.port.extra.SLOT` | the slot name |
+| `org.metroidprime.port.extra.PASSWORD` | optional |
+
+The room goes through the same path as the overlay's Connect button, whether
+the game was running or the intent started it. An intent without a server or a
+slot is ignored. As with Connect, a room for another seed sends a loaded game
+back to the title.
+
+```sh
+adb shell am start -n org.metroidprime.port/.MetroidPrimeActivity \
+    -a org.metroidprime.port.action.ARCHIPELAGO_CONNECT \
+    --es org.metroidprime.port.extra.SERVER host:38281 \
+    --es org.metroidprime.port.extra.SLOT Player1
+```
+
 ### Items
 
 The built-in item table mirrors the world's `Items.py` (ids from 5031000): ids

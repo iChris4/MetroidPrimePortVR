@@ -3,6 +3,7 @@
 
 #include "debug_ui_internal.h"
 
+#include "port_apclient.h"
 #include "port_debug.h"
 #include "port_custom_actions.h"
 #include "port_photo.h"
@@ -491,6 +492,12 @@ Java_org_metroidprime_port_MetroidPrimeActivity_nativeRemasteredPicked(JNIEnv* e
     }
     env->ReleaseStringUTFChars(uri, chars);
   }
+}
+
+// The connect intent left a room in pending_ap_connect.json while the game runs.
+extern "C" JNIEXPORT void JNICALL
+Java_org_metroidprime_port_MetroidPrimeActivity_nativeArchipelagoRoom(JNIEnv*, jclass) {
+  PortAp::HandOffArrived();
 }
 
 // Whether a real pad, keyboard or mouse was used since the last call.

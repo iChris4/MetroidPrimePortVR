@@ -23,6 +23,7 @@
 #include "port_room_geo.h"
 #include "port_room_effects.h"
 #include "port_room_liquid.h"
+#include "port_utf8_path.h"
 
 #include <aurora/dvd.h>
 #include <aurora/gfx.h>
@@ -118,12 +119,9 @@ bool sOverlaysRegistered = false;
 // PortMods<n>.pak files served (ExtraPakCount); never goes down.
 int sExtraPaks = 0;
 
-std::string PathString(const fs::path& path) {
-  const auto u8 = path.u8string();
-  return std::string(u8.begin(), u8.end());
-}
+using PortUtf8::ToUtf8;
 
-fs::path PathFromString(const std::string& text) { return fs::path(std::u8string(text.begin(), text.end())); }
+using PortUtf8::FromUtf8;
 
 using port::EndsWith;
 using port::Lower;
@@ -192,7 +190,7 @@ bool ReadPakHeader(const std::string& hostPath, int32_t entry, std::vector<uint8
   Segment whole;
   if (!hostPath.empty()) {
     std::error_code ec;
-    size = fs::file_size(PathFromString(hostPath), ec);
+    size = fs::file_size(FromUtf8(hostPath), ec);
     if (ec) {
       return false;
     }
@@ -263,7 +261,7 @@ bool IsDocument(const std::string& name) {
 // The kImportParts entry a file of a Remastered import belongs to, by its folder and then its
 // type; nullptr for one that always loads (textures, material cubes, the gallery).
 const char* ImportPartOf(const fs::path& relative) {
-  const std::string name = PathString(relative.filename());
+  const std::string name = ToUtf8(relative.filename());
   uint32_t type = 0;
   uint32_t id = 0;
   // By type first, as the scan's geometry check: room geometry in any folder.
@@ -271,7 +269,7 @@ const char* ImportPartOf(const fs::path& relative) {
     return "geometry";
   }
   if (relative.has_parent_path()) {
-    const std::string folder = Lower(PathString(*relative.begin()));
+    const std::string folder = Lower(ToUtf8(*relative.begin()));
     if (folder == "roomgeo") {
       return "geometry";
     }
@@ -336,12 +334,12 @@ std::vector<PortRemasteredStorage::ModFolder> ScanModFolders(const std::string& 
 bool HasRoomGeometryNow(const std::vector<PortRemasteredStorage::ModFolder>& mods) {
   for (const PortRemasteredStorage::ModFolder& mod : mods) {
     std::error_code ec;
-    for (fs::recursive_directory_iterator it(PathFromString(mod.path), fs::directory_options::skip_permission_denied,
+    for (fs::recursive_directory_iterator it(FromUtf8(mod.path), fs::directory_options::skip_permission_denied,
                                              ec),
          end;
          !ec && it != end; it.increment(ec)) {
       uint32_t id = 0;
-      if (PortRoomGeo::ParseFileName(PathString(it->path().filename()), id)) {
+      if (PortRoomGeo::ParseFileName(ToUtf8(it->path().filename()), id)) {
         return true;
       }
     }
@@ -363,7 +361,7 @@ std::string Folder() {
     dir += "mods";
   }
   std::error_code ec;
-  fs::create_directories(PathFromString(dir), ec);
+  fs::create_directories(FromUtf8(dir), ec);
   return dir;
 }
 
@@ -380,7 +378,7 @@ bool HasEnabledRoomGeometry() {
   const std::vector<std::string> disabled = SplitDisabled(PortDebug::ModsDisabled());
   std::vector<PortRemasteredStorage::ModFolder> mods = ScanModFolders(Folder());
   std::erase_if(mods, [&](const PortRemasteredStorage::ModFolder& mod) {
-    const std::string name = PathString(PathFromString(mod.path).filename());
+    const std::string name = ToUtf8(FromUtf8(mod.path).filename());
     return std::find(disabled.begin(), disabled.end(), name) != disabled.end();
   });
   return HasRoomGeometryNow(mods);
@@ -392,7 +390,7 @@ bool AnyModEnabled() {
   }
   const std::vector<std::string> disabled = SplitDisabled(PortDebug::ModsDisabled());
   for (const PortRemasteredStorage::ModFolder& mod : ScanModFolders(Folder())) {
-    const std::string name = PathString(PathFromString(mod.path).filename());
+    const std::string name = ToUtf8(FromUtf8(mod.path).filename());
     if (std::find(disabled.begin(), disabled.end(), name) == disabled.end()) {
       return true;
     }
@@ -506,7 +504,7 @@ bool BindTexture(const void* owner, uint32_t id) {
     return false;
   }
   const auto registration = aurora::texture::register_file_replacement(
-      aurora::texture::TexturePointerKey{owner}, PathFromString(found->second));
+      aurora::texture::TexturePointerKey{owner}, FromUtf8(found->second));
   if (registration.id == 0) {
     return false;
   }
@@ -565,7 +563,7 @@ uint32_t RemapEffectId(uint32_t owner, uint32_t field, uint32_t id) {
   std::lock_guard<std::mutex> lock(sEffectIdsMutex);
   if (!sEffectIdsLoaded) {
     sEffectIdsLoaded = true;
-    std::ifstream in(PathFromString(sEffectIdMapPath));
+    std::ifstream in(FromUtf8(sEffectIdMapPath));
     std::string line;
     while (std::getline(in, line)) {
       unsigned a = 0, b = 0, c = 0, d = 0;
@@ -689,7 +687,7 @@ void Initialize() {
   std::vector<fs::path> modDirs;
   modDirs.reserve(scan.size());
   for (const PortRemasteredStorage::ModFolder& mod : scan) {
-    modDirs.push_back(PathFromString(mod.path));
+    modDirs.push_back(FromUtf8(mod.path));
   }
 
   // Keyed by disc entry and by (type, id); a later mod overwrites an earlier.
@@ -700,7 +698,7 @@ void Initialize() {
   std::string dreadDir;  // the Dread Samus import's folder, when it is on
   for (const fs::path& modDir : modDirs) {
     ModInfo& info = sStatus.mods.emplace_back();
-    info.name = PathString(modDir.filename());
+    info.name = ToUtf8(modDir.filename());
     info.enabled = sStatus.active && std::find(disabled.begin(), disabled.end(), info.name) == disabled.end();
     // An import is told by its stamp, or by the folder name an import without one (before the
     // stamp existed) was installed under. Checked even when disabled: it is still out of date.
@@ -735,7 +733,7 @@ void Initialize() {
       continue;
     }
     if (info.name == PortDreadSamus::kModName) {
-      dreadDir = PathString(modDir);
+      dreadDir = ToUtf8(modDir);
     }
     const size_t modIndex = sStatus.mods.size() - 1;
     // An import's text tables are copies of the disc it was made from (kTextDiscName): on
@@ -768,7 +766,7 @@ void Initialize() {
     std::vector<fs::path> files;
     for (fs::recursive_directory_iterator it(modDir, fs::directory_options::skip_permission_denied, ec), end;
          !ec && it != end; it.increment(ec)) {
-      const std::string name = PathString(it->path().filename());
+      const std::string name = ToUtf8(it->path().filename());
       if (!name.empty() && name[0] == '.') {
         if (it->is_directory(ec)) {
           it.disable_recursion_pending();
@@ -797,7 +795,7 @@ void Initialize() {
     // saved so the next process loads it. Reuse the file list (no second walk).
     const bool roomGeometry = std::any_of(files.begin(), files.end(), [](const fs::path& file) {
       uint32_t id = 0;
-      return PortRoomGeo::ParseFileName(PathString(file.filename()), id);
+      return PortRoomGeo::ParseFileName(ToUtf8(file.filename()), id);
     });
     if (roomGeometry && !PortRoomGeo::BuffersReady()) {
       info.enabled = false;
@@ -813,8 +811,8 @@ void Initialize() {
     std::sort(files.begin(), files.end());
     std::unordered_map<uint32_t, std::string> native;
     for (const fs::path& file : files) {
-      const std::string name = PathString(file.filename());
-      const std::string relative = PathString(file.lexically_relative(modDir).generic_u8string());
+      const std::string name = ToUtf8(file.filename());
+      const std::string relative = ToUtf8(file.lexically_relative(modDir).generic_u8string());
       const uint64_t size = fs::file_size(file, ec);
       if (ec) {
         Message(info.name + ": cannot read " + relative);
@@ -823,76 +821,76 @@ void Initialize() {
       uint32_t type = 0;
       uint32_t id = 0;
       if (ParseNativeTextureName(name, id)) {
-        native[id] = PathString(file);
+        native[id] = ToUtf8(file);
         continue;
       }
       if (PortHdFont::ParseFileName(name)) {
-        sFont = PathString(file);
+        sFont = ToUtf8(file);
         continue;
       }
-      if (name == "brdf.lut" && PathString(file.parent_path().filename()) == "roomenv") {
-        sBrdfLut = PathString(file);
+      if (name == "brdf.lut" && ToUtf8(file.parent_path().filename()) == "roomenv") {
+        sBrdfLut = ToUtf8(file);
         continue;
       }
       if (name.size() > 4 && name.compare(name.size() - 4, 4, ".jpg") == 0 &&
-          PathString(file.parent_path().filename()) == "gallery") {
-        sGallery[name] = PathString(file);
+          ToUtf8(file.parent_path().filename()) == "gallery") {
+        sGallery[name] = ToUtf8(file);
         continue;
       }
-      if (name == PortRoomGeo::kLodFileName && PathString(file.parent_path().filename()) == "roomgeo") {
-        sRoomLods.push_back(PathString(file));
+      if (name == PortRoomGeo::kLodFileName && ToUtf8(file.parent_path().filename()) == "roomgeo") {
+        sRoomLods.push_back(ToUtf8(file));
         continue;
       }
       if (PortRoomEnv::ParseFileName(name, id)) {
-        sRoomEnvs[id] = PathString(file);
+        sRoomEnvs[id] = ToUtf8(file);
         continue;
       }
       if (ParseMaterialCubeName(name, id)) {
-        sMaterialCubes[id] = PathString(file);
+        sMaterialCubes[id] = ToUtf8(file);
         continue;
       }
       if (name == "effectids.map") {
-        sEffectIdMapPath = PathString(file);
+        sEffectIdMapPath = ToUtf8(file);
         continue;
       }
       if (name == "thermal.lut") {
-        sThermalLut = PathString(file);
+        sThermalLut = ToUtf8(file);
         continue;
       }
       if (name == "envfx.bin") {
-        sEnvFx = PathString(file);
+        sEnvFx = ToUtf8(file);
         continue;
       }
       if (name == "shell.bin") {
-        sShell = PathString(file);
+        sShell = ToUtf8(file);
         continue;
       }
       if (name == "icy.bin") {
-        sIcy = PathString(file);
+        sIcy = ToUtf8(file);
         continue;
       }
       if (name == PortRetailPlacement::kFileName) {
-        sRetailPlacements = PathString(file);
+        sRetailPlacements = ToUtf8(file);
         continue;
       }
       if (PortHudBars::ParseFileName(name, id)) {
         if (!hudFits) {
           continue;  // the bars of a frame left out below
         }
-        sHudBars[id] = PathString(file);
+        sHudBars[id] = ToUtf8(file);
         continue;
       }
       if (PortRoomGeo::ParseFileName(name, id)) {
-        sRoomGeos[id] = PathString(file);
+        sRoomGeos[id] = ToUtf8(file);
         continue;
       }
       if (PortRoomLiquid::ParseFileName(name, id)) {
-        sRoomLiquids[id] = PathString(file);
+        sRoomLiquids[id] = ToUtf8(file);
         continue;
       }
       if (PortRoomEffects::ParseFileName(name, id)) {
-        sRoomEffects[id] = PathString(file);
-        sRoomEffectsProviders[id] = PathString(modDir);
+        sRoomEffects[id] = ToUtf8(file);
+        sRoomEffectsProviders[id] = ToUtf8(modDir);
         continue;
       }
       if (ParseLooseName(name, type, id)) {
@@ -909,17 +907,17 @@ void Initialize() {
           continue;
         }
         if (!textFits && type == 0x53545247 && // 'STRG'
-            PathString(file.parent_path().filename()) == PortRemastered::kTextFolder) {
+            ToUtf8(file.parent_path().filename()) == PortRemastered::kTextFolder) {
           ++textLeftOut;
           continue;
         }
         if (!hudFits && type == 0x46524D45 && // 'FRME'
-            PathString(file.parent_path().filename()) == PortRemastered::kHudFolder) {
+            ToUtf8(file.parent_path().filename()) == PortRemastered::kHudFolder) {
           ++hudLeftOut;
           continue;
         }
-        loose[{type, id}] = {type, id, PathString(file), size, info.name};
-        sResourceProviders[{type, id}] = PathString(modDir);
+        loose[{type, id}] = {type, id, ToUtf8(file), size, info.name};
+        sResourceProviders[{type, id}] = ToUtf8(modDir);
         looseMod[{type, id}] = modIndex;
         if (type == 0x54585452) { // 'TXTR': an earlier mod's image was made for another texture
           sNativeTextures.erase(id);
@@ -934,7 +932,7 @@ void Initialize() {
         // to its own only when the GameCube name is missing).
         if (EndsWith(Lower(name), ".thp") && (entry < 0 || entry >= aurora_dvd_base_entry_count()) && size > 0 &&
             size <= kMaxFileSize) {
-          addedMovies[Lower("/" + relative)] = {"/" + relative, {PathString(file), size, modIndex}};
+          addedMovies[Lower("/" + relative)] = {"/" + relative, {ToUtf8(file), size, modIndex}};
           continue;
         }
         if (!IsDocument(name)) {
@@ -946,7 +944,7 @@ void Initialize() {
         Message(info.name + ": " + relative + " is too big; ignored");
         continue;
       }
-      replaced[entry] = {PathString(file), size, modIndex};
+      replaced[entry] = {ToUtf8(file), size, modIndex};
     }
     if (textLeftOut != 0) {
       Message(info.name + ": its text was imported from another disc; this disc's text is used (" +
@@ -959,7 +957,7 @@ void Initialize() {
     info.textures = int(native.size());
     for (auto& [id, path] : native) {
       sNativeTextures[id] = std::move(path);
-      sResourceProviders[{0x54585452, id}] = PathString(modDir);
+      sResourceProviders[{0x54585452, id}] = ToUtf8(modDir);
     }
   }
 
@@ -991,9 +989,27 @@ void Initialize() {
         ++served;
       }
     }
-    sDarkSamusServed = served != 0;
+    // Her Morph Ball, as every suit's (CMorphBall::GetMorphBallModel's variant ANCS and low-poly ball).
+    size_t balls = 0;
+    for (const auto& t : PortDreadSamus::kBallTargets) {
+      const LooseResource* ancs = echoes(0x414E4353u, PortEchoesSuits::DarkBallId(t.ancs));  // 'ANCS'
+      const LooseResource* low = echoes(0x434D444Cu, PortEchoesSuits::DarkBallId(t.low));    // 'CMDL'
+      if (ancs == nullptr || low == nullptr) continue;
+      for (const LooseResource* from : {ancs, low}) {
+        const uint32_t to = PortModelVariant::Id(from == ancs ? t.ancs : t.low, t.suit);
+        LooseResource resource = *from;
+        resource.id = to;
+        loose[{resource.type, to}] = std::move(resource);
+        if (const auto provider = sResourceProviders.find({from->type, from->id}); provider != sResourceProviders.end()) {
+          sResourceProviders[{from->type, to}] = provider->second;
+        }
+      }
+      ++balls;
+    }
+    sDarkSamusServed = served != 0 || balls != 0;
     if (sDarkSamusServed) {
-      PortLog::Write("mods: %s serves Dark Samus as %zu Samus body model(s)\n", PortEchoesSuits::kModName, served);
+      PortLog::Write("mods: %s serves Dark Samus as %zu Samus body model(s) and %zu Morph Ball(s)\n",
+                     PortEchoesSuits::kModName, served, balls);
     }
   }
 
@@ -1039,7 +1055,7 @@ void Initialize() {
           const auto source = [&](uint32_t id) {
             const auto found = sNativeTextures.find(id);
             return found != sNativeTextures.end() &&
-                           PathString(PathFromString(found->second).parent_path()) == dreadDir
+                           ToUtf8(FromUtf8(found->second).parent_path()) == dreadDir
                        ? found->second
                        : std::string();
           };
@@ -1175,7 +1191,7 @@ void Initialize() {
       if (used.count(key) != 0) {
         continue;
       }
-      const std::string name = PathString(PathFromString(resource.hostPath).filename());
+      const std::string name = ToUtf8(FromUtf8(resource.hostPath).filename());
       if (knownIds.count(key.second) != 0 || !addedIds.insert(key.second).second) {
         Message(resource.mod + ": " + name + " reuses an id another type holds; ignored");
       } else if (homeEntry < 0) {

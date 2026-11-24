@@ -64,6 +64,10 @@ bool PanelFocused();
 // `factor` 0 uses Supersample().
 bool RequestCapture(int factor = 0);
 bool Capturing();
+// The Screenshot binding and F1 > Game: a PNG of the frame as it is (no overlays), under
+// screenshots/ (Android: moved to Pictures/Metroid Prime), with a toast. False while a
+// capture is saving.
+bool RequestScreenshot();
 // What the last capture did, for the toast and the console.
 struct CaptureResult {
   int state = 0; // 0 none yet, 1 saved, -1 failed

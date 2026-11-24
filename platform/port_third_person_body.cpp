@@ -2024,7 +2024,6 @@ std::string DescribeFeet() {
 }
 
 void SetBackWalk(BackWalk mode) { sBackWalk = mode; }
-BackWalk GetBackWalk() { return sBackWalk; }
 
 bool PinClip(const char* name, float phase, float yaw) {
   if (name == nullptr || !Ready()) {

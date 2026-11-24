@@ -2,6 +2,7 @@
 
 #include "port_json.h"
 #include "port_log.h"
+#include "port_utf8_path.h"
 #include "port_ws.h"
 
 #include <algorithm>
@@ -23,9 +24,7 @@ namespace PortUpdateCheck {
 namespace {
 
 // The state file's name is UTF-8; a narrow path is the ANSI code page on Windows.
-std::filesystem::path Utf8Path(const std::string& text) {
-  return std::filesystem::path(std::u8string(text.begin(), text.end()));
-}
+using PortUtf8::FromUtf8;
 
 bool SplitVersion(const std::string& text, std::vector<uint32_t>& parts) {
   parts.clear();
@@ -84,7 +83,7 @@ struct Runtime {
 
   // checked=<unix time>, latest=<version>, url=<release page>.
   void LoadState() {
-    std::ifstream in(Utf8Path(stateFile));
+    std::ifstream in(FromUtf8(stateFile));
     std::string line;
     while (std::getline(in, line)) {
       const size_t eq = line.find('=');
@@ -104,7 +103,7 @@ struct Runtime {
   }
 
   void SaveState() const {
-    const std::filesystem::path file = Utf8Path(stateFile);
+    const std::filesystem::path file = FromUtf8(stateFile);
     std::filesystem::path temp = file;
     temp += ".tmp";
     {

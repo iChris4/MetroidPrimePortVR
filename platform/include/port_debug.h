@@ -151,6 +151,16 @@ bool FrameLimitEnabled();
 int FrameRateCap();
 void SetFrameLimitEnabled(bool enabled);
 void RecordFrame(uint64_t durationNs, unsigned ticks, bool presented);
+// The last full second of main-loop work (RecordFrame's durations, pacing left out):
+// iterations, mean and slowest in ms, and how many took longer than a 60 Hz period
+// (console `status`). MP_SLOW_FRAME_MS=<ms> logs each slower iteration.
+struct FrameWorkStats {
+  int frames = 0;
+  float avgMs = 0.f;
+  float maxMs = 0.f;
+  int slow = 0;
+};
+FrameWorkStats LastFrameWork();
 // Setting `vsync`, as stored. Aurora presents without it under MP_TURBO and (PortVr:)
 // while the headset runs, as the window only mirrors the headset then; it applies
 // again when the headset stops.
@@ -164,6 +174,9 @@ void SetFullscreen(bool enabled);
 // 0 = auto (native, driven by the display scale), otherwise a fixed multiplier.
 float RenderScale();
 void SetRenderScale(float scale);
+// The highest fixed scale (3840 lines: a 4K display supersampled ~1.8x). Aurora fits the
+// EFB inside the device's texture size limit, so a wide window can draw a little less.
+constexpr float kRenderScaleMax = 8.f;
 // Photo mode captures: the configured scale (auto: the scale the window's own size
 // is, as a multiple of what 1x draws), and a temporary override
 // (0 = none) that also holds dynamic resolution still.
@@ -259,6 +272,10 @@ enum ECrosshairStyle { kCrosshairStyle_Classic, kCrosshairStyle_Remastered, kCro
 ECrosshairStyle CrosshairStyle();
 void SetCrosshairStyle(ECrosshairStyle style);
 bool CrosshairColor(float rgb[3]);
+// The crosshair fades to this colour over an enemy the current beam hurts (crosshair_target_color=,
+// issue #277; Remastered style: in place of its red, and only where the beam hurts). False = off,
+// also under Original experience; rgb may be null to just ask.
+bool CrosshairTargetColor(float rgb[3]);
 // Auto-aim: without Lock-On the gun picks the target nearest the screen centre
 // (CPlayer::UpdateAimTarget). Off = aim only at a locked target. On under Original experience.
 bool AutoAim();
@@ -454,6 +471,9 @@ float FirstPersonFov();
 void SetFirstPersonFov(float degrees);
 bool GunFollowsFov();
 void SetGunFollowsFov(bool enabled);
+// Whether the morph ball's cameras widen or narrow with the FOV setting.
+bool BallFollowsFov();
+void SetBallFollowsFov(bool enabled);
 float GunFov();
 void SetGunFov(float degrees);
 // The FOV the arm cannon is drawn at, for a first-person camera whose FOV is cameraFov.
@@ -816,6 +836,10 @@ void SetRemasteredMovement(bool enabled);
 // must pass. The gyro source is the aim's.
 void SetSpringBallFlick(bool enabled);
 void SetSpringBallFlickRate(float radiansPerSecond);
+// Under Steam Input, read the back buttons (SDL's paddles) of the physical controller behind
+// Player 1's virtual pad, which has none (steam_input_back_buttons, default on,
+// `MP_STEAM_INPUT_BACK_BUTTONS`; Linux only; port_steam_triton.h).
+void SetSteamInputBackButtons(bool enabled);
 // True for a short while after a flick, so one just before landing still counts.
 bool SpringBallFlickPending();
 void ClearSpringBallFlick();
@@ -829,6 +853,12 @@ void SetStickAimRate(float pixelsPerSecond);
 // overlay's own while touch is active.
 bool FlickStick();
 void SetFlickStick(bool enabled);
+// Controller settings > Precise stick deadzones (precise_stick_deadzones, env
+// MP_PRECISE_STICK_DEADZONES, default off): the Stick / C-stick deadzone sliders are the only
+// deadzone. Tilt past a slider runs from zero, and the game's own PADClamp cut (15 of 127 per
+// axis) is offset away, so a stick moves Samus and the aim from its first step past the slider.
+bool PreciseStickDeadZones();
+void SetPreciseStickDeadZones(bool enabled);
 void SetTouchFlickStick(bool enabled);
 // Flick stick's outer deadzone as a fraction of travel (flick_stick_outer_deadzone).
 float FlickOuterDeadZone();
@@ -855,7 +885,6 @@ void CancelGyroRecalibration();
 float GyroRecalibrationCountdown(); // seconds left, or negative when none pending
 float GyroManualCalibrationProgress(); // 0..1 while Recalibrate samples, or negative
 bool GyroCalibrating();             // auto calibration is learning right now
-void ResetGyroCalibration();
 float GyroCalibrationConfidence();
 // Recentres the pointer-aim cursor and levels the camera pitch (the "Reset aim"
 // action; thread-safe, applied on the next aim tick).

@@ -77,6 +77,10 @@ int sPhaseFrames = 0;
 double sPhaseAt = 0.0;
 int sCaptureFactor = 1;
 CaptureResult sLast;
+// The plain screenshot: a PNG of the frame as it is, saving.
+bool sShotSaving = false;
+double sShotAt = 0.0;
+std::string sShotPath;
 
 double Now() { return static_cast<double>(SDL_GetTicks()) * 0.001; }
 
@@ -199,6 +203,49 @@ std::string ExportToPictures(const std::string& path) {
 }
 #endif
 
+// Where a capture named `prefix`-<milliseconds>.png is written.
+std::string CapturePath(const char* prefix) {
+  const auto stamp =
+      std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+          .count();
+  std::string path = std::string("screenshots/") + prefix + "-" + std::to_string(stamp) + ".png";
+#if defined(__ANDROID__)
+  // SDL opens a relative path as an APK asset there, which can't be written.
+  if (const char* root = SDL_GetAndroidInternalStoragePath()) {
+    path = std::string(root) + "/" + path;
+  }
+#endif
+  return path;
+}
+
+// Where a saved capture ends up: on Android, moved to the shared Pictures when it can be.
+std::string Publish(const std::string& path) {
+#if defined(__ANDROID__)
+  if (std::string shared = ExportToPictures(path); !shared.empty()) {
+    return shared;
+  }
+#endif
+  return path;
+}
+
+void ScreenshotFrame(double now) {
+  if (!sShotSaving) {
+    return;
+  }
+  unsigned w = 0;
+  unsigned h = 0;
+  const int state = aurora::screenshot_png_state(&w, &h);
+  if (state == 0 && now - sShotAt < kSaveTimeoutSeconds) {
+    return;
+  }
+  sShotSaving = false;
+  if (state > 0) {
+    Say("Saved " + Publish(sShotPath) + " (" + std::to_string(w) + "x" + std::to_string(h) + ")");
+  } else {
+    Say("Couldn't save the screenshot");
+  }
+}
+
 } // namespace
 
 bool Active() { return sActive; }
@@ -319,6 +366,7 @@ void Tick(CStateManager& mgr, bool inPlay) {
 
 void Frame() {
   const double now = Now();
+  ScreenshotFrame(now);
   // Tick only runs while the game plays: a request made over a menu or a load has no taker.
   if (sRequestEnter && now - sRequestAt > kPendingTimeoutSeconds) {
     sRequestEnter = false;
@@ -350,17 +398,8 @@ void Frame() {
     }
     break;
   case Phase::Settling:
-    if (++sPhaseFrames >= (sCaptureFactor > 1 ? kSettleFrames : 2)) {
-      const auto stamp = std::chrono::duration_cast<std::chrono::milliseconds>(
-                             std::chrono::system_clock::now().time_since_epoch())
-                             .count();
-      sLast.path = "screenshots/metroid-prime-photo-" + std::to_string(stamp) + ".png";
-#if defined(__ANDROID__)
-      // SDL opens a relative path as an APK asset there, which can't be written.
-      if (const char* root = SDL_GetAndroidInternalStoragePath()) {
-        sLast.path = std::string(root) + "/" + sLast.path;
-      }
-#endif
+    if (++sPhaseFrames >= (sCaptureFactor > 1 ? kSettleFrames : 2) && !sShotSaving) {
+      sLast.path = CapturePath("metroid-prime-photo");
       aurora::request_screenshot_png(sLast.path.c_str());
       sPhase = Phase::Saving;
       sPhaseAt = now;
@@ -379,11 +418,7 @@ void Frame() {
     sLast.width = w;
     sLast.height = h;
     if (state > 0) {
-#if defined(__ANDROID__)
-      if (std::string shared = ExportToPictures(sLast.path); !shared.empty()) {
-        sLast.path = std::move(shared);
-      }
-#endif
+      sLast.path = Publish(sLast.path);
       Say("Saved " + sLast.path + " (" + std::to_string(w) + "x" + std::to_string(h) + ")" +
           (sLast.clamped ? ", smaller than asked: too large for this GPU" : ""));
     } else {
@@ -512,6 +547,19 @@ bool RequestCapture(int factor) {
 }
 
 bool Capturing() { return sPhase != Phase::Idle; }
+
+bool RequestScreenshot() {
+  // One PNG request at a time: aurora keeps a single path and result.
+  if (sShotSaving || sPhase == Phase::Saving) {
+    return false;
+  }
+  sShotPath = CapturePath("metroid-prime");
+  aurora::request_screenshot_png(sShotPath.c_str());
+  sShotSaving = true;
+  sShotAt = Now();
+  return true;
+}
+
 CaptureResult LastCapture() { return sLast; }
 
 std::string TakeMessage() {

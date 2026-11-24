@@ -14,6 +14,7 @@
 #include "port_config_reset.h"
 #include "port_input_devices.h"
 #include "port_savestate.h"
+#include "port_steam_triton.h"
 #include "port_flick_stick.h"
 #include "port_mouse.h"
 
@@ -134,8 +135,9 @@ const char* sGyroStatus = "off";
 // different pad, or the phone), and whether that source has an accelerometer.
 PortGyro::Motion sGyroMotion;
 // The source the motion state belongs to: a pad's joystick instance id (never
-// reused, unlike its pointer after a replug), or kPhoneSource; 0 for none.
+// reused, unlike its pointer after a replug), kPhoneSource or kSteamTritonSource; 0 for none.
 constexpr uint32_t kPhoneSource = 0xFFFFFFFFu;
+constexpr uint32_t kSteamTritonSource = 0xFFFFFFFEu;
 uint32_t sGyroMotionSource = 0;
 bool sGyroHasAccel = false;
 PortGyro::Filter sGyroFilter;
@@ -251,8 +253,6 @@ float GyroManualCalibrationProgress() {
 
 bool GyroCalibrating() { return sGyroCalibrating || sGyroMotion.ManualCalibrating(); }
 
-void ResetGyroCalibration() { sGyroMotion.Reset(); }
-
 void RequestResetAim() { sResetAimRequested.store(true, std::memory_order_release); }
 
 float GyroCalibrationConfidence() {
@@ -319,6 +319,15 @@ bool ReadGyroRates(float& pitch, float& yaw, float dt) {
         }
       }
     }
+  }
+
+  // The controller behind Player 1's Steam Input pad (a Steam Controller, a Deck, a Sony or
+  // Nintendo one): read from its own reports (PortSteamTriton::Update opens it), not through SDL,
+  // whose drivers for them fight Steam.
+  if (source == 0 && wantController && PortSteamTriton::Motion(gyro, accel)) {
+    source = kSteamTritonSource;
+    haveAccel = true;
+    sGyroStatus = "controller (behind Steam Input, read directly)";
   }
 
   if (source == 0 && wantPhone) {
@@ -426,6 +435,15 @@ void PollGyro() {
   float pitch = 0.f;
   if (!ReadGyroRates(pitch, yaw, dt)) {
     sGyroStatus = "no gyro found";
+    // A controller behind Steam Input that is open but gives no motion says why.
+    if (sInput.gyroSource == 0 || sInput.gyroSource == 1) {
+      const PortSteamTriton::Stats sc = PortSteamTriton::GetStats();
+      if (sc.open && sc.notPlayerOne) {
+        sGyroStatus = "no gyro found (the controller behind Steam Input is not Player 1's)";
+      } else if (sc.open && sc.imuOff) {
+        sGyroStatus = "motion sensor behind Steam Input off (turning it on)";
+      }
+    }
     sSpringFlickArmed = true;
     return;
   }

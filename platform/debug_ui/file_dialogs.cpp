@@ -19,6 +19,7 @@
 #include "port_remastered_text.h"
 #include "port_discord.h"
 #include "port_savestate.h"
+#include "port_utf8_path.h"
 
 #include <aurora/imgui.h>
 #include <imgui_internal.h>
@@ -136,18 +137,18 @@ std::string CardList() {
   if (folder.empty()) {
     return "The memory card is not a GCI folder.";
   }
-  std::string text = "card: " + PortGci::PathString(folder);
+  std::string text = "card: " + PortUtf8::ToUtf8(folder);
   for (const std::filesystem::path& file : PortGci::GameFiles(folder)) {
     std::error_code ec;
-    text += "\n  " + PortGci::PathString(file.filename()) + " (" +
+    text += "\n  " + PortUtf8::ToUtf8(file.filename()) + " (" +
             std::to_string(std::filesystem::file_size(file, ec)) + " bytes)";
   }
   const PortGci::DolphinCard dolphin = PortGci::FindDolphinCard();
   if (!dolphin.gciFolder.empty()) {
-    text += "\ndolphin folder: " + PortGci::PathString(dolphin.gciFolder);
+    text += "\ndolphin folder: " + PortUtf8::ToUtf8(dolphin.gciFolder);
   }
   if (!dolphin.rawImage.empty()) {
-    text += "\ndolphin raw: " + PortGci::PathString(dolphin.rawImage);
+    text += "\ndolphin raw: " + PortUtf8::ToUtf8(dolphin.rawImage);
   }
   return text;
 }
@@ -159,8 +160,8 @@ std::string CardImport(const std::string& path) {
     return refusal;
   }
   std::error_code ec;
-  if (std::filesystem::is_directory(PortGci::PathFromString(path), ec)) {
-    return FinishCardImport(PortGci::ImportFolder(PortGci::PathFromString(path), folder));
+  if (std::filesystem::is_directory(PortUtf8::FromUtf8(path), ec)) {
+    return FinishCardImport(PortGci::ImportFolder(PortUtf8::FromUtf8(path), folder));
   }
   // SDL reads content:// URIs from the Android picker as well as paths.
   size_t size = 0;
@@ -185,7 +186,7 @@ std::string CardExport(const std::string& dest, const std::string& format) {
   if (to == PortGci::ExportFormat::Unknown) {
     return "Unknown export format " + format + kCardExportUsage;
   }
-  const std::filesystem::path target = PortGci::PathFromString(dest);
+  const std::filesystem::path target = PortUtf8::FromUtf8(dest);
   if (to == PortGci::ExportFormat::WiiSave) {
     return PortGci::ExportTrilogy(folder, target).Summary("Exported");
   }
@@ -230,7 +231,7 @@ std::string CardImportDolphin() {
                                        ? PortGci::ImportFolder(source, folder)
                                        : PortGci::ImportFile(source, folder, folder.parent_path());
     if (report.copied > 0 || !report.errors.empty()) {
-      return "From " + PortGci::PathString(source) + ": " + FinishCardImport(report);
+      return "From " + PortUtf8::ToUtf8(source) + ": " + FinishCardImport(report);
     }
   }
   return "The emulator's memory card holds no Metroid Prime saves.";
@@ -252,7 +253,7 @@ std::string CardExportDolphin(const std::string& format) {
       return "No Trilogy save in Dolphin or PrimeHack (Wii/title/00010000/52334d45 or 52334d50/data/save.bin in "
              "its user folder); start Metroid Prime Trilogy there once to create it.";
     }
-    return "To " + PortGci::PathString(bin) + ": " + PortGci::ExportTrilogy(folder, bin).Summary("Exported");
+    return "To " + PortUtf8::ToUtf8(bin) + ": " + PortGci::ExportTrilogy(folder, bin).Summary("Exported");
   }
   const char* region = PortGci::CardRegionOf(to);
   const PortGci::DolphinCard dolphin = PortGci::FindDolphinCard(region);
@@ -267,12 +268,12 @@ std::string CardExportDolphin(const std::string& format) {
     return "The port already uses the emulator's card (sharing is on); nothing to export.";
   }
   if (!dolphin.gciFolder.empty()) {
-    text = "To " + PortGci::PathString(dolphin.gciFolder) + ": " +
+    text = "To " + PortUtf8::ToUtf8(dolphin.gciFolder) + ": " +
            PortGci::ExportFolder(folder, dolphin.gciFolder, to).Summary("Exported");
   }
   if (!dolphin.rawImage.empty()) {
     text += std::string(text.empty() ? "" : "\n") + "To " +
-            PortGci::PathString(dolphin.rawImage) + ": " +
+            PortUtf8::ToUtf8(dolphin.rawImage) + ": " +
             PortGci::ExportRaw(folder, dolphin.rawImage, to).Summary("Exported");
   }
   return text;
@@ -402,14 +403,14 @@ std::string CardQueueExport(const std::filesystem::path& folder, const std::stri
       std::vector<uint8_t> bytes = port::ReadAll(in);
       if (!in && !in.eof()) {
         sCardExportQueue.clear();
-        return "Could not read " + PortGci::PathString(file.filename()) + ".";
+        return "Could not read " + PortUtf8::ToUtf8(file.filename()) + ".";
       }
       // Named by the format's game code (a Trilogy disc's keep R3ME/R3MP).
       PortGci::Header header;
       std::string error;
       if (!PortGci::ParseHeader(bytes.data(), bytes.size(), header, error)) {
         sCardExportQueue.clear();
-        return "Could not read " + PortGci::PathString(file.filename()) + ": " + error;
+        return "Could not read " + PortUtf8::ToUtf8(file.filename()) + ": " + error;
       }
       std::memcpy(bytes.data(), PortGci::GameCodeOf(to), 4);
       header.game = PortGci::GameCodeOf(to);
@@ -531,7 +532,7 @@ void DrawEmulatorCard() {
     const PortGci::DolphinCard card = PortGci::FindDolphinCard();
     if (card.Found()) {
       // <root>/GC/<region>/Card A or <root>/GC/MemoryCardA.<region>.raw.
-      found = PortGci::PathString(card.gciFolder.empty()
+      found = PortUtf8::ToUtf8(card.gciFolder.empty()
                                       ? card.rawImage.parent_path().parent_path()
                                       : card.gciFolder.parent_path().parent_path().parent_path());
     }
@@ -559,13 +560,13 @@ void DrawEmulatorCard() {
   const std::vector<std::filesystem::path> detected = PortGci::DetectedEmulatorFolders();
   if (!detected.empty()) {
     auto label = [](const std::filesystem::path& root) {
-      const std::string path = PortGci::PathString(root);
+      const std::string path = PortUtf8::ToUtf8(root);
       return (path.find("primehack") != std::string::npos ? "PrimeHack: " : "Dolphin: ") + path;
     };
     const std::string preview = chosen.empty() ? "Auto" : chosen;
     if (ImGui::BeginCombo("Installed emulators", preview.c_str())) {
       for (const std::filesystem::path& root : detected) {
-        const std::string path = PortGci::PathString(root);
+        const std::string path = PortUtf8::ToUtf8(root);
         if (ImGui::Selectable(label(root).c_str(), path == chosen)) {
           PortGci::SetEmulatorFolder(path);
           MarkDirty();
@@ -603,7 +604,7 @@ void DrawEmulatorCard() {
   ImGui::BeginDisabled(inGame || sCardDialogOpen);
   if (ImGui::Button("Copy port saves into shared card")) {
     const std::filesystem::path own =
-        PortGci::PathFromString(PortPaths::CardFolder()) / PortGci::CardRegion() / "Card A";
+        PortUtf8::FromUtf8(PortPaths::CardFolder()) / PortGci::CardRegion() / "Card A";
     std::error_code same;
     if (std::filesystem::equivalent(own, base / PortGci::CardRegion() / "Card A", same)) {
       sCardStatus = "The port's own card is the shared one.";
@@ -633,7 +634,7 @@ void DrawMemoryCard() {
     return;
   }
   const size_t saves = PortGci::GameFiles(folder).size();
-  ImGui::TextWrapped("Card: %s (%zu save file%s)", PortGci::PathString(folder).c_str(), saves,
+  ImGui::TextWrapped("Card: %s (%zu save file%s)", PortUtf8::ToUtf8(folder).c_str(), saves,
                      saves == 1 ? "" : "s");
   const bool inGame = sStateManager != nullptr;
   const bool busy = sCardDialogOpen;
@@ -721,7 +722,7 @@ void DrawMemoryCard() {
   ImGui::SameLine();
   if (ImGui::Button("Open card folder")) {
     // "Card A" has a space, which a URL can't carry as is.
-    const std::string path = PortGci::PathString(folder);
+    const std::string path = PortUtf8::ToUtf8(folder);
     std::string url = path.front() == '/' ? "file://" : "file:///"; // C:\ on Windows
     for (const char c : path) {
       url += c == ' ' ? std::string("%20") : std::string(1, c == '\\' ? '/' : c);

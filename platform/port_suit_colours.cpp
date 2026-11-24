@@ -160,7 +160,7 @@ struct Analysis {
   std::vector<uint8_t> hard;     // the slot came from a whole island
 };
 
-Analysis Analyse(const PortRemastered::Image& image, int suit, const std::vector<int>* transfer) {
+Analysis Analyse(const PortRemastered::Image& image, int suit, const std::vector<int>* transfer, bool islands) {
   const Suit& info = kSuits[suit];
   const int n = HueSlots(info);
   Analysis a;
@@ -225,7 +225,7 @@ Analysis Analyse(const PortRemastered::Image& image, int suit, const std::vector
   // mostly one slot (or small) is that slot, near enough in hue.
   std::vector<int> island(count, -1);
   std::vector<size_t> stack;
-  for (size_t start = 0; start < count; ++start) {
+  for (size_t start = 0; islands && start < count; ++start) {
     if (!in[start] || a.hsv[start].v < kSeamValue || island[start] >= 0) {
       continue;
     }
@@ -412,7 +412,7 @@ bool Pending(bool wanted) {
 }
 
 size_t Recolour(PortRemastered::Image& image, int suit, const Picks& picks, const PortRemastered::Image* transfer,
-                int transferSuit) {
+                int transferSuit, bool islands) {
   if (suit < 0 || suit >= kSuitCount || image.width <= 0 || image.height <= 0 ||
       image.rgba.size() != size_t(image.width) * size_t(image.height) * 4) {
     return 0;
@@ -421,9 +421,9 @@ size_t Recolour(PortRemastered::Image& image, int suit, const Picks& picks, cons
   std::vector<int> transferSlots;
   if (transfer != nullptr && transfer->width == image.width && transfer->height == image.height &&
       transfer->rgba.size() == image.rgba.size() && transferSuit >= 0 && transferSuit < kSuitCount) {
-    transferSlots = Analyse(*transfer, transferSuit, nullptr).slot;
+    transferSlots = Analyse(*transfer, transferSuit, nullptr, true).slot;
   }
-  const Analysis a = Analyse(image, suit, transferSlots.empty() ? nullptr : &transferSlots);
+  const Analysis a = Analyse(image, suit, transferSlots.empty() ? nullptr : &transferSlots, islands);
   const int n = HueSlots(info);
   const int base = info.base ? info.slots - 1 : -1;
   const size_t count = a.hsv.size();

@@ -243,7 +243,7 @@ size and contents, then write a replacement with the same stem into the device f
 
 `tools/make_prompt_glyphs.py <dir>` writes one icon per input that can be bound (every key,
 mouse button, and pad button, stick and D-pad, whole and per direction) into `<dir>/bindings/`,
-compositing the CC0 icons vendored in `tools/prompt_icons/` (Kenney's Input Prompts pack). The
+compositing the CC0 icons vendored in `tools/prompt_icons/` (Kenney's Input Prompts pack; the Steam Deck set is Xelu's). The
 names are the port's stems for the inputs, not the game's texture names, so the same set serves
 every screen. The build copies `textures/` next to the executable (or embeds it), so a built
 binary picks the replacements up without a manual copy. Three details matter:

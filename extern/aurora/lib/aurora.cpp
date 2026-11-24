@@ -809,6 +809,7 @@ bool aurora_is_suspended() {
   return aurora::window::is_backgrounded() || !aurora::window::is_surface_ready() ||
          aurora::window::is_surface_changing();
 }
+uint64_t aurora_joystick_update_ns() { return aurora::window::joystick_update_ns(); }
 void aurora_end_frame() { aurora::end_frame(AURORA_STEREO_CONTENT_TAG_UNKNOWN); }
 void aurora_end_frame_tagged(uint64_t contentTag) { aurora::end_frame(contentTag); }
 void aurora_end_frame_ex(uint64_t contentTag, void* imguiFrame) {

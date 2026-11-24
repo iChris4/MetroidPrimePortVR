@@ -33,6 +33,7 @@
 #include "port_photo.h"
 #include "port_pointer_menu.h"
 #include "port_skip_cutscenes.h"
+#include "port_text.h"
 #include <math.h>
 #endif
 
@@ -215,6 +216,7 @@ enum EPortOption {
   kPO_GunFollowsFov,
   kPO_GunFov,
   kPO_ScanShoot,
+  kPO_BallFollowsFov,
 };
 #define PORT_OPTION(opt) static_cast< EGameOption >(opt)
 
@@ -251,6 +253,7 @@ static const SGameOption skPortDisplayOptions[] = {
     {PORT_OPTION(kPO_WidescreenHUD), -1, 0.f, 1.f, 1.f, kOT_DoubleEnum},
     {PORT_OPTION(kPO_HudScale), -1, PortDebug::kHudScaleMin, PortDebug::kHudScaleMax, 5.f, kOT_Float},
     {PORT_OPTION(kPO_Fov), -1, PortDebug::kFovMin, PortDebug::kFovMax, 1.f, kOT_Float},
+    {PORT_OPTION(kPO_BallFollowsFov), -1, 0.f, 1.f, 1.f, kOT_DoubleEnum},
     {PORT_OPTION(kPO_GunFollowsFov), -1, 0.f, 1.f, 1.f, kOT_DoubleEnum},
     {PORT_OPTION(kPO_GunFov), -1, PortDebug::kFovMin, PortDebug::kFovMax, 1.f, kOT_Float},
     {PORT_OPTION(kPO_AntiAliasing), -1, 0.f, 1.f, 1.f, kOT_DoubleEnum},
@@ -311,61 +314,63 @@ static bool IsPortOption(EGameOption option) { return option > kGO_RestoreDefaul
 static const wchar_t* PortOptionTitle(EGameOption option) {
   switch (static_cast< int >(option)) {
   case kPO_AspectRatio:
-    return L"Aspect Ratio";
+    return PortText::Get(PortText::kOptAspectRatio);
   case kPO_WidescreenHUD:
-    return L"Widescreen HUD";
+    return PortText::Get(PortText::kOptWidescreenHud);
   case kPO_TwinStick:
-    return L"Twin Stick Aim";
+    return PortText::Get(PortText::kOptTwinStick);
   case kPO_AimSpeed:
-    return L"Stick Aim Speed";
+    return PortText::Get(PortText::kOptAimSpeed);
   case kPO_FastMorph:
-    return L"Fast Morph";
+    return PortText::Get(PortText::kOptFastMorph);
   case kPO_LockOnToggle:
-    return L"Toggle Lock-On";
+    return PortText::Get(PortText::kOptLockOnToggle);
   case kPO_GrappleShoot:
-    return L"Shoot While Grappling";
+    return PortText::Get(PortText::kOptGrappleShoot);
   case kPO_ScanShoot:
-    return L"Shoot in Scan Visor";
+    return PortText::Get(PortText::kOptScanShoot);
   case kPO_GrappleToggle:
-    return L"Toggle Grapple";
+    return PortText::Get(PortText::kOptGrappleToggle);
   case kPO_SpiderToggle:
-    return L"Toggle Spider Ball";
+    return PortText::Get(PortText::kOptSpiderToggle);
   case kPO_AimLockOn:
-    return L"Aim Lock-On";
+    return PortText::Get(PortText::kOptAimLockOn);
   case kPO_StickyCharge:
-    return L"Sticky Charge";
+    return PortText::Get(PortText::kOptStickyCharge);
   case kPO_RapidCharge:
-    return L"Remastered Charge";
+    return PortText::Get(PortText::kOptRapidCharge);
   case kPO_Fov:
-    return L"Field of View";
+    return PortText::Get(PortText::kOptFov);
+  case kPO_BallFollowsFov:
+    return PortText::Get(PortText::kOptBallFollowsFov);
   case kPO_GunFollowsFov:
-    return L"Arm Cannon Follows FOV";
+    return PortText::Get(PortText::kOptGunFollowsFov);
   case kPO_GunFov:
-    return L"Arm Cannon FOV";
+    return PortText::Get(PortText::kOptGunFov);
   case kPO_AntiAliasing:
-    return L"Anti-Aliasing";
+    return PortText::Get(PortText::kOptAntiAliasing);
   case kPO_HudScale:
-    return L"HUD Scale";
+    return PortText::Get(PortText::kOptHudScale);
   case kPO_HideHelmet:
-    return L"Hide Helmet";
+    return PortText::Get(PortText::kOptHideHelmet);
   case kPO_HideVisorEffects:
-    return L"Hide Visor Effects";
+    return PortText::Get(PortText::kOptHideVisorEffects);
   case kPO_SpeedrunTimer:
-    return L"In-Game Timer";
+    return PortText::Get(PortText::kOptSpeedrunTimer);
   case kPO_RevealMap:
-    return L"Reveal Map";
+    return PortText::Get(PortText::kOptRevealMap);
   case kPO_MapPickups:
-    return L"Pickup Dots";
+    return PortText::Get(PortText::kOptMapPickups);
   case kPO_CrosshairSize:
-    return L"Crosshair Size";
+    return PortText::Get(PortText::kOptCrosshairSize);
   case kPO_SkippableCutscenes:
-    return L"Skippable Cutscenes";
+    return PortText::Get(PortText::kOptSkippableCutscenes);
   case kPO_ElevatorRide:
-    return L"Elevator Ride";
+    return PortText::Get(PortText::kOptElevatorRide);
   case kPO_OriginalExperience:
-    return L"Original Experience";
+    return PortText::Get(PortText::kOptOriginalExperience);
   case kPO_PhotoMode:
-    return L"Photo Mode";
+    return PortText::Get(PortText::kOptPhotoMode);
   default:
     return L"";
   }
@@ -401,6 +406,8 @@ static int GetPortOption(EGameOption option) {
     return PortDebug::RapidCharge() ? 1 : 0;
   case kPO_Fov:
     return static_cast< int >(PortDebug::FirstPersonFov() + 0.5f);
+  case kPO_BallFollowsFov:
+    return PortDebug::BallFollowsFov() ? 1 : 0;
   case kPO_GunFollowsFov:
     return PortDebug::GunFollowsFov() ? 1 : 0;
   case kPO_GunFov:
@@ -461,6 +468,7 @@ static bool IsOriginalLocked(EGameOption option) {
   case kPO_StickyCharge:
   case kPO_RapidCharge:
   case kPO_Fov:
+  case kPO_BallFollowsFov:
   case kPO_GunFollowsFov:
   case kPO_GunFov:
   case kPO_AntiAliasing:
@@ -524,6 +532,9 @@ static void SetPortOption(EGameOption option, int value) {
     break;
   case kPO_Fov:
     PortDebug::SetFirstPersonFov(static_cast< float >(value));
+    break;
+  case kPO_BallFollowsFov:
+    PortDebug::SetBallFollowsFov(value > 0);
     break;
   case kPO_GunFollowsFov:
     PortDebug::SetGunFollowsFov(value > 0);
@@ -748,6 +759,7 @@ void CGameOptions::TryRestoreDefaults(const CFinalInput& input, int category, in
         PortDebug::SetAspectMode(PortDebug::kAspect_4_3);
         PortDebug::SetHudWide(false);
         PortDebug::SetFirstPersonFov(PortDebug::kFovRetail);
+        PortDebug::SetBallFollowsFov(true);
         PortDebug::SetGunFollowsFov(false);
         PortDebug::SetGunFov(PortDebug::kFovRetail);
         PortDebug::SetMsaa(1);
@@ -1065,19 +1077,19 @@ void COptionsScreen::UpdateOptionView() {
 #ifdef TARGET_PC
     // The triple labels are the sound modes' (strings 96-98) except on port rows.
     for (int i = 0; i < 3; ++i) {
-      static const wchar_t* const kAspectLabels[] = {L"4:3", L"16:9", L"Window"};
       CGuiTextPane* label =
           static_cast< CGuiTextPane* >(x194_tablegroup_triple->GetWorkerWidget(i));
-      static const wchar_t* const kElevatorLabels[] = {L"Original", L"Fast", L"Skip"};
-      static const wchar_t* const kPickupLabels[] = {L"Off", L"Seen", L"All"};
       if (opt.option == PORT_OPTION(kPO_AspectRatio)) {
-        label->TextSupport().SetText(rstl::wstring_l(kAspectLabels[i]));
+        label->TextSupport().SetText(
+            rstl::wstring_l(PortText::Get(PortText::Id(PortText::kAspect4x3 + i))));
       } else if (opt.option == PORT_OPTION(kPO_ElevatorRide)) {
-        label->TextSupport().SetText(rstl::wstring_l(kElevatorLabels[i]));
+        label->TextSupport().SetText(
+            rstl::wstring_l(PortText::Get(PortText::Id(PortText::kElevatorOriginal + i))));
       } else if (opt.option == PORT_OPTION(kPO_MapPickups)) {
-        label->TextSupport().SetText(rstl::wstring_l(
-            i == 2 && PortDebug::MapPickups() == PortDebug::kMapPickups_Rooms ? L"Rooms"
-                                                                              : kPickupLabels[i]));
+        label->TextSupport().SetText(rstl::wstring_l(PortText::Get(
+            i == 2 && PortDebug::MapPickups() == PortDebug::kMapPickups_Rooms
+                ? PortText::kPickupsRooms
+                : PortText::Id(PortText::kPickupsOff + i))));
       } else {
         label->TextSupport().SetText(rstl::wstring_l(xc_pauseStrg.GetString(96 + i)));
       }

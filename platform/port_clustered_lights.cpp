@@ -31,8 +31,6 @@ bool Outside(const Plane& p, const float c[3], float r) {
   return p.nx * c[0] + p.ny * c[1] + p.nz * c[2] + p.d > r;
 }
 
-float Dot3(const float a[3], const float b[3]) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
-
 bool FiniteLight(const RawLight& l) {
   if (!std::isfinite(l.radius)) {
     return false;
@@ -399,7 +397,5 @@ const Frame& Update(const Camera& camera, uint32_t width, uint32_t height, const
 }
 
 const Frame& Current() { return Cached().frame; }
-
-void ResetCache() { Cached() = Cache{}; }
 
 } // namespace PortClusteredLights

@@ -357,6 +357,8 @@ This port would not exist without the work of these projects. Thank you.
   calibration and aiming spaces.
 - [Kenney Input Prompts](https://kenney.nl/assets/input-prompts) (CC0): the
   controller button icons.
+- [Xelu's Free Controllers & Keyboard Prompts](https://thoseawesomeguys.com/prompts/) (CC0): the
+  Steam Deck button icons.
 - [Dolphin](https://dolphin-emu.org): the texture pack and save formats the port reads and writes.
 
 **Libraries**

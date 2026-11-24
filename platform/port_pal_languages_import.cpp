@@ -7,6 +7,7 @@
 #include "port_flaahgra_music.h"
 #include "port_gci.h"
 #include "port_paths.h"
+#include "port_utf8_path.h"
 
 #include <aurora/dvd.h>
 
@@ -32,7 +33,7 @@ constexpr uint32_t kSTRG = 0x53545247;  // 'STRG'
 constexpr uint32_t kFONT = 0x464F4E54;  // 'FONT'
 constexpr uint32_t kTXTR = 0x54585452;  // 'TXTR'
 
-fs::path Folder() { return PortGci::PathFromString(PortPaths::UserFolder()) / "languages"; }
+fs::path Folder() { return PortUtf8::FromUtf8(PortPaths::UserFolder()) / "languages"; }
 
 void SetMessage(const std::string& message) {
   std::lock_guard lock(sMutex);
@@ -43,7 +44,7 @@ int CountTables() {
   int count = 0;
   std::error_code ec;
   for (fs::directory_iterator it(Folder(), ec), end; !ec && it != end; it.increment(ec)) {
-    const std::string name = PortGci::PathString(it->path().filename());
+    const std::string name = PortUtf8::ToUtf8(it->path().filename());
     count += name.size() == 13 && name.compare(8, 5, ".lang") == 0;
   }
   return count;
@@ -166,14 +167,14 @@ int Import(const std::string& path, std::string& error) {
   fs::remove_all(staging, ec);
   fs::create_directories(staging, ec);
   if (ec) {
-    error = "Could not create " + PortGci::PathString(staging) + ".";
+    error = "Could not create " + PortUtf8::ToUtf8(staging) + ".";
     return -1;
   }
   const auto write = [&](const char* name, const std::vector<uint8_t>& data) {
     std::ofstream out(staging / name, std::ios::binary);
     out.write(reinterpret_cast<const char*>(data.data()), std::streamsize(data.size()));
     if (!out) {
-      error = "Could not write " + PortGci::PathString(staging / name) + ".";
+      error = "Could not write " + PortUtf8::ToUtf8(staging / name) + ".";
       fs::remove_all(staging, ec);
       return false;
     }
@@ -203,7 +204,7 @@ int Import(const std::string& path, std::string& error) {
   fs::remove_all(folder, ec);
   fs::rename(staging, folder, ec);
   if (ec) {
-    error = "Could not move the tables into " + PortGci::PathString(folder) + ".";
+    error = "Could not move the tables into " + PortUtf8::ToUtf8(folder) + ".";
     return -1;
   }
   return written;
@@ -311,7 +312,7 @@ int RunFromCommandLine(const std::string& path) {
     std::fprintf(stderr, "%s\n", error.c_str());
     return 1;
   }
-  std::printf("Added the PAL disc's languages: %d text tables in %s\n", tables, PortGci::PathString(Folder()).c_str());
+  std::printf("Added the PAL disc's languages: %d text tables in %s\n", tables, PortUtf8::ToUtf8(Folder()).c_str());
   std::printf("%s\n", AddFlaahgraTheme(path).c_str());
   return 0;
 }

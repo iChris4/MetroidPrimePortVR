@@ -283,7 +283,8 @@ inline constexpr int kModels = 37;
 // 228: a model Remastered keeps under a carried-over id converts as the effect's own (drain debris).
 // 229: Remastered decals (DPSM) written over their paired DPSCs, with their material (shader, blend,
 //      texture wrap, parameter defaults), SMTR and TMTR.
-inline constexpr int kEffects = 229;
+// 230: an inactive primitive (0, 4, 5, or 3 without PMDL) drops its GRTE: it makes no particles.
+inline constexpr int kEffects = 230;
 // 20: two rooms matching one area write only the closer match's files, not the later room's.
 // 21: roomenv version 22, the world master's hints driven by its camera volumes (the table in every roomenv).
 // 22: a master's InventoryActivator fired by the camera going under water drives its hints (kSenderCameraWaterItem).
@@ -354,7 +355,9 @@ inline constexpr int kEffects = 229;
 // too (1131 placements of 24 models drew the retail model; 21 placements of 2 models still do).
 // 88: the stage record keeps each retail placement's animated flag (a reused rooms stage lost it,
 // and the retail models stage converted animation sets' models).
-inline constexpr int kRooms = 88;
+// 89: script objects sharing a place pair by the retail layer the place's lone matches put
+// their Remastered layer on (Hive Totem's normal and poison Water were swapped).
+inline constexpr int kRooms = 89;
 inline constexpr int kRoomModels = 1;  // the rooms' own models and their levels of detail
 // kText: port_remastered_text, and the font (port_remastered_font).
 // 2: text/.disc, the disc the tables were merged from (kTextDiscName).
@@ -363,7 +366,7 @@ inline constexpr int kText = 2;
 // 10: shell.bin, the silhouette-shell textures (port_shell_file.h).
 // 18: hud/.disc, the disc the frames were rebuilt from (kHudDiscName).
 // 19: icy.bin, the frozen-enemy material (port_icy_file.h).
-inline constexpr int kHud = 20;        // port_remastered_hud, port_remastered_map, envfx.bin, shell.bin, icy.bin
+inline constexpr int kHud = 23;        // port_remastered_hud, port_remastered_map, envfx.bin, shell.bin, icy.bin
 inline constexpr int kMovies = 0;      // port_remastered_movie
 inline constexpr int kGallery = 0;     // the gallery pictures (port_gallery)
 }  // namespace ImportStage

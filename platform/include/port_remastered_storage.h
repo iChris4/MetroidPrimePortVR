@@ -42,6 +42,8 @@
 #include <utility>
 #include <vector>
 
+#include "port_utf8_path.h"
+
 namespace PortRemasteredStorage {
 
 // --- Names ------------------------------------------------------------------
@@ -128,15 +130,6 @@ inline bool RejectObsoleteBarrierModel(bool builtin, uint32_t type, uint32_t id)
   return builtin && type == 0x434D444C && id == 0x6556EEC5;
 }
 
-inline std::filesystem::path PathFromUtf8(const std::string& text) {
-  return std::filesystem::path(std::u8string(text.begin(), text.end()));
-}
-
-inline std::string PathToUtf8(const std::filesystem::path& path) {
-  const std::u8string text = path.u8string();
-  return std::string(text.begin(), text.end());
-}
-
 // The last part of a path, with any trailing separators ignored.
 inline std::string FileName(const std::string& path) {
   size_t end = path.size();
@@ -191,18 +184,18 @@ inline std::vector<ModFolder> ScanFolders(const std::string& sharedFolder, const
   std::vector<ModFolder> shared;
   std::error_code ec;
   if (!sharedFolder.empty()) {
-    const std::filesystem::path base = PathFromUtf8(sharedFolder);
+    const std::filesystem::path base = PortUtf8::FromUtf8(sharedFolder);
     std::filesystem::directory_iterator it(base, ec), end;
     for (; !ec && it != end; it.increment(ec)) {
       std::error_code entryEc;
       if (!it->is_directory(entryEc)) {
         continue;
       }
-      const std::string name = PathToUtf8(it->path().filename());
+      const std::string name = PortUtf8::ToUtf8(it->path().filename());
       if (!IsModFolderName(name)) {
         continue;
       }
-      shared.push_back(ModFolder{name, PathToUtf8(it->path()), false});
+      shared.push_back(ModFolder{name, PortUtf8::ToUtf8(it->path()), false});
     }
   }
   return OrderMods(std::move(shared), builtinPath);

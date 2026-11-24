@@ -150,7 +150,6 @@ void Build(const Camera& camera, uint32_t width, uint32_t height, const RawLight
 // of a few hundred bytes).
 const Frame& Update(const Camera& camera, uint32_t width, uint32_t height, const RawLight* lights, int count);
 const Frame& Current();
-void ResetCache();
 
 // Gaps, as the CPU side cannot close them (report §5, §6):
 // - depthOrigin is *(CCameraSceneNode+0x64), unverified and 0 in the port.

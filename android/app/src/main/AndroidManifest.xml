@@ -34,6 +34,13 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- Another app (an Archipelago companion) hands over a room: extras
+                 org.metroidprime.port.extra.SERVER, .SLOT and .PASSWORD
+                 (docs/ARCHIPELAGO.md). -->
+            <intent-filter>
+                <action android:name="org.metroidprime.port.action.ARCHIPELAGO_CONNECT" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
         </activity>
         <!-- Restarts the game after a data folder move; its own process so it
              outlives the one it ends. -->

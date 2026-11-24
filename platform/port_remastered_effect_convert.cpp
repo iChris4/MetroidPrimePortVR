@@ -5644,6 +5644,13 @@ public:
       // Only inactive primitives clear it; do not substitute SIZE=0 to hide draws.
       return true;
     }
+    if (s.inactivePrimitive && fourcc == F("GRTE")) {
+      // An inactive primitive makes no particles: SetupPrimitiveTypes 0x29069c sets the
+      // no-particles bit (SParticle+0x1c bit 2) and Compile 0x290e4c then clears the emitter.
+      // Without a GRTE the port emits nothing, so nothing counts as a live particle (the Chozo
+      // Ghost visor effect's root kept its blue tint up for the billboard's 30 s).
+      return true;
+    }
     // DFOG 1 sets the description's no-fog bit (CreateGPSM 0x25a560, CreateSWSH 0x2dce88: desc+0x6b
     // bit 3), which the static render state carries as 0x8000 (ctor 0x28bfc4) and which keeps
     // RenderSpriteEntries/RenderSwooshEntries from injecting the fog block, whatever the blend.

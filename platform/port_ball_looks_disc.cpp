@@ -12,6 +12,7 @@
 #include "port_paths.h"
 #include "port_strings.h"
 #include "port_custom_res.h"
+#include "port_utf8_path.h"
 
 #include <cstdio>
 #include <filesystem>
@@ -223,7 +224,7 @@ std::vector<PortMods::LooseResource> Collect(Look look) {
   if (user.empty()) {
     return {};
   }
-  const fs::path dir = PortPaths::detail::FromUtf8(user) / "generated" / Folder(look);
+  const fs::path dir = PortUtf8::FromUtf8(user) / "generated" / Folder(look);
   const std::string stamp = std::string(Folder(look)) + " " + std::to_string(kVersion) + " " +
                             PortDisc::Name(PortDisc::Current()) + "\n";
   std::error_code ec;
@@ -235,7 +236,7 @@ std::vector<PortMods::LooseResource> Collect(Look look) {
       if (ec || size == 0) {
         return std::vector<PortMods::LooseResource>{};
       }
-      found.push_back({type, id, PortPaths::detail::ToUtf8(file), size, "generated"});
+      found.push_back({type, id, PortUtf8::ToUtf8(file), size, "generated"});
     }
     return found;
   };
@@ -244,7 +245,7 @@ std::vector<PortMods::LooseResource> Collect(Look look) {
     if (in.is_open() && port::ReadAllText(in) == stamp) {
       std::vector<PortMods::LooseResource> found = cached();
       if (!found.empty()) {
-        PortLog::Write("%s: from the cache in %s\n", Name(look), PortPaths::detail::ToUtf8(dir).c_str());
+        PortLog::Write("%s: from the cache in %s\n", Name(look), PortUtf8::ToUtf8(dir).c_str());
         return found;
       }
     }
@@ -268,13 +269,13 @@ std::vector<PortMods::LooseResource> Collect(Look look) {
       out.close();
       if (!out) {
         fs::remove(temporary, ec);
-        return Fail(look, "cannot write " + PortPaths::detail::ToUtf8(file));
+        return Fail(look, "cannot write " + PortUtf8::ToUtf8(file));
       }
     }
     fs::rename(temporary, file, ec);
     if (ec) {
       fs::remove(temporary, ec);
-      return Fail(look, "cannot write " + PortPaths::detail::ToUtf8(file));
+      return Fail(look, "cannot write " + PortUtf8::ToUtf8(file));
     }
     return true;
   };
@@ -287,7 +288,7 @@ std::vector<PortMods::LooseResource> Collect(Look look) {
   if (!put(kStampName, stamp.data(), stamp.size())) {
     return {};
   }
-  PortLog::Write("%s: made in %s\n", Name(look), PortPaths::detail::ToUtf8(dir).c_str());
+  PortLog::Write("%s: made in %s\n", Name(look), PortUtf8::ToUtf8(dir).c_str());
   return cached();
 }
 

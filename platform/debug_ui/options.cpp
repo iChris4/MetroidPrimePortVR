@@ -85,6 +85,11 @@ float sTickPeriod = 1.f / 60.f;
 uint64_t sTimingWallNs = 0;
 uint64_t sTimingWallLastNs = 0;
 unsigned sTimingFrames = 0, sTimingTicks = 0;
+// Every iteration of the window, presented or not, its slowest and how many overran
+// a 60 Hz period; published as sFrameWork.
+int sWorkIterations = 0, sWorkSlow = 0;
+uint64_t sWorkMaxNs = 0;
+FrameWorkStats sFrameWork;
 bool sDynActive = false;
 // GPU pass times (Aurora's gpu_prof) are wanted by dynamic resolution and by the
 // Remastered debug panel. Switching them on restarts their average, so only a change
@@ -304,6 +309,19 @@ void RecordFrame(uint64_t durationNs, unsigned ticks, bool presented) {
   sTimingTicks += ticks;
   ++sTimingLoops;
   if (presented) ++sTimingFrames;
+  {
+    // MP_SLOW_FRAME_MS=<ms>: log every iteration whose work took longer, to tie a
+    // hitch to what happened then (logcat on Android).
+    static const int sSlowLogMs = port::EnvInt("MP_SLOW_FRAME_MS", 0);
+    constexpr uint64_t kPeriodNs = 16666667ull;
+    ++sWorkIterations;
+    sWorkMaxNs = std::max(sWorkMaxNs, durationNs);
+    if (durationNs > kPeriodNs) ++sWorkSlow;
+    if (sSlowLogMs > 0 && durationNs > static_cast< uint64_t >(sSlowLogMs) * 1000000ull) {
+      PortLog::Write("[perf] slow frame %.1f ms (%u ticks%s)\n", static_cast< double >(durationNs) / 1e6,
+                     ticks, presented ? "" : ", not presented");
+    }
+  }
   // Wall-clock time for the same span, kept separately from the frame's own
   // duration. Dividing presented frames by the frame's CPU time reports
   // throughput, which is what the process can *produce*; dividing by wall time
@@ -339,11 +357,19 @@ void RecordFrame(uint64_t durationNs, unsigned ticks, bool presented) {
                      sActualFps, sThroughputFps, sActualTps, EffectiveFrameLimit() ? 60 : sFpsCap);
     }
     UpdateDynamicRes(sActualFps, sTimingFrames);
+    sFrameWork.frames = sWorkIterations;
+    sFrameWork.avgMs = sWorkIterations > 0 ? static_cast< float >(sTimingNs) / 1e6f / sWorkIterations : 0.f;
+    sFrameWork.maxMs = static_cast< float >(sWorkMaxNs) / 1e6f;
+    sFrameWork.slow = sWorkSlow;
+    sWorkIterations = sWorkSlow = 0;
+    sWorkMaxNs = 0;
     sTimingNs = 0;
     sTimingWallNs = 0;
     sTimingFrames = sTimingTicks = 0;
   }
 }
+
+FrameWorkStats LastFrameWork() { return sFrameWork; }
 
 void SetFrameLimitEnabled(bool enabled) {
   EnsureInitialized();
@@ -643,6 +669,17 @@ bool CrosshairColor(float rgb[3]) {
   return true;
 }
 
+bool CrosshairTargetColor(float rgb[3]) {
+  EnsureInitialized();
+  if (!sCrosshairTargetCustomColor || sOriginalExperience) {
+    return false;
+  }
+  if (rgb != nullptr) {
+    std::copy_n(sCrosshairTargetColor, 3, rgb);
+  }
+  return true;
+}
+
 bool HideHelmet() {
   EnsureInitialized();
   return (sHideHelmet || PortPhoto::Active() || PortThirdPerson::Active()) && !OriginalOverridesComfort();
@@ -832,6 +869,13 @@ bool GunFollowsFov() {
 }
 
 void SetGunFollowsFov(bool enabled) { StoreSetting(sGunFollowsFov, enabled); }
+
+bool BallFollowsFov() {
+  EnsureInitialized();
+  return sBallFollowsFov && !sOriginalExperience;
+}
+
+void SetBallFollowsFov(bool enabled) { StoreSetting(sBallFollowsFov, enabled); }
 
 float GunFov() {
   EnsureInitialized();
@@ -1171,6 +1215,10 @@ bool FlickStick() {
 
 void SetFlickStick(bool enabled) { StoreSetting(sInput.flickStick, enabled); }
 
+bool PreciseStickDeadZones() { return Loaded(sInput.preciseStickDeadZones); }
+
+void SetPreciseStickDeadZones(bool enabled) { StoreSetting(sInput.preciseStickDeadZones, enabled); }
+
 float FlickOuterDeadZone() { return Loaded(sInput.flickOuterDeadZone) / 100.f; }
 
 void SetTouchFlickStick(bool enabled) { StoreSetting(sInput.touchFlickStick, enabled); }
@@ -1477,6 +1525,8 @@ bool RemasteredMovement() {
 void SetRemasteredMovement(bool enabled) { StoreSetting(sInput.remasteredMovement, enabled); }
 
 void SetSpringBallFlick(bool enabled) { StoreSetting(sInput.springFlick, enabled); }
+
+void SetSteamInputBackButtons(bool enabled) { StoreSetting(sInput.steamInputBackButtons, enabled); }
 
 void SetSpringBallFlickRate(float radiansPerSecond) {
   EnsureInitialized();

@@ -6,6 +6,7 @@
 #include "port_dread_samus_mod.h"
 #include "port_hints.h"
 #include "port_mouse.h"
+#include "port_pipeline_context.h"
 #include "port_freecam.h"
 #ifdef TARGET_PC
 #include "vr/vr_pad.h"
@@ -2916,6 +2917,9 @@ void CPlayer::PreRender(CStateManager& mgr, const CFrustumPlanes& frustum) {
   if (x2f8_morphBallState == kMS_Unmorphed || mgr.GetCameraManager()->IsInCinematicCamera()) {
     x768_morphball->DeleteBallShadow();
   } else {
+#ifdef TARGET_PC
+    CPortPipelineContextScope globalPipelines(AURORA_PIPELINE_CONTEXT_GLOBAL);
+#endif
     x768_morphball->CreateBallShadow();
     x768_morphball->RenderToShadowTex(mgr);
   }
@@ -2965,6 +2969,12 @@ void CPlayer::RenderReflectedPlayer(CStateManager& mgr) {
 }
 
 void CPlayer::Render(const CStateManager& mgr) const {
+#ifdef TARGET_PC
+  // Samus (suit, morph ball, its effects) is drawn in every area, so her pipelines are GLOBAL,
+  // pinned against memory trims, also when she draws from the sorted actor lists (MP2 issue #98:
+  // the trims rebuilt the ball's pipelines on each morph).
+  CPortPipelineContextScope globalPipelines(AURORA_PIPELINE_CONTEXT_GLOBAL);
+#endif
   bool doRender = x2f4_cameraState != kCS_Spawned;
   if (!doRender) {
     if (const CCinematicCamera* cam =

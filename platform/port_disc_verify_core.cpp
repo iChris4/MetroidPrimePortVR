@@ -1,4 +1,5 @@
 #include "port_disc_verify.h"
+#include "port_bytes.h"
 
 #include <zlib.h>
 
@@ -10,10 +11,6 @@ namespace PortDiscVerify {
 
 namespace {
 uint32_t Rotl(uint32_t value, int bits) { return (value << bits) | (value >> (32 - bits)); }
-uint32_t Be32(const uint8_t* p) {
-  return (static_cast<uint32_t>(p[0]) << 24) | (static_cast<uint32_t>(p[1]) << 16) |
-         (static_cast<uint32_t>(p[2]) << 8) | p[3];
-}
 } // namespace
 
 Sha1Stream::Sha1Stream() : mState{0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476, 0xc3d2e1f0}, mBuffer{} {}
@@ -21,7 +18,7 @@ Sha1Stream::Sha1Stream() : mState{0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476
 void Sha1Stream::Block(const uint8_t* block) {
   uint32_t words[80];
   for (size_t i = 0; i < 16; ++i) {
-    words[i] = Be32(block + i * 4);
+    words[i] = port::ReadBE32(block + i * 4);
   }
   for (size_t i = 16; i < 80; ++i) {
     words[i] = Rotl(words[i - 3] ^ words[i - 8] ^ words[i - 14] ^ words[i - 16], 1);
@@ -163,14 +160,14 @@ std::vector<FstFile> ParseFst(const uint8_t* fst, size_t size) {
   if (size < 12 || fst[0] != 1) {
     return files;
   }
-  const uint32_t count = Be32(fst + 8);
+  const uint32_t count = port::ReadBE32(fst + 8);
   if (count == 0 || static_cast<uint64_t>(count) * 12 > size) {
     return files;
   }
   const uint8_t* names = fst + static_cast<size_t>(count) * 12;
   const size_t namesSize = size - static_cast<size_t>(count) * 12;
   auto nameOf = [&](const uint8_t* entry) {
-    const size_t at = Be32(entry) & 0x00ffffff;
+    const size_t at = port::ReadBE32(entry) & 0x00ffffff;
     if (at >= namesSize) {
       return std::string();
     }
@@ -185,9 +182,9 @@ std::vector<FstFile> ParseFst(const uint8_t* fst, size_t size) {
     }
     const std::string path = dirs.back().second + nameOf(entry);
     if (entry[0] != 0) {
-      dirs.emplace_back(Be32(entry + 8), path + "/");
+      dirs.emplace_back(port::ReadBE32(entry + 8), path + "/");
     } else {
-      files.push_back({Be32(entry + 4), Be32(entry + 8), path});
+      files.push_back({port::ReadBE32(entry + 4), port::ReadBE32(entry + 8), path});
     }
   }
   return files;

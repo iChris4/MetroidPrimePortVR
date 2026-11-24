@@ -437,7 +437,9 @@ void CFirstPersonCamera::Reset(const CTransform4f& xf, CStateManager& mgr) {
   SetTransform(xf);
   SetTranslation(mgr.GetPlayer()->GetEyePosition());
   x190_gunFollowXf = GetTransform();
-  if (PortDebug::MouseAim()) {
+  // Any direct aim, not only the mouse: with twin-stick or touch aim a teleport (a spawn point at
+  // the end of a cutscene) otherwise leaves the old aim, which turns Samus back.
+  if (PortDebug::MouseAim() || PortDebug::DirectAim()) {
     const CVector3f forward = x190_gunFollowXf.GetForward();
     PortDebug::SynchronizeMouseAim(forward.GetX(), forward.GetY(), forward.GetZ());
   }

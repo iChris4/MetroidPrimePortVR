@@ -64,6 +64,8 @@ bool get_pipeline(PipelineRef ref, wgpu::RenderPipeline& pipeline);
 
 // Render thread: a draw was dropped because its pipeline wasn't built (aurora_get_pipeline_stats).
 void note_skipped_draw();
+// Draws dropped so far, for a render-thread reader that compares two points of the encode.
+uint64_t skipped_draw_count();
 
 // Draw thread: whether `ref`, returned by an earlier find_pipeline, is still built or queued (a
 // queued background build moves up, as a lookup would). False after drop_pipelines(), so the

@@ -366,6 +366,9 @@ void aurora_release_lost_surface();
 // True while the app is backgrounded or has no surface (Android pause): the main loop
 // may legitimately not run then. Atomics only, so any thread can ask.
 bool aurora_is_suspended();
+// Nanoseconds the last aurora_update spent updating joysticks (device detection
+// included), part of its event pump time.
+uint64_t aurora_joystick_update_ns();
 
 void aurora_set_log_level(AuroraLogLevel level);
 void aurora_set_pause_on_focus_lost(bool value);

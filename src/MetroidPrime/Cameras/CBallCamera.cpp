@@ -2431,8 +2431,17 @@ void CBallCamera::SetState(EBallCameraState state, CStateManager& mgr) {
 #endif
     SetTransform(xf);
     TeleportCamera(xf.GetTranslation(), mgr);
+#ifdef TARGET_PC
+    // The FOV blends over the morph's own duration, as retail's 1 s does, so a Fast Morph's
+    // 0.2 s pull-back doesn't leave the zoom running on for 0.8 s after it (#268).
+    const float morphDuration = mgr.GetPlayer()->GetMorphDuration();
+    InterpolateFOV(mgr.CameraManager()->GetFirstPersonCamera()->GetFov(),
+                   CCameraManager::GetDefaultThirdPersonVerticalFOV(),
+                   morphDuration > 0.f ? morphDuration : 1.f, 0.f);
+#else
     InterpolateFOV(mgr.CameraManager()->GetFirstPersonCamera()->GetFov(),
                    CCameraManager::GetDefaultThirdPersonVerticalFOV(), 1.f, 0.f);
+#endif
     x36c_splineState = kBSS_Invalid;
   }
   case kBCS_Default:
@@ -2632,7 +2641,12 @@ void CBallCamera::OverrideCameraInfo(CStateManager& mgr) {
   }
 
   if ((hint->GetOverrideFlags() & 0x8000000) != 0) {
+#ifdef TARGET_PC
+    InterpolateFOV(x15c_currentFov, CCameraManager::PortFollowFovSetting(hint->GetInfo().GetFov()), 1.f,
+                   0.f);
+#else
     InterpolateFOV(x15c_currentFov, hint->GetInfo().GetFov(), 1.f, 0.f);
+#endif
   }
   if ((hint->GetOverrideFlags() & 0x40000000) != 0) {
     x1a8_targetAnglePerSecond = hint->GetInfo().GetAnglePerSecond();

@@ -19,6 +19,8 @@
 #include <SDL3/SDL_init.h>
 #include <SDL3/SDL_hints.h>
 #include <SDL3/SDL_stdinc.h>
+#include <SDL3/SDL_joystick.h>
+#include <SDL3/SDL_timer.h>
 #include <SDL3/SDL_pixels.h>
 #include <tracy/Tracy.hpp>
 
@@ -72,6 +74,7 @@ std::mutex g_surfaceHeldMutex;
 std::condition_variable g_surfaceHeldCv;
 bool g_surfaceHeld = false;
 bool g_lastPaused = false;
+uint64_t g_joystickUpdateNs = 0;
 bool g_gotFocus = false;
 
 void retain_event_strings(SDL_Event& event) {
@@ -321,6 +324,15 @@ const AuroraEvent* poll_events() {
   SDL_Event event;
   // Clear out the previous scroll values to prevent ghost input
   input::set_mouse_scroll(0, 0);
+  // What SDL_PumpEvents would do first (SDL_HINT_AUTO_UPDATE_JOYSTICKS is off), timed on its
+  // own: on Windows a device change re-enumerates DirectInput and HID devices here, on this
+  // thread, and a slow driver makes that a freeze of seconds (issue #278).
+  {
+    ZoneScopedN("SDL_UpdateJoysticks");
+    const uint64_t start = SDL_GetTicksNS();
+    SDL_UpdateJoysticks();
+    g_joystickUpdateNs = SDL_GetTicksNS() - start;
+  }
   if (is_paused()) {
     // The application may service main-thread audio and I/O completions even
     // while it cannot render. Do not block its pump until the window returns.
@@ -479,6 +491,9 @@ bool initialize() {
       SDL_HINT_SCREENSAVER_INHIBIT_ACTIVITY_NAME, SDL_GetError());
   TRY(SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_GAMECUBE_RUMBLE_BRAKE, "1"), "Error setting {}: {}",
       SDL_HINT_JOYSTICK_HIDAPI_GAMECUBE_RUMBLE_BRAKE, SDL_GetError());
+  // poll_events updates the joysticks itself, timed.
+  TRY(SDL_SetHint(SDL_HINT_AUTO_UPDATE_JOYSTICKS, "0"), "Error setting {}: {}", SDL_HINT_AUTO_UPDATE_JOYSTICKS,
+      SDL_GetError());
 
   TRY(SDL_DisableScreenSaver(), "Error disabling screensaver: {}", SDL_GetError());
   if (g_config.allowJoystickBackgroundEvents) {
@@ -522,6 +537,14 @@ Vec2<int> frame_buffer_size_for_scale(int native_fb_w, int native_fb_h, float fr
       fb_w = fitW;
       fb_h = fitH;
     }
+  }
+  // A high scale in a wide window can pass the device's texture size limit, which the EFB
+  // targets fail to allocate at: shrink it to fit, keeping the aspect.
+  const int maxDim = static_cast<int>(std::min<uint32_t>(max_texture_dimension(), INT32_MAX));
+  if (maxDim > 0 && (fb_w > maxDim || fb_h > maxDim)) {
+    const float shrink = static_cast<float>(maxDim) / static_cast<float>(std::max(fb_w, fb_h));
+    fb_w = std::clamp(static_cast<int>(static_cast<float>(fb_w) * shrink), 1, maxDim);
+    fb_h = std::clamp(static_cast<int>(static_cast<float>(fb_h) * shrink), 1, maxDim);
   }
   return {fb_w, fb_h};
 }
@@ -580,6 +603,8 @@ const void* get_native_window_handle() noexcept {
 }
 
 SDL_Renderer* get_sdl_renderer() { return g_renderer; }
+
+uint64_t joystick_update_ns() noexcept { return g_joystickUpdateNs; }
 
 bool is_paused() noexcept {
   if (!is_presentable()) {

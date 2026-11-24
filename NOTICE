@@ -79,7 +79,7 @@ travels with any build that contains it.
 | RmlUi | MIT | fetched, `rmlui-src/` |
 | SQLite | public domain | fetched, `sqlite3-src/` (no licence file) |
 | OpenSSL (Windows, macOS and Android, linked in) | Apache-2.0 | `openssl.txt` / `openssl-license.txt` in each package |
-| Button prompt icons | Kenney CC0 | `tools/prompt_icons/README.md` |
+| Button prompt icons | Kenney CC0; Steam Deck set Xelu CC0 | `tools/prompt_icons/README.md` |
 | Skippable cutscene room patches (`platform/port_skip_cutscenes_data.inc`), generated from randomprime's output | MIT, © 2018 April Wade | `packaging/licenses/randomprime.txt` |
 | Archipelago pickup room patches (`platform/port_ap_pickups_data.inc`), generated from randomprime's `pickup_meta.rs.in` | MIT, © 2018 April Wade | `packaging/licenses/randomprime.txt` |
 | Archipelago room and elevator table (`platform/port_ap_world_data.inc`), generated from randomprime's `pickup_meta.rs.in` and `elevators.rs` | MIT, © 2018 April Wade | `packaging/licenses/randomprime.txt` |

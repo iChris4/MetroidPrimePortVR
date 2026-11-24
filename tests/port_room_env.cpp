@@ -1504,6 +1504,19 @@ void TestExposureAverage() {
   e.Take(rgb);
   CHECK_MSG(Near(e.Update(true, 1.5f, -4.f, 8.f, 0.f, 32.f, false, 5, &target), 5.f) && e.created,
             "exposure average: after a reset the Gaussian starts again at L");
+  // The static EV is the Gaussian's second component: it starts, eases and snaps with the EV.
+  float shownStatic = -100.f;
+  e.Reset();
+  e.Take(rgb);
+  e.Update(true, 1.5f, -4.f, 8.f, 0.f, 32.f, false, 1, &target, 6.f, &shownStatic);
+  CHECK_MSG(shownStatic == 6.f, "exposure average: the static EV starts at its target");
+  e.Update(true, 1.5f, -4.f, 8.f, 0.f, 32.f, false, 10, &target, 2.f, &shownStatic);
+  CHECK_MSG(shownStatic < 6.f && shownStatic > 2.f, "exposure average: the static EV eases towards a new target");
+  e.Update(true, 1.5f, -4.f, 8.f, 0.f, 32.f, true, 0, &target, 2.f, &shownStatic);
+  CHECK_MSG(shownStatic == 2.f, "exposure average: a snap sets the static EV");
+  shownStatic = -100.f;
+  e.Update(false, 1.5f, -4.f, 8.f, 0.f, 32.f, false, 1, &target, 6.f, &shownStatic);
+  CHECK_MSG(shownStatic == -100.f, "exposure average: without a hint the static EV is left alone");
 }
 } // namespace
 

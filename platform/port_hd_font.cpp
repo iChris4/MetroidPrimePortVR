@@ -8,6 +8,7 @@
 #include "port_gci.h"
 #include "port_log.h"
 #include "port_mods.h"
+#include "port_utf8_path.h"
 
 #include "Kyoto/Graphics/CGX.hpp"
 #include "Kyoto/Graphics/CGraphicsPalette.hpp"
@@ -48,7 +49,7 @@ bool Load() {
     return false;
   }
   sTried = true;
-  std::ifstream file(PortGci::PathFromString(path), std::ios::binary);
+  std::ifstream file(PortUtf8::FromUtf8(path), std::ios::binary);
   const std::vector<uint8_t> data = ReadAll(file);
   std::string error;
   if (!file || !ReadFont(data.data(), data.size(), sFont, error)) {

@@ -13,6 +13,7 @@
 #if defined(__ANDROID__)
 #include "port_debug.h"
 #include "port_log.h"
+#include "port_utf8_path.h"
 
 #include <imgui.h>
 #include <jni.h>
@@ -29,8 +30,8 @@ namespace PortDataFolder {
 namespace {
 
 namespace fs = std::filesystem;
-using PortPaths::detail::FromUtf8;
-using PortPaths::detail::ToUtf8;
+using PortUtf8::FromUtf8;
+using PortUtf8::ToUtf8;
 
 const char* const kTempSuffix = ".mpcopy";
 const char* const kIncomplete = ".mpcopy_incomplete";

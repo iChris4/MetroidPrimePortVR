@@ -25,10 +25,6 @@ namespace PortGci {
 constexpr size_t kHeaderSize = 64;
 constexpr size_t kBlockSize = 8192;
 
-// UTF-8 text to and from paths (std::filesystem's u8 forms are char8_t).
-std::string PathString(const std::filesystem::path& path);
-std::filesystem::path PathFromString(const std::string& text);
-
 struct Header {
   std::string game;     // four characters, GM8E for this game
   std::string maker;    // two characters, 01

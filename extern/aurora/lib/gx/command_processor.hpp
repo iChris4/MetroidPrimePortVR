@@ -20,6 +20,9 @@ void reset_draw_cache() noexcept;
 // Forgets which vertex layouts take native input (part of reset_draw_cache; tests
 // that swap populate_pipeline_config's stubbed layout call it directly).
 void clear_native_vertex_choices() noexcept;
+// The frame's vertex array copies (see command_processor.cpp's sFrameArrays); the recording
+// calls it when the frame's storage ends.
+void clear_frame_arrays() noexcept;
 
 } // namespace aurora::gx::fifo
 

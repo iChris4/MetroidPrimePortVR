@@ -1,5 +1,6 @@
 #include "port_gci.h"
 #include "port_test.h"
+#include "port_utf8_path.h"
 
 #include <aurora/aurora.h>
 
@@ -274,14 +275,14 @@ int main() {
 
     PortGci::SetGameCode("GM8E");
     std::string why;
-    PortGci::SetEmulatorFolder(PortGci::PathString(card));
-    CHECK_MSG(PortGci::EmulatorFolder() == PortGci::PathString(emu), "folder stored normalised");
+    PortGci::SetEmulatorFolder(PortUtf8::ToUtf8(card));
+    CHECK_MSG(PortGci::EmulatorFolder() == PortUtf8::ToUtf8(emu), "folder stored normalised");
     PortGci::SetShareEmulatorCard(false);
     CHECK_MSG(PortGci::SharedCardBase(&why).empty() && !why.empty(), "sharing off: no base");
     CHECK_MSG(PortGci::CardTargetDirectory("").empty(), "sharing off: default card");
     PortGci::SetShareEmulatorCard(true);
     CHECK_MSG(PortGci::SharedCardBase() == emu / "GC", "sharing on: <emu>/GC");
-    CHECK_MSG(PortGci::CardTargetDirectory("") == PortGci::PathString(emu / "GC"), "shared card is the target");
+    CHECK_MSG(PortGci::CardTargetDirectory("") == PortUtf8::ToUtf8(emu / "GC"), "shared card is the target");
     CHECK_MSG(PortGci::CardTargetDirectory("/ap") == "/ap", "Archipelago card wins");
     PortGci::SetGameCode("R3ME");
     CHECK_MSG(PortGci::SharedCardBase(&why).empty() && why.find("Trilogy") != std::string::npos,

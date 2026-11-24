@@ -54,11 +54,23 @@ MARKS = root / "platform/port_map_marks.cpp"
 SETTINGS_DOC = root / "docs/SETTINGS.md"
 CONSOLE_DOC = root / "docs/CONSOLE.md"
 CMAKE = root / "CMakeLists.txt"
+PORT_TEXT = root / "platform/port_text.cpp"
+PORT_TEXT_HEADER = root / "platform/include/port_text.h"
 
 
 def mapper_text():
     """The map screen's code: the decomp file's hooks and the port file they call."""
     return MAPPER.read_text() + "\n" + MAPPER_PORT.read_text()
+
+
+def port_text_english(name):
+    """PortText's built-in English for an Id (port_text.h order, port_text.cpp strings)."""
+    header = PORT_TEXT_HEADER.read_text()
+    ids = re.findall(r"^\s*(k\w+),$", header[header.index("enum Id {"):], re.M)
+    source = PORT_TEXT.read_text()
+    table = source[source.index("kEnglish[] = {"):]
+    english = re.findall(r'L"([^"]*)"', table[:table.index("};")])
+    return english[ids.index(name)]
 
 
 class Wiring(WiringCase):
@@ -181,8 +193,9 @@ class Wiring(WiringCase):
         # the row ratio (11/13) draws them 197 px wide against the disc's 198.
         # Longer labels would leave a tail on screen while the panel is away.
         mapper = mapper_text()
-        labels = re.findall(r'entry\(\s*PortCustomRes::kLegend\w+Txtr\s*,\s*L"([^"]+)"\s*\)',
-                            mapper)
+        ids = re.findall(r'entry\(\s*PortCustomRes::kLegend\w+Txtr\s*,\s*'
+                         r'PortText::Get\(PortText::(k\w+)\)\s*\)', mapper)
+        labels = [port_text_english(i) for i in ids]
         self.assertEqual(sorted(labels), ["Collected", "Major", "Marked", "Minor", "Pickup"])
         self.assertLessEqual(max(len(l) for l in labels), 9, labels)
         paired = sorted((len(l) for l in labels), reverse=True)

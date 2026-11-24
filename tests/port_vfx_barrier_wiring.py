@@ -17,7 +17,7 @@ import sys
 import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from wiring_helpers import WiringCase, braced, count, find, root_argument  # noqa: E402
+from wiring_helpers import WiringCase, braced, count, root_argument  # noqa: E402
 
 root = root_argument()
 AURORA = root / "extern/aurora/include/aurora/vfx.hpp"

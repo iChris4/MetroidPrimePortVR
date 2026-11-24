@@ -19,6 +19,7 @@
 #include "port_gci.h"
 #include "vr/vr_view.h"
 #include "port_pointer_menu.h"
+#include "port_text.h"
 #endif
 #ifdef MP_ENABLE_SMOKE_DRIVER
 #include "port_smoke.h"
@@ -242,7 +243,7 @@ void CSaveGameScreen::SetUIText() {
   x68_textpane_choice3->SetIsSelectable(opt3 != -1);
 #ifdef TARGET_PC
   if (warpChoice) {
-    x64_textpane_choice2->TextSupport().SetText(rstl::wstring_l(L"Warp to start"));
+    x64_textpane_choice2->TextSupport().SetText(rstl::wstring_l(PortText::Get(PortText::kWarpToStart)));
     x64_textpane_choice2->SetIsSelectable(true);
   }
 #endif

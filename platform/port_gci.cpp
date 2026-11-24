@@ -6,6 +6,7 @@
 #include <aurora/card.h>
 
 #include "port_save_convert.h"
+#include "port_utf8_path.h"
 
 #include <algorithm>
 #include <atomic>
@@ -69,14 +70,8 @@ const char* CardRegionOf(ExportFormat format) {
   return format == ExportFormat::PalGci ? "EUR" : "USA";
 }
 
-std::string PathString(const fs::path& path) {
-  const auto u8 = path.u8string();
-  return std::string(u8.begin(), u8.end());
-}
-
-fs::path PathFromString(const std::string& text) {
-  return fs::path(std::u8string(text.begin(), text.end()));
-}
+using PortUtf8::FromUtf8;
+using PortUtf8::ToUtf8;
 
 namespace {
 
@@ -93,12 +88,12 @@ std::string Field(const uint8_t* data, size_t size) {
 bool ReadAll(const fs::path& path, std::vector<uint8_t>& out, std::string& error) {
   std::ifstream in(path, std::ios::binary);
   if (!in) {
-    error = "cannot open " + PathString(path);
+    error = "cannot open " + ToUtf8(path);
     return false;
   }
   out = port::ReadAll(in);
   if (in.bad()) {
-    error = "cannot read " + PathString(path);
+    error = "cannot read " + ToUtf8(path);
     return false;
   }
   return true;
@@ -163,13 +158,13 @@ bool WriteTemp(const fs::path& path, const std::vector<uint8_t>& data, std::stri
   if (!out) {
     std::error_code ignored;
     fs::remove(temp, ignored);
-    error = "cannot write " + PathString(path);
+    error = "cannot write " + ToUtf8(path);
     return false;
   }
   if (!SyncFile(temp)) {
     std::error_code ignored;
     fs::remove(temp, ignored);
-    error = "cannot flush " + PathString(path) + " to disk";
+    error = "cannot flush " + ToUtf8(path) + " to disk";
     return false;
   }
   return true;
@@ -182,14 +177,14 @@ bool CommitTemp(const fs::path& path, std::string& error) {
   if (!MoveFileExW(temp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
     std::error_code ignored;
     fs::remove(temp, ignored);
-    error = "cannot write " + PathString(path);
+    error = "cannot write " + ToUtf8(path);
     return false;
   }
 #else
   std::error_code ec;
   fs::rename(temp, path, ec);
   if (ec) {
-    error = "cannot write " + PathString(path) + ": " + ec.message();
+    error = "cannot write " + ToUtf8(path) + ": " + ec.message();
     std::error_code ignored;
     fs::remove(temp, ignored);
     return false;
@@ -243,14 +238,14 @@ bool MoveAside(const fs::path& file, std::string& error, Moved* moved = nullptr)
   std::error_code ec;
   const fs::path dir = file.parent_path() / "_replaced";
   fs::create_directories(dir, ec);
-  const std::string stem = PathString(file.stem()) + "-" + Timestamp();
-  fs::path target = dir / PathFromString(stem + ".gci");
+  const std::string stem = ToUtf8(file.stem()) + "-" + Timestamp();
+  fs::path target = dir / FromUtf8(stem + ".gci");
   for (int suffix = 1; fs::exists(target, ec); ++suffix) {
-    target = dir / PathFromString(stem + "-" + std::to_string(suffix) + ".gci");
+    target = dir / FromUtf8(stem + "-" + std::to_string(suffix) + ".gci");
   }
   fs::rename(file, target, ec);
   if (ec) {
-    error = "cannot move " + PathString(file) + " aside: " + ec.message();
+    error = "cannot move " + ToUtf8(file) + " aside: " + ec.message();
     return false;
   }
   if (moved != nullptr) {
@@ -276,7 +271,7 @@ void AddError(Report& report, std::string error) {
 // The extension in any case: a save copied through a case-insensitive disk
 // can come back as .GCI.
 std::string LowerExtension(const fs::path& path) {
-  std::string ext = PathString(path.extension());
+  std::string ext = ToUtf8(path.extension());
   std::transform(ext.begin(), ext.end(), ext.begin(),
                  [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
   return ext;
@@ -379,10 +374,10 @@ bool Install(const fs::path& folder, const std::vector<uint8_t>& gci, std::strin
   std::error_code ec;
   fs::create_directories(folder, ec);
   if (!fs::is_directory(folder, ec)) {
-    error = "no folder at " + PathString(folder);
+    error = "no folder at " + ToUtf8(folder);
     return false;
   }
-  const fs::path target = folder / PathFromString(DiskName(header));
+  const fs::path target = folder / FromUtf8(DiskName(header));
   if (!WriteTemp(target, gci, error)) {
     return false;
   }
@@ -406,7 +401,7 @@ bool Install(const fs::path& folder, const std::vector<uint8_t>& gci, std::strin
     }
   }
   if (ec) {
-    error = "cannot list " + PathString(folder) + ": " + ec.message();
+    error = "cannot list " + ToUtf8(folder) + ": " + ec.message();
     return fail();
   }
   for (const fs::path& path : candidates) {
@@ -631,7 +626,7 @@ Report ImportBytes(const std::vector<uint8_t>& bytes, const std::string& name, c
     AddError(report, error);
     return report;
   }
-  const std::string imagePath = PathString(image);
+  const std::string imagePath = ToUtf8(image);
   std::vector<uint8_t> gci(bytes.size());
   std::vector<std::vector<uint8_t>> set;
   bool listed = false;
@@ -702,7 +697,7 @@ Report MigrateLegacyPal(const fs::path& folder) {
     Converted c;
     std::string error;
     if (!Convert(old.bytes, {}, c, error)) {
-      AddError(report, PathString(old.path.filename()) + ": " + error);
+      AddError(report, ToUtf8(old.path.filename()) + ": " + error);
       continue;
     }
     if (!have || std::make_pair(c.modTime, c.newest) > std::make_pair(best.modTime, best.newest)) {
@@ -738,7 +733,7 @@ Report ImportFile(const fs::path& source, const fs::path& folder, const fs::path
     AddError(report, error);
     return report;
   }
-  return ImportBytes(bytes, PathString(source.filename()), folder, scratch);
+  return ImportBytes(bytes, ToUtf8(source.filename()), folder, scratch);
 }
 
 std::vector<fs::path> GameFiles(const fs::path& folder) { return FilesOf(folder, sGameCode); }
@@ -760,7 +755,7 @@ Report CopyFiles(const fs::path& source, const std::vector<fs::path>& files, con
                  const std::string& code) {
   Report report;
   if (files.empty()) {
-    AddError(report, "no Metroid Prime save in " + PathString(source));
+    AddError(report, "no Metroid Prime save in " + ToUtf8(source));
   }
   std::vector<std::vector<uint8_t>> set;
   for (const fs::path& file : files) {
@@ -773,7 +768,7 @@ Report CopyFiles(const fs::path& source, const std::vector<fs::path>& files, con
     set.push_back(std::move(bytes));
   }
   if (!set.empty()) {
-    InstallCandidates(report, folder, PathString(source.filename()), set, code);
+    InstallCandidates(report, folder, ToUtf8(source.filename()), set, code);
   }
   return report;
 }
@@ -855,13 +850,13 @@ bool ImportPending(const fs::path& userFolder, const fs::path& folder) {
   std::error_code cleanEc;
   fs::rename(claimed, done, cleanEc);
   if (cleanEc) {
-    total.errors.push_back("could not retire " + PathString(claimed) + ": " + cleanEc.message() +
+    total.errors.push_back("could not retire " + ToUtf8(claimed) + ": " + cleanEc.message() +
                            "; remove it before the next start");
   } else {
     fs::remove_all(done, cleanEc);
   }
 
-  const std::string text = total.Summary("Imported") + "\nCard: " + PathString(folder) + "\n";
+  const std::string text = total.Summary("Imported") + "\nCard: " + ToUtf8(folder) + "\n";
   std::ofstream report(base / "import_report.txt", std::ios::binary | std::ios::trunc);
   report << text;
   return true;
@@ -880,7 +875,7 @@ bool ExportBytes(const fs::path& folder, ExportFormat format, std::vector<uint8_
     std::string fileError;
     if (!ReadAll(file, bytes, fileError) || !Convert(bytes, art, c, fileError, format, &trilogyBase)) {
       if (error.empty()) {
-        error = PathString(file.filename()) + ": " + fileError;
+        error = ToUtf8(file.filename()) + ": " + fileError;
       }
       continue;
     }
@@ -969,15 +964,15 @@ Report ExportRaw(const fs::path& folder, const fs::path& image, ExportFormat for
     backup += ".bak";
     fs::copy_file(image, backup, fs::copy_options::overwrite_existing, ec);
     if (ec) {
-      AddError(report, "cannot back up " + PathString(image) + ": " + ec.message());
+      AddError(report, "cannot back up " + ToUtf8(image) + ": " + ec.message());
       return report;
     }
-    report.note = "the previous card image is kept as " + PathString(backup.filename());
+    report.note = "the previous card image is kept as " + ToUtf8(backup.filename());
   }
   if (!converted.empty()) {
     report.note = report.note.empty() ? converted : converted + "; " + report.note;
   }
-  const std::string imagePath = PathString(image);
+  const std::string imagePath = ToUtf8(image);
   // As for folders: the other of A/B, if the image has it, would win when newer.
   std::vector<std::string> existing;
   if (fs::exists(image, ec)) {
@@ -1020,14 +1015,14 @@ Report ExportTrilogy(const fs::path& folder, const fs::path& saveBin) {
   std::error_code ec;
   fs::copy_file(saveBin, backup, fs::copy_options::overwrite_existing, ec);
   if (ec) {
-    AddError(report, "cannot back up " + PathString(saveBin) + ": " + ec.message());
+    AddError(report, "cannot back up " + ToUtf8(saveBin) + ": " + ec.message());
     return report;
   }
   if (!WriteAll(saveBin, bin, error)) {
     AddError(report, error);
     return report;
   }
-  report.note += "; the previous save is kept as " + PathString(backup.filename());
+  report.note += "; the previous save is kept as " + ToUtf8(backup.filename());
   report.copied = 1;
   return report;
 }
@@ -1092,7 +1087,7 @@ std::vector<fs::path> DolphinRoots() {
   {
     std::lock_guard<std::mutex> lock(sEmulatorMutex);
     if (!sEmulatorFolder.empty()) {
-      return {PathFromString(sEmulatorFolder)};
+      return {FromUtf8(sEmulatorFolder)};
     }
   }
   return AutoDolphinRoots();
@@ -1121,7 +1116,7 @@ fs::path NormalizeEmulatorFolder(const fs::path& picked) {
       path = path.parent_path();
     }
   };
-  const std::string name = PathString(path.filename());
+  const std::string name = ToUtf8(path.filename());
   if (name == "Card A" && path.parent_path().parent_path().filename() == "GC") {
     up(3);
   } else if ((name == "USA" || name == "EUR" || name == "JAP") &&
@@ -1134,7 +1129,7 @@ fs::path NormalizeEmulatorFolder(const fs::path& picked) {
 }
 
 void SetEmulatorFolder(const std::string& path) {
-  const std::string normal = path.empty() ? path : PathString(NormalizeEmulatorFolder(PathFromString(path)));
+  const std::string normal = path.empty() ? path : ToUtf8(NormalizeEmulatorFolder(FromUtf8(path)));
   std::lock_guard<std::mutex> lock(sEmulatorMutex);
   sEmulatorFolder = normal;
 }
@@ -1199,7 +1194,7 @@ std::string CardTargetDirectory(const std::string& apDirectory) {
   if (!apDirectory.empty()) {
     return apDirectory;
   }
-  return PathString(SharedCardBase());
+  return ToUtf8(SharedCardBase());
 }
 
 DolphinCard FindDolphinCard(const char* region) {
@@ -1309,7 +1304,7 @@ fs::path MountedCardFolder() {
       buffer[0] == '\0') {
     return {};
   }
-  return PathFromString(buffer);
+  return FromUtf8(buffer);
 }
 
 Report MigrateMountedLegacyPal() {

@@ -35,6 +35,13 @@ inline bool is_corrupt(sqlite3* db) {
   return code == SQLITE_CORRUPT || code == SQLITE_NOTADB;
 }
 
+// Sorts and IN (...) subqueries larger than the page cache spill to a temp file, and an Android
+// app has no temp directory SQLite can find (no TMPDIR, /tmp or /var/tmp, and "." is "/"), so the
+// statement fails with "disk I/O error" (SQLITE_IOERR_GETTEMPPATH) once the cache holds ~2 MiB of
+// rows (issue #98: the pipeline cache then stays off for every session). The caches are small
+// enough to keep those in memory everywhere.
+inline void use_memory_temp_store(sqlite3* db) { exec(db, "PRAGMA temp_store=MEMORY;"); }
+
 // Deletes a cache database with its WAL and shared-memory files. A .db copied
 // over an install next to an older -wal/-shm reads as malformed, so they go together.
 inline void delete_db_files(const std::string& file, Module& log) {
@@ -56,6 +63,9 @@ inline int open_cache_db(const std::string& file, sqlite3** db, Module& log, boo
   for (int attempt = 0;; ++attempt) {
     int ret = sqlite3_open(file.c_str(), db);
     bool damaged = false;
+    if (ret == SQLITE_OK) {
+      use_memory_temp_store(*db);
+    }
     if (ret == SQLITE_OK && !quickCheck) {
       return SQLITE_OK;
     }

@@ -35,7 +35,7 @@ fs::path SlotPath(const std::string& userFolder, const std::string& identity, in
   char name[48];
   std::snprintf(name, sizeof(name), "%016llx-%d.bin",
                 static_cast< unsigned long long >(CardKey(identity)), slot);
-  return PathFromUtf8(userFolder + "mapdata") / name;
+  return PortUtf8::FromUtf8(userFolder + "mapdata") / name;
 }
 
 // The staged record of a slot of the card in use now, or a path-less one when
@@ -57,7 +57,7 @@ Staged StagedFor(int slot, bool erase) {
 // as port_ap_protocol.cpp's writer): MoveFileExW replaces it in one step and
 // writes it through.
 bool ReplaceWithTemporary(const fs::path& temporary, const fs::path& path) {
-  if (std::rename(PathToUtf8(temporary).c_str(), PathToUtf8(path).c_str()) == 0) {
+  if (std::rename(PortUtf8::ToUtf8(temporary).c_str(), PortUtf8::ToUtf8(path).c_str()) == 0) {
     return true;
   }
 #ifdef _WIN32
@@ -214,7 +214,7 @@ bool Apply(int slot, const uint8_t* slotBytes, size_t size, uint32_t* seen,
          KeyedFiles(path.parent_path(), "", "-" + std::to_string(slot) + ".bin", path)) {
       if (ReadFile(other, fingerprint, data)) {
         PortLog::Write("map data: slot %d takes its data from %s (another card path)\n", slot,
-                       PathToUtf8(other).c_str());
+                       PortUtf8::ToUtf8(other).c_str());
         adopted = true;
         break;
       }

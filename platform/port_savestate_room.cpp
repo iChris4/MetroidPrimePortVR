@@ -36,6 +36,7 @@
 #include "MetroidPrime/TCastTo.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <map>
 #include <set>
@@ -60,6 +61,7 @@ enum RoomTag : uint32_t {
   kTagCinematic = 15, // a running cinematic camera: elapsed time, passed view point, passed target
   kTagMusic = 16,     // music playing at the save: kind (kMusicMidi/kMusicStream), stream file
   kTagMaterial = 17,  // u32 lo, u32 hi of an enemy's CMaterialList (solid, shootable, targetable)
+  kTagMaze = 18,      // a maze node: what it generated, its gate and puddle, and once the maze's cells
 };
 
 enum : uint8_t {
@@ -248,6 +250,184 @@ struct PortRoomState {
       }
     }
   }
+  // A maze node's walls, gate effect and puddle objects are copies it generated when the
+  // script sent it Action (Central Dynamo, once the drone is dead), from a maze drawn
+  // at random when the area loaded. The rebuilt room has neither: a new maze and no
+  // walls, so the pickup lay open. Saved: which copies exist, the gate's blink, each
+  // puddle object's state and, with the first node, the maze's cells (the puddle opens
+  // walls, so the seed would not do).
+  enum : uint8_t {
+    kMazeActor = 1,
+    kMazeTrigger = 2,
+    kMazeEffect = 4,
+    kMazeGateEffect = 8,
+    kMazeHasPuddle = 16,
+    kMazeHasGate = 32,
+    kMazeGateActive = 64,
+    kMazeCells = 128,
+  };
+  enum : uint8_t { kPuddleGone = 0, kPuddleInactive = 1, kPuddleActive = 2 };
+  static bool IsPuddleConn(const SConnection& c) {
+    return (c.x0_state == kSS_Closed || c.x0_state == kSS_DeactivateState) && c.x4_msg == kSM_Activate;
+  }
+  static void PutMaze(CStateManager& mgr, const CScriptMazeNode& n, bool withCells,
+                      PortSaveState::BlockWriter& w) {
+    CSinglePathMaze* maze = withCells ? mgr.SinglePathMaze() : nullptr;
+    uint8_t flags = 0;
+    if (mgr.ObjectById(n.xfc_actorId) != nullptr)
+      flags |= kMazeActor;
+    if (mgr.ObjectById(n.x10c_triggerId) != nullptr)
+      flags |= kMazeTrigger;
+    if (mgr.ObjectById(n.x11c_effectId) != nullptr)
+      flags |= kMazeEffect;
+    if (mgr.ObjectById(n.xf4_gateEffectId) != nullptr)
+      flags |= kMazeGateEffect;
+    if (n.x13c_24_hasPuddle)
+      flags |= kMazeHasPuddle;
+    if (n.x13c_25_hasGate)
+      flags |= kMazeHasGate;
+    if (n.x13c_26_gateActive)
+      flags |= kMazeGateActive;
+    if (maze != nullptr)
+      flags |= kMazeCells;
+    w.U8(flags);
+    w.F32(n.xf8_msgTimer);
+    const uint32_t puddles = static_cast< uint32_t >(n.x12c_puddleObjectIds.size());
+    w.U8(static_cast< uint8_t >(puddles < 255 ? puddles : 255));
+    for (uint32_t i = 0; i < puddles && i < 255; ++i) {
+      const CEntity* ent = mgr.ObjectById(n.x12c_puddleObjectIds[i]);
+      w.U8(ent == nullptr ? kPuddleGone : ent->GetActive() ? kPuddleActive : kPuddleInactive);
+    }
+    if (maze != nullptr) {
+      for (uint i = 0; i < NUM_MAZE_CELLS; ++i) {
+        const SMazeCell& c = maze->MazePoint(i);
+        w.U8(static_cast< uint8_t >(c.x0_24_openTop | c.x0_25_openRight << 1 | c.x0_26_openBottom << 2 |
+                                    c.x0_27_openLeft << 3 | c.x0_28_gateTop << 4 | c.x0_29_gateRight << 5 |
+                                    c.x0_30_gateBottom << 6 | c.x0_31_gateLeft << 7));
+        w.U8(static_cast< uint8_t >(c.x1_24_puddle | c.x1_25_onPath << 1 | c.x1_26_checked << 2));
+      }
+    }
+  }
+  struct MazeSave {
+    uint8_t flags = 0;
+    float msgTimer = 1.f;
+    std::vector< uint8_t > puddles;
+    uint8_t cells[NUM_MAZE_CELLS * 2] = {};
+  };
+  static bool ReadMaze(PortSaveState::BlockReader& r, MazeSave& out) {
+    out.flags = r.U8();
+    out.msgTimer = r.F32();
+    const uint8_t puddles = r.U8();
+    for (uint8_t i = 0; i < puddles && r.ok; ++i)
+      out.puddles.push_back(r.U8());
+    if ((out.flags & kMazeCells) != 0)
+      for (uint8_t& b : out.cells)
+        b = r.U8();
+    return r.ok && std::isfinite(out.msgTimer);
+  }
+  static void SetMazeCells(CStateManager& mgr, const MazeSave& save) {
+    if (mgr.SinglePathMaze() == nullptr) {
+      rstl::single_ptr< CSinglePathMaze > made =
+          rs_new CSinglePathMaze(skEnterCol, skEnterRow, skTargetCol, skTargetRow);
+      made->CreateMaze(CScriptMazeNode::sMazeSeeds[0]);
+      mgr.SetSinglePathMaze(made);
+    }
+    CSinglePathMaze* maze = mgr.SinglePathMaze();
+    for (uint i = 0; i < NUM_MAZE_CELLS; ++i) {
+      SMazeCell& c = maze->MazePoint(i);
+      const uint8_t a = save.cells[i * 2];
+      const uint8_t b = save.cells[i * 2 + 1];
+      c.x0_24_openTop = (a & 1) != 0;
+      c.x0_25_openRight = (a & 2) != 0;
+      c.x0_26_openBottom = (a & 4) != 0;
+      c.x0_27_openLeft = (a & 8) != 0;
+      c.x0_28_gateTop = (a & 16) != 0;
+      c.x0_29_gateRight = (a & 32) != 0;
+      c.x0_30_gateBottom = (a & 64) != 0;
+      c.x0_31_gateLeft = (a & 128) != 0;
+      c.x1_24_puddle = (b & 1) != 0;
+      c.x1_25_onPath = (b & 2) != 0;
+      c.x1_26_checked = (b & 4) != 0;
+    }
+  }
+  static TUniqueId GenerateCopy(CStateManager& mgr, const TEditorId& eid) {
+    const bool wasGenerating = mgr.IsGeneratingObject();
+    mgr.SetIsGeneratingObject(true);
+    const TUniqueId uid = mgr.GenerateObject(eid).second;
+    mgr.SetIsGeneratingObject(wasGenerating);
+    return uid;
+  }
+  // Generates what the node had, the way its Action handler does. Returns the copies made.
+  static int GetMaze(CStateManager& mgr, CScriptMazeNode& n, const MazeSave& save) {
+    // The node is as rebuilt, or as a load without a rebuild left it: only copies it
+    // made itself go (the fields block may have named a template here).
+    TUniqueId* own[] = {&n.x11c_effectId, &n.xfc_actorId, &n.x10c_triggerId, &n.xf4_gateEffectId};
+    for (TUniqueId* id : own) {
+      if (CEntity* ent = mgr.ObjectById(*id))
+        if (PortSaveState::IsScriptGeneratedCopy(mgr, *ent))
+          mgr.DeleteObjectRequest(*id);
+      *id = kInvalidUniqueId;
+    }
+    for (int i = 0; i < n.x12c_puddleObjectIds.size(); ++i)
+      if (CEntity* ent = mgr.ObjectById(n.x12c_puddleObjectIds[i]))
+        if (PortSaveState::IsScriptGeneratedCopy(mgr, *ent))
+          mgr.DeleteObjectRequest(ent->GetUniqueId());
+    n.x12c_puddleObjectIds.clear();
+
+    int made = 0;
+    n.x13c_24_hasPuddle = (save.flags & kMazeHasPuddle) != 0;
+    n.x13c_25_hasGate = (save.flags & kMazeHasGate) != 0;
+    n.x13c_26_gateActive = true;
+    if ((save.flags & (kMazeActor | kMazeTrigger | kMazeEffect)) != 0) {
+      n.GenerateBarrier(mgr);
+      made += (n.xfc_actorId != kInvalidUniqueId) + (n.x10c_triggerId != kInvalidUniqueId) +
+              (n.x11c_effectId != kInvalidUniqueId);
+    }
+    const rstl::vector< SConnection >& conns = n.GetConnectionList();
+    if ((save.flags & kMazeGateEffect) != 0) {
+      for (rstl::vector< SConnection >::const_iterator conn = conns.begin(); conn != conns.end(); ++conn) {
+        if (conn->x0_state != kSS_Modify || conn->x4_msg != kSM_Activate)
+          continue;
+        const TUniqueId uid = GenerateCopy(mgr, conn->x8_objId);
+        n.xf4_gateEffectId = uid;
+        if (CActor* actor = TCastToPtr< CActor >(mgr.ObjectById(uid))) {
+          actor->SetTranslation(n.GetTranslation() + n.x120_effectPos);
+          mgr.DeliverScriptMsg(actor, n.GetUniqueId(), kSM_Activate);
+          ++made;
+        }
+        break;
+      }
+    }
+    // The gate blinks: Think sent the copies Deactivate last when it is off.
+    if (n.x13c_25_hasGate && (save.flags & kMazeGateActive) == 0) {
+      n.x13c_26_gateActive = false;
+      n.SendBarrierMsg(mgr, kSM_Deactivate);
+    }
+    n.xf8_msgTimer = save.msgTimer;
+    if (!save.puddles.empty()) {
+      n.x12c_puddleObjectIds.reserve(static_cast< int >(save.puddles.size()));
+      size_t i = 0;
+      for (rstl::vector< SConnection >::const_iterator conn = conns.begin();
+           conn != conns.end() && i < save.puddles.size(); ++conn) {
+        if (!IsPuddleConn(*conn))
+          continue;
+        const uint8_t state = save.puddles[i++];
+        // One the puddle's trigger deleted keeps its place in the list, as it did.
+        TUniqueId uid = kInvalidUniqueId;
+        if (state != kPuddleGone) {
+          uid = GenerateCopy(mgr, conn->x8_objId);
+          if (CActor* actor = TCastToPtr< CActor >(mgr.ObjectById(uid))) {
+            actor->SetTransform(n.GetTransform());
+            if (state == kPuddleActive && !actor->GetActive())
+              mgr.DeliverScriptMsg(actor, n.GetUniqueId(), kSM_Activate);
+            ++made;
+          }
+        }
+        n.x12c_puddleObjectIds.push_back(uid);
+      }
+    }
+    return made;
+  }
   // What CScriptActorRotate does after turning a waypoint: every waypoint's path and
   // touch bounds are rebuilt from the poses now in place.
   static void RebuildSpiderBallWaypoints(CStateManager& mgr) {
@@ -401,6 +581,16 @@ bool IsGeneratedCopy(const CStateManager& mgr, CEntity& ent) {
   return n != nullptr && n->generated;
 }
 
+// The maze is the state manager's, one for all its nodes: the first node carries it.
+bool IsFirstMazeNode(CStateManager& mgr, const CEntity& ent) {
+  const CObjectList& list = mgr.GetObjectListById(kOL_All);
+  for (int idx = list.GetFirstObjectIndex(); idx != -1; idx = list.GetNextObjectIndex(idx))
+    if (const CEntity* other = list[idx])
+      if (dynamic_cast< const CScriptMazeNode* >(other) != nullptr)
+        return other == &ent;
+  return false;
+}
+
 void CaptureObject(CStateManager& mgr, CEntity& ent, RoomObject& obj) {
   obj.editorId = ent.GetEditorId().Value();
   obj.active = ent.GetActive();
@@ -508,6 +698,11 @@ void CaptureObject(CStateManager& mgr, CEntity& ent, RoomObject& obj) {
     BlockWriter w;
     if (PortRoomState::PutRotate(mgr, *rotate, w))
       obj.blocks.push_back({kTagRotate, w.bytes});
+  }
+  if (CScriptMazeNode* node = dynamic_cast< CScriptMazeNode* >(&ent)) {
+    BlockWriter w;
+    PortRoomState::PutMaze(mgr, *node, IsFirstMazeNode(mgr, ent), w);
+    obj.blocks.push_back({kTagMaze, w.bytes});
   }
   // The music actually playing, which the load restarts: the rebuilt objects never get
   // the Play their trigger sent (CScriptMidi's destructor stopped its song).
@@ -1083,6 +1278,30 @@ bool RoomAreaAwaitsRestore(CStateManager& mgr, const RoomState& room,
   return DecideAreaRestore(room, area, data, size) == RoomAreaRestore::kRestore;
 }
 
+// After the objects: the nodes' own flags are in place (the fields block), and the
+// copies are made from templates that have their saved state. The cells go in first,
+// whichever node carries them.
+static void RestoreMaze(CStateManager& mgr, const RoomState& room, const std::set< int >& now,
+                        RoomApplyStats& stats) {
+  std::vector< std::pair< CScriptMazeNode*, PortRoomState::MazeSave > > nodes;
+  for (const RoomObject& obj : room.objects) {
+    const RoomBlock* b = FindBlock(obj, kTagMaze);
+    if (b == nullptr || now.count(TEditorId(obj.editorId).AreaNum()) == 0)
+      continue;
+    CScriptMazeNode* node =
+        dynamic_cast< CScriptMazeNode* >(mgr.ObjectById(mgr.GetIdForScript(TEditorId(obj.editorId))));
+    PortRoomState::MazeSave save;
+    BlockReader r(b->data);
+    if (node == nullptr || node->IsInGraveyard() || !PortRoomState::ReadMaze(r, save))
+      continue;
+    if ((save.flags & PortRoomState::kMazeCells) != 0)
+      PortRoomState::SetMazeCells(mgr, save);
+    nodes.emplace_back(node, std::move(save));
+  }
+  for (auto& node : nodes)
+    stats.generated += PortRoomState::GetMaze(mgr, *node.first, node.second);
+}
+
 int ApplyRoomState(CStateManager& mgr, const RoomState& room, std::vector< int32_t >& done,
                    RoomApplyStats& stats) {
   const CWorld* world = mgr.GetWorld();
@@ -1185,6 +1404,7 @@ int ApplyRoomState(CStateManager& mgr, const RoomState& room, std::vector< int32
   }
   if (waypointsMoved)
     PortRoomState::RebuildSpiderBallWaypoints(mgr);
+  RestoreMaze(mgr, room, now, stats);
   RestoreDocks(mgr, room, now);
   done.insert(done.end(), now.begin(), now.end());
   return waiting;

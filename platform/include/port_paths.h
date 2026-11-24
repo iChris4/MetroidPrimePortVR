@@ -37,19 +37,15 @@
 #include <SDL3/SDL_stdinc.h>
 
 #include "port_env.h"
+#include "port_utf8_path.h"
 
 namespace PortPaths {
 
 namespace detail {
 
-inline std::filesystem::path FromUtf8(const std::string& text) {
-  return std::filesystem::path(std::u8string(text.begin(), text.end()));
-}
+using PortUtf8::FromUtf8;
 
-inline std::string ToUtf8(const std::filesystem::path& path) {
-  const std::u8string text = path.u8string();
-  return std::string(text.begin(), text.end());
-}
+using PortUtf8::ToUtf8;
 
 inline std::string WithSeparator(std::string dir) {
   if (!dir.empty() && dir.back() != '/' && dir.back() != '\\') {

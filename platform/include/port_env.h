@@ -33,6 +33,12 @@ inline bool EnvFlag(const char* name, bool fallback = false) {
   return true;
 }
 
+// MP_LOG_HUD, read once: the HUD asks per widget per frame.
+inline bool LogHud() {
+  static const bool on = EnvFlag("MP_LOG_HUD");
+  return on;
+}
+
 inline int EnvInt(const char* name, int fallback) {
   const char* value = std::getenv(name);
   if (value == nullptr || value[0] == '\0') {

@@ -109,6 +109,8 @@ void BuildProfile(PortInput::Profile& out);
 // menu buttons" applies) that presses a PAD button or pushes a PAD axis from
 // `family`, preferring one that applies in the current context. False when none.
 bool PromptButtonInput(unsigned padButton, PortInput::Family family, PortInput::Input& out);
+// The contexts PromptButtonInput resolves against now: the prompts re-resolve when they change.
+uint16_t PromptContexts();
 bool PromptAxisInput(PADAxis axis, PortInput::Family family, PortInput::Input& out);
 // A pad input as the native button the prompts name (an SDL_GamepadButton or
 // PAD_NATIVE_BUTTON_TRIGGER_*), or PAD_NATIVE_BUTTON_INVALID.

@@ -9,6 +9,9 @@
 #include "MetroidPrime/Player/CPlayer.hpp"
 #include "MetroidPrime/Enemies/CPatterned.hpp"
 #include "MetroidPrime/CCollisionActor.hpp"
+#include "MetroidPrime/CDamageInfo.hpp"
+#include "MetroidPrime/CDamageVulnerability.hpp"
+#include "MetroidPrime/Player/CPlayerState.hpp"
 #include "MetroidPrime/Player/CPlayerGun.hpp"
 #include "MetroidPrime/ScriptObjects/CScriptGrapplePoint.hpp"
 #include "MetroidPrime/TCastTo.hpp"
@@ -301,7 +304,8 @@ void CCompoundTargetReticle::Update(float dt, const CStateManager& mgr) {
 #endif
   UpdateOrbitZoneGroup(dt, mgr);
 #ifdef TARGET_PC
-  if (PortDebug::CrosshairStyle() == PortDebug::kCrosshairStyle_Remastered) {
+  if (PortDebug::CrosshairStyle() == PortDebug::kCrosshairStyle_Remastered ||
+      PortDebug::CrosshairTargetColor(nullptr)) {
     PortUpdateRemasteredCrosshair(dt, mgr);
   }
 #endif
@@ -1452,9 +1456,22 @@ CColor PortRemasteredCrosshairColor(EReticleState state, float targetT) {
   if (PortDebug::CrosshairColor(rgb)) {
     std::copy_n(rgb, 3, idle);
   }
-  const float target[3] = {1.f, 0.f, 0.f};
+  float target[3] = {1.f, 0.f, 0.f};
+  PortDebug::CrosshairTargetColor(target);
   return CColor(idle[0] + (target[0] - idle[0]) * targetT, idle[1] + (target[1] - idle[1]) * targetT,
                 idle[2] + (target[2] - idle[2]) * targetT, 1.f);
+}
+
+// The crosshair target colour setting (issue #277): `color` faded toward it as the aim ray
+// meets an enemy the current beam hurts (hurtT 0..1); unchanged with the setting off.
+CColor PortXhairTargetTint(const CColor& color, float hurtT) {
+  float target[3];
+  if (hurtT <= 0.f || !PortDebug::CrosshairTargetColor(target)) {
+    return color;
+  }
+  return CColor(color.GetRed() + (target[0] - color.GetRed()) * hurtT,
+                color.GetGreen() + (target[1] - color.GetGreen()) * hurtT,
+                color.GetBlue() + (target[2] - color.GetBlue()) * hurtT, color.GetAlpha());
 }
 } // namespace
 
@@ -1493,11 +1510,21 @@ void CCompoundTargetReticle::PortUpdateRemasteredCrosshair(float dt, const CStat
     if (hit.IsValid()) {
       distance = (hit.GetPoint() - mgr.GetPlayer()->GetTranslation()).Magnitude();
       const CEntity* ent = mgr.GetObjectById(hitId);
+      const CActor* const hitActor = TCastToConstPtr< CActor >(ent);
       if (const CCollisionActor* col = TCastToConstPtr< CCollisionActor >(ent)) {
         ent = mgr.GetObjectById(col->GetOwnerId());
       }
       if (const CPatterned* pat = TCastToConstPtr< CPatterned >(ent)) {
           overTarget = pat->IsAlive() && pat->GetActive() && pat->GetTargetable();
+      }
+      // With a target colour set, only where a shot of the current beam would hurt: the part
+      // hit (a collision actor has its own vulnerability), as CStateManager::ApplyDamage asks.
+      if (overTarget && hitActor != nullptr && PortDebug::CrosshairTargetColor(nullptr)) {
+        const CPlayerState::EBeamId beam = mgr.GetPlayerState()->GetCurrentBeam();
+        const CWeaponMode mode(beam == CPlayerState::kBI_Phazon ? kWT_Phazon : EWeaponType(beam));
+        const CDamageInfo info(mode, 0.f, 0.f, 0.f);
+        const CDamageVulnerability* vuln = hitActor->GetDamageVulnerability(eye, dir, info);
+        overTarget = vuln != nullptr && vuln->WeaponHurts(mode, CDamageVulnerability::kRD_No);
       }
     }
   }
@@ -1576,6 +1603,7 @@ void CCompoundTargetReticle::DrawOrbitZoneGroup(const CMatrix3f& rot,
     if (PortDebug::CrosshairColor(rgb)) {
       color = CColor(rgb[0], rgb[1], rgb[2], color.GetAlpha());
     }
+    color = PortXhairTargetTint(color, xPortXhairTargetT);
     // The tweak's alpha is 0.19, so the additive strokes barely show on a modern screen. Outside
     // Original experience the opacity setting is the alpha itself (100% = full strength).
     // PortVr: not in the headset's immersive view. There the crosshair sits in the world (on the
@@ -2229,11 +2257,12 @@ void CCompoundTargetReticle::PortTriUpdateCombat(float dt, const CStateManager& 
 }
 
 // The port's crosshair settings on Trilogy's aiming cursor and retained crosshair, as on GC's:
-// a custom colour replaces theirs, opacity scales their alpha (100%, the default, is retail) and
-// size scales them under direct aim.
-static CColor PortTriXhairColor(const CColor& color) {
+// a custom colour replaces theirs and the target colour tints them (hurtT), opacity scales their
+// alpha (100%, the default, is retail) and size scales them under direct aim.
+static CColor PortTriXhairColor(const CColor& color, float hurtT) {
   float rgb[3];
-  return PortDebug::CrosshairColor(rgb) ? CColor(rgb[0], rgb[1], rgb[2], color.GetAlpha()) : color;
+  return PortXhairTargetTint(
+      PortDebug::CrosshairColor(rgb) ? CColor(rgb[0], rgb[1], rgb[2], color.GetAlpha()) : color, hurtT);
 }
 static float PortTriXhairAlpha(float alpha) {
   return alpha * static_cast< float >(PortDebug::CrosshairOpacity()) / 100.f;
@@ -2304,11 +2333,11 @@ void CCompoundTargetReticle::PortTriDrawAiming(const CMatrix3f& rot, const CStat
   }
   const CTransform4f base = CTransform4f(rot, pos) * CTransform4f::Scale(PortTriXhairSize());
   PortTriDrawModel(x38c_aimCenter, base * CTransform4f::Scale(.45f * x278_aimCenterScale),
-      PortTriXhairColor(x25c_aimCenterColor), PortTriXhairAlpha(x260_aimCenterAlpha));
+      PortTriXhairColor(x25c_aimCenterColor, xPortXhairTargetT), PortTriXhairAlpha(x260_aimCenterAlpha));
   for (int i = 0; i < 3; ++i) {
     PortTriDrawModel(x398_aimArm, base * CTransform4f::RotateY(CRelAngle::FromDegrees(i * 120.f)) *
         CTransform4f::Scale(.45f) * CTransform4f::Translate(0.f, 0.f, .25f) *
-        CTransform4f::Scale(1.f, 1.f, x274_aimArmScale), PortTriXhairColor(x254_aimArmColor),
+        CTransform4f::Scale(1.f, 1.f, x274_aimArmScale), PortTriXhairColor(x254_aimArmColor, xPortXhairTargetT),
         PortTriXhairAlpha(x258_aimArmAlpha));
   }
 }
@@ -2339,7 +2368,7 @@ void CCompoundTargetReticle::PortTriDrawCrosshairs(const CMatrix3f& rot, const C
   }
   const_cast< TCachedToken< CModel >& >(x34_crosshairs).TryCache();
   if (const CModel* model = x34_crosshairs.GetObject()) {
-    CColor color = PortTriXhairColor(gpTweakTargeting->x1c0_crosshairsColor);
+    CColor color = PortTriXhairColor(gpTweakTargeting->x1c0_crosshairsColor, xPortXhairTargetT);
     color.SetAlpha(PortTriAlphaU8(255.f * PortTriXhairAlpha(x1e8_crosshairsScale)));
     CTransform4f scale = CTransform4f::Scale(x1e8_crosshairsScale * PortTriXhairSize());
     if (PortDebug::CrosshairStyle() == PortDebug::kCrosshairStyle_GameCube) {

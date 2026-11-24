@@ -1641,7 +1641,7 @@ void ExposureAverage::Take(const float rgb[3]) {
 }
 
 float ExposureAverage::Update(bool hint, float tonemapEv, float lo, float hi, float bias, float s, bool snap,
-                              int steps, float* target) {
+                              int steps, float* target, float staticTarget, float* staticOut) {
   // Remastered's SRGB_To_Linear (0x12c394) is pow(x, 2.2), not the sRGB curve: 128/255 -> 0.21952
   constexpr float kGrey = 0.2195197f;
   if (!hint || !(L >= 0.f)) {
@@ -1651,17 +1651,21 @@ float ExposureAverage::Update(bool hint, float tonemapEv, float lo, float hi, fl
   if (sigma != s) {
     sigma = s;
     ev.SetSigma(s);
+    staticEv.SetSigma(s);
   }
   *target = std::min(std::max(std::log2(L / kGrey) + 3.f + bias, lo), hi);
-  if (!created) {
+  if (!created || snap) {
     created = true;
     ev.SetValue(*target);
-  } else if (snap) {
-    ev.SetValue(*target);
+    staticEv.SetValue(staticTarget);
   } else {
     for (int i = steps; i > 0; --i) {
       ev.Step(*target);
+      staticEv.Step(staticTarget);
     }
+  }
+  if (staticOut != nullptr) {
+    *staticOut = staticEv.value;
   }
   return ev.value;
 }

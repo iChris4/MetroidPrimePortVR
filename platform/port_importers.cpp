@@ -5,6 +5,7 @@
 
 #include "port_mods.h"
 #include "port_paths.h"
+#include "port_utf8_path.h"
 
 #include <SDL3/SDL.h>
 
@@ -23,12 +24,9 @@ State sState;
 std::string sPartial;
 SDL_Process* sProcess = nullptr;
 
-std::string PathString(const fs::path& path) {
-  const std::u8string text = path.u8string();
-  return std::string(text.begin(), text.end());
-}
+using PortUtf8::ToUtf8;
 
-fs::path PathFromString(const std::string& text) { return fs::path(std::u8string(text.begin(), text.end())); }
+using PortUtf8::FromUtf8;
 
 bool IsImporter(const fs::directory_entry& entry) {
   std::error_code ec;
@@ -36,7 +34,7 @@ bool IsImporter(const fs::directory_entry& entry) {
     return false;
   }
 #if defined(_WIN32)
-  std::string ext = PathString(entry.path().extension());
+  std::string ext = ToUtf8(entry.path().extension());
   std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
   return ext == ".exe" || ext == ".bat" || ext == ".cmd";
 #else
@@ -52,7 +50,7 @@ SDL_Process* Spawn(const std::string& name, const std::string& argument, bool pi
     error = "no importer named " + name;
     return nullptr;
   }
-  const std::string program = PathString(PathFromString(folder) / PathFromString(name));
+  const std::string program = ToUtf8(FromUtf8(folder) / FromUtf8(name));
   const char* args[3] = {program.c_str(), argument.empty() ? nullptr : argument.c_str(), nullptr};
 
   SDL_Environment* env = SDL_CreateEnvironment(true);
@@ -102,7 +100,7 @@ std::string Folder() {
   }
   dir += "importers";
   std::error_code ec;
-  fs::create_directories(PathFromString(dir), ec);
+  fs::create_directories(FromUtf8(dir), ec);
   return dir;
 #endif
 }
@@ -114,9 +112,9 @@ std::vector<std::string> List() {
     return names;
   }
   std::error_code ec;
-  for (const fs::directory_entry& entry : fs::directory_iterator(PathFromString(folder), ec)) {
+  for (const fs::directory_entry& entry : fs::directory_iterator(FromUtf8(folder), ec)) {
     if (IsImporter(entry)) {
-      names.push_back(PathString(entry.path().filename()));
+      names.push_back(ToUtf8(entry.path().filename()));
     }
   }
   std::sort(names.begin(), names.end());

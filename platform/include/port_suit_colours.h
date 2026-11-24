@@ -4,7 +4,8 @@
 // player, baked into recoloured copies of the suit's own diffuse textures.
 //
 // Every suit has its own CMPR TXTRs, which the cutscene body, the pause
-// screen's doll, the first-person arm and the morph ball all draw, so serving
+// screen's doll, the first-person arm, the morph ball and the in-game body
+// (the morph transition's, which has textures of its own) all draw, so serving
 // recoloured textures under the retail ids (and the generated balls' ids,
 // port_ball_looks.h) changes every view with no render change. Samus's face
 // (51E5B069) is shared and never touched, nor are the glow, visor and
@@ -46,7 +47,7 @@
 namespace PortSuitColours {
 
 // Bump when the output changes: the cache is remade when its stamp differs.
-inline constexpr int kVersion = 1;
+inline constexpr int kVersion = 2;
 
 // CPlayerState::EPlayerSuit order, then the Dread Samus import's suits in the
 // same order from kDreadFirst (Power, Gravity, Varia, Phazon's Metroid Suit).
@@ -109,9 +110,12 @@ bool Pending(bool wanted);
 // Recolours a decoded texture of `suit` towards `picks`. `transfer`, when
 // given, is a texture of `transferSuit` with the same UVs whose slot map
 // replaces this one's where both are coloured (Varia's textures take the
-// Power Suit's cleaner split). Returns how many texels changed.
+// Power Suit's cleaner split). `islands` false leaves out the island pass, for
+// a texture whose pieces touch with no dark seam between them: it would take
+// the whole texture for one island and give it its majority slot. Returns how
+// many texels changed.
 size_t Recolour(PortRemastered::Image& image, int suit, const Picks& picks,
-                const PortRemastered::Image* transfer = nullptr, int transferSuit = 0);
+                const PortRemastered::Image* transfer = nullptr, int transferSuit = 0, bool islands = true);
 
 // The suit's textures recoloured to `picks` (one snapshot of SuitPicks, so
 // the stamp and the images agree), made or taken from the cache, to serve as

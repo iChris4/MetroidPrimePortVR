@@ -1051,12 +1051,12 @@ bool CParticleElectric::PortHasAnyParticlesRecursive() const {
     return true;
   }
   for (int i = 0; i < x400_gpsmGenerators.size(); ++i) {
-    if (x400_gpsmGenerators[i]->GetParticleCountAll() > 0) {
+    if (x400_gpsmGenerators[i]->PortHasAnyParticlesRecursive()) {
       return true;
     }
   }
   for (int i = 0; i < x410_epsmGenerators.size(); ++i) {
-    if (x410_epsmGenerators[i]->GetParticleCountAll() > 0) {
+    if (x410_epsmGenerators[i]->PortHasAnyParticlesRecursive()) {
       return true;
     }
   }

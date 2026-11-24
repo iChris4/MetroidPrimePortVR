@@ -372,6 +372,5 @@ bool PinClip(const char* name, float phase, float yaw = 0.f);
 // the forward walks played in reverse.
 enum class BackWalk { Struggle, Reverse, Procedural };
 void SetBackWalk(BackWalk mode);
-BackWalk GetBackWalk();
 
 } // namespace PortThirdPersonBody

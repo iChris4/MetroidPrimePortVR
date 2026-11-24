@@ -5,6 +5,7 @@
 #include "port_disc_verify.h"
 #include "port_log.h"
 #include "port_paths.h"
+#include "port_utf8_path.h"
 
 #include <aurora/aurora.h>
 #include <SDL3/SDL_dialog.h>
@@ -123,11 +124,11 @@ std::string CopyToUserFolder(const std::string& source, std::string* target, std
     PortLog::Write("metroid_prime_port: no data folder to copy the disc into\n");
     return "There is no data folder to copy the disc image into.";
   }
-  const std::filesystem::path destination = PortPaths::detail::FromUtf8(folder) / "disc.iso";
+  const std::filesystem::path destination = PortUtf8::FromUtf8(folder) / "disc.iso";
   // Copied under another name and renamed when complete: a copy killed part
   // way (the app closed during a multi-minute copy) must not leave a
   // truncated disc.iso, which ResolveDiscPath would prefer on every launch.
-  const std::filesystem::path partial = PortPaths::detail::FromUtf8(folder) / "disc.iso.part";
+  const std::filesystem::path partial = PortUtf8::FromUtf8(folder) / "disc.iso.part";
 
   SDL_IOStream* in = SDL_IOFromFile(source.c_str(), "rb");
   if (in == nullptr) {
@@ -162,9 +163,9 @@ std::string CopyToUserFolder(const std::string& source, std::string* target, std
   if (doneOut != nullptr) {
     doneOut->store(0);
   }
-  SDL_IOStream* out = SDL_IOFromFile(PortPaths::detail::ToUtf8(partial).c_str(), "wb");
+  SDL_IOStream* out = SDL_IOFromFile(PortUtf8::ToUtf8(partial).c_str(), "wb");
   if (out == nullptr) {
-    PortLog::Write("metroid_prime_port: could not create %s: %s\n", PortPaths::detail::ToUtf8(partial).c_str(), SDL_GetError());
+    PortLog::Write("metroid_prime_port: could not create %s: %s\n", PortUtf8::ToUtf8(partial).c_str(), SDL_GetError());
     SDL_CloseIO(in);
     return "The copy can't be created in the data folder.";
   }
@@ -189,7 +190,7 @@ std::string CopyToUserFolder(const std::string& source, std::string* target, std
       break;
     }
     if (SDL_WriteIO(out, buffer, got) != got) {
-      PortLog::Write("metroid_prime_port: writing %s failed: %s\n", PortPaths::detail::ToUtf8(partial).c_str(), SDL_GetError());
+      PortLog::Write("metroid_prime_port: writing %s failed: %s\n", PortUtf8::ToUtf8(partial).c_str(), SDL_GetError());
       failure = "Writing the copy failed; the device may be full.";
       break;
     }
@@ -216,14 +217,14 @@ std::string CopyToUserFolder(const std::string& source, std::string* target, std
     }
   }
   if (!SDL_FlushIO(out) && failure.empty()) {
-    PortLog::Write("metroid_prime_port: flushing %s failed: %s\n", PortPaths::detail::ToUtf8(partial).c_str(), SDL_GetError());
+    PortLog::Write("metroid_prime_port: flushing %s failed: %s\n", PortUtf8::ToUtf8(partial).c_str(), SDL_GetError());
     failure = "Writing the copy failed.";
   }
   if (!SDL_CloseIO(in)) {
     PortLog::Write("metroid_prime_port: closing the picked image failed: %s\n", SDL_GetError());
   }
   if (!SDL_CloseIO(out) && failure.empty()) {
-    PortLog::Write("metroid_prime_port: closing %s failed: %s\n", PortPaths::detail::ToUtf8(partial).c_str(), SDL_GetError());
+    PortLog::Write("metroid_prime_port: closing %s failed: %s\n", PortUtf8::ToUtf8(partial).c_str(), SDL_GetError());
     failure = "Writing the copy failed.";
   }
   std::error_code ec;
@@ -236,22 +237,22 @@ std::string CopyToUserFolder(const std::string& source, std::string* target, std
   // truncated image fails to parse as a disc with no further clue.
   const auto written = std::filesystem::file_size(partial, ec);
   if (ec || static_cast<Sint64>(written) != done || (total > 0 && done != total)) {
-    PortLog::Write("metroid_prime_port: %s is %lld bytes on disk, copied %lld of %lld\n", PortPaths::detail::ToUtf8(partial).c_str(),
+    PortLog::Write("metroid_prime_port: %s is %lld bytes on disk, copied %lld of %lld\n", PortUtf8::ToUtf8(partial).c_str(),
                    static_cast<long long>(written), static_cast<long long>(done), static_cast<long long>(total));
     std::filesystem::remove(partial, ec);
     return "The copy is incomplete.";
   }
   std::filesystem::rename(partial, destination, ec);
   if (ec) {
-    PortLog::Write("metroid_prime_port: could not rename %s to %s: %s\n", PortPaths::detail::ToUtf8(partial).c_str(),
-                   PortPaths::detail::ToUtf8(destination).c_str(), ec.message().c_str());
+    PortLog::Write("metroid_prime_port: could not rename %s to %s: %s\n", PortUtf8::ToUtf8(partial).c_str(),
+                   PortUtf8::ToUtf8(destination).c_str(), ec.message().c_str());
     std::filesystem::remove(partial, ec);
     return "The copy can't be put in place.";
   }
   PortLog::Write("metroid_prime_port: copied the disc image to %s (%lld bytes)\n",
-                 PortPaths::detail::ToUtf8(destination).c_str(), static_cast<long long>(done));
+                 PortUtf8::ToUtf8(destination).c_str(), static_cast<long long>(done));
   if (target != nullptr) {
-    *target = PortPaths::detail::ToUtf8(destination);
+    *target = PortUtf8::ToUtf8(destination);
   }
   return {};
 }

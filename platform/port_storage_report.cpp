@@ -21,6 +21,7 @@
 #include "port_log.h"
 #include "port_mods.h"
 #include "port_remastered_import.h"
+#include "port_utf8_path.h"
 
 namespace fs = std::filesystem;
 
@@ -28,12 +29,9 @@ namespace PortStorageReport {
 namespace {
 
 // The folders come as UTF-8; a narrow path is the ANSI code page on Windows.
-fs::path FromUtf8(const std::string& text) { return fs::path(std::u8string(text.begin(), text.end())); }
+using PortUtf8::FromUtf8;
 
-std::string ToUtf8(const fs::path& path) {
-  const std::u8string text = path.u8string();
-  return std::string(text.begin(), text.end());
-}
+using PortUtf8::ToUtf8;
 
 struct Totals {
   uint64_t bytes = 0;

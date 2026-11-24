@@ -56,6 +56,7 @@
 #include "port_map_icons.h"
 #include "port_custom_res.h"
 #include "port_map_marks.h"
+#include "port_text.h"
 #include "port_map_pickups.h"
 #include "port_automapper.h"
 #include "port_disc.h"
@@ -710,8 +711,8 @@ void CAutoMapper::ProcessControllerInput(const CFinalInput& frameInput,
                         "SI,0.6,1.0,%8.8X", gpTweakPlayerRes->xac_xButton[0]))));
         mark.append(L"; ", -1);
         mark.append(PortMapMarks::IsMarked(x24_world->IGetWorldAssetId(), xa0_curAreaId.value)
-                        ? L"Unmark room"
-                        : L"Mark room",
+                        ? PortText::Get(PortText::kUnmarkRoom)
+                        : PortText::Get(PortText::kMarkRoom),
                     -1);
         x2fc_textpane_hint->TextSupport().SetText(mark);
       } else {

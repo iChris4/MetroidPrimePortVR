@@ -1432,10 +1432,10 @@ int CMain::RsMain(int argc, const char* const* argv) {
           if (sLastStallLogNs != 0 && workEndNs - sLastStallLogNs < 2000000000ull) {
             ++sStallsUnlogged;
           } else {
-            PortLog::Write("MP stall: frame %u took %llu ms (events %llu, input %llu, tick %llu, draw %llu)%s, "
-                           "%u more since the last line\n",
+            PortLog::Write("MP stall: frame %u took %llu ms (events %llu of it joysticks %llu, input %llu, tick "
+                           "%llu, draw %llu)%s, %u more since the last line\n",
                            s_frameLog, ms(workEndNs - loopStartNs), ms(eventsDoneNs - loopStartNs),
-                           ms(inputDoneNs - eventsDoneNs), ms(tickDoneNs - inputDoneNs),
+                           ms(aurora_joystick_update_ns()), ms(inputDoneNs - eventsDoneNs), ms(tickDoneNs - inputDoneNs),
                            ms(workEndNs - tickDoneNs), presented ? "" : ", not presented", sStallsUnlogged);
             sLastStallLogNs = workEndNs;
             sStallsUnlogged = 0;

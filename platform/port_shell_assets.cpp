@@ -9,6 +9,7 @@
 #include "port_mods.h"
 #include "port_shell_file.h"
 #include "port_strings.h"
+#include "port_utf8_path.h"
 
 namespace PortShell {
 const Assets* Get() {
@@ -22,7 +23,7 @@ const Assets* Get() {
   if (path.empty()) {
     return nullptr;
   }
-  std::ifstream in(PortGci::PathFromString(path), std::ios::binary);
+  std::ifstream in(PortUtf8::FromUtf8(path), std::ios::binary);
   const std::vector<uint8_t> data = port::ReadAll(in);
   auto assets = std::make_unique<Assets>();
   std::string error;

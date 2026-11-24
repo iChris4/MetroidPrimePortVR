@@ -24,6 +24,7 @@ struct Item {
   bool zip64 = false;
   bool badCrc = false;
   uint16_t flags = 0;
+  uint32_t declaredSize = 0; // non-zero: the directory claims this inflated size instead of the real one
 };
 
 void Put16(std::string& s, uint16_t v) {
@@ -87,7 +88,8 @@ std::string BuildZip(const std::vector< Item >& items, bool zip64Tail, const std
     Put32(dir, crc);
     const uint16_t extraLen = item.zip64 ? 28 : 0;
     Put32(dir, item.zip64 ? 0xFFFFFFFFu : static_cast< uint32_t >(body.size()));
-    Put32(dir, item.zip64 ? 0xFFFFFFFFu : static_cast< uint32_t >(item.data.size()));
+    Put32(dir, item.zip64 ? 0xFFFFFFFFu
+                          : item.declaredSize != 0 ? item.declaredSize : static_cast< uint32_t >(item.data.size()));
     Put16(dir, static_cast< uint16_t >(item.name.size()));
     Put16(dir, extraLen);
     Put16(dir, 0);
@@ -227,6 +229,16 @@ int main(int argc, char** argv) {
     CHECK(!PortZip::Extract(zip.string(), (base / "outbad").string(), PortZip::TexturePackFilter, nullptr, count, error));
     CHECK(error.find("CRC") != std::string::npos);
     CHECK(!fs::exists(base / "outbad" / "x.png"));
+  }
+  // An entry that inflates past its declared size (a zip bomb) is refused and leaves no file.
+  {
+    const fs::path zip = base / "bomb.zip";
+    Write(zip, BuildZip({{"x.png", big, true, false, false, 0, 1000}}, false));
+    size_t count = 0;
+    std::string error;
+    CHECK(!PortZip::Extract(zip.string(), (base / "outbomb").string(), PortZip::TexturePackFilter, nullptr, count, error));
+    CHECK(error.find("size mismatch") != std::string::npos);
+    CHECK(!fs::exists(base / "outbomb" / "x.png"));
   }
   // Encrypted entries are refused with a clear error.
   {

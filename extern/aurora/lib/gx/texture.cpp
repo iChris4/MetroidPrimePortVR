@@ -127,6 +127,17 @@ struct SourceKeyCacheKey {
 
 absl::flat_hash_map<u32, CachedTextureEntry> s_textureObjectCaches;
 absl::flat_hash_map<u32, TlutObjectCache> s_tlutObjectCaches;
+// Port: the other palettes of a C4/C8 texture the game draws with several in turn (two to four,
+// in the new-game menus and the Scan Visor). s_textureObjectCaches holds one TLUT per object, so
+// each switch hashed the whole source again: 24 a frame in the menus, 5 in the Scan Visor. Keyed
+// by texObjId << 32 | tlutObjId; only entries without a replacement; dropped with either object.
+struct PaletteVariantEntry {
+  gfx::TextureHandle handle;
+  u32 texDataVersion = 0;
+  u32 tlutDataVersion = 0;
+  uint64_t lastUsedFrame = 0;
+};
+absl::flat_hash_map<uint64_t, PaletteVariantEntry> s_paletteVariants;
 absl::flat_hash_map<TextureContentKey, ContentCacheEntry> s_contentCache;
 absl::flat_hash_map<SourceKeyCacheKey, SourceKeyCacheEntry> s_sourceKeyCache;
 absl::flat_hash_map<uint64_t, absl::flat_hash_set<u32>> s_replacementUsers;
@@ -254,8 +265,24 @@ constexpr bool BuildSourceKeyForDebug = false;
 
 constexpr uint32_t div_ceil(uint32_t value, uint32_t divisor) noexcept { return (value + divisor - 1) / divisor; }
 
+uint64_t palette_variant_key(u32 texObjId, u32 tlutObjId) noexcept {
+  return (static_cast<uint64_t>(texObjId) << 32) | tlutObjId;
+}
+
+void erase_palette_variants(u32 texObjId, u32 tlutObjId) noexcept {
+  for (auto it = s_paletteVariants.begin(); it != s_paletteVariants.end();) {
+    if ((texObjId != 0 && (it->first >> 32) == texObjId) ||
+        (tlutObjId != 0 && static_cast<u32>(it->first) == tlutObjId)) {
+      s_paletteVariants.erase(it++);
+    } else {
+      ++it;
+    }
+  }
+}
+
 void do_clear_static_texture_cache() noexcept {
   s_textureObjectCaches.clear();
+  s_paletteVariants.clear();
   s_replacementUsers.clear();
   for (auto& [_, cache] : s_tlutObjectCaches) {
     cache.staticTextureUsers.clear();
@@ -323,6 +350,16 @@ void store_cached_texture(const GXTexObj_& obj, gfx::TextureHandle handle, u32 t
 
   auto& entry = s_textureObjectCaches[obj.texObjId];
   if (entry.tlutObjId != tlutObjId || entry.replacementId != replacementId) {
+    // Port: another palette of the same texture keeps the one it replaces (s_paletteVariants).
+    if (tlutObjId != 0 && entry.tlutObjId != 0 && entry.tlutObjId != tlutObjId && entry.replacementId == 0 &&
+        entry.handle && entry.texDataVersion == obj.texDataVersion) {
+      s_paletteVariants[palette_variant_key(obj.texObjId, entry.tlutObjId)] = {
+          .handle = entry.handle,
+          .texDataVersion = entry.texDataVersion,
+          .tlutDataVersion = entry.tlutDataVersion,
+          .lastUsedFrame = entry.lastUsedFrame,
+      };
+    }
     clear_texture_dependency(obj.texObjId, entry);
   }
 
@@ -652,6 +689,13 @@ void sweep_object_caches() {
       ++it;
     }
   }
+  for (auto it = s_paletteVariants.begin(); it != s_paletteVariants.end();) {
+    if (expired(it->second.lastUsedFrame)) {
+      s_paletteVariants.erase(it++);
+    } else {
+      ++it;
+    }
+  }
 
   for (auto cacheIt = s_tlutObjectCaches.begin(); cacheIt != s_tlutObjectCaches.end();) {
     auto& cache = cacheIt->second;
@@ -854,6 +898,20 @@ gfx::TextureHandle resolve_static_palette_texture(const GXTexObj_& obj, const GX
         return entry.handle;
       }
     }
+    if (const auto it = s_paletteVariants.find(palette_variant_key(obj.texObjId, tlut.tlutObjId));
+        it != s_paletteVariants.end()) {
+      auto& variant = it->second;
+      if (tlut.tlutObjId != 0 && variant.texDataVersion == obj.texDataVersion &&
+          variant.tlutDataVersion == tlut.tlutDataVersion) {
+        variant.lastUsedFrame = s_frameCount;
+        if (auto tlutIt = s_tlutObjectCaches.find(tlut.tlutObjId); tlutIt != s_tlutObjectCaches.end()) {
+          tlutIt->second.lastUsedFrame = s_frameCount;
+        }
+        ++s_stats.objectHits;
+        return variant.handle;
+      }
+      s_paletteVariants.erase(it);
+    }
   }
 
   // Only a source that is about to be read needs the check: it is a system call, and a cached
@@ -936,6 +994,7 @@ uint64_t leak_warning_count() noexcept { return s_leak.warnings; }
 
 void shutdown() noexcept {
   s_textureObjectCaches.clear();
+  s_paletteVariants.clear();
   s_tlutObjectCaches.clear();
   s_replacementUsers.clear();
   s_contentCache.clear();
@@ -972,6 +1031,9 @@ void evict_texture_object(u32 texObjId) noexcept {
     s_textureObjectCaches.erase(it);
     clear_texture_dependency(texObjId, entry);
   }
+  if (!s_paletteVariants.empty()) {
+    erase_palette_variants(texObjId, 0);
+  }
   forget_destroyed_upload(texObjId);
   // If there is a loaded slot with this ID, mark it as no_cache to avoid inserting it when it's resolved.
   // This also handles the case where the texture was created, loaded, and immediately destroyed before we resolved it.
@@ -992,6 +1054,9 @@ void evict_tlut_object(u32 tlutObjId) noexcept {
       }
     }
     s_tlutObjectCaches.erase(it);
+  }
+  if (!s_paletteVariants.empty()) {
+    erase_palette_variants(0, tlutObjId);
   }
   for (auto& obj : g_gxState.loadedTluts) {
     if (obj.tlutObjId == tlutObjId) {

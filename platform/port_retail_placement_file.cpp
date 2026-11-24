@@ -1,4 +1,5 @@
 #include "port_retail_placement.h"
+#include "port_bytes.h"
 
 #include <cstring>
 
@@ -10,8 +11,6 @@ void Put32(std::vector<uint8_t>& out, uint32_t value) {
     out.push_back(uint8_t(value >> (8 * i)));
   }
 }
-
-uint32_t Get32(const uint8_t* p) { return uint32_t(p[0]) | uint32_t(p[1]) << 8 | uint32_t(p[2]) << 16 | uint32_t(p[3]) << 24; }
 
 constexpr size_t kRecordSize = 12 + 12 * 4;
 
@@ -38,21 +37,21 @@ std::vector<uint8_t> Encode(const std::vector<Record>& records) {
 
 bool Decode(const uint8_t* data, size_t size, std::vector<Record>& records) {
   records.clear();
-  if (size < 12 || Get32(data) != kFileMagic || Get32(data + 4) != kFileVersion) {
+  if (size < 12 || port::ReadLE32(data) != kFileMagic || port::ReadLE32(data + 4) != kFileVersion) {
     return false;
   }
-  const uint32_t count = Get32(data + 8);
+  const uint32_t count = port::ReadLE32(data + 8);
   if ((size - 12) / kRecordSize < count || 12 + count * kRecordSize != size) {
     return false;
   }
   records.resize(count);
   const uint8_t* p = data + 12;
   for (Record& r : records) {
-    r.mrea = Get32(p);
-    r.editorId = Get32(p + 4);
-    r.model = Get32(p + 8);
+    r.mrea = port::ReadLE32(p);
+    r.editorId = port::ReadLE32(p + 4);
+    r.model = port::ReadLE32(p + 8);
     for (size_t i = 0; i < 12; ++i) {
-      const uint32_t bits = Get32(p + 12 + 4 * i);
+      const uint32_t bits = port::ReadLE32(p + 12 + 4 * i);
       std::memcpy(&r.correction[i], &bits, 4);
     }
     p += kRecordSize;

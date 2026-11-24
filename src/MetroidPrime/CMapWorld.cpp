@@ -657,12 +657,15 @@ void CMapWorld::DrawPortPickups(const CMapWorldDrawParms& parms,
       continue;
     }
     const int areaIdx = world.IGetAreaId(dot.area).Value();
-    if (seenOnly && !PortMapPickups::Seen(i) &&
+    // A pickup Samus collected was seen, even when it was grabbed before it
+    // had been in view long enough to count (CScriptPickup::PortMarkSeen).
+    const bool taken = mailbox.HasMsg(TEditorId(dot.relay));
+    if (seenOnly && !taken && !PortMapPickups::Seen(i) &&
         !(stationShows && mwInfo.IsWorldVisible(areaIdx))) {
       continue;
     }
-    const bool collected = (tracker != nullptr && tracker[i] == PortMapPickups::kC_Grey) ||
-                           mailbox.HasMsg(TEditorId(dot.relay));
+    const bool collected =
+        (tracker != nullptr && tracker[i] == PortMapPickups::kC_Grey) || taken;
     if (collected && tracker == nullptr && kinds == nullptr) {
       continue;
     }
@@ -676,8 +679,13 @@ void CMapWorld::DrawPortPickups(const CMapWorldDrawParms& parms,
     for (int j = 0; j < bfsInfos.size() && !drawn; ++j) {
       drawn = bfsInfos[j].GetAreaIndex() == areaIdx;
     }
-    if (!drawn || !GetMapArea(areaIdx)->GetIsVisibleToAutoMapper(mwInfo.IsWorldVisible(areaIdx),
-                                                                 mwInfo.IsAreaVisible(areaIdx))) {
+    // A secret room (shown only once visited) keeps its dot once the map station
+    // has shown the world, though the room itself stays hidden until then: its
+    // pickup is still one to find.
+    const bool worldVisible = mwInfo.IsWorldVisible(areaIdx);
+    const bool areaVisible = mwInfo.IsAreaVisible(areaIdx);
+    if (!drawn || !(worldVisible || areaVisible ||
+                    GetMapArea(areaIdx)->GetIsVisibleToAutoMapper(worldVisible, areaVisible))) {
       continue;
     }
     if (!setUp) {

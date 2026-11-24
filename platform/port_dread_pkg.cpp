@@ -3,6 +3,7 @@
 // ECMA-182 polynomial, the table generated here instead of stored.
 
 #include "port_dread_pkg.h"
+#include "port_bytes.h"
 
 #include <algorithm>
 #include <array>
@@ -28,11 +29,6 @@ const std::array<uint64_t, 256>& Table() {
   return table;
 }
 
-uint32_t Le32(const uint8_t* p) {
-  return uint32_t(p[0]) | uint32_t(p[1]) << 8 | uint32_t(p[2]) << 16 | uint32_t(p[3]) << 24;
-}
-uint64_t Le64(const uint8_t* p) { return uint64_t(Le32(p)) | uint64_t(Le32(p + 4)) << 32; }
-
 } // namespace
 
 uint64_t PathCrc64(std::string_view path) {
@@ -52,7 +48,7 @@ bool PkgHeaderBytes(const uint8_t* data, size_t size, size_t& bytes) {
   if (data == nullptr || size < 12) {
     return false;
   }
-  const uint32_t count = Le32(data + 8);
+  const uint32_t count = port::ReadLE32(data + 8);
   if (count > kMaxPkgEntries) {
     return false;
   }
@@ -79,13 +75,13 @@ bool Pkg::Parse(const uint8_t* data, size_t size, std::string& error, uint64_t f
     error = "pkg: file larger than 4 GiB (offsets are 32-bit)";
     return false;
   }
-  const uint32_t count = Le32(data + 8);
+  const uint32_t count = port::ReadLE32(data + 8);
   std::vector<PkgEntry> entries(count);
   for (uint32_t i = 0; i < count; ++i) {
     const uint8_t* e = data + 12 + size_t(i) * 16;
-    entries[i].assetId = Le64(e);
-    entries[i].start = Le32(e + 8);
-    entries[i].end = Le32(e + 12);
+    entries[i].assetId = port::ReadLE64(e);
+    entries[i].start = port::ReadLE32(e + 8);
+    entries[i].end = port::ReadLE32(e + 12);
     if (entries[i].start < tableBytes || entries[i].start > entries[i].end || entries[i].end > fileSize) {
       error = "pkg: entry " + std::to_string(i) + " lies outside the file";
       return false;

@@ -4,11 +4,13 @@
 #include "port_dread_samus.h"
 
 #include "port_ball_looks.h"
+#include "port_bytes.h"
 #include "port_dread_bcmdl.h"
 #include "port_dread_bctex.h"
 #include "port_dread_bsmat.h"
 #include "port_dread_pkg.h"
 #include "port_remastered_convert.h"
+#include "port_strings.h"
 
 #include <algorithm>
 #include <array>
@@ -24,26 +26,8 @@ namespace PortDreadSamus {
 
 namespace {
 
-constexpr uint32_t FourCC(char a, char b, char c, char d) {
-  return (uint32_t(uint8_t(a)) << 24) | (uint32_t(uint8_t(b)) << 16) | (uint32_t(uint8_t(c)) << 8) | uint8_t(d);
-}
-
-uint32_t Be32(const std::vector<uint8_t>& d, size_t o) {
-  return (uint32_t(d[o]) << 24) | (uint32_t(d[o + 1]) << 16) | (uint32_t(d[o + 2]) << 8) | d[o + 3];
-}
-
-float BeF(const std::vector<uint8_t>& d, size_t o) {
-  const uint32_t u = Be32(d, o);
-  float f;
-  std::memcpy(&f, &u, 4);
-  return f;
-}
-
-std::string Hex8(uint32_t v) {
-  char b[16];
-  std::snprintf(b, sizeof(b), "%08X", v);
-  return b;
-}
+using port::FourCC;
+using port::Hex8;
 
 // A Dread body's stem ("samusgravity") as CPlayerState::EPlayerSuit, -1 for none.
 int PrimeSuitOf(const char* stem) {
@@ -68,37 +52,37 @@ bool Fail(std::string* error, std::string message) {
 bool RetailSkinFromCmdl(const std::vector<uint8_t>& m, const std::vector<uint8_t>& k, PortDread::RetailSkinRef& out,
                         std::string* error) {
   out = {};
-  if (m.size() < 0x2c || Be32(m, 0) != 0xDEADBABE || k.size() < 4) {
+  if (m.size() < 0x2c || port::GetBE32(m, 0) != 0xDEADBABE || k.size() < 4) {
     return Fail(error, "retail body: not a CMDL and CSKR");
   }
-  const uint32_t nsec = Be32(m, 0x24), nmat = Be32(m, 0x28);
+  const uint32_t nsec = port::GetBE32(m, 0x24), nmat = port::GetBE32(m, 0x28);
   if (nmat >= nsec || 0x2c + 4ull * nsec > m.size()) {
     return Fail(error, "retail body: bad section table");
   }
   size_t o = (0x2c + 4 * size_t(nsec) + 31) & ~size_t(31);
   for (uint32_t i = 0; i < nmat; ++i) {
-    o += Be32(m, 0x2c + 4 * size_t(i));
+    o += port::GetBE32(m, 0x2c + 4 * size_t(i));
   }
-  const size_t psize = Be32(m, 0x2c + 4 * size_t(nmat));
+  const size_t psize = port::GetBE32(m, 0x2c + 4 * size_t(nmat));
   if (o + psize > m.size()) {
     return Fail(error, "retail body: positions past the end");
   }
   size_t ko = 4;
-  const uint32_t groups = Be32(k, 0);
+  const uint32_t groups = port::GetBE32(k, 0);
   for (uint32_t g = 0; g < groups; ++g) {
     if (ko + 4 > k.size()) {
       return Fail(error, "retail skin: cut short");
     }
-    const uint32_t nw = Be32(k, ko);
+    const uint32_t nw = port::GetBE32(k, ko);
     ko += 4;
     if (nw > 64 || ko + 8ull * nw + 4 > k.size()) {
       return Fail(error, "retail skin: cut short");
     }
     std::vector<std::pair<uint32_t, float>> ws;
     for (uint32_t i = 0; i < nw; ++i, ko += 8) {
-      ws.emplace_back(Be32(k, ko), BeF(k, ko + 4));
+      ws.emplace_back(port::GetBE32(k, ko), port::GetBEFloat(k, ko + 4));
     }
-    const uint32_t count = Be32(k, ko);
+    const uint32_t count = port::GetBE32(k, ko);
     ko += 4;
     if (out.weights.size() + count > psize / 12 + 1) {
       return Fail(error, "retail skin: more vertices than the model");
@@ -109,7 +93,7 @@ bool RetailSkinFromCmdl(const std::vector<uint8_t>& m, const std::vector<uint8_t
   out.weights.resize(n);
   out.pos.reserve(n * 3);
   for (size_t i = 0; i < n * 3; ++i) {
-    out.pos.push_back(BeF(m, o + 4 * i));
+    out.pos.push_back(port::GetBEFloat(m, o + 4 * i));
   }
   return n > 0 ? true : Fail(error, "retail body: no skinned vertices");
 }
@@ -528,31 +512,31 @@ bool FitCannon(const PortDread::ReskinResult& body, const float muzzle[3], float
 
 bool FirstTextureOfSets(const std::vector<uint8_t>& m, std::vector<uint32_t>& out, std::string* error) {
   out.clear();
-  if (m.size() < 0x2c || Be32(m, 0) != 0xDEADBABE) {
+  if (m.size() < 0x2c || port::GetBE32(m, 0) != 0xDEADBABE) {
     return Fail(error, "not a CMDL");
   }
-  const uint32_t nsec = Be32(m, 0x24), nmat = Be32(m, 0x28);
+  const uint32_t nsec = port::GetBE32(m, 0x24), nmat = port::GetBE32(m, 0x28);
   if (nmat >= nsec || 0x2c + 4ull * nsec > m.size()) {
     return Fail(error, "bad section table");
   }
   size_t o = (0x2c + 4 * size_t(nsec) + 31) & ~size_t(31);
   for (uint32_t i = 0; i < nmat; ++i) {
-    const size_t size = Be32(m, 0x2c + 4 * size_t(i));
+    const size_t size = port::GetBE32(m, 0x2c + 4 * size_t(i));
     if (o + size > m.size() || size < 8) {
       return Fail(error, "material set past the end");
     }
     // u32 textures, ids; u32 materials, end offsets; then the materials: u32 flags, u32 count,
     // texture indices.
-    const size_t ntex = Be32(m, o);
+    const size_t ntex = port::GetBE32(m, o);
     const size_t at = o + 4 + 4 * ntex;
     if (at + 4 > o + size) {
       return Fail(error, "material set cut short");
     }
-    const size_t first = at + 4 + 4 * size_t(Be32(m, at));
-    if (Be32(m, at) == 0 || first + 12 > o + size || Be32(m, first + 4) == 0 || Be32(m, first + 8) >= ntex) {
+    const size_t first = at + 4 + 4 * size_t(port::GetBE32(m, at));
+    if (port::GetBE32(m, at) == 0 || first + 12 > o + size || port::GetBE32(m, first + 4) == 0 || port::GetBE32(m, first + 8) >= ntex) {
       return Fail(error, "material set " + std::to_string(i) + ": material 0 has no texture");
     }
-    out.push_back(Be32(m, o + 4 + 4 * size_t(Be32(m, first + 8))));
+    out.push_back(port::GetBE32(m, o + 4 + 4 * size_t(port::GetBE32(m, first + 8))));
     o += size;
   }
   return !out.empty() ? true : Fail(error, "no material sets");
@@ -580,7 +564,7 @@ bool BeamTint(const PortRemastered::Image& image, float out[3]) {
 bool FitBall(const PortDread::Bcmdl& source, const std::vector<uint8_t>& retailCmdl,
              uint32_t joint, PortDread::ReskinResult& out, std::string* error) {
   out = {};
-  if (retailCmdl.size() < 44 || Be32(retailCmdl, 0) != 0xDEADBABE)
+  if (retailCmdl.size() < 44 || port::GetBE32(retailCmdl, 0) != 0xDEADBABE)
     return Fail(error, "ball fit: bad retail CMDL");
   const PortDread::BcmdlMesh* shell = nullptr;
   for (const auto& mesh : source.meshes) {
@@ -664,7 +648,7 @@ bool FitBall(const PortDread::Bcmdl& source, const std::vector<uint8_t>& retailC
   }
   float sourceSize = 0, targetSize = 0, center[3];
   for (int a = 0; a < 3; ++a) {
-    const float l = BeF(retailCmdl, 12 + 4 * a), h = BeF(retailCmdl, 24 + 4 * a);
+    const float l = port::GetBEFloat(retailCmdl, 12 + 4 * a), h = port::GetBEFloat(retailCmdl, 24 + 4 * a);
     if (!std::isfinite(l) || !std::isfinite(h) || h <= l)
       return Fail(error, "ball fit: bad retail bounds");
     center[a] = (l + h) * 0.5f;
@@ -1197,14 +1181,14 @@ bool Import(const Io& io, Result& result, std::string& error) {
     if (io.progress) io.progress(result.converted, total);
     if (cancelled()) return Fail(&error, "cancelled");
     std::vector<uint8_t> ancs;
-    if (!io.retail(FourCC('A','N','C','S'), t.ancs, ancs) || ancs.size() < 14 || Be32(ancs, 4) == 0)
+    if (!io.retail(FourCC('A','N','C','S'), t.ancs, ancs) || ancs.size() < 14 || port::GetBE32(ancs, 4) == 0)
       return Fail(&error, "ball: missing ANCS " + Hex8(t.ancs));
     size_t at = 14;
     while (at < ancs.size() && ancs[at]) ++at;
     ++at;
-    if (at + 12 > ancs.size() || Be32(ancs, at) != t.cmdl)
+    if (at + 12 > ancs.size() || port::GetBE32(ancs, at) != t.cmdl)
       return Fail(&error, "ball: unexpected ANCS character model");
-    const uint32_t skin = Be32(ancs, at + 4), cinf = Be32(ancs, at + 8);
+    const uint32_t skin = port::GetBE32(ancs, at + 4), cinf = port::GetBE32(ancs, at + 8);
     const uint32_t modelId = PortModelVariant::Id(t.cmdl, t.suit);
     const uint32_t skinId = PortModelVariant::Id(skin, t.suit);
     const uint32_t ancsId = PortModelVariant::Id(t.ancs, t.suit);

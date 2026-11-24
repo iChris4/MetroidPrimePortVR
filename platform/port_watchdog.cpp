@@ -10,6 +10,7 @@
 
 #include <SDL3/SDL_timer.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -137,7 +138,7 @@ void Heartbeat(unsigned frame) {
   static const int sTestStall = port::EnvInt("MP_WATCHDOG_TEST_STALL", 0);
   if (sTestStall > 0 && frame == static_cast< unsigned >(sTestStall)) {
     aurora::phase::set(aurora::phase::Main, "test stall (MP_WATCHDOG_TEST_STALL)");
-    SDL_Delay(8000);
+    SDL_Delay(static_cast< Uint32 >(std::max(port::EnvInt("MP_WATCHDOG_TEST_STALL_MS", 8000), 0)));
   }
   static const int sTestThrow = port::EnvInt("MP_WATCHDOG_TEST_THROW", 0);
   if (sTestThrow > 0 && frame == static_cast< unsigned >(sTestThrow)) {

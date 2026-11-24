@@ -764,6 +764,9 @@ void CmdStatus(CStateManager& mgr) {
   }
   Out("probe %s weight %.0f, pbr draws %u", ProbeModeName(), CCubeMaterial::sPortPBRProbeWeight,
       CCubeMaterial::sPortPBRDraws);
+  const PortDebug::FrameWorkStats work = PortDebug::LastFrameWork();
+  Out("work last second: %d frames, %.2f ms mean, %.2f ms worst, %d over 16.7 ms", work.frames, work.avgMs,
+      work.maxMs, work.slow);
 }
 
 void CmdAreas(CStateManager& mgr) {
@@ -1624,9 +1627,13 @@ void CmdMemo(CStateManager& mgr) {
     mgr.ShowPausedHUDMemo(CAssetId(strg), 0.f);
     return Finish();
   }
+  // "memo hint <text>": the boxed hint memo with its pulsing continue button,
+  // as a scripted HUDMemo flagged as a hint shows it.
+  const bool hint = sCmd.args.size() > 2 && sCmd.args[1] == "hint";
+  const size_t first = hint ? 2 : 1;
   std::wstring wide;
-  for (size_t i = 1; i < sCmd.args.size(); ++i) {
-    if (i > 1) {
+  for (size_t i = first; i < sCmd.args.size(); ++i) {
+    if (i > first) {
       wide += L' ';
     }
     // UTF-8, so text with accents can be tried; a stray byte reads as Latin-1.
@@ -1649,9 +1656,9 @@ void CmdMemo(CStateManager& mgr) {
     }
   }
   if (wide.empty()) {
-    return Finish("usage: memo <text>");
+    return Finish("usage: memo [hint] <text>");
   }
-  CSamusHud::DisplayHudMemo(rstl::wstring(wide.c_str()), CHUDMemoParms(5.f, true, false, false));
+  CSamusHud::DisplayHudMemo(rstl::wstring(wide.c_str()), CHUDMemoParms(5.f, true, false, hint));
   Finish();
 }
 
@@ -2564,6 +2571,13 @@ void CmdFov() {
     Out("gun %s", PortDebug::GunFollowsFov() ? "follows fov" : "own fov");
     return Finish();
   }
+  if (sCmd.args.size() > 1 && sCmd.args[1] == "ball") {
+    if (sCmd.args.size() > 2) {
+      PortDebug::SetBallFollowsFov(sCmd.args[2] != "0");
+    }
+    Out("ball %s", PortDebug::BallFollowsFov() ? "follows fov" : "retail fov");
+    return Finish();
+  }
   if (sCmd.args.size() > 1 && sCmd.args[1] == "cannon") {
     if (sCmd.args.size() > 2) {
       const float fov = static_cast< float >(std::atof(sCmd.args[2].c_str()));
@@ -2578,8 +2592,9 @@ void CmdFov() {
   const float fov =
       sCmd.args.size() > 1 ? static_cast< float >(std::atof(sCmd.args[1].c_str())) : 0.f;
   if (!(fov >= PortDebug::kFovMin && fov <= PortDebug::kFovMax)) {
-    return Finish("usage: fov <45..120> | fov gun [0|1] | fov cannon [45..120]   first-person vertical\n"
-                  "FOV (retail 55); gun 1 draws the arm cannon at it too, cannon sets its own FOV");
+    return Finish("usage: fov <45..120> | fov gun [0|1] | fov ball [0|1] | fov cannon [45..120]\n"
+                  "first-person vertical FOV (retail 55); gun 1 draws the arm cannon at it too,\n"
+                  "ball 1 scales the morph ball's cameras with it, cannon sets the cannon's own FOV");
   }
   PortDebug::SetFirstPersonFov(fov);
   Finish();
@@ -4506,7 +4521,7 @@ const CommandSpec kCommands[] = {
     {"hint", nullptr, [](CStateManager&) { CmdHint(); },
      "hint show                  show the hint the game would show next"},
     {"memo", nullptr, [](CStateManager& mgr) { CmdMemo(mgr); },
-     "memo <text> | pause <strg> show text as a HUD message, or a string table as the boxed one"},
+     "memo [hint] <text> | pause <strg> show text as a HUD message (hint: the boxed hint memo), or a string table as the boxed one"},
     {"strg", nullptr, [](CStateManager&) { CmdStrg(); },
      "strg <id> [index]          a string table as the game loads it (mods included)"},
     {"language", nullptr, [](CStateManager&) { CmdLanguage(); },
@@ -4630,8 +4645,9 @@ const CommandSpec kCommands[] = {
      "keypreset classic|mouse|<saved name>|save <name>   apply or save a keyboard preset (Controls > Remap)"},
     {"padpreset", CmdPadPreset, nullptr,
      "padpreset gamecube|remastered|modern|southpaw|<saved name>|save <name>   apply or save a controller preset"},
-    {"fov", CmdFov, nullptr, "fov <45..120>|gun [0|1]|cannon [45..120]  first-person vertical FOV, as the\n"
-                             "                           Options row does; gun 1: the arm cannon follows it;\n"
+    {"fov", CmdFov, nullptr, "fov <45..120>|gun [0|1]|ball [0|1]|cannon [45..120]  first-person vertical\n"
+                             "                           FOV, as the Options row does; gun 1: the arm cannon\n"
+                             "                           follows it; ball 1: the morph ball's cameras follow it;\n"
                              "                           cannon: the arm cannon's own FOV"},
     {"gunoffset", CmdGunOffset, nullptr,
      "gunoffset <r> <f> <u>      arm cannon offset in metres (+-1), as the Video row does"},

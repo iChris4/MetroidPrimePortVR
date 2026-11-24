@@ -31,6 +31,13 @@ target_link_libraries(io_tests PRIVATE gtest gtest_main ${AURORA_SDL3_TARGET})
 aurora_copy_runtime_dlls(io_tests)
 gtest_discover_tests(io_tests)
 
+# Port: who holds the first pad port (touch pad or a real controller, #120).
+add_executable(input_first_port_tests
+  input_first_port_test.cpp
+)
+target_link_libraries(input_first_port_tests PRIVATE gtest gtest_main)
+gtest_discover_tests(input_first_port_tests)
+
 add_executable(time_tests
   time_test.cpp
   ../lib/time.cpp

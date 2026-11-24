@@ -781,19 +781,25 @@ struct Convergence {
 // without a hint or while L < 0 (a NaN L fails that test too); otherwise the target is
 // clamp(log2(L / grey) + 3 + bias, lo, hi), and the first one creates the Gaussian at the
 // target. A new CStateManager starts over (Reset); doors and area loads do not.
+// The Gaussian is a CGaussianConvergenceCVector3f of (EV, static EV, 0): the hint's static EV
+// (CAutoExposureHintGOC::GetParams 0x53933c out[3], lerp(min, max, t)) eases with the EV, and
+// both replace the transitioned tonemap's (this+0x68/0x6c after Update, 0xaffe40).
 struct ExposureAverage {
   float L = -1.f;
   float rgb[3] = {}; // the readback L came from (roomenv info)
   bool created = false;
   Convergence ev;
+  Convergence staticEv;
   float sigma = -1.f;
   uint32_t serial = 0; // of the last readback taken
   void Reset();
   void Take(const float rgb[3]);
   // The frame's EV. `snap`: a hint registered this frame (type 1), SetValue instead of
-  // stepping; `steps`: 60 Hz steps due. `target` gets the EV aimed at.
+  // stepping; `steps`: 60 Hz steps due. `target` gets the EV aimed at. With `staticOut`, the
+  // hint's static EV `staticTarget` goes through the Gaussian too, and *staticOut gets it
+  // when the Gaussian is in use (left alone otherwise: the tonemap's static EV stands).
   float Update(bool hint, float tonemapEv, float lo, float hi, float bias, float sigma, bool snap, int steps,
-               float* target);
+               float* target, float staticTarget = 0.f, float* staticOut = nullptr);
 };
 
 // --- The game side (port_room_env.cpp) -----------------------------------------

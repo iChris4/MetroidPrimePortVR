@@ -803,6 +803,55 @@ std::string SaveCardDirectory() {
   }
 }
 
+namespace {
+struct HandOff {
+  std::mutex mutex;
+  std::string path; // empty until OpenHandOff
+};
+HandOff& GetHandOff() {
+  static HandOff handOff;
+  return handOff;
+}
+} // namespace
+
+void HandOffArrived() {
+  try {
+    HandOff& handOff = GetHandOff();
+    std::lock_guard<std::mutex> lock(handOff.mutex);
+    if (handOff.path.empty())
+      return;
+    std::error_code ec;
+    if (!std::filesystem::exists(handOff.path, ec))
+      return;
+    const Protocol::Connection room = Protocol::LoadConnectionFile(handOff.path);
+    // Deleted whatever it held, so a bad one is not read at every launch.
+    std::filesystem::remove(handOff.path, ec);
+    ConnectionDetails details;
+    details.server = room.server;
+    details.slot = room.slot;
+    details.password = room.password;
+    std::string error;
+    if (Connect(details, error))
+      PortLog::Write("archipelago: another app handed over slot %s on %s\n", details.slot.c_str(),
+                     details.server.c_str());
+    else
+      PortLog::Write("archipelago: the room another app handed over was not used: %s\n", error.c_str());
+  } catch (const std::exception& exception) {
+    PortLog::Write("archipelago: the room another app handed over was not used: %s\n", exception.what());
+  } catch (...) {
+    PortLog::Write("archipelago: the room another app handed over was not used\n");
+  }
+}
+
+void OpenHandOff(const std::string& path) {
+  {
+    HandOff& handOff = GetHandOff();
+    std::lock_guard<std::mutex> lock(handOff.mutex);
+    handOff.path = path;
+  }
+  HandOffArrived();
+}
+
 std::string ConfigFilePath() {
   try {
     return ConfigPath();

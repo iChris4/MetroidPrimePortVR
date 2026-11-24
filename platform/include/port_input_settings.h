@@ -76,6 +76,11 @@ struct Settings {
   bool remasteredMovement = true;
   bool springFlick = false;
   float springFlickRate = 6.f;
+  // Under Steam Input, read the back buttons (SDL's paddles) of the physical controller behind
+  // Player 1's virtual pad, which has none (port_steam_triton.h; Linux only).
+  bool steamInputBackButtons = true;
+  // The Stick / C-stick deadzone sliders are the only deadzone (PortDebug::PreciseStickDeadZones).
+  bool preciseStickDeadZones = false;
   bool springSwipe = true;  // Android: a quick swipe up on the touch aim area springs
   float stickAimRate = 900.f;
   // With stickAimSplit on, stickAimRateY drives vertical stick aim and

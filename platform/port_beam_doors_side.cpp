@@ -104,7 +104,7 @@ std::string SidePath(const std::string& userFolder, const std::string& identity,
   char name[64];
   std::snprintf(name, sizeof(name), "beam-doors-%016llx-slot%d.bin",
                 static_cast< unsigned long long >(PortMapSide::CardKey(identity)), slot);
-  return PortMapSide::PathToUtf8(PortMapSide::PathFromUtf8(userFolder + "mapdata") / name);
+  return PortUtf8::ToUtf8(PortUtf8::FromUtf8(userFolder + "mapdata") / name);
 }
 
 void Stage(int slot, const uint8_t* slotBytes, size_t size, const uint32_t* bits) {
@@ -168,7 +168,7 @@ bool Apply(int slot, const uint8_t* slotBytes, size_t size, uint32_t* bits) {
     for (const fs::path& other : PortMapSide::KeyedFiles(path.parent_path(), "beam-doors-", suffix, path)) {
       if (ReadSide(other, fingerprint, decoded, false)) {
         PortLog::Write("beam doors: slot %d takes its unlocks from %s (another card path)\n", slot,
-                       PortMapSide::PathToUtf8(other).c_str());
+                       PortUtf8::ToUtf8(other).c_str());
         found = true;
         break;
       }

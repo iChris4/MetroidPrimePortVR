@@ -4372,15 +4372,16 @@ std::string build_shader_source(const ShaderConfig& config) noexcept {
   };
 
   // The pickup's (kind 15, Remastered's PickUp 3E95A9FE, perm 000_1) travelling bump: the skinned model-space
-  // position moves along its unit normal by sin(CCH3.y t - CCH3.x p.y) CCH3.z a, a = the vertex colour's alpha
-  // (raw), times vp_c1[0].x (an engine constant, 1 here). CCH3 is pbr_shield[3], t is pbr_param.x.
+  // position moves along its unit normal by sin(CCH3.y t - CCH3.x h) CCH3.z a 0.01, h = the height (Remastered's
+  // Y-up p.y, the converted mesh's z), a = the vertex colour's alpha (raw), 0.01 = vp_c1[0].x, the shader's own
+  // c1 literal (0x3c23d70a in every PickUp twin and perm). CCH3 is pbr_shield[3], t is pbr_param.x.
   const bool hasBump = config.pbr && config.pbrKind == PbrKind::Pickup && config.attrs[GX_VA_CLR0].attrType != GX_NONE &&
                        config.attrs[GX_VA_NRM].attrType != GX_NONE;
   const auto bumpCode = [&](const std::string& pos, const std::string& clr, const std::string& nrm) {
     return fmt::format(
         "\n    let bump_n = {2};"
-        "\n    let bump_k = sin(ubuf.pbr_shield[3].y * ubuf.pbr_param.x - ubuf.pbr_shield[3].x * {0}.y) *"
-        "\n                 ubuf.pbr_shield[3].z * {1}.a;"
+        "\n    let bump_k = sin(ubuf.pbr_shield[3].y * ubuf.pbr_param.x - ubuf.pbr_shield[3].x * {0}.z) *"
+        "\n                 ubuf.pbr_shield[3].z * {1}.a * 0.00999999978;"
         "\n    let bump_pos = {0} + select(bump_n, normalize(bump_n), dot(bump_n, bump_n) > 1e-10) * bump_k;",
         pos, clr, nrm);
   };

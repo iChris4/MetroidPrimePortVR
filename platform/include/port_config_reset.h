@@ -27,6 +27,8 @@
 #include <system_error>
 #include <vector>
 
+#include "port_utf8_path.h"
+
 namespace PortConfigReset {
 
 namespace fs = std::filesystem;
@@ -74,13 +76,6 @@ inline bool IsPreservedSetting(std::string_view key) {
 
 namespace detail {
 
-inline std::string Utf8(const fs::path& path) {
-  const std::u8string text = path.u8string();
-  return std::string(text.begin(), text.end());
-}
-
-inline fs::path FromUtf8Path(const std::string& text) { return fs::path(std::u8string(text.begin(), text.end())); }
-
 inline std::string Stamp() {
   const std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
   std::tm parts{};
@@ -106,7 +101,7 @@ inline fs::path MakeBackupDir(const fs::path& dir, std::string& error) {
       return candidate;
     }
     if (ec) {
-      error = "could not create " + Utf8(candidate) + ": " + ec.message();
+      error = "could not create " + PortUtf8::ToUtf8(candidate) + ": " + ec.message();
       return {};
     }
   }
@@ -145,7 +140,7 @@ inline Result Reset(const fs::path& dir, const std::function< bool(const std::st
   Result result;
   std::error_code ec;
   if (!fs::is_directory(dir, ec)) {
-    result.error = "user folder not found: " + detail::Utf8(dir);
+    result.error = "user folder not found: " + PortUtf8::ToUtf8(dir);
     return result;
   }
 
@@ -157,13 +152,13 @@ inline Result Reset(const fs::path& dir, const std::function< bool(const std::st
     names.emplace_back(fixed[i]);
   }
   for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
-    const std::string name = detail::Utf8(it->path().filename());
+    const std::string name = PortUtf8::ToUtf8(it->path().filename());
     if (IsResettable(name) && std::find(names.begin(), names.end(), name) == names.end()) {
       names.push_back(name);
     }
   }
   if (ec) {
-    result.error = "could not list " + detail::Utf8(dir) + ": " + ec.message();
+    result.error = "could not list " + PortUtf8::ToUtf8(dir) + ": " + ec.message();
     return result;
   }
   std::vector<std::string> present;
@@ -230,7 +225,7 @@ inline Result Reset(const fs::path& dir, const std::function< bool(const std::st
     if (stuck.empty() && fs::remove(backup, rm)) {
       result.backupDir.clear();
     } else {
-      result.backupDir = detail::Utf8(backup);
+      result.backupDir = PortUtf8::ToUtf8(backup);
     }
     return result;
   };
@@ -266,7 +261,7 @@ inline Result Reset(const fs::path& dir, const std::function< bool(const std::st
 
   result.ok = true;
   result.moved = true;
-  result.backupDir = detail::Utf8(backup);
+  result.backupDir = PortUtf8::ToUtf8(backup);
   result.files = moved;
   return result;
 }

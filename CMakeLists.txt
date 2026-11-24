@@ -200,6 +200,7 @@ list(APPEND MP_GAME_SOURCES
     platform/port_raster_font.cpp
     platform/port_morph_ball.cpp
     platform/port_automapper.cpp
+    platform/port_text.cpp
     platform/port_particle_vfx_read.cpp
     platform/port_element_gen.cpp
     platform/port_entity_schema.cpp
@@ -235,8 +236,15 @@ if(MSVC)
         target_compile_options(mp_game PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/Zc:strictStrings->)
     endif()
 else()
+    # The game was written for Metrowerks, which neither assumes strict aliasing
+    # nor that signed overflow can't happen; the decomp reads floats through int
+    # pointers (__HI in CVector3f.cpp). MSVC and clang-cl don't alias-optimise.
     target_compile_options(mp_game PRIVATE
+        -fno-strict-aliasing -fwrapv
         -Wformat -Werror=return-type -Wno-narrowing -Wno-multichar -Wno-write-strings
+        # rstl's smart pointers delete in headers: on an incomplete type that silently skips
+        # the destructor, and which unit's copy survives the link is arbitrary.
+        $<$<COMPILE_LANGUAGE:CXX>:-Werror=delete-incomplete>
         -include ${CMAKE_CURRENT_SOURCE_DIR}/platform/compat.h)
 endif()
 
@@ -360,6 +368,7 @@ set(MP_PORT_SOURCES
     platform/debug_ui/window.cpp
     platform/port_input_settings.cpp
     platform/port_gyro_motion.cpp
+    platform/port_steam_triton.cpp
     platform/disc.cpp
     platform/shims.cpp
     platform/sdk_stubs.cpp
@@ -369,6 +378,7 @@ set(MP_PORT_SOURCES
     platform/port_prompts.cpp
     platform/port_controls.cpp
     platform/input/port_input_devices.cpp
+    platform/input/port_steam_triton_hid.cpp
     platform/input/port_input_engine.cpp
     platform/input/port_input_bindings.cpp
     platform/input/port_input_remap_ui.cpp
@@ -456,6 +466,7 @@ set(MP_PORT_SOURCES
     platform/port_hud_bars.cpp
     platform/port_hud_bars_file.cpp
     platform/port_speedrun_timer.cpp
+    platform/port_imgui_fonts.cpp
     platform/port_remastered_font.cpp
     platform/port_remastered_hud.cpp
     platform/port_remastered_map.cpp
@@ -1732,6 +1743,12 @@ if(MP_BUILD_TESTS)
         INCLUDES platform/include)
     mp_port_test(port_gyro_motion_tests
         SOURCES tests/port_gyro_motion.cpp platform/port_gyro_motion.cpp
+        INCLUDES platform/include)
+    # The Steam Controller (2026), Steam Deck, Sony and Nintendo reports
+    # (platform/port_steam_triton.cpp): state reports captured from a controller, their axes and
+    # scaling, the back buttons and the IMU enable request.
+    mp_port_test(port_steam_triton_tests
+        SOURCES tests/port_steam_triton.cpp platform/port_steam_triton.cpp platform/port_gyro_motion.cpp
         INCLUDES platform/include)
     # The Windows renderer choice (issue #135): the names the settings file and
     # MP_GRAPHICS_BACKEND carry, the per-run override that outranks the file, and the

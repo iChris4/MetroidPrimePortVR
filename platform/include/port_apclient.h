@@ -77,6 +77,15 @@ bool SameSoloSeed(const std::string& a, const std::string& b);
 bool DeleteSolo(const std::string& seedName, std::string& error);
 // Ends the session and keeps it off at the next launch, until Connect.
 bool Disconnect(std::string& error);
+// A room handed over by another app (Android: the connect intent, see
+// docs/ARCHIPELAGO.md). The activity leaves the details in `path`, a JSON
+// object with "server", "slot" and "password". OpenHandOff names that file once
+// the user directory is known and takes what a launch left there;
+// HandOffArrived takes one left while the game runs, and does nothing before
+// OpenHandOff. The file is deleted as it is read, and the room goes through
+// Connect. Both are safe from any thread.
+void OpenHandOff(const std::string& path);
+void HandOffArrived();
 // The directory whose memory card the running Archipelago game saves to, or ""
 // for the default card (no session, or its seed not known yet).
 std::string SaveCardDirectory();

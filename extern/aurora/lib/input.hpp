@@ -60,6 +60,8 @@ void visionos_refresh_vr_controllers() noexcept;
 #endif
 Sint32 player_index(Uint32 instance) noexcept;
 void set_player_index(Uint32 instance, Sint32 index) noexcept;
+bool take_first_port(Uint32 instance) noexcept; // Port
+void restore_saved_ports() noexcept; // Port
 std::string controller_name(Uint32 instance) noexcept;
 bool is_gamecube(Uint32 instance) noexcept;
 bool controller_has_rumble(Uint32 instance) noexcept;

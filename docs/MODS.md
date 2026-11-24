@@ -5,7 +5,7 @@ formats and the technical details are in [`docs/MOD_FORMATS.md`](MOD_FORMATS.md)
 repository).
 
 - [Community mods](#community-mods)
-- [Installing mods](#installing-mods)
+- [Installing mods](#installing-mods): [Translating the port's own text](#translating-the-ports-own-text)
 - [Built-in mods](#built-in-mods): [Full Flaahgra theme](#full-flaahgra-theme-ntsc-discs),
   [Metroid Prime Remastered](#metroid-prime-remastered),
   [Metroid Dread Samus models](#metroid-dread-samus-models)
@@ -79,6 +79,43 @@ disabled mods take effect on reload, PAK resources and native `.dds` textures al
 
 Change the folder first, then reload: until then the game still reads the old files, so don't
 delete a loaded mod and keep playing.
+
+### Translating the port's own text
+
+Text the port adds to the game's screens (the main menu's Exit Game, the options it adds to the
+pause menu and their choices, the map's legend entries and Mark room prompt, the save station's
+Warp to start) is a string table of its own, STRG `504F5254`, which no disc has. A translation
+mod ships it as `504F5254.STRG` beside its other tables, in the same language sections; the
+log then says `text: the port's strings come from a mod (<n> of <total>)`.
+
+- A string the table doesn't have (an older table from before a port version added strings, or
+  an empty one) stays English, so a translation keeps working as the port adds text.
+- Strings keep their index across versions; new ones are only added at the end.
+- The usual markup works (`&push;&main-color=...;`). Exit Game fills letter by letter while it's
+  held, spaces skipped.
+- The map legend entries (4 to 8) go two to a line inside the disc legend's width: keep each to
+  about 9 characters and a line's pair to about 15, or the legend's tail stays on screen while
+  its panel slides away.
+- The F1 overlay, the console and Archipelago or randomizer messages stay English.
+
+| # | English | # | English | # | English |
+| --- | --- | --- | --- | --- | --- |
+| 0 | Exit Game | 16 | Shoot in Scan Visor | 32 | Pickup Dots |
+| 1 | Warp to start | 17 | Toggle Grapple | 33 | Crosshair Size |
+| 2 | Mark room | 18 | Toggle Spider Ball | 34 | Skippable Cutscenes |
+| 3 | Unmark room | 19 | Aim Lock-On | 35 | Elevator Ride |
+| 4 | Major | 20 | Sticky Charge | 36 | Original Experience |
+| 5 | Minor | 21 | Remastered Charge | 37 | Photo Mode |
+| 6 | Collected | 22 | Field of View | 38 | 4:3 |
+| 7 | Pickup | 23 | Morph Ball Follows FOV | 39 | 16:9 |
+| 8 | Marked | 24 | Arm Cannon Follows FOV | 40 | Window |
+| 9 | Aspect Ratio | 25 | Arm Cannon FOV | 41 | Original |
+| 10 | Widescreen HUD | 26 | Anti-Aliasing | 42 | Fast |
+| 11 | Twin Stick Aim | 27 | HUD Scale | 43 | Skip |
+| 12 | Stick Aim Speed | 28 | Hide Helmet | 44 | Off |
+| 13 | Fast Morph | 29 | Hide Visor Effects | 45 | Seen |
+| 14 | Toggle Lock-On | 30 | In-Game Timer | 46 | All |
+| 15 | Shoot While Grappling | 31 | Reveal Map | 47 | Rooms |
 
 ## Built-in mods
 
@@ -330,9 +367,11 @@ Power Suit stays Prime's.
   (`echoes_first_person_cannon`, on by default; console `echoescannon 0|1`) switches it, from the
   next beam selected.
 - "Play as Dark Samus" (`echoes_dark_samus`, off by default; console `darksamus 0|1`) puts Echoes'
-  Dark Samus body in place of every suit's, in third person, cutscenes and the pause screen, from
-  the next mod reload. Her skeleton and bind pose are Echoes Samus's, so she is fitted like the
-  suits. The first-person arm and the Morph Ball stay the suit's (Echoes has neither for her).
+  Dark Samus body in place of every suit's, in third person, cutscenes and the pause screen, and
+  her Morph Ball (the one from the Aerie fight) in place of every suit's ball, from the next mod
+  reload. Her skeleton and bind pose are Echoes Samus's, so she is fitted like the suits. The
+  first-person arm stays the suit's (Echoes has none for her). Imports from before mod version 8
+  have no ball; import again.
 
 ## Texture packs
 
@@ -369,7 +408,7 @@ may hold subfolders `xbox`, `playstation`, `switch`, `gamecube`, `standard` and 
 - Only deliberate input switches it: a key press, a mouse move or click, a pad button, or a stick
   or trigger pushed past half way. The touch overlay's virtual pad does not count.
 - F1 Controls > Options "Button glyphs" (`prompt_glyphs=`) pins one set (Xbox, PlayStation,
-  Nintendo Switch, GameCube or keyboard & mouse), and `MP_TEXTURE_DEVICE` forces any name.
+  Nintendo Switch, GameCube, keyboard & mouse or Steam Deck), and `MP_TEXTURE_DEVICE` forces any name.
 - A folder with no subfolders is a single device-agnostic pack. A folder that has device
   subfolders but not the one selected loads nothing rather than mixing packs.
 - Prompts follow your bindings: rebinding a key, mouse or pad button changes the prompt.

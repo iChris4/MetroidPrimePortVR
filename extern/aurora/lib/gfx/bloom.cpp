@@ -7,6 +7,7 @@
 #include "../webgpu/gpu_prof.hpp"
 #include "frame.hpp"
 #include "hdr_tone.hpp"
+#include "pipeline_cache.hpp"
 #include "readback_slots.hpp"
 #include "recording.hpp"
 #include "stereo_shadow.hpp"
@@ -861,6 +862,11 @@ std::mutex g_measureMutex;
 std::array<Measure, MeasureSlots> g_measures;
 uint32_t g_nextMeasure = 0;
 uint64_t g_measureFrame = UINT64_MAX;
+// Render thread (encode_measure): the dropped-draw count at the last measure, and how many measures
+// in a row have been passed over for drops since.
+uint64_t g_measureSkipped = 0;
+uint32_t g_measureSkipRun = 0;
+constexpr uint32_t MeasureSkipLimit = 300; // 5 s at 60 fps
 
 uint32_t ceil_pow2(uint32_t v) {
   uint32_t p = 1;
@@ -917,6 +923,19 @@ void encode_measure(const EncoderTaskContext& ctx, const wgpu::CommandEncoder& c
   if (!hdr_source_valid(measure.color, measure.resolved, samples)) {
     Log.warn("scene measure: the recorded scene is not a valid {}-sample RGBA16F target; skipped", samples);
     return;
+  }
+  // Draws dropped since the last measure for pipelines still building (lazy mode on Android, a
+  // room's first visit): the opaque scene is missing part of the room, and measured it pulls the
+  // exposure toward a near-empty frame, then the room appears white or black. Remastered never
+  // drops a draw; the last value stays, as after a failed readback. A pipeline that never builds
+  // must not freeze the exposure: after MeasureSkipLimit such measures in a row, measure anyway.
+  if (const uint64_t skipped = skipped_draw_count(); skipped != g_measureSkipped) {
+    g_measureSkipped = skipped;
+    if (++g_measureSkipRun <= MeasureSkipLimit) {
+      return;
+    }
+  } else {
+    g_measureSkipRun = 0;
   }
   const auto& source = samples > 1 ? measure.resolved : measure.color;
   ensure_pipelines();

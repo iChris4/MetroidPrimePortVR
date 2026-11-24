@@ -187,6 +187,10 @@ void PADSetPortForIndex(u32 index, u32 port);
 s32 PADGetIndexForPort(u32 port);
 void PADGetVidPid(u32 port, u32* vid, u32* pid);
 void PADClearPort(u32 port);
+/* Port: the controller with this SDL joystick id takes port 0 without saving the choice */
+BOOL PADTakeFirstPort(u32 instance);
+/* Port: put the saved port choices back after PADTakeFirstPort moved controllers */
+void PADRestoreSavedPorts();
 const char* PADGetName(u32 port);
 void PADSetButtonMapping(u32 port, PADButtonMapping mapping);
 void PADSetAllButtonMappings(u32 port, PADButtonMapping buttons[PAD_BUTTON_COUNT]);

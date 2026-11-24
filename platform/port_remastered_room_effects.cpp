@@ -4,6 +4,7 @@
 #include "port_queen_barrier_assets.h"
 #include "port_room_effects.h"
 #include "port_maya_spline.h"
+#include "port_strings.h"
 
 #include <iterator>
 
@@ -137,18 +138,7 @@ constexpr uint32_t kBarrierRetailModel = 0x6556EEC5;
 constexpr uint32_t kRetailControllerFunction = 8;
 constexpr size_t kNoIndex = static_cast<size_t>(-1);
 
-int HexDigit(char c) {
-  if (c >= '0' && c <= '9') {
-    return c - '0';
-  }
-  if (c >= 'a' && c <= 'f') {
-    return c - 'a' + 10;
-  }
-  if (c >= 'A' && c <= 'F') {
-    return c - 'A' + 10;
-  }
-  return -1;
-}
+using port::HexDigit;
 
 // A guid in the text the asset table holds it (8-4-4-4-12, its digits' case free), as the 16
 // bytes a ROOM property stores it: the same order Variable::guid uses.

@@ -4,6 +4,7 @@
 #include "port_gci.h"
 #include "port_log.h"
 #include "port_mods.h"
+#include "port_utf8_path.h"
 
 #include "Kyoto/CRandom16.hpp"
 #include "Kyoto/Particles/CElementGen.hpp"
@@ -253,7 +254,7 @@ void BeginArea(uint32_t mrea) {
   if (path.empty()) {
     return;
   }
-  std::ifstream in(PortGci::PathFromString(path), std::ios::binary);
+  std::ifstream in(PortUtf8::FromUtf8(path), std::ios::binary);
   const std::vector<uint8_t> data{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
   std::string error;
   if (data.empty() || !Parse(data, sFile, error)) {

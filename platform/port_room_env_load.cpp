@@ -3,6 +3,7 @@
 // hands them to the GPU. See port_room_env_internal.h.
 
 #include "port_room_env_internal.h"
+#include "port_utf8_path.h"
 
 namespace PortRoomEnv {
 namespace EnvDetail {
@@ -21,7 +22,7 @@ double MsSince(std::chrono::steady_clock::time_point t) {
 // is up to 40 MB, which stalled the render thread for 140 ms when a room loaded cold.
 Loaded ReadRoomFile(const std::string& path) {
   Loaded loaded;
-  std::ifstream in(PortGci::PathFromString(path), std::ios::binary);
+  std::ifstream in(PortUtf8::FromUtf8(path), std::ios::binary);
   std::vector<uint8_t> data = ReadAll(in);
   if (!in || !Parse(std::move(data), loaded.file, loaded.error)) {
     if (loaded.error.empty()) {

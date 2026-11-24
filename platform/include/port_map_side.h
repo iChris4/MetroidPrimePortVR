@@ -12,6 +12,7 @@
 #include "port_map_marks.h"
 #include "port_hash.h"
 #include "port_map_pickups.h"
+#include "port_utf8_path.h"
 
 // The seen pickups and room marks of a save slot, kept in a small file in the
 // port's user folder instead of only in the slot: a USA slot has no room for
@@ -68,17 +69,6 @@ inline uint64_t Fingerprint(const uint8_t* bytes, size_t size) {
   return port::Fnv1a64(bytes, size);
 }
 
-// UTF-8 text to and from paths (std::filesystem's u8 forms are char8_t), as
-// PortPaths::detail and PortGci keep them; inline here so the unit test needs
-// neither of those.
-inline std::filesystem::path PathFromUtf8(const std::string& text) {
-  return std::filesystem::path(std::u8string(text.begin(), text.end()));
-}
-inline std::string PathToUtf8(const std::filesystem::path& path) {
-  const std::u8string text = path.u8string();
-  return std::string(text.begin(), text.end());
-}
-
 // One directory, one spelling: absolute, lexically normalised and with symlinks
 // resolved, so a relative path, a trailing separator, a "." or ".." and a
 // symlink to the same directory all key the same files. Falls back to the path
@@ -90,8 +80,8 @@ inline std::string NormalizedDirectory(const std::string& directory) {
   }
   std::error_code error;
   const std::filesystem::path resolved =
-      std::filesystem::weakly_canonical(PathFromUtf8(directory), error);
-  return error ? directory : PathToUtf8(resolved);
+      std::filesystem::weakly_canonical(PortUtf8::FromUtf8(directory), error);
+  return error ? directory : PortUtf8::ToUtf8(resolved);
 }
 
 // The identity of a card, as the key's input: the directory the card resolves
@@ -141,7 +131,7 @@ inline std::vector< std::filesystem::path > KeyedFiles(const std::filesystem::pa
     const std::filesystem::path path = it->path();
     std::error_code fileError;
     if (path != skip && it->is_regular_file(fileError) && !fileError &&
-        HasKeyedName(PathToUtf8(path.filename()), prefix, suffix)) {
+        HasKeyedName(PortUtf8::ToUtf8(path.filename()), prefix, suffix)) {
       found.push_back(path);
     }
     it.increment(error);

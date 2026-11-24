@@ -74,6 +74,7 @@ public:
 
 class CScriptMazeNode : public CActor {
   friend struct PortEntitySchema; // save-state field schema (platform/include/port_entity_schema.h)
+  friend struct PortRoomState;    // save-state maze block (platform/port_savestate_room.cpp)
 public:
   CScriptMazeNode(TUniqueId uid, const rstl::string& name, const CEntityInfo& info,
                   const CTransform4f& xf, bool active, int col, int row, int side,

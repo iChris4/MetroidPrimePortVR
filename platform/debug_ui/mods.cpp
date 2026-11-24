@@ -77,7 +77,7 @@ ImportFile CheckImportFile(const char* path, const std::string& known) {
   }
   if (it->time < 0.0 || now - it->time >= 1.0) {
     std::error_code error;
-    it->exists = std::filesystem::is_regular_file(PortRemasteredStorage::PathFromUtf8(path), error);
+    it->exists = std::filesystem::is_regular_file(PortUtf8::FromUtf8(path), error);
     it->time = now;
   }
   return it->exists ? ImportFile::Ok : known == path ? ImportFile::Gone : ImportFile::NotFound;

@@ -7,6 +7,7 @@
 #include "port_retail_placement.h"
 #include "port_dread_reskin.h"
 #include "port_remastered_anim.h"
+#include "port_utf8_path.h"
 
 namespace PortRemastered {
 namespace ImportDetail {
@@ -126,12 +127,9 @@ ImportState sState;
 std::thread sThread;
 std::atomic<bool> sCancel{false};
 
-fs::path PathFromString(const std::string& text) { return fs::path(std::u8string(text.begin(), text.end())); }
+using PortUtf8::FromUtf8;
 
-std::string PathString(const fs::path& path) {
-  const std::u8string text = path.u8string();
-  return std::string(text.begin(), text.end());
-}
+using PortUtf8::ToUtf8;
 
 void SetMessage(const std::string& message) {
   std::lock_guard<std::mutex> lock(sStateMutex);
@@ -426,7 +424,7 @@ bool WriteManifest(const fs::path& path, const Manifest& manifest) {
 bool LinkFiles(const fs::path& source, const fs::path& target, const std::vector<std::string>& files) {
   std::error_code ec;
   for (const std::string& name : files) {
-    const fs::path relative = PathFromString(name).lexically_normal();
+    const fs::path relative = FromUtf8(name).lexically_normal();
     if (relative.empty() || relative.is_absolute() || relative.has_root_path() || *relative.begin() == "..") {
       return false;
     }
@@ -436,8 +434,8 @@ bool LinkFiles(const fs::path& source, const fs::path& target, const std::vector
   }
   std::vector<fs::path> linked;
   for (const std::string& name : files) {
-    const fs::path from = source / PathFromString(name);
-    const fs::path to = target / PathFromString(name);
+    const fs::path from = source / FromUtf8(name);
+    const fs::path to = target / FromUtf8(name);
     if (fs::exists(to, ec)) {
       continue;
     }
@@ -513,7 +511,7 @@ public:
       std::string line = key + '\t' + entry.value;
       bool there = true;
       for (const std::string& file : entry.files) {
-        there = there && fs::is_regular_file(mod / PathFromString(file), ec);
+        there = there && fs::is_regular_file(mod / FromUtf8(file), ec);
         line += '\t' + file;
       }
       if (there) {
@@ -554,7 +552,7 @@ bool WriteReplacing(const fs::path& path, const std::vector<uint8_t>& data) {
 
 fs::path StagingFolder() {
   const std::string root = ImportRootFolder();
-  return root.empty() ? fs::path() : PathFromString(root) / kStagingName;
+  return root.empty() ? fs::path() : FromUtf8(root) / kStagingName;
 }
 
 #if defined(__ANDROID__)
@@ -577,8 +575,8 @@ std::string LegacySharedImport() {
     return {};
   }
   std::error_code ec;
-  const fs::path legacy = PathFromString(mods) / kImportModName;
-  return fs::is_directory(legacy, ec) ? PathString(legacy) : std::string();
+  const fs::path legacy = FromUtf8(mods) / kImportModName;
+  return fs::is_directory(legacy, ec) ? ToUtf8(legacy) : std::string();
 }
 
 // Where a finished import that is not yet in place waits while the next one reuses it.
@@ -1641,11 +1639,11 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
     std::error_code legacyEc;
     const bool installedUsable = fs::is_regular_file(source / kManifestName, installedEc);
     const bool legacyUsable =
-        !legacy.empty() && fs::is_regular_file(PathFromString(legacy) / kManifestName, legacyEc);
+        !legacy.empty() && fs::is_regular_file(FromUtf8(legacy) / kManifestName, legacyEc);
     const std::string reused =
-        PortRemasteredStorage::ReuseFolder(PathString(source), installedUsable, legacy, legacyUsable);
+        PortRemasteredStorage::ReuseFolder(ToUtf8(source), installedUsable, legacy, legacyUsable);
     if (!reused.empty()) {
-      source = PathFromString(reused);
+      source = FromUtf8(reused);
     }
   }
   fs::remove_all(staging, ec);
@@ -1714,7 +1712,7 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
   std::vector<std::string> reused;
   std::string keyCommon;  // what every stage depends on: the image and the disc
   {
-    const fs::path nsp = PathFromString(nspPath);
+    const fs::path nsp = FromUtf8(nspPath);
     const uintmax_t size = fs::file_size(nsp, ec);
     keyCommon = "|nsp " + std::to_string(ec ? 0 : size);
     const auto time = fs::last_write_time(nsp, ec);
@@ -1936,8 +1934,8 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
         std::lock_guard<std::mutex> lock(takenMutex);
         taken.insert(uint32_t(std::strtoul(name.substr(0, 8).c_str(), nullptr, 16)));
       }
-      const fs::path path = folder / PathFromString(name);
-      const fs::path tmp = folder / PathFromString(name + ".tmp" + std::to_string(worker));
+      const fs::path path = folder / FromUtf8(name);
+      const fs::path tmp = folder / FromUtf8(name + ".tmp" + std::to_string(worker));
       {
         std::ofstream file(tmp, std::ios::binary);
         file.write(reinterpret_cast<const char*>(data.data()), std::streamsize(data.size()));
@@ -1973,16 +1971,16 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
       }
       std::error_code linkError;
       for (const std::string& file : entry.files) {
-        const fs::path relative = PathFromString(file).lexically_normal();
+        const fs::path relative = FromUtf8(file).lexically_normal();
         if (relative.empty() || relative.has_root_path() || *relative.begin() == ".." ||
             (!fs::is_regular_file(staging / relative, linkError) && !fs::is_regular_file(source / relative, linkError))) {
           return false;
         }
       }
       for (const std::string& file : entry.files) {
-        const fs::path path = staging / PathFromString(file);
+        const fs::path path = staging / FromUtf8(file);
         if (!fs::is_regular_file(path, linkError)) {
-          const fs::path from = source / PathFromString(file);
+          const fs::path from = source / FromUtf8(file);
           fs::path tmp = path;
           tmp += ".tmp" + std::to_string(worker);
           fs::remove(tmp, linkError);
@@ -2011,7 +2009,7 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
                                       const std::vector<std::string>& files) {
       TextureMemory::Entry entry{value, {}};
       for (const std::string& name : files) {
-        const std::u8string relative = (folder / PathFromString(name)).lexically_relative(staging).generic_u8string();
+        const std::u8string relative = (folder / FromUtf8(name)).lexically_relative(staging).generic_u8string();
         entry.files.emplace_back(relative.begin(), relative.end());
       }
       textureMemory.Put(prefix + key, std::move(entry));
@@ -3034,7 +3032,7 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
       io.write = [&](const std::string& name, const std::vector<uint8_t>& data) {
         const bool isGeometry = (name.size() > 8 && name.compare(name.size() - 8, 8, ".roomgeo") == 0) ||
                                 (name.size() > 11 && name.compare(name.size() - 11, 11, ".roomliquid") == 0);
-        return writeFile((isGeometry ? geometryFolder : roomFolder) / PathFromString(name), data);
+        return writeFile((isGeometry ? geometryFolder : roomFolder) / FromUtf8(name), data);
       };
       io.model = geometryId;
       io.piece = pieceId;
@@ -3045,8 +3043,8 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
       io.effect = [&](const std::array<uint8_t, 16>& genp) -> uint32_t {
         std::error_code ec;
         const uint32_t own = RoomEffectId(genp);
-        if (fs::exists(staging / PathFromString(Hex8(own) + ".PART"), ec) ||
-            fs::exists(staging / PathFromString(Hex8(own) + ".ELSC"), ec)) {
+        if (fs::exists(staging / FromUtf8(Hex8(own) + ".PART"), ec) ||
+            fs::exists(staging / FromUtf8(Hex8(own) + ".ELSC"), ec)) {
           return own;
         }
         std::array<uint8_t, 16> property = genp;
@@ -3062,7 +3060,7 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
       // would be pointed at nothing.
       io.barrierEffect = [&](uint32_t part, uint32_t feature,
                              const std::vector<std::array<uint8_t, 16>>& vars) {
-        const fs::path path = staging / PathFromString(Hex8(part) + ".PART");
+        const fs::path path = staging / FromUtf8(Hex8(part) + ".PART");
         std::ifstream in(path, std::ios::binary | std::ios::ate);
         if (!in) return false;
         const auto length = in.tellg();
@@ -3074,7 +3072,7 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
         const auto dependency = [&](uint32_t type, uint32_t id) {
           if (type != 0x54585452) return false;
           std::error_code ec;
-          const fs::path texture = staging / PathFromString(Hex8(id) + ".TXTR");
+          const fs::path texture = staging / FromUtf8(Hex8(id) + ".TXTR");
           return fs::is_regular_file(texture, ec) && !ec && fs::file_size(texture, ec) > 0 && !ec;
         };
         if (PortQueenBarrier::ValidatePart(bytes, feature, vars, dependency, reason)) return true;
@@ -3085,7 +3083,7 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
         std::vector<uint32_t> out;
         for (uint32_t id : MatchedRetailEffects(genp)) {
           std::error_code ec;
-          if (fs::exists(staging / PathFromString(Hex8(id) + ".PART"), ec)) {
+          if (fs::exists(staging / FromUtf8(Hex8(id) + ".PART"), ec)) {
             out.push_back(id);
           }
         }
@@ -4223,7 +4221,7 @@ void Run(std::string nspPath, std::string keysPath, int threads, fs::path stagin
     std::error_code checkError;
     for (const auto& [stageName, stage] : made) {
       for (const std::string& file : stage.files) {
-        if (!fs::is_regular_file(staging / PathFromString(file), checkError)) {
+        if (!fs::is_regular_file(staging / FromUtf8(file), checkError)) {
           if (missing++ == 0) {
             first = stageName + ": " + file;
           }
@@ -4331,9 +4329,9 @@ std::string ImportRootFolder(std::string* error) {
   }
   // The root has to exist before anything is staged in it; SDL's internal storage path does.
   std::error_code ec;
-  fs::create_directories(PathFromString(choice.folder), ec);
+  fs::create_directories(FromUtf8(choice.folder), ec);
   ec.clear();
-  if (!fs::is_directory(PathFromString(choice.folder), ec)) {
+  if (!fs::is_directory(FromUtf8(choice.folder), ec)) {
     if (error != nullptr) {
       *error = "Cannot use the import folder " + choice.folder + (ec ? ": " + ec.message() : "");
     }
@@ -4362,8 +4360,8 @@ std::string InstalledModFolder() {
     return {};
   }
   std::error_code ec;
-  const fs::path installed = PathFromString(root) / kImportModName;
-  return fs::is_directory(installed, ec) ? PathString(installed) : std::string();
+  const fs::path installed = FromUtf8(root) / kImportModName;
+  return fs::is_directory(installed, ec) ? ToUtf8(installed) : std::string();
 }
 
 std::string DefaultKeysPath() {
@@ -4371,7 +4369,7 @@ std::string DefaultKeysPath() {
   if (home == nullptr) {
     return {};
   }
-  const fs::path path = PathFromString(home) / ".switch" / "prod.keys";
+  const fs::path path = FromUtf8(home) / ".switch" / "prod.keys";
   std::error_code ec;
   if (!fs::exists(path, ec)) {
     return {};
@@ -4395,22 +4393,22 @@ bool StartMovieImport(const std::string& nspPath, const std::string& keysPath) {
   // folder, so on Android a player who still has only that one is asked for a full import.
   std::string rootError;
   const std::string root = ImportRootFolder(&rootError);
-  const fs::path staging = root.empty() ? fs::path() : PathFromString(root) / kStagingName;
+  const fs::path staging = root.empty() ? fs::path() : FromUtf8(root) / kStagingName;
   std::error_code ec;
   const std::string legacy = LegacySharedImport();
   bool legacyExists = false;
   if (!legacy.empty()) {
-    legacyExists = fs::is_directory(PathFromString(legacy), ec);
+    legacyExists = fs::is_directory(FromUtf8(legacy), ec);
   }
   const bool privateRoot = UsesPrivateImportRoot();
   PortRemasteredStorage::MovieTarget target;
   if (!staging.empty()) {
     target = PortRemasteredStorage::ChooseMovieTarget(
-        privateRoot, PathString(staging), fs::exists(staging / kMarkerName, ec),
-        PathString(staging.parent_path() / kImportModName),
+        privateRoot, ToUtf8(staging), fs::exists(staging / kMarkerName, ec),
+        ToUtf8(staging.parent_path() / kImportModName),
         fs::is_directory(staging.parent_path() / kImportModName, ec), legacy, legacyExists);
   }
-  const fs::path mod = target.folder.empty() ? fs::path() : PathFromString(target.folder);
+  const fs::path mod = target.folder.empty() ? fs::path() : FromUtf8(target.folder);
   std::lock_guard<std::mutex> lock(sStateMutex);
   sState = {};
   if (mod.empty()) {
@@ -4440,7 +4438,7 @@ bool StartImport(const std::string& nspPath, const std::string& keysPath, int th
   // that names itself; the shared mods folder is not a fallback.
   std::string rootError;
   const std::string root = ImportRootFolder(&rootError);
-  const fs::path staging = root.empty() ? fs::path() : PathFromString(root) / kStagingName;
+  const fs::path staging = root.empty() ? fs::path() : FromUtf8(root) / kStagingName;
   std::lock_guard<std::mutex> lock(sStateMutex);
   sState = {};
   if (staging.empty()) {
@@ -4646,14 +4644,14 @@ void RemoveLegacyImport() {
   if (root.empty() || mods.empty()) {
     return;
   }
-  const fs::path modsPath = PathFromString(mods);
+  const fs::path modsPath = FromUtf8(mods);
   // A deletion a kill interrupted resumes here.
   SweepTrash(modsPath);
   if (ImportStatus().running) {
     return;
   }
   std::error_code ec;
-  const fs::path installed = PathFromString(root) / kImportModName;
+  const fs::path installed = FromUtf8(root) / kImportModName;
   const bool installedUsable = fs::is_regular_file(installed / kManifestName, ec) &&
                                !fs::exists(installed / kMarkerName, ec);
   const fs::path legacy = modsPath / kImportModName;

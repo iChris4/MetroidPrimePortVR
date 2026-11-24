@@ -4,6 +4,7 @@
 #include "port_debug.h"
 #include "port_custom_actions.h"
 #include "port_input_map.h"
+#include "port_steam_triton.h"
 #include "port_input_remap_ui.h"
 #include "port_log.h"
 #include "port_paths.h"
@@ -33,10 +34,6 @@
 #include <fstream>
 #include <memory>
 #include <mutex>
-
-namespace aurora {
-void request_screenshot() noexcept;
-}
 
 namespace PortInputDevices {
 namespace {
@@ -457,9 +454,26 @@ void BindPortControls(Profile& p) {
   }
 }
 
-float StickValue(s16 raw, u16 deadZone, bool useDeadZones) {
-  if (useDeadZones && std::abs(static_cast< int >(raw)) <= deadZone) return 0.f;
+// `rescale` (Precise stick deadzones): tilt past the deadzone runs from 0, not from the
+// deadzone's edge, so the stick doesn't jump when it leaves it.
+float StickValue(s16 raw, u16 deadZone, bool useDeadZones, bool rescale = false) {
+  const int magnitude = std::abs(static_cast< int >(raw));
+  if (useDeadZones && magnitude <= deadZone) return 0.f;
+  if (useDeadZones && rescale) {
+    const float past =
+        static_cast< float >(magnitude - deadZone) / static_cast< float >(std::max(32767 - deadZone, 1));
+    return std::copysign(std::min(past, 1.f), static_cast< float >(raw));
+  }
   return std::clamp(static_cast< float >(raw) / 32767.f, -1.f, 1.f);
+}
+
+// Precise stick deadzones: the game's PADClamp drops the first 15 of 127 units of each stick
+// axis, and its integer scaling the 16th, before Samus moves or aims. A value past the port's
+// own deadzone reaches the game from 17 up instead, so the slider is the only deadzone.
+float PastGameClamp(float v) {
+  if (v == 0.f || !PortDebug::PreciseStickDeadZones()) return v;
+  // StickX/StickY truncate v * 32767 / 256; the half unit keeps 17 and 127 exact.
+  return std::copysign((17.5f + std::min(std::fabs(v), 1.f) * 110.f) / 128.f, v);
 }
 
 uint16_t GameContexts();
@@ -477,13 +491,14 @@ void FillRawState(PortInput::RawState& raw, unsigned mouseHeld, bool focused) {
     raw.padButtons = pad.buttons;
     const PADDeadZones* dz = PADGetDeadZones(kPort);
     const bool useDz = dz != nullptr && dz->useDeadzones;
+    const bool precise = PortDebug::PreciseStickDeadZones();
     for (int a = 0; a < PAD_RAW_AXIS_COUNT; ++a) {
       if (a == SDL_GAMEPAD_AXIS_LEFT_TRIGGER || a == SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) {
         raw.padAxes[a] = std::max(0.f, static_cast< float >(pad.axes[a]) / 32767.f);
       } else {
         const bool left = a == SDL_GAMEPAD_AXIS_LEFTX || a == SDL_GAMEPAD_AXIS_LEFTY;
         raw.padAxes[a] = StickValue(pad.axes[a], dz == nullptr ? 0 : left ? dz->stickDeadZone : dz->substickDeadZone,
-                                    useDz);
+                                    useDz, precise);
       }
     }
     // Flick stick turns by the right stick's angle: a dead zone per axis zeroes
@@ -494,10 +509,16 @@ void FillRawState(PortInput::RawState& raw, unsigned mouseHeld, bool focused) {
       const float y = static_cast< float >(pad.axes[SDL_GAMEPAD_AXIS_RIGHTY]);
       const float dzr = static_cast< float >(dz->substickDeadZone);
       const bool inside = x * x + y * y <= dzr * dzr;
-      raw.padAxes[SDL_GAMEPAD_AXIS_RIGHTX] = inside ? 0.f : StickValue(pad.axes[SDL_GAMEPAD_AXIS_RIGHTX], 0, false);
-      raw.padAxes[SDL_GAMEPAD_AXIS_RIGHTY] = inside ? 0.f : StickValue(pad.axes[SDL_GAMEPAD_AXIS_RIGHTY], 0, false);
+      // Rescaled, the tilt runs from the round dead zone's edge (the flick then skips it).
+      const float length = std::sqrt(x * x + y * y);
+      const float scale = !inside && precise ? std::min((length - dzr) / std::max(32767.f - dzr, 1.f), 1.f) / length
+                                             : 1.f / 32767.f;
+      raw.padAxes[SDL_GAMEPAD_AXIS_RIGHTX] = inside ? 0.f : std::clamp(x * scale, -1.f, 1.f);
+      raw.padAxes[SDL_GAMEPAD_AXIS_RIGHTY] = inside ? 0.f : std::clamp(y * scale, -1.f, 1.f);
     }
   }
+  // The back buttons of the controller behind Steam Input's virtual pad, which has none (Player 1).
+  raw.padButtons |= PortSteamTriton::Paddles();
 
   uint32_t mouse = 0;
   // Aurora reads a key slot's mouse button with SDL_GetMouseState.
@@ -929,6 +950,8 @@ void ReadRaw(PortInput::RawState& raw) {
       raw.padAxes[a] = std::clamp(static_cast< float >(pad.axes[a]) / 32767.f, -1.f, 1.f);
     }
   }
+  // The back buttons of the controller behind Steam Input's virtual pad, which has none.
+  raw.padButtons |= PortSteamTriton::Paddles();
   raw.mouseButtons = (SDL_GetMouseState(nullptr, nullptr) & PortInputMap::kMouseButtonMask) << kMouseKeySlot;
   raw.touch = TouchBits(sTouchControls);
 }
@@ -1193,6 +1216,8 @@ bool PromptButtonInput(unsigned padButton, PortInput::Family family, Input& out)
   return PromptInputFor({menu->menu, game}, family, out);
 }
 
+uint16_t PromptContexts() { return GameContexts(); }
+
 bool PromptAxisInput(PADAxis axis, PortInput::Family family, Input& out) {
   // On the map a bound map row (rotate on the control stick, pan on the C-stick) comes first.
   const Action game = PadAxisAction(axis);
@@ -1224,10 +1249,10 @@ PADStatus Synthesize(const PortInput::Output& out) {
     }
     return v;
   };
-  s.stickX = StickX(stick(Action::MainRight), stick(Action::MainLeft));
-  s.stickY = StickY(stick(Action::MainDown), stick(Action::MainUp));
-  s.substickX = StickX(stick(Action::CRight), stick(Action::CLeft));
-  s.substickY = StickY(stick(Action::CDown), stick(Action::CUp));
+  s.stickX = StickX(PastGameClamp(stick(Action::MainRight) - stick(Action::MainLeft)), 0.f);
+  s.stickY = StickY(PastGameClamp(stick(Action::MainDown) - stick(Action::MainUp)), 0.f);
+  s.substickX = StickX(PastGameClamp(stick(Action::CRight) - stick(Action::CLeft)), 0.f);
+  s.substickY = StickY(PastGameClamp(stick(Action::CDown) - stick(Action::CUp)), 0.f);
   // An open radial menu takes the C-stick (PortRadial::Tick), so it doesn't swap beams too.
   if (PortRadial::Capturing()) s.substickX = s.substickY = 0;
   s.triggerLeft = Trigger(std::max(out.Value(Action::LAnalog), out.Value(Action::MenuLAnalog)), (s.button & PAD_TRIGGER_L) != 0);
@@ -1383,7 +1408,7 @@ void PollPortActions() {
   if (out.Pressed(Action::PortMenu)) PortDebug::RequestToggle();
   if (out.Pressed(Action::SaveState)) PortDebug::RequestSaveStateHotkey(1);
   if (out.Pressed(Action::LoadState)) PortDebug::RequestSaveStateHotkey(2);
-  if (out.Pressed(Action::Screenshot)) aurora::request_screenshot();
+  if (out.Pressed(Action::Screenshot)) PortPhoto::RequestScreenshot();
   if (out.Pressed(Action::PhotoMode)) PortPhoto::RequestToggle();
   if (out.Pressed(Action::ToggleOriginal)) PortDebug::SetOriginalExperience(!PortDebug::OriginalExperience());
   if (out.Pressed(Action::ToggleRemastered)) PortDebug::ToggleRemastered();

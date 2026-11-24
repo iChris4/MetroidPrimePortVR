@@ -431,6 +431,7 @@ public:
   bool IsFastMorphTransition() const {
     return x578_morphDuration > 0.f && x578_morphDuration < 1.f;
   }
+  float GetMorphDuration() const { return x578_morphDuration; }
 #endif
   const CScriptWater* GetVisorRunoffEffect(const CStateManager& mgr) const;
   void SetMorphBallState(EPlayerMorphBallState state, CStateManager& mgr);

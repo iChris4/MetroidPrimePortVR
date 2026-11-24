@@ -42,6 +42,7 @@
 #include "port_gci.h"
 #include "port_storage_report.h"
 #include "port_gpu_driver.h"
+#include "port_imgui_fonts.h"
 
 #include <SDL3/SDL_dialog.h>
 #include <SDL3/SDL_events.h>
@@ -50,6 +51,7 @@
 #include <SDL3/SDL_platform_defines.h>
 #if defined(SDL_PLATFORM_IOS)
 #include "port_ios.h"
+#include "port_utf8_path.h"
 #endif
 #include <SDL3/SDL_iostream.h>
 #include <SDL3/SDL_messagebox.h>
@@ -187,7 +189,7 @@ DiscMatch MatchDiscImage(const std::filesystem::path& path) {
     }
     // Through SDL with a UTF-8 name: std::fopen on Windows takes the ANSI code
     // page, which cannot name every folder a user might unpack the game into.
-    SDL_IOStream* file = SDL_IOFromFile(PortPaths::detail::ToUtf8(path).c_str(), "rb");
+    SDL_IOStream* file = SDL_IOFromFile(PortUtf8::ToUtf8(path).c_str(), "rb");
     if (file == nullptr) {
         return DiscMatch::No;
     }
@@ -226,7 +228,7 @@ std::string FindDiscNextToExecutable() {
     // and this runs before anything that could report it, so nothing escapes.
     try {
         std::error_code ec;
-        const fs::path baseDir = PortPaths::detail::FromUtf8(base);
+        const fs::path baseDir = PortUtf8::FromUtf8(base);
         std::vector<fs::path> dirs{baseDir};
         for (fs::directory_iterator it(baseDir, ec), end; !ec && it != end; it.increment(ec)) {
             std::error_code entryEc;
@@ -250,10 +252,10 @@ std::string FindDiscNextToExecutable() {
             for (const fs::path& file : files) {
                 const DiscMatch match = MatchDiscImage(file);
                 if (match == DiscMatch::Yes) {
-                    return PortPaths::detail::ToUtf8(file);
+                    return PortUtf8::ToUtf8(file);
                 }
                 if (match == DiscMatch::Maybe && maybe.empty()) {
-                    maybe = PortPaths::detail::ToUtf8(file);
+                    maybe = PortUtf8::ToUtf8(file);
                 }
             }
         }
@@ -961,6 +963,13 @@ int main(int argc, char** argv) {
         PortLog::Write("port: portable data: %s\n", line.c_str());
     }
     PortRandomizer::EnsureLoaded();
+#if defined(__ANDROID__)
+    // A room the connect intent brought (MetroidPrimeActivity.takeArchipelagoRoom):
+    // saved before the client starts, so it starts with that room.
+    if (const char* dir = SDL_GetAndroidInternalStoragePath(); dir != nullptr) {
+        PortAp::OpenHandOff((std::filesystem::path(dir) / "pending_ap_connect.json").string());
+    }
+#endif
     PortAp::EnsureLoaded();
     // A 16:9 window when widescreen is requested; the game's render mode is
     // widened to match. Values are the default window size only.
@@ -1084,14 +1093,22 @@ int main(int argc, char** argv) {
     // Built pipelines stay until memory runs short (issue #187), areas left long ago included, so
     // walking back is free. Lazy mode trims on the system's memory warnings (port_memory_log.cpp) and
     // on a headroom check every 5 s (MemAvailable; Windows: also commit and the GPU budget): under 1024 MiB available it releases what a minute of
-    // frames didn't draw, under 512 MiB all but what the last frames drew (GLOBAL pipelines stay).
+    // frames didn't draw, under 512 MiB what 30 s didn't (GLOBAL pipelines stay; a shorter window freed
+    // actors that left the view for a moment, then hid them while they rebuilt).
     // An 8 GB phone or tablet runs the game with 2-4 GB available; Android's own low-memory
     // threshold (logged with each memory warning) is a few hundred MiB, so 1024 trims well before
-    // the system starts killing apps and 512 just above it. Overrides: MP_PIPELINE_TRIM_MIB and
-    // MP_PIPELINE_TRIM_SEVERE_MIB (0 turns a level off), MP_PIPELINE_EVICT (a fixed idle sweep).
+    // the system starts killing apps and 512 just above it. Android has no moderate level: a 3-4 GB
+    // phone sits under 1024 MiB available all the time, and rebuilding a pipeline costs up to 2 s on
+    // a Mali (MP2 issue #98). Overrides: MP_PIPELINE_TRIM_MIB and MP_PIPELINE_TRIM_SEVERE_MIB (0
+    // turns a level off), MP_PIPELINE_EVICT (a fixed idle sweep).
     uint32_t pipelineEvictFrames = 0;
     if (pipelineLazy) {
-        const int trimMib = port::EnvInt("MP_PIPELINE_TRIM_MIB", 1024);
+#ifdef __ANDROID__
+        constexpr int kDefaultTrimMib = 0;
+#else
+        constexpr int kDefaultTrimMib = 1024;
+#endif
+        const int trimMib = port::EnvInt("MP_PIPELINE_TRIM_MIB", kDefaultTrimMib);
         const int severeMib = port::EnvInt("MP_PIPELINE_TRIM_SEVERE_MIB", 512);
         PortMemoryLog::SetPipelinePressure(trimMib, severeMib);
         if (port::EnvString("MP_PIPELINE_TRIM_MIB") != nullptr ||
@@ -1224,7 +1241,7 @@ int main(int argc, char** argv) {
         .logCallback = StderrLogCallback,
 #endif
         .logLevel = LOG_DEBUG,
-        .imGuiInitCallback = nullptr,
+        .imGuiInitCallback = PortImGuiFonts::Init,
         .mem1Size = mem1Size,
         .mem2Size = ARAM_DEFAULT_SIZE,
         .frameBufferScale = frameBufferScale,
@@ -1651,12 +1668,12 @@ int main(int argc, char** argv) {
 #else
         const std::string cardBase = PortPaths::CardFolder();
 #endif
-        const std::filesystem::path user = PortGci::PathFromString(PortPaths::UserFolder());
+        const std::filesystem::path user = PortUtf8::FromUtf8(PortPaths::UserFolder());
         const std::filesystem::path card =
-            PortGci::PathFromString(cardBase) / PortGci::CardRegion() / "Card A";
+            PortUtf8::FromUtf8(cardBase) / PortGci::CardRegion() / "Card A";
         if (!cardBase.empty() && PortGci::ImportPending(user, card)) {
             PortLog::Write("metroid_prime_port: imported the memory card the launcher left in %s\n",
-                           PortGci::PathString(user / "primedgun" / "pending_import").c_str());
+                           PortUtf8::ToUtf8(user / "primedgun" / "pending_import").c_str());
         }
     }
     PortRemastered::RemoveLegacyImport();

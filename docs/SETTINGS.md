@@ -82,11 +82,12 @@
   touch controls, bindings, cheats, save states, the randomizer and Archipelago,
   rich presence and the timer stay available; the settings it forces are greyed
   out in F1.
-- Resolution scale (F1 > Video > Quality, persisted as `render_scale`): 1x-4x of the GameCube's
+- Resolution scale (F1 > Video > Quality, persisted as `render_scale`): 1x-8x of the GameCube's
   640x528 EFB, shown with the lines it draws (1x is 480p in NTSC), or the window's own size with
   "Auto render scale". Above 2x it
   supersamples (4x at 16:9 is 3755x2112; with MSAA 4 the targets take
-  several hundred MB). "Dynamic
+  several hundred MB, at 8x about 2 GB). The frame buffer is shrunk to fit the GPU's
+  texture size limit (usually 8192 or 16384). "Dynamic
   resolution" (`dynamic_resolution`) lowers the scale while the GPU cannot hold the
   "Frame rate target" (`dynamic_res_target`, 30-500 fps, 0 = "Display", the
   display's rate, however high; never above the frame rate cap), down to "Minimum resolution
@@ -373,6 +374,12 @@
   later with its type's default mappings gets the preset then, and with no
   controller connected the Remap page shows the preset's mappings. Applying a
   preset of your own clears it.
+- Player 1 on a Steam Deck: the Deck's built-in controller ranks below any other controller for
+  Player 1. A connected controller takes Player 1 from it whatever Steam's order, and the Deck
+  gets it back when that controller leaves. Choosing Player 1's controller on the Remap page saves
+  it (`controller_ports.dat`), and that choice overrides this. When Steam reports a controller by
+  its untranslated name key (`#SettingsController_...`), its mapping file is the one of the same
+  vid/pid under its real name, so one controller keeps one mapping.
 - Swap the Scan and X-Ray visor buttons (Controls > Options, persisted as
   `swap_scan_xray`, off by default): each visor takes the other's D-pad
   direction, as in Remastered (D-pad right Scan, left X-Ray).
@@ -384,9 +391,31 @@
   layout editor: slide the finger from where it pressed toward an entry (about
   72 dp reaches one) and lift to pick; a look drag points the menu too.
 - Button glyphs (Controls > Options, persisted as `prompt_glyphs`: `auto`, the
-  default, `xbox`, `playstation`, `switch`, `gamecube` or `keyboard`): which
+  default, `xbox`, `playstation`, `switch`, `gamecube`, `keyboard` or `steamdeck`): which
   buttons the game's prompts and tutorials show. Auto follows the keyboard,
   controller or touch layout last used; `gamecube` shows the game's own art.
+  A Steam Deck's own pad or a Steam Controller (also behind Steam Input) gets
+  the Steam Deck set under Auto, with L4/R4/L5/R5 for the back buttons.
+- Precise stick deadzones (Controls > Controller settings, under the deadzone
+  sliders, persisted as `precise_stick_deadzones`, off by default, env
+  `MP_PRECISE_STICK_DEADZONES=1`): the Stick and C-stick deadzone sliders become
+  the only deadzone. Tilt past a slider runs from zero instead of jumping in at
+  its edge, and each stick axis reaches the game from 17 of 127 up, past the 15
+  PADClamp drops (retail's ~12% dead tilt, left even with a slider at 0).
+  Twin-stick aim and flick stick follow it; off, the pad status is unchanged.
+- Steam Input back buttons (Controls > Touch & gyro, persisted as
+  `steam_input_back_buttons`, default on, env `MP_STEAM_INPUT_BACK_BUTTONS`;
+  Linux only). Under Steam Input, Player 1 also gets the back buttons (SDL's
+  paddles) of the physical controller behind its virtual pad, which Steam Input
+  doesn't pass to the game: L4, R4, L5, R5 on a 2026 Steam Controller or a Steam
+  Deck (shown on the Remap page as Paddle 1 (R4) and so on), the DualSense
+  Edge's back and Fn buttons, SL and SR of a Joy-Con pair (a single sideways
+  Joy-Con's are its shoulders, which Steam passes on). Bind Gyro aim to one on
+  the Remap page, say. If the game's Steam layout also maps them, one press does
+  both, so bind each in one place. The row shows which controller is behind
+  Steam Input. On its own (gyro off) this setting leaves a controller's motion
+  sensor as Steam set it. The gyro (source Auto or Controller) reads that same
+  controller directly too, since Steam's virtual pad has no motion sensor.
 - Fast Morph (Controls > Options and pause Options > Controller, persisted as
   `fast_morph`, off by default): morph ball transitions in the style of Metroid
   Prime 4. Morphing and unmorphing each take 0.2 s instead of 1 s; both
@@ -468,6 +497,9 @@
   crosshair) and "Controller settings" (stick aim and dead
   zones). **Remap > Active controller** selects any detected gamepad, including
   one assigned to player 2 or later; the choice is saved and restored on reconnect.
+  Every connected controller plays without choosing it: the one used last, the touch controls
+  included, takes over (not saved). While the saved controller is away another one, or the touch
+  controls, stands in, and picking the touch controls (or the Steam Deck's own pad) saves no choice.
   Select it here before recording its bindings in Remap. Remap's "Controller bindings for" selects
   binding profiles, not the controller used to play. Every binding is on **Controls > Remap**, below.
 - **Controls > Remap** lists all devices' bindings together, with keyboard, mouse, controller
@@ -627,9 +659,9 @@
   primary, secondary and accent, the Phazon Suit glow and accent (its body is nearly black
   and stays as it is). The suit's own diffuse textures are recoloured from your disc (the
   slot texels' hues move to the picked one, keeping their shading), so cutscenes, the pause
-  screen's doll, the first-person arm and the morph ball (the generated balls above too)
-  all change; Samus's face and the glow, visor and reflection maps stay. Made on Apply and
-  kept in `generated/suit-colours/<suit>/` in the user folder (remade when the picks, the
+  screen's doll, the first-person arm, the morph ball (the generated balls above too) and
+  the in-game body (morphing, pickup cutscenes, the third-person camera) all change;
+  Samus's face and the glow, visor and reflection maps stay. Made on Apply and kept in `generated/suit-colours/<suit>/` in the user folder (remade when the picks, the
   generator or the disc change). A texture a mod brings (the Remastered import) is left as
   it is. With "Suit-coloured morph balls" off, a suit that borrows another's ball shows
   that suit's colours on it. While the Dread Samus import is on (DREAD_SAMUS.md), the list
@@ -674,8 +706,13 @@
   muzzle as retail's do. With it off, shots start where the cannon is drawn and are aimed at
   where retail's would arrive (the aim target at its depth when assist aimed
   the shot at it, else what lies on retail's line), so they hit what retail's
-  hit (#134). Morph ball, cutscene and other scripted cameras keep
-  their own FOVs; cutscenes that end in Samus's eyes ease to the setting.
+  hit (#134). With Morph ball follows FOV (persisted as `ball_follows_fov`, default
+  on, off in the original experience; console `fov ball [0|1]`) the morph ball's
+  cameras (its own, spline and spindle cameras, and
+  camera hints' FOVs) widen or narrow in step: each FOV is scaled by the ratio of the
+  setting's view tangent to retail's 55, so retail's 60 becomes about 86 at FOV 80
+  (#268). Cutscene and other scripted cameras keep their own FOVs; cutscenes that
+  end in Samus's eyes ease to the setting.
 - Arm cannon offset (Video > Display, persisted as `gun_offset=right,forward,up`,
   metres, each -1 to 1, default 0,0,0; like PrimeHack's): moves the arm
   cannon from its retail place along the camera's axes. It moves the real gun,
@@ -845,6 +882,12 @@
   scales their alpha (the defaults leave them as on the Wii), the size slider scales them under
   direct aim, and `remastered` draws the Remastered cursor where the aiming cursor is, without
   the old crosshair.
+- Crosshair colour on enemies (Video > Display, `crosshair_target_color`, `RRGGBB` or empty
+  for off, default off, issue #277): the crosshair fades to that colour in 0.25 s while the aim
+  ray (the pointer's under pointer aim) meets a living, active, targetable enemy that a shot of
+  the current beam would hurt (the vulnerability of the part hit, as damage asks it), and back
+  off it. Every style and Trilogy's aiming cursor; in the `remastered` style it replaces the
+  red, which then also skips enemies the beam does not hurt. Original experience ignores it.
 - Crosshair in X-Ray and Crosshair in Thermal (Video > Display, `crosshair_xray` and
   `crosshair_thermal`, default off, issue #241): off fades the aiming crosshair out in
   that visor as the game does in the Scan Visor, whatever the crosshair style (on a
@@ -944,10 +987,12 @@
   default; Tracker page: Off, Seen, Rooms, All; the pause row cycles Off, Seen
   and All, with Rooms shown as the third value when set elsewhere): All draws a
   plain white dot on the map and minimap for every pickup not yet collected, in
-  rooms the map shows; Seen draws the dot only once you have looked at that
+  rooms the map shows (a secret room that a map station doesn't show, such as
+  Quarantine Monitor, gets its dot once the map station has been used); Seen draws the dot only once you have looked at that
   pickup for half a second (within 40 units, in the middle half of the view,
   with a clear line from the eye; see-through surfaces such as gratings don't
-  block it; kept per save, `pickups seen`); Rooms draws no dots but tints the rooms that
+  block it; kept per save, `pickups seen`), and a collected pickup always counts
+  as seen, so its collected mark shows however fast it was grabbed; Rooms draws no dots but tints the rooms that
   still hold an uncollected pickup amber. An old saved `1` stays All. In Seen,
   Map stations show pickups (`map_station_pickups`, on by default) also marks
   every pickup in the rooms a map station has mapped (or a hint, or Reveal map,
@@ -1209,7 +1254,8 @@ other `X:\Users\<name>`: `X:\Users\<user>`); the
   Studio). `MP_CRASH_TEST=segv|abort` crashes on purpose at startup to check it.
 - Save states (F1 > Save states): eight slots in `savestates/` under the pref
   folder (`slot<N>.mpss`). F5 saves to the selected slot and F9 loads it
-  (`savestate_hotkeys`, on by default). A state holds the whole game save
+  (`savestate_hotkeys`, on by default). The selected slot is kept between
+  launches (`state_slot`, 1-8). A state holds the whole game save
   (items, ammo, doors, pickups, map, scans, world layers) plus Samus's room,
   position, facing and morph ball state; loading reloads that world and puts
   her back. The room marks and the seen pickups come with it, whatever the
@@ -1771,8 +1817,10 @@ headers, applies the same rule to its own on/off variables (`MP_LOG_COPY_TEX`,
 
 - `MP_WATCHDOG=0`: no stall watchdog. On by default: with no frame for 5, 15, 30
   and 60 s it logs where the main and render threads are, the main thread's stack
-  at 5 and 30 s, and on Android a logcat dump. `MP_WATCHDOG_TEST_STALL=<frame>`
-  sleeps 8 s on that frame and `MP_WATCHDOG_TEST_THROW=<frame>` throws an exception
+  at 5 and 30 s, and on Android a logcat dump. Shorter freezes, frames over 250 ms,
+  get an `MP stall` line instead (the event pump's share, with the joystick update
+  in it, then input, tick and draw; `MP_NO_STALL_LOG=1` turns it off). `MP_WATCHDOG_TEST_STALL=<frame>`
+  sleeps 8 s on that frame (`MP_WATCHDOG_TEST_STALL_MS` sets the length) and `MP_WATCHDOG_TEST_THROW=<frame>` throws an exception
   there, to test it and the crash report.
 - `MP_HEAP_CHECK=1`: deep checks of the game
   heap's block links on every normal-heap free and of each frame's delayed deletions (queued
@@ -1782,10 +1830,11 @@ headers, applies the same rule to its own on/off variables (`MP_LOG_COPY_TEX`,
 - `MP_PIPELINE_LAZY=<0|1>`: build pipelines on first use instead of compiling the
   cache at startup. On by default on Android and on low-RAM devices (issue #162).
   In lazy mode, built pipelines are trimmed when memory runs short (issue #187):
-  `MP_PIPELINE_TRIM_MIB=<n>` (default 1024) releases those a minute of frames didn't
+  `MP_PIPELINE_TRIM_MIB=<n>` (default 1024; 0, off, on Android) releases those a minute of frames didn't
   draw when less than that is available (free RAM; on Windows also free commit and
   the GPU's memory budget), `MP_PIPELINE_TRIM_SEVERE_MIB=<n>` (default
-  512) all but what the last frames drew; 0 turns a level off.
+  512) those 30 s of frames didn't draw, as do Android's memory warnings in play; 0 turns a level off. GLOBAL pipelines (Samus and
+  her morph ball, gun, HUD, visors) are never trimmed.
   `MP_PIPELINE_EVICT=<frames>` adds a fixed sweep of pipelines idle that long.
 - `MP_PIPELINE_PBR=<0|1>`: compile the cached PBR pipelines at startup. By default
   only when a mod is enabled, since only converted materials draw with them.

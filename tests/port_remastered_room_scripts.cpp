@@ -98,6 +98,7 @@ struct Fixture {
     float pos[3] = {0, 0, 0};
     float scale[3] = {1, 1, 1};
     Bytes guid;  // the component's own, Guid(n) when empty: the barrier's graph is keyed by them
+    size_t layer = 0;  // the LAYR it and its entity are in
   };
   std::vector<Comp> comps;
 
@@ -110,7 +111,12 @@ struct Fixture {
     for (size_t i = 0; i < n; ++i) {
       guidOf.push_back(comps[i].guid.empty() ? Guid(i) : comps[i].guid);
     }
-    Bytes sden, idta, records;
+    size_t layers = 1;
+    for (const Comp& c : comps) {
+      layers = std::max(layers, c.layer + 1);
+    }
+    Bytes sden, idta;
+    std::vector<Bytes> records(layers);
     for (size_t i = 0; i < 2 * n; ++i) {
       const bool entity = i >= n;
       const Comp& c = comps[entity ? i - n : i];
@@ -150,9 +156,9 @@ struct Fixture {
         }
       }
       Append(idta, Chunk("IDTA", id));
-      PutLE(records, entity ? kEntity : c.type, 4);
-      PutLE(records, i, 4);
-      PutLE(records, i, 4);
+      PutLE(records[c.layer], entity ? kEntity : c.type, 4);
+      PutLE(records[c.layer], i, 4);
+      PutLE(records[c.layer], i, 4);
     }
     Bytes body;
     Append(body, Form("SDTA", [&] {
@@ -160,7 +166,11 @@ struct Fixture {
              Append(b, idta);
              return b;
            }()));
-    Append(body, Form("LYRS", Form("LAYR", Form("SRIP", Chunk("COMP", records)))));
+    Bytes lyrs;
+    for (const Bytes& r : records) {
+      Append(lyrs, Form("LAYR", Form("SRIP", Chunk("COMP", r))));
+    }
+    Append(body, Form("LYRS", lyrs));
     return Form("ROOM", body);
   }
 };
@@ -1468,6 +1478,46 @@ void TestPlatformTransformBindings() {
   }
 }
 
+// Two Waters at one place pair by the retail layer their Remastered layer's lone matches are
+// on, not by the layer index: Hive Totem's are retail's + 1, and its normal water (alone on
+// its layer) took the poison Water on its own index.
+void TestSamePlaceLayerVote() {
+  Fixture f;
+  Fixture::Comp normal = Plain(kWaterMP1), poison = Plain(kWaterMP1), dest = Plain(kWaterMP1);
+  normal.layer = 1;
+  poison.layer = dest.layer = 2;
+  normal.pos[0] = poison.pos[0] = 4;
+  dest.pos[0] = 9;
+  f.comps = {normal, poison, dest};
+  Area area;
+  area.xf[0][0] = area.xf[1][1] = area.xf[2][2] = 1.;
+  auto water = [&](uint32_t id, const float* pos) {
+    ScriptObject o;
+    o.id = id;
+    o.type = 0x20;
+    o.layer = int(id >> 26);
+    o.hasPos = true;
+    o.pos = Apply(area.xf, MulR2G(Vec3{pos[0], pos[1], pos[2]}));
+    area.objects.push_back(o);
+  };
+  water(0x04000002, poison.pos);  // retail layer 1: the poison Water and its Dest
+  water(0x04000003, dest.pos);
+  water(0x00000001, normal.pos);  // retail layer 0: the normal Water
+  const Parsed p(f);
+  const auto scripts = MatchScripts(p.room, area);
+  // Layered, the room holds its components in layer order: its entity indices are not
+  // f.Entity's.
+  const std::vector<const Component*> waters = p.room.Of(kWaterMP1);
+  REQUIRE(waters.size() == 3);
+  auto paired = [&](size_t comp) {
+    const auto it = scripts.retail.find(waters[comp]->entity);
+    return it == scripts.retail.end() ? 0u : area.objects[it->second].id;
+  };
+  CHECK_EQ(paired(0), 0x00000001u);
+  CHECK_EQ(paired(1), 0x04000002u);
+  CHECK_EQ(paired(2), 0x04000003u);
+}
+
 // Optional read-only shipped-data audit; no import output or game execution.
 void AuditModulateRooms() {
   const char* root = std::getenv("PORT_MODULATE_AUDIT_ROOT");
@@ -1556,6 +1606,7 @@ int main() {
   TestEnvFxIntensity();
   TestDynamoModulateGraph();
   TestPlatformTransformBindings();
+  TestSamePlaceLayerVote();
   AuditModulateRooms();
   AuditPlatformRoom();
   if (port_test::Failures() == 0) {

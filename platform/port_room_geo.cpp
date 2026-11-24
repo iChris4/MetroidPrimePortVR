@@ -12,6 +12,7 @@
 #include "port_log.h"
 #include "port_mods.h"
 #include "port_room_env.h"
+#include "port_utf8_path.h"
 #include "port_visor_mesh.h"
 
 #include "Kyoto/Alloc/CMemory.hpp"
@@ -958,7 +959,7 @@ void ReadLods() {
   sLodsRead = true;
   sLods.clear();
   for (const std::string& path : PortMods::RoomLodPaths()) {
-    std::ifstream in(PortGci::PathFromString(path), std::ios::binary);
+    std::ifstream in(PortUtf8::FromUtf8(path), std::ios::binary);
     const std::vector< uint8_t > data = ReadAll(in);
     std::vector< Lods > table;
     std::string error;
@@ -983,7 +984,7 @@ struct Parsed {
 
 Parsed ReadAndParse(const std::string& path) {
   Parsed parsed;
-  std::ifstream in(PortGci::PathFromString(path), std::ios::binary);
+  std::ifstream in(PortUtf8::FromUtf8(path), std::ios::binary);
   const std::vector< uint8_t > data = ReadAll(in);
   parsed.ok = in && Parse(data, parsed.instances, parsed.error, &parsed.script);
   return parsed;

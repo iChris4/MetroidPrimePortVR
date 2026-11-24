@@ -830,6 +830,7 @@ static sqlite3* open_pipeline_cache_seed_db(const std::string& path) {
     Log.info("No bundled initial pipeline cache found at '{}'", path);
     return nullptr;
   }
+  sqlite::use_memory_temp_store(seedDb);
 
   bool schemaMatch = false;
   const auto schemaQuery = fmt::format("SELECT 1 FROM aurora_schema WHERE value = {}", PipelineCacheSchema);
@@ -1746,7 +1747,8 @@ static bool load_rows(sqlite3_stmt* stmt, const CachedRowOptions& opts, CachedRo
   }
   const bool ok = ret == SQLITE_DONE;
   if (!ok) {
-    Log.error("Failed to read pipeline cache rows: {}", sqlite3_errmsg(g_pipelineCacheDb));
+    Log.error("Failed to read pipeline cache rows: {} (code {})", sqlite3_errmsg(g_pipelineCacheDb),
+              sqlite3_extended_errcode(g_pipelineCacheDb));
   }
   sqlite3_reset(stmt);
   sqlite3_clear_bindings(stmt);
@@ -2137,6 +2139,8 @@ void end_pipeline_frame() {
 }
 
 void note_skipped_draw() { g_skippedDraws.fetch_add(1, std::memory_order_relaxed); }
+
+uint64_t skipped_draw_count() { return g_skippedDraws.load(std::memory_order_relaxed); }
 
 bool get_pipeline(PipelineRef ref, wgpu::RenderPipeline& pipeline) {
   std::lock_guard guard{g_pipelineMutex};

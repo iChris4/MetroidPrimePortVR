@@ -14,6 +14,7 @@
 #include "port_paths.h"
 #include "port_remastered_txtr.h"
 #include "port_strings.h"
+#include "port_utf8_path.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -39,18 +40,21 @@ std::string FileName(uint32_t id) {
 
 // A texture to recolour: retail, or a generated ball's (port_ball_looks.h)
 // when `look` is set. `from` is a texture of `fromSuit` with the same UVs
-// whose slot split it takes.
+// whose slot split it takes. `islands` false: see Recolour.
 struct Source {
   uint32_t id;
   int look = -1;
   uint32_t from = 0;
   int fromSuit = 0;
+  bool islands = true;
 };
 
 constexpr int kPower = 0, kGravity = 1, kVaria = 2, kPhazon = 3;
 
 // Each suit's own diffuse textures: the body (cutscenes, the pause screen's
-// doll), the first-person arm, then the morph ball. See
+// doll), the first-person arm, the morph ball, then the in-game body
+// (BallTransitionsANCS: drawn while morphing and when the camera shows Samus
+// in play, as after a pickup), which has its own. See
 // build/s-suitcolour-20261022/suit_table.txt for where each is drawn.
 std::vector<Source> Sources(int suit) {
   using PortBallLooks::Look;
@@ -59,30 +63,34 @@ std::vector<Source> Sources(int suit) {
     return {{0x50BA2229}, {0xC0625536}, {0xE323D51D}, {0xEBD3C428}, {0xB2F8703C},
             {PortBallLooks::kBallPower},
             {PortModelVariant::Id(PortBallLooks::kSpiderVaria, kPower), int(Look::PowerSpider)},
-            {PortModelVariant::Id(PortBallLooks::kLowPolyVaria, kPower), int(Look::PowerSpider)}};
+            {PortModelVariant::Id(PortBallLooks::kLowPolyVaria, kPower), int(Look::PowerSpider)},
+            {0x5C02CF66}};
   case kGravity:
     return {{0x10E6A980}, {0x33A729AB}, {0xC901566D}, {0xFE5F7B41}, {0x7FD98F23}, {0x985C0EAA},
             {PortBallLooks::kSpiderGravity}, {PortBallLooks::kLowPolyGravity},
-            {PortModelVariant::Id(PortBallLooks::kBallVaria, kGravity), int(Look::Gravity)}};
+            {PortModelVariant::Id(PortBallLooks::kBallVaria, kGravity), int(Look::Gravity)},
+            {0x349AD971}};
   case kVaria:
     return {{0x18443363, -1, 0xC0625536, kPower}, {0x1C48ADEA, -1, 0x50BA2229, kPower}, {0x3B05B348},
             {0x8B774EA2, -1, 0xEBD3C428, kPower}, {0x309AA3D4, -1, 0xB2F8703C, kPower},
             {PortBallLooks::kBallVaria, -1, PortBallLooks::kBallPower, kPower},
-            {PortBallLooks::kSpiderVaria}, {PortBallLooks::kLowPolyVaria}};
+            {PortBallLooks::kSpiderVaria}, {PortBallLooks::kLowPolyVaria},
+            {0xD2149656, -1, 0, 0, false}};
   case kPhazon:
     return {{0x127E7854}, {0x287BD568}, {0x604DA35A}, {0x74C46891}, {0x32541D97}, {0xC94DD270},
             {PortBallLooks::kPhazonShell},
-            {PortModelVariant::Id(PortBallLooks::kBallVaria, kPhazon), int(Look::Phazon)}};
-  case 4: return {{0x83BF93AA}, {0x9733896D}, {0xC00F4EB6}, {0x917987E9}};
-  case 5: return {{0xD2DBEDB7}, {0xDE41AE5E}, {0x5629B84C}, {0x62D5C2D0}};
-  case 6: return {{0x0E483BE6}, {0x4445373A}, {0x3FAAF7A9}, {0x424EC5F7}};
-  case 7: return {{0x68EC596F}, {0xD033616E}, {0x9DF3B473}, {0xB1986E4B}};
+            {PortModelVariant::Id(PortBallLooks::kBallVaria, kPhazon), int(Look::Phazon)},
+            {0x08FA7447}};
+  case 4: return {{0x83BF93AA}, {0x9733896D}, {0xC00F4EB6}, {0x917987E9}, {0x100032C8}, {0x67C7C1EB}, {0x848EC21E}};
+  case 5: return {{0xD2DBEDB7}, {0xDE41AE5E}, {0x5629B84C}, {0x62D5C2D0}, {0xAA522481}, {0xF1E13711}, {0x06AE8EEA}};
+  case 6: return {{0x0E483BE6}, {0x4445373A}, {0x3FAAF7A9}, {0x424EC5F7}, {0xDE5D5172}, {0x986278F4}, {0xB809E769}};
+  case 7: return {{0x68EC596F}, {0xD033616E}, {0x9DF3B473}, {0xB1986E4B}, {0x6BE50A0D}, {0x3A3B3B2E}, {0xD09DA9D4}};
   default: return {};
   }
 }
 
 bool ReadFile(const std::string& path, std::vector<uint8_t>& out) {
-  std::ifstream in(PortPaths::detail::FromUtf8(path), std::ios::binary);
+  std::ifstream in(PortUtf8::FromUtf8(path), std::ios::binary);
   if (!in.is_open()) {
     return false;
   }
@@ -112,14 +120,14 @@ bool Put(const fs::path& dir, const std::string& name, const char* data, size_t 
     out.close();
     if (!out) {
       fs::remove(temporary, ec);
-      PortLog::Write("suit colours: cannot write %s\n", PortPaths::detail::ToUtf8(file).c_str());
+      PortLog::Write("suit colours: cannot write %s\n", PortUtf8::ToUtf8(file).c_str());
       return false;
     }
   }
   fs::rename(temporary, file, ec);
   if (ec) {
     fs::remove(temporary, ec);
-    PortLog::Write("suit colours: cannot write %s\n", PortPaths::detail::ToUtf8(file).c_str());
+    PortLog::Write("suit colours: cannot write %s\n", PortUtf8::ToUtf8(file).c_str());
     return false;
   }
   return true;
@@ -166,7 +174,7 @@ std::vector<PortMods::LooseResource> Collect(
     return {};
   }
 
-  const fs::path dir = PortPaths::detail::FromUtf8(user) / "generated" / "suit-colours" / info.key;
+  const fs::path dir = PortUtf8::FromUtf8(user) / "generated" / "suit-colours" / info.key;
   const std::string stamp = std::string("suit-colours ") + std::to_string(kVersion) + " " +
                             PortDisc::Name(PortDisc::Current()) + " " + info.key + " " + picksKey + inputs + "\n";
   std::error_code ec;
@@ -178,7 +186,7 @@ std::vector<PortMods::LooseResource> Collect(
       if (ec || size == 0) {
         continue;  // could not be made: logged when it was tried
       }
-      found.push_back({kTXTR, job.source.id, PortPaths::detail::ToUtf8(file), size, "generated"});
+      found.push_back({kTXTR, job.source.id, PortUtf8::ToUtf8(file), size, "generated"});
     }
     return found;
   };
@@ -187,7 +195,7 @@ std::vector<PortMods::LooseResource> Collect(
     if (in.is_open() && port::ReadAllText(in) == stamp) {
       std::vector<PortMods::LooseResource> found = cached();
       if (!found.empty()) {
-        PortLog::Write("suit colours: %s from the cache in %s\n", info.name, PortPaths::detail::ToUtf8(dir).c_str());
+        PortLog::Write("suit colours: %s from the cache in %s\n", info.name, PortUtf8::ToUtf8(dir).c_str());
         return found;
       }
     }
@@ -218,7 +226,8 @@ std::vector<PortMods::LooseResource> Collect(
       haveFrom = decode({{job.source.from}, {}}, from);
     }
     const bool alpha = HasTransparency(image);
-    const size_t changed = Recolour(image, suit, picks, haveFrom ? &from : nullptr, job.source.fromSuit);
+    const size_t changed =
+        Recolour(image, suit, picks, haveFrom ? &from : nullptr, job.source.fromSuit, job.source.islands);
     PortLog::Write("suit colours: %s: %s: %zu of %d texels recoloured\n", info.name, FileName(job.source.id).c_str(),
                    changed, image.width * image.height);
     outputs.emplace_back(job.source.id, PortRemastered::EncodeTxtrCmpr(image, alpha, PortRemastered::MapKind::Colour));
@@ -235,7 +244,7 @@ std::vector<PortMods::LooseResource> Collect(
   if (!Put(dir, kStampName, stamp.data(), stamp.size())) {
     return {};
   }
-  PortLog::Write("suit colours: %s made in %s\n", info.name, PortPaths::detail::ToUtf8(dir).c_str());
+  PortLog::Write("suit colours: %s made in %s\n", info.name, PortUtf8::ToUtf8(dir).c_str());
   return cached();
 }
 
@@ -247,7 +256,7 @@ std::vector<std::pair<uint32_t, std::string>> CollectDread(int suit, const Picks
     return {};
   }
   const Suit& info = SuitInfo(suit);
-  const fs::path mod = PortPaths::detail::FromUtf8(modDir);
+  const fs::path mod = PortUtf8::FromUtf8(modDir);
 
   // "<suit> <texture id>" lines, the suit as CPlayerState::EPlayerSuit.
   std::vector<std::pair<uint32_t, std::string>> jobs;  // (id, the .dds served now)
@@ -298,10 +307,10 @@ std::vector<std::pair<uint32_t, std::string>> CollectDread(int suit, const Picks
   }
   std::error_code ec;
   for (const auto& [id, path] : jobs) {
-    const uintmax_t size = fs::file_size(PortPaths::detail::FromUtf8(path), ec);
+    const uintmax_t size = fs::file_size(PortUtf8::FromUtf8(path), ec);
     sources += " " + ddsName(id) + "@" + std::to_string(ec ? 0 : size);
   }
-  const fs::path dir = PortPaths::detail::FromUtf8(user) / "generated" / "suit-colours" / info.key;
+  const fs::path dir = PortUtf8::FromUtf8(user) / "generated" / "suit-colours" / info.key;
   const PortRemastered::DdsFormat format = PortRemastered::ColourDdsFormat();
   const std::string stamp = std::string("suit-colours ") + std::to_string(kVersion) + " " +
                             PortRemastered::TextureFormatName() + " " + info.key + " " + picksKey + " " + sources +
@@ -314,7 +323,7 @@ std::vector<std::pair<uint32_t, std::string>> CollectDread(int suit, const Picks
       if (ec || size == 0) {
         continue;  // could not be made: logged when it was tried
       }
-      found.emplace_back(job.first, PortPaths::detail::ToUtf8(file));
+      found.emplace_back(job.first, PortUtf8::ToUtf8(file));
     }
     return found;
   };
@@ -323,7 +332,7 @@ std::vector<std::pair<uint32_t, std::string>> CollectDread(int suit, const Picks
     if (in.is_open() && port::ReadAllText(in) == stamp) {
       std::vector<std::pair<uint32_t, std::string>> found = cached();
       if (!found.empty()) {
-        PortLog::Write("suit colours: %s from the cache in %s\n", info.name, PortPaths::detail::ToUtf8(dir).c_str());
+        PortLog::Write("suit colours: %s from the cache in %s\n", info.name, PortUtf8::ToUtf8(dir).c_str());
         return found;
       }
     }
@@ -362,7 +371,7 @@ std::vector<std::pair<uint32_t, std::string>> CollectDread(int suit, const Picks
   if (made == 0 || !Put(dir, kStampName, stamp.data(), stamp.size())) {
     return {};
   }
-  PortLog::Write("suit colours: %s made in %s\n", info.name, PortPaths::detail::ToUtf8(dir).c_str());
+  PortLog::Write("suit colours: %s made in %s\n", info.name, PortUtf8::ToUtf8(dir).c_str());
   return cached();
 }
 

@@ -555,7 +555,7 @@ bool CGuiFrame::GetIsFinishedLoading() const {
     }
     if (!(*it)->GetIsFinishedLoading()) {
       x58_24_loaded = false;
-      if (port::EnvFlag("MP_LOG_HUD")) {
+      if (port::LogHud()) {
         static int sLogCount = 0;
         if (sLogCount < 80) {
           ++sLogCount;

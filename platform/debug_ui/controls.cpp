@@ -6,6 +6,7 @@
 #include "port_debug.h"
 #include "port_gyro_motion.h"
 #include "port_pointer.h"
+#include "port_steam_triton.h"
 #include "port_apclient.h"
 #include "port_controls.h"
 #include "port_input_devices.h"
@@ -59,7 +60,7 @@ void DrawControlsOptions() {
   int glyphs = sPromptGlyphs.load(std::memory_order_relaxed);
   if (ImGui::Combo("Button glyphs", &glyphs,
                    "Follow the input in use\0" "Xbox\0" "PlayStation\0" "Nintendo Switch\0" "GameCube\0"
-                   "Keyboard & mouse\0")) {
+                   "Keyboard & mouse\0" "Steam Deck\0")) {
     sPromptGlyphs.store(glyphs, std::memory_order_relaxed);
     MarkDirty();
   }
@@ -402,6 +403,14 @@ void DrawControlsController() {
     if (pad != nullptr && SDL_IsJoystickVirtual(SDL_GetGamepadID(pad))) {
       ImGui::TextDisabled("OpenXR Controllers: dead zones last until the game closes.");
     }
+    bool precise = sInput.preciseStickDeadZones;
+    if (ImGui::Checkbox("Precise stick deadzones", &precise)) {
+      SetPreciseStickDeadZones(precise);
+    }
+    ItemHelp("Makes the Stick and C-stick deadzone sliders the only deadzone: the game also ignores "
+             "about the first 12% of each stick's tilt, which this offsets, and movement past a slider "
+             "starts from zero instead of jumping. Lower the sliders with it for tighter controls; at "
+             "0% any drift moves Samus.");
   }
 }
 
@@ -697,6 +706,27 @@ void DrawControlsTouchGyro() {
     SetSpringBallFlickRate(flickRate);
   }
   ImGui::EndDisabled();
+
+  if (PortSteamTriton::kAvailable) {
+    // Under Steam Input: the back buttons of the physical controller behind Player 1's virtual pad
+    // (read from its own reports, port_steam_triton.h; Steam's virtual pad has none).
+    ImGui::SeparatorText("Back buttons");
+    bool backButtons = sInput.steamInputBackButtons;
+    if (ImGui::Checkbox("Steam Input back buttons", &backButtons)) {
+      SetSteamInputBackButtons(backButtons);
+    }
+    ItemHelp("Under Steam Input, reads Player 1's controller's back buttons (Steam Controller and Steam "
+             "Deck L4, R4, L5, R5; DualSense Edge back and Fn buttons; SL and SR of a Joy-Con pair), "
+             "which Steam Input doesn't pass to the game, as Paddle 1-4 on the Remap page (bind Gyro aim "
+             "to one there, say). If the game's Steam layout also maps them, bind each button in one "
+             "place, not both.");
+    if (sInput.steamInputBackButtons) {
+      const PortSteamTriton::Stats sc = PortSteamTriton::GetStats();
+      ImGui::Text("Behind Steam Input: %s", sc.receiving      ? sc.device
+                                            : sc.notPlayerOne ? "not Player 1's controller"
+                                                              : "none");
+    }
+  }
 }
 
 } // namespace PortDebug

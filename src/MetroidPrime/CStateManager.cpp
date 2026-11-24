@@ -2918,7 +2918,22 @@ void CStateManager::PreRender() {
   x86c_stateManagerContainer->xf39c_renderLast.clear();
   xf7c_projectedShadow = nullptr;
 
+#ifdef TARGET_PC
+  {
+    // Port: an area's PreRender is a per-update step that retail runs once a frame: a door
+    // waiting on its room pings the area in Think, and PreRender sends an unpinged area's
+    // data back to ARAM. A frame drawn between two updates (FPS cap above the simulation
+    // rate) found no ping and undid the door's transfer every time, so the door never
+    // opened (issue #283).
+    static uint sLastSimTick = ~0u;
+    if (xPortSimTick != sLastSimTick) {
+      sLastSimTick = xPortSimTick;
+      x850_world->PreRender();
+    }
+  }
+#else
   x850_world->PreRender();
+#endif
 #ifdef TARGET_PC
   {
     // Port: Remastered's shader clock (wind, Phazon) reads the presented time

@@ -322,6 +322,11 @@ public:
   // The PART id this system was built from (Remastered compares a generator's desc id).
   CAssetId PortDescId() const { return x1c_genDesc.GetTag().GetId(); }
   int PortCurFrame() const { return x74_curFrame; }
+  // CElementGen::HasAnyParticlesRecursive 0x24d42c: own particles, else any child system or
+  // per-particle child with particles, of whatever kind (the recursive count sees PARTs only).
+  bool PortHasAnyParticlesRecursive() const;
+  // The generator's vtable+0x40 by kind: PART, ELSC/ELC2, SWHC (CParticleSwoosh 0x27f6e8).
+  static bool PortHasAnyParticles(const CParticleGen& gen);
   void PortCreateParticlesAtPositionsIncludingChildren(int n, const CVector3f* pos);
   // Remastered particle variables (PVRT): a handle is looked up once and then binds are cheap.
   // Binds are generator-wide, persist until rebound, and are no-ops when the variable is absent.

@@ -361,7 +361,7 @@ void CHUDBillboardEffect::PortUpdateVisorOverrides(CStateManager& mgr, float dt)
         if (fx->x104_26_isElementGen) {
           const CElementGen& gen = static_cast< const CElementGen& >(*fx->xe8_generator);
           PortExtractVisorData(gen, d);
-          active = gen.GetParticleCountAll() > 0;
+          active = gen.PortHasAnyParticlesRecursive();
           return true;
         }
         if (fx->xe8_generator->Get4CharId() == 'ELSC') {

@@ -1135,19 +1135,58 @@ SceneryScripts MatchScripts(const Room& room, const Area& area) {
     match[k] = int(j);
     used[j] = true;
   };
-  // Same type at the same place; among several, the one on the same layer.
-  for (size_t k = 0; k < ents.size(); ++k) {
-    const Ent& e = ents[k];
-    if (!e.hasPos || e.type < 0) {
-      continue;
-    }
-    std::vector<size_t> cands, same;
+  // Same type at the same place. Several at one place are told apart by layer, once the
+  // place's lone matches show which retail layer each Remastered layer is: the indices
+  // need not agree (Hive Totem's are retail's + 1, and its normal water took the poison
+  // Water on the same index). A layer no lone match is on compares the indices.
+  auto samePlace = [&](const Ent& e) {
+    std::vector<size_t> cands;
     for (size_t j = 0; j < objects.size(); ++j) {
       if (objects[j].type == e.type && !used[j] && valid(objects[j]) && MaxAbs(objects[j].pos, e.w) < kMatchTolerance) {
         cands.push_back(j);
-        if (objects[j].layer == e.layer) {
-          same.push_back(j);
+      }
+    }
+    return cands;
+  };
+  std::vector<size_t> ambiguous;
+  for (size_t k = 0; k < ents.size(); ++k) {
+    if (!ents[k].hasPos || ents[k].type < 0) {
+      continue;
+    }
+    const std::vector<size_t> cands = samePlace(ents[k]);
+    if (cands.size() == 1) {
+      take(k, cands[0]);
+    } else if (cands.size() > 1) {
+      ambiguous.push_back(k);
+    }
+  }
+  std::map<int, std::map<int, int>> placeVotes;  // Remastered layer -> retail layer -> matches
+  for (size_t k = 0; k < ents.size(); ++k) {
+    if (match[k] >= 0) {
+      ++placeVotes[ents[k].layer][objects[size_t(match[k])].layer];
+    }
+  }
+  // Voted layers first: the rest then choose among what those left (Hive Totem's normal water
+  // is its layer's only entity; its poison sibling's layer votes for the poison Water's).
+  std::stable_partition(ambiguous.begin(), ambiguous.end(),
+                        [&](size_t k) { return placeVotes.count(ents[k].layer) != 0; });
+  for (size_t k : ambiguous) {
+    const Ent& e = ents[k];
+    int layer = e.layer;
+    const auto v = placeVotes.find(e.layer);
+    if (v != placeVotes.end()) {
+      int most = 0;
+      for (const auto& [retail, n] : v->second) {
+        if (n > most) {
+          layer = retail;
+          most = n;
         }
+      }
+    }
+    std::vector<size_t> cands = samePlace(e), same;
+    for (size_t j : cands) {
+      if (objects[j].layer == layer) {
+        same.push_back(j);
       }
     }
     if (cands.size() > 1 && !same.empty()) {

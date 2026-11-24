@@ -3,6 +3,7 @@
 // (port_remastered_tegra_swizzle.cpp, port_remastered_bcdec.cpp).
 
 #include "port_dread_bctex.h"
+#include "port_bytes.h"
 
 #include "port_remastered_txtr_codecs.h"
 
@@ -20,11 +21,6 @@ namespace {
 
 constexpr size_t kMaxInflated = size_t(512) << 20;
 constexpr size_t kMaxDimension = 16384;
-
-uint32_t Le32(const uint8_t* p) {
-  return uint32_t(p[0]) | uint32_t(p[1]) << 8 | uint32_t(p[2]) << 16 | uint32_t(p[3]) << 24;
-}
-uint64_t Le64(const uint8_t* p) { return uint64_t(Le32(p)) | uint64_t(Le32(p + 4)) << 32; }
 
 std::string Hex(uint32_t v) {
   char buf[16];
@@ -81,7 +77,7 @@ bool Bctex::Parse(const uint8_t* data, size_t size, std::string& error) {
     error = "bctex: not an MTXT file";
     return false;
   }
-  const size_t inflatedSize = Le32(data + size - 4);
+  const size_t inflatedSize = port::ReadLE32(data + size - 4);
   if (inflatedSize < 0x30 || inflatedSize > kMaxInflated) {
     error = "bctex: implausible inflated size";
     return false;
@@ -96,8 +92,8 @@ bool Bctex::Parse(const uint8_t* data, size_t size, std::string& error) {
   }
 
   // Outer header.
-  const uint32_t xtxOff = Le32(inf.data() + 0x20);
-  const uint32_t xtxSize = Le32(inf.data() + 0x28);
+  const uint32_t xtxOff = port::ReadLE32(inf.data() + 0x20);
+  const uint32_t xtxSize = port::ReadLE32(inf.data() + 0x28);
   if (xtxOff < 8 || size_t(xtxOff) - 8 > inf.size() || xtxSize > inf.size() - (size_t(xtxOff) - 8) ||
       xtxSize < 16) {
     error = "bctex: the XTX lies outside the file";
@@ -109,7 +105,7 @@ bool Bctex::Parse(const uint8_t* data, size_t size, std::string& error) {
     error = "bctex: no XTX container";
     return false;
   }
-  const uint32_t xtxHeader = Le32(xtx + 4);
+  const uint32_t xtxHeader = port::ReadLE32(xtx + 4);
   if (xtxHeader < 16 || xtxHeader > xtxLen) {
     error = "bctex: bad XTX header size";
     return false;
@@ -123,10 +119,10 @@ bool Bctex::Parse(const uint8_t* data, size_t size, std::string& error) {
   size_t at = xtxHeader;
   while (at + 36 <= xtxLen && std::memcmp(xtx + at, "HBvN", 4) == 0) {
     const uint8_t* b = xtx + at;
-    const uint32_t blockSize = Le32(b + 4);
-    const uint64_t dataSize = Le64(b + 8);
-    const int64_t dataOff = int64_t(Le64(b + 16));
-    const uint32_t type = Le32(b + 24);
+    const uint32_t blockSize = port::ReadLE32(b + 4);
+    const uint64_t dataSize = port::ReadLE64(b + 8);
+    const int64_t dataOff = int64_t(port::ReadLE64(b + 16));
+    const uint32_t type = port::ReadLE32(b + 24);
     if (blockSize < 36 || dataOff < 0 || uint64_t(dataOff) > xtxLen - at || dataSize > xtxLen - at - uint64_t(dataOff)) {
       error = "bctex: an XTX block lies outside the XTX";
       return false;
@@ -156,16 +152,16 @@ bool Bctex::Parse(const uint8_t* data, size_t size, std::string& error) {
     return false;
   }
   BctexInfo info;
-  info.width = Le32(texHdr + 12);
-  info.height = Le32(texHdr + 16);
-  info.depth = Le32(texHdr + 20);
-  info.format = Le32(texHdr + 28);
-  info.mipCount = Le32(texHdr + 32);
+  info.width = port::ReadLE32(texHdr + 12);
+  info.height = port::ReadLE32(texHdr + 16);
+  info.depth = port::ReadLE32(texHdr + 20);
+  info.format = port::ReadLE32(texHdr + 28);
+  info.mipCount = port::ReadLE32(texHdr + 32);
   for (int i = 0; i < 17; ++i) {
-    info.mipOffset[i] = Le32(texHdr + 40 + 4 * i);
+    info.mipOffset[i] = port::ReadLE32(texHdr + 40 + 4 * i);
   }
-  info.layout1 = Le32(texHdr + 40 + 17 * 4);
-  info.layout2 = Le32(texHdr + 44 + 17 * 4);
+  info.layout1 = port::ReadLE32(texHdr + 40 + 17 * 4);
+  info.layout2 = port::ReadLE32(texHdr + 44 + 17 * 4);
   info.blockHeightGobs = 1u << (info.layout1 & 7);
   if (info.width == 0 || info.height == 0 || info.width > kMaxDimension || info.height > kMaxDimension ||
       info.mipCount == 0 || info.mipCount > 17 || info.depth > 1) {

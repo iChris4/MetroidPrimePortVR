@@ -10,6 +10,7 @@
 #include "port_gci.h"
 #include "port_discord.h"
 #include "port_gallery.h"
+#include "port_utf8_path.h"
 
 #include <aurora/imgui.h>
 #include <imgui_internal.h>
@@ -71,7 +72,7 @@ void LoadGalleryPicture() {
   ReleaseGalleryTexture();
   sGalleryFailed = true;
   sGalleryLoaded = sGalleryIndex;
-  std::ifstream file(PortGci::PathFromString(sGalleryPaths[sGalleryIndex]), std::ios::binary);
+  std::ifstream file(PortUtf8::FromUtf8(sGalleryPaths[sGalleryIndex]), std::ios::binary);
   const std::vector<uint8_t> jpeg = port::ReadAll(file);
   int width = 0;
   int height = 0;

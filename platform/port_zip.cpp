@@ -1,4 +1,6 @@
 #include "port_zip.h"
+#include "port_bytes.h"
+#include "port_utf8_path.h"
 
 #include <zlib.h>
 
@@ -15,16 +17,7 @@ namespace {
 
 namespace fs = std::filesystem;
 
-fs::path FromUtf8(const std::string& text) {
-  return fs::path(std::u8string(text.begin(), text.end()));
-}
-
-uint16_t Le16(const uint8_t* p) { return static_cast< uint16_t >(p[0] | (p[1] << 8)); }
-uint32_t Le32(const uint8_t* p) {
-  return static_cast< uint32_t >(p[0]) | (static_cast< uint32_t >(p[1]) << 8) |
-         (static_cast< uint32_t >(p[2]) << 16) | (static_cast< uint32_t >(p[3]) << 24);
-}
-uint64_t Le64(const uint8_t* p) { return Le32(p) | (static_cast< uint64_t >(Le32(p + 4)) << 32); }
+using PortUtf8::FromUtf8;
 
 struct Entry {
   std::string name;
@@ -59,7 +52,7 @@ bool ReadDirectory(std::ifstream& in, std::vector< Entry >& entries, std::string
   }
   size_t eocd = SIZE_MAX;
   for (size_t i = tail.size() - kEocd + 1; i-- > 0;) {
-    if (Le32(&tail[i]) == 0x06054b50) {
+    if (port::ReadLE32(&tail[i]) == 0x06054b50) {
       eocd = i;
       break;
     }
@@ -68,15 +61,15 @@ bool ReadDirectory(std::ifstream& in, std::vector< Entry >& entries, std::string
     error = "not a zip file";
     return false;
   }
-  uint64_t total = Le16(&tail[eocd + 10]);
-  uint64_t dirSize = Le32(&tail[eocd + 12]);
-  uint64_t dirOffset = Le32(&tail[eocd + 16]);
+  uint64_t total = port::ReadLE16(&tail[eocd + 10]);
+  uint64_t dirSize = port::ReadLE32(&tail[eocd + 12]);
+  uint64_t dirOffset = port::ReadLE32(&tail[eocd + 16]);
   const uint64_t eocdPos = fileSize - window + eocd;
   if (total == 0xFFFF || dirSize == 0xFFFFFFFFu || dirOffset == 0xFFFFFFFFu) {
     uint8_t locator[20];
     const bool hasLocator = eocdPos >= sizeof(locator) &&
                             ReadAt(in, eocdPos - sizeof(locator), locator, sizeof(locator)) &&
-                            Le32(locator) == 0x07064b50;
+                            port::ReadLE32(locator) == 0x07064b50;
     // A plain archive of exactly 65535 entries saturates the count without ZIP64.
     if (!hasLocator && (dirSize == 0xFFFFFFFFu || dirOffset == 0xFFFFFFFFu)) {
       error = "missing ZIP64 end of central directory";
@@ -84,13 +77,13 @@ bool ReadDirectory(std::ifstream& in, std::vector< Entry >& entries, std::string
     }
     if (hasLocator) {
       uint8_t rec[56];
-      if (!ReadAt(in, Le64(locator + 8), rec, sizeof(rec)) || Le32(rec) != 0x06064b50) {
+      if (!ReadAt(in, port::ReadLE64(locator + 8), rec, sizeof(rec)) || port::ReadLE32(rec) != 0x06064b50) {
         error = "bad ZIP64 end of central directory";
         return false;
       }
-      total = Le64(rec + 32);
-      dirSize = Le64(rec + 40);
-      dirOffset = Le64(rec + 48);
+      total = port::ReadLE64(rec + 32);
+      dirSize = port::ReadLE64(rec + 40);
+      dirOffset = port::ReadLE64(rec + 48);
     }
   }
   if (dirOffset > fileSize || dirSize > fileSize - dirOffset || dirSize > (1ull << 31)) {
@@ -103,18 +96,18 @@ bool ReadDirectory(std::ifstream& in, std::vector< Entry >& entries, std::string
     return false;
   }
   size_t pos = 0;
-  while (pos + 46 <= dir.size() && Le32(&dir[pos]) == 0x02014b50) {
+  while (pos + 46 <= dir.size() && port::ReadLE32(&dir[pos]) == 0x02014b50) {
     const uint8_t* h = &dir[pos];
     Entry e;
-    e.flags = Le16(h + 8);
-    e.method = Le16(h + 10);
-    e.crc = Le32(h + 16);
-    e.compressed = Le32(h + 20);
-    e.size = Le32(h + 24);
-    const size_t nameLen = Le16(h + 28);
-    const size_t extraLen = Le16(h + 30);
-    const size_t commentLen = Le16(h + 32);
-    e.localOffset = Le32(h + 42);
+    e.flags = port::ReadLE16(h + 8);
+    e.method = port::ReadLE16(h + 10);
+    e.crc = port::ReadLE32(h + 16);
+    e.compressed = port::ReadLE32(h + 20);
+    e.size = port::ReadLE32(h + 24);
+    const size_t nameLen = port::ReadLE16(h + 28);
+    const size_t extraLen = port::ReadLE16(h + 30);
+    const size_t commentLen = port::ReadLE16(h + 32);
+    e.localOffset = port::ReadLE32(h + 42);
     if (pos + 46 + nameLen + extraLen + commentLen > dir.size()) {
       error = "bad central directory entry";
       return false;
@@ -122,8 +115,8 @@ bool ReadDirectory(std::ifstream& in, std::vector< Entry >& entries, std::string
     e.name.assign(reinterpret_cast< const char* >(h + 46), nameLen);
     const uint8_t* extra = h + 46 + nameLen;
     for (size_t x = 0; x + 4 <= extraLen;) {
-      const uint16_t id = Le16(extra + x);
-      const size_t len = Le16(extra + x + 2);
+      const uint16_t id = port::ReadLE16(extra + x);
+      const size_t len = port::ReadLE16(extra + x + 2);
       if (x + 4 + len > extraLen) {
         break;
       }
@@ -133,7 +126,7 @@ bool ReadDirectory(std::ifstream& in, std::vector< Entry >& entries, std::string
         size_t left = len;
         const auto take = [&](uint64_t& value, bool wanted) {
           if (wanted && left >= 8) {
-            value = Le64(f);
+            value = port::ReadLE64(f);
             f += 8;
             left -= 8;
           }
@@ -153,11 +146,11 @@ bool ReadDirectory(std::ifstream& in, std::vector< Entry >& entries, std::string
 
 bool ExtractEntry(std::ifstream& in, const Entry& e, const fs::path& out, std::string& error) {
   uint8_t local[30];
-  if (!ReadAt(in, e.localOffset, local, sizeof(local)) || Le32(local) != 0x04034b50) {
+  if (!ReadAt(in, e.localOffset, local, sizeof(local)) || port::ReadLE32(local) != 0x04034b50) {
     error = e.name + ": bad local header";
     return false;
   }
-  uint64_t offset = e.localOffset + 30 + Le16(local + 26) + Le16(local + 28);
+  uint64_t offset = e.localOffset + 30 + port::ReadLE16(local + 26) + port::ReadLE16(local + 28);
   std::error_code ec;
   fs::create_directories(out.parent_path(), ec);
   std::ofstream file(out, std::ios::binary | std::ios::trunc);
@@ -174,6 +167,12 @@ bool ExtractEntry(std::ifstream& in, const Entry& e, const fs::path& out, std::s
   uint64_t written = 0;
   uint64_t remaining = e.compressed;
   const auto emit = [&](const uint8_t* data, size_t length) {
+    // Checked before the write: an entry that inflates past its declared size (a zip bomb) must not
+    // fill the disk first.
+    if (length > e.size - written) {
+      error = e.name + ": size mismatch";
+      return false;
+    }
     crc = static_cast< uint32_t >(crc32(crc, data, static_cast< uInt >(length)));
     written += length;
     file.write(reinterpret_cast< const char* >(data), static_cast< std::streamsize >(length));
@@ -198,7 +197,7 @@ bool ExtractEntry(std::ifstream& in, const Entry& e, const fs::path& out, std::s
     remaining -= want;
     if (!deflated) {
       ok = emit(inBuf.data(), want);
-      if (!ok) {
+      if (!ok && error.empty()) {
         error = e.name + ": write failed";
       }
       continue;
@@ -215,7 +214,9 @@ bool ExtractEntry(std::ifstream& in, const Entry& e, const fs::path& out, std::s
         break;
       }
       if (!emit(outBuf.data(), outBuf.size() - zs.avail_out)) {
-        error = e.name + ": write failed";
+        if (error.empty()) {
+          error = e.name + ": write failed";
+        }
         ok = false;
       }
       streamEnd = rc == Z_STREAM_END;

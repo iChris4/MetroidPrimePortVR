@@ -188,7 +188,9 @@ drops a draw that would read past one of its arrays (the bind pose read through 
 texgen reads is not checked: retail's packed-lightmap draws index TEX0 past its array that way, which
 nothing reads. It costs about 1 ns per
 vertex per indexed attribute, so it is off in release builds unless set (`0` turns it off), and on in
-builds without `NDEBUG`.
+builds without `NDEBUG`. `MP_GX_ARRAY_REUSE=0` turns off aurora's per-frame vertex array reuse (each
+array is then copied into the frame's storage once per attribute slot and bind, as before): an A/B for
+a model drawn with stale vertices.
 
     python3 tools/mpsoak.py --evidence-dir build/s-release-<date>/soak
     python3 tools/mpsoak.py --dry-run --evidence-dir /tmp/soak-dry    # the commands only, no game

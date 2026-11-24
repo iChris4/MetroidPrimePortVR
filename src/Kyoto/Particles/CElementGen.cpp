@@ -4733,7 +4733,15 @@ void CElementGen::RenderModels() {
   CVector3f pmopVec(0.f, 0.f, 0.f);
 
   CTransform4f orient(CTransform4f::Identity());
-  if (!x28_loadedGenDesc->x31_27_PMOO) {
+#ifdef TARGET_PC
+  // Remastered reads PMOO and discards it (CreateGPSM 0x259094): SolveParticleTransform 0x246f14
+  // always bases a model particle on the system orientation Q_l, so a converted PART (PIRN) keeps
+  // x1d8 whatever retail's default PMOO says. kMOT_One already takes it from the birth matrix.
+  const bool portKeepsOrient = x28_loadedGenDesc->xPortIrnd && x2c_orientType != kMOT_One;
+#else
+  const bool portKeepsOrient = false;
+#endif
+  if (!x28_loadedGenDesc->x31_27_PMOO || portKeepsOrient) {
     orient = x1d8_orientation;
   }
   orient = orient * x22c_globalOrientation;
@@ -5077,6 +5085,38 @@ int CElementGen::GetParticleCountAllInternal() const {
 #endif
   return ret;
 }
+
+#ifdef TARGET_PC
+bool CElementGen::PortHasAnyParticles(const CParticleGen& gen) {
+  switch (gen.Get4CharId()) {
+  case 'PART':
+    return static_cast< const CElementGen& >(gen).PortHasAnyParticlesRecursive();
+  case 'ELSC':
+    return static_cast< const CParticleElectric& >(gen).PortHasAnyParticlesRecursive();
+  case 'SWHC':
+    return gen.GetParticleCount() > 1;
+  default:
+    return false;
+  }
+}
+
+bool CElementGen::PortHasAnyParticlesRecursive() const {
+  if (x25c_activeParticleCount != 0) {
+    return true;
+  }
+  for (AUTO(it, x290_activePartChildren.begin()); it != x290_activePartChildren.end(); ++it) {
+    if (PortHasAnyParticles(**it)) {
+      return true;
+    }
+  }
+  for (size_t i = 0; i < xPortPsps.size(); ++i) {
+    if (xPortPsps[i].sys != nullptr && PortHasAnyParticles(*xPortPsps[i].sys)) {
+      return true;
+    }
+  }
+  return false;
+}
+#endif
 
 int CElementGen::GetSystemCount() {
   int ret = static_cast< int >(x25c_activeParticleCount) > 0;

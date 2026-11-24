@@ -226,7 +226,7 @@ void CHudEnergyInterface::Update(float dt, float energyLowPulse) {
 #else
   const float warningAlpha = 1.f;
 #endif
-  if (port::EnvFlag("MP_LOG_HUD") && x2c_energybart01_energybar != nullptr) {
+  if (port::LogHud() && x2c_energybart01_energybar != nullptr) {
     static int sLastKey = -1;
     const bool visible = x2c_energybart01_energybar->GetIsVisible();
     const int alpha = x2c_energybart01_energybar->GetModifiedColor().GetAlphau8();

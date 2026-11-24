@@ -5,6 +5,7 @@
 #include "port_mods.h"
 #include "port_strings.h"
 #include "port_bytes.h"
+#include "port_utf8_path.h"
 
 #include <algorithm>
 #include <cctype>
@@ -33,9 +34,7 @@ uint64_t RoundUp32(uint64_t value) { return (value + 31) & ~uint64_t(31); }
 
 using port::HexDigit;
 
-std::filesystem::path HostPath(const std::string& text) {
-  return std::filesystem::path(std::u8string(text.begin(), text.end()));
-}
+using PortUtf8::FromUtf8;
 
 } // namespace
 
@@ -391,7 +390,7 @@ int64_t Reader::ReadSegment(const Segment& segment, uint64_t at, uint8_t* buffer
     if (offset < segment.hostSize) {
       fromFile = size_t(std::min<uint64_t>(length, segment.hostSize - offset));
       if (mHost->path != segment.hostPath || !mHost->in.is_open()) {
-        mHost->in = std::ifstream(HostPath(segment.hostPath), std::ios::binary);
+        mHost->in = std::ifstream(FromUtf8(segment.hostPath), std::ios::binary);
         mHost->path = segment.hostPath;
       }
       mHost->in.clear();

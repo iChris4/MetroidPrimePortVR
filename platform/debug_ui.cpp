@@ -114,6 +114,8 @@ bool sCrosshairCustomColor = false;
 bool sCrosshairXRay = false;
 bool sCrosshairThermal = false;
 float sCrosshairColor[3] = {1.f, 1.f, 1.f};
+bool sCrosshairTargetCustomColor = false;
+float sCrosshairTargetColor[3] = {1.f, 0.f, 0.f};
 bool sHideHelmet = true;
 bool sHideVisorEffects = false;
 bool sHideMinimap = false;
@@ -173,6 +175,7 @@ std::mutex sRandoMutex;
 PortRandoGen::Settings sRandoSettings;
 float sFirstPersonFov = PortDebug::kFovRetail;
 bool sGunFollowsFov = false;
+bool sBallFollowsFov = true;
 float sGunFov = PortDebug::kFovRetail;
 float sGunOffset[3] = {};
 int sMsaa = 1;
@@ -337,11 +340,6 @@ std::string SettingsFilePath() {
   return (dir.empty() ? std::string("./") : dir) + "port_settings.ini";
 }
 
-bool ParseBool(const std::string& value) {
-  return value == "1" || value == "true" || value == "on" || value == "yes";
-}
-
-
 void MarkDirty() { sSettingsDirty = true; }
 
 PortRemastered::ImportParts RemasteredImportParts() {
@@ -400,6 +398,9 @@ void ApplyUpdateCheck() {
 } // namespace DebugUi
 
 namespace {
+// The SDL joystick id of the pad used since the last TakePadPortForLastUsed; 0 for none.
+std::atomic< uint32_t > sPadUsed{0};
+
 // Whether the player just used a real pad, keyboard or mouse. The touch overlay
 // is itself a virtual pad, and touches also arrive as a mouse, so neither counts.
 // A stick or trigger has to move well past rest, so drift does not count either.
@@ -441,6 +442,12 @@ bool IsPhysicalInput(const SDL_Event& event) {
 } // namespace
 
 namespace DebugUi {
+void TakePadPortForLastUsed() {
+  if (const uint32_t instance = sPadUsed.exchange(0, std::memory_order_acq_rel); instance != 0) {
+    PADTakeFirstPort(instance);
+  }
+}
+
 
 bool SDLCALL debug_event_watch(void*, SDL_Event* event) {
   PortDebug::PhotoTouchEvent(*event);
@@ -454,6 +461,14 @@ bool SDLCALL debug_event_watch(void*, SDL_Event* event) {
       event->type == SDL_EVENT_WINDOW_LEAVE_FULLSCREEN) {
     sWindowFullscreen.store(event->type == SDL_EVENT_WINDOW_ENTER_FULLSCREEN ? 1 : 0,
                             std::memory_order_release);
+  }
+  // Every pad plays player 1: the one just used, the touch pad included, takes pad port 0
+  // (TakePadPortForLastUsed, on the game's thread). Axis motion counts past the drift threshold.
+  if (event->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) {
+    sPadUsed.store(event->gbutton.which, std::memory_order_release);
+  } else if (event->type == SDL_EVENT_GAMEPAD_AXIS_MOTION &&
+             std::abs(static_cast< int >(event->gaxis.value)) > 16000) {
+    sPadUsed.store(event->gaxis.which, std::memory_order_release);
   }
   if (IsPhysicalInput(*event)) {
     sPhysicalInput.store(true, std::memory_order_release);

@@ -38,6 +38,8 @@ AuroraWindowSize get_window_size();
 // The frame buffer size a render scale would give, without applying it.
 bool get_frame_buffer_size_for_scale(float scale, uint32_t* width, uint32_t* height);
 const AuroraEvent* poll_events();
+// How long the last poll_events spent in SDL_UpdateJoysticks.
+uint64_t joystick_update_ns() noexcept;
 SDL_Window* get_sdl_window();
 SDL_Renderer* get_sdl_renderer();
 const void* get_native_window_handle() noexcept;

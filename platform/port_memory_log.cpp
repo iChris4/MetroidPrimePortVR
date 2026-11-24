@@ -155,7 +155,10 @@ constexpr uint64_t kPressurePollNs = 5 * kSampleNs;
 // A level that holds trims again this often, so a moderate trim catches what went idle since.
 constexpr uint64_t kPressureRepeatNs = 30 * kSampleNs;
 constexpr uint32_t kModerateIdleFrames = 3600; // a minute at 60 fps: areas left a while ago
-constexpr uint32_t kSevereIdleFrames = 16;     // everything this frame and the last few don't draw
+// Everything not drawn for half a minute (at 60 fps). Not the last few frames: an actor out
+// of view for a moment (Ridley circling the Artifact Temple) lost its pipelines, and rebuilding one
+// costs up to 2 s on a Mali, so it stayed invisible that long.
+constexpr uint32_t kSevereIdleFrames = 1800;
 int64_t sPressureModerateKb = 0;
 int64_t sPressureSevereKb = 0;
 
@@ -425,8 +428,9 @@ extern "C" JNIEXPORT void JNICALL Java_org_metroidprime_port_MetroidPrimeActivit
                  low ? " (system is low on memory)" : "");
   // Running low or critical, or the app is in the background: release built pipelines no recent frame
   // drew with (issue #162). The frame loop does it at the next frame start; they rebuild on demand.
+  // In play that keeps the severe trim's window; hidden, nothing is on screen to lose.
   if (level == -1 || level >= 10) {
-    aurora_trim_pipelines(16);
+    aurora_trim_pipelines(level >= 20 ? 16 : PortMemoryLog::kSevereIdleFrames);
     aurora_reduce_gpu_memory();
     // No headroom until the next sample, a second away: one severe texture sweep.
     if (PortMemoryLog::sTextureModerateKb > 0 || PortMemoryLog::sTextureSevereKb > 0) {

@@ -1,6 +1,7 @@
 #include "port_input_settings.h"
 
 #include "port_env.h"
+#include "port_strings.h"
 
 #include <algorithm>
 #include <cmath>
@@ -13,15 +14,13 @@
 namespace PortInput {
 namespace {
 
+using port::ParseBool;
+
 // Settings::padPreset's values, as ApplyPadPresetNamed takes them.
 constexpr std::string_view kPadPresetNames[] = {"gamecube", "remastered", "modern", "southpaw"};
 
 std::mutex sLayoutMutex;
 std::string sLayout;
-
-bool ParseBool(const std::string& value) {
-  return value == "1" || value == "true" || value == "on" || value == "yes";
-}
 
 // The mouse button a settings key such as "mouse_left" names, or -1.
 int MouseButtonSetting(const std::string& key) {
@@ -316,6 +315,10 @@ bool ApplySetting(std::string_view keyView, std::string_view valueView) {
     if (std::isfinite(f) && f >= 2.f && f <= 20.f) {
       s.springFlickRate = f;
     }
+  } else if (key == "steam_input_back_buttons") {
+    s.steamInputBackButtons = ParseBool(value);
+  } else if (key == "precise_stick_deadzones") {
+    s.preciseStickDeadZones = ParseBool(value);
   } else if (key == "spring_ball_swipe") {
     s.springSwipe = ParseBool(value);
   } else {
@@ -391,6 +394,8 @@ void WriteAimSettings(std::ostream& out) {
   out << "flick_stick_outer_deadzone=" << s.flickOuterDeadZone << '\n';
   out << "gyro_mode=" << s.gyroMode << '\n';
   out << "gyro_source=" << s.gyroSource << '\n';
+  out << "steam_input_back_buttons=" << (s.steamInputBackButtons ? 1 : 0) << '\n';
+  out << "precise_stick_deadzones=" << (s.preciseStickDeadZones ? 1 : 0) << '\n';
   out << "gyro_sensitivity=" << s.gyroSensitivity << '\n';
   out << "gyro_split=" << (s.gyroSplit ? 1 : 0) << '\n';
   out << "gyro_sensitivity_y=" << s.gyroSensitivityY << '\n';
@@ -459,6 +464,9 @@ void ApplyEnvOverrides() {
   }
   if (port::EnvFlag("MP_FLICK_STICK")) {
     s.flickStick = true;
+  }
+  if (port::EnvFlag("MP_PRECISE_STICK_DEADZONES")) {
+    s.preciseStickDeadZones = true;
   }
   if (port::EnvFlag("MP_TOUCH_FLICK_STICK")) {
     s.touchFlickStick = true;

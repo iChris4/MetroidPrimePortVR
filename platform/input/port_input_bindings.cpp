@@ -146,7 +146,7 @@ std::string MouseText(int code) {
     base = kMouseMenu;
   }
   int b = code - base;
-  if (b >= kMouseNameCount)
+  if (b < 0 || b >= kMouseNameCount)
     return std::to_string(code); // a raw code
   return std::string(prefix) + std::string(kMouseNames[b]);
 }

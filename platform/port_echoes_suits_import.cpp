@@ -6,6 +6,7 @@
 #include "port_remastered_import_internal.h"
 
 #include "port_echoes_suits.h"
+#include "port_utf8_path.h"
 
 #include <aurora/dvd.h>
 
@@ -20,12 +21,9 @@ constexpr const char* kEchoesStaging = ".echoes-suits.staging";
 constexpr const char* kEchoesOld = ".echoes-suits.old";
 constexpr const char* kEchoesDone = ".done";  // in the staging folder once it is complete
 
-fs::path Utf8Path(const std::string& text) { return fs::path(std::u8string(text.begin(), text.end())); }
+using PortUtf8::FromUtf8;
 
-std::string Utf8(const fs::path& path) {
-  const std::u8string text = path.u8string();
-  return std::string(text.begin(), text.end());
-}
+using PortUtf8::ToUtf8;
 
 bool WriteFile(const fs::path& path, const std::vector<uint8_t>& data) {
   std::ofstream out(path, std::ios::binary | std::ios::trunc);
@@ -181,13 +179,13 @@ bool MoveEchoesIntoPlace(const fs::path& mods) {
   if (had) {
     fs::rename(target, old, ec);
     if (ec) {
-      PortLog::Write("echoes: could not set aside %s: %s\n", Utf8(target).c_str(), ec.message().c_str());
+      PortLog::Write("echoes: could not set aside %s: %s\n", ToUtf8(target).c_str(), ec.message().c_str());
       return false;
     }
   }
   fs::rename(staging, target, ec);
   if (ec) {
-    PortLog::Write("echoes: could not move the import to %s: %s\n", Utf8(target).c_str(), ec.message().c_str());
+    PortLog::Write("echoes: could not move the import to %s: %s\n", ToUtf8(target).c_str(), ec.message().c_str());
     if (had) {
       std::error_code restore;
       fs::rename(old, target, restore);
@@ -220,7 +218,7 @@ void RunEchoes(std::string imagePath, fs::path mods) {
   ec.clear();
   fs::create_directories(staging, ec);
   if (ec) {
-    fail("Cannot write " + Utf8(staging) + ": " + ec.message());
+    fail("Cannot write " + ToUtf8(staging) + ": " + ec.message());
     return;
   }
   PortEchoesSuits::Io io;
@@ -228,7 +226,7 @@ void RunEchoes(std::string imagePath, fs::path mods) {
   io.retail = [&retail](uint32_t type, uint32_t id, std::vector<uint8_t>& out) { return retail.Read(type, id, out); };
   io.retailId = [&retail](uint32_t id) { return retail.HasId(id); };
   io.write = [&staging](const std::string& name, const std::vector<uint8_t>& data) {
-    return WriteFile(staging / Utf8Path(name), data);
+    return WriteFile(staging / FromUtf8(name), data);
   };
   io.log = [](const std::string& line) {
     PortLog::Write("%s\n", line.c_str());
@@ -254,7 +252,7 @@ void RunEchoes(std::string imagePath, fs::path mods) {
   if (!WriteFile(staging / PortEchoesSuits::kStampName, std::vector<uint8_t>(stamp.begin(), stamp.end())) ||
       !WriteFile(staging / kEchoesDone, {})) {
     fs::remove_all(staging, ec);
-    fail("Cannot write " + Utf8(staging));
+    fail("Cannot write " + ToUtf8(staging));
     return;
   }
   if (sCancel.load()) {
@@ -273,7 +271,7 @@ void RunEchoes(std::string imagePath, fs::path mods) {
 
 bool ApplyPendingEchoesImport() {
   const std::string mods = PortMods::Folder();
-  return !mods.empty() && MoveEchoesIntoPlace(Utf8Path(mods));
+  return !mods.empty() && MoveEchoesIntoPlace(FromUtf8(mods));
 }
 
 }  // namespace ImportDetail
@@ -307,7 +305,7 @@ bool StartEchoesSuitsImport(const std::string& imagePath) {
   sCancel = false;
   sState.running = true;
   sState.message = "Starting";
-  sThread = std::thread(RunEchoes, imagePath, Utf8Path(mods));
+  sThread = std::thread(RunEchoes, imagePath, FromUtf8(mods));
   return true;
 }
 

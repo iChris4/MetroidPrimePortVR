@@ -1,3 +1,54 @@
+## 2026-11-24: merged upstream port c872da704 (0.46.0)
+
+The upstream repository is gone: github.com/Odrannnn/MetroidPrimePort and the
+Odrannnn account answer 404 since mid-November, so `git fetch upstream` fails.
+Its last commits survive in forks that kept the history:
+gaudizer/metroidprimeport's `build-v0.46.0` branch is upstream 0.46.0
+(`c872da704`, 2026-11-12) plus one CI commit of the fork's own, and
+tib-kpl/MetroidPrimePort and gitlodey/MetroidPrimePort-h700 contain the same
+commit. It descends from the last upstream commit fetched here (`d2c4acbc6`,
+2026-11-08), so the content is upstream's, unchanged. No fork holds a later
+upstream commit, and Software Heritage's last visit (2026-10-30) is older. The
+local `refs/remotes/upstream/port` was set to `c872da704` by hand.
+
+60 upstream commits since the 0.42 base Nobbie merged on 2026-11-07: releases
+0.43.0 to 0.46.0, Steam Input gyro and back buttons (Linux), the pad used last
+takes player 1, the quick save-state slot kept between launches, Precise stick
+deadzones, resolution scale up to 8x, crosshair colour over enemies the beam
+hurts, per-frame vertex array copies made once, paletted textures keeping their
+other palettes, map pickup dots, Remastered exposure and water fixes, strings
+from a translatable STRG, and the shared UTF-8 path helpers.
+
+Conflicts (9 files), all kept from both sides:
+- aurora.cpp: upstream's `aurora_joystick_update_ns` next to the fork's tagged
+  `aurora_end_frame*`.
+- command_processor.cpp/.hpp: upstream's per-frame array copies
+  (`frame_array_range`, `clear_frame_arrays`) after the fork's de-index plan and
+  bind-group cache. Resident arrays still come first; the copies are cleared
+  when the frame's recording ends, so stereo replay and pipelining read ranges
+  of their own frame.
+- input.cpp includes; debug_ui.cpp (crosshair target colour, `sHideHelmet` stays
+  on by default); controls.cpp (the OpenXR dead-zone note, then Precise stick
+  deadzones); settings.cpp (`quick_resume_prompt_enabled` plus upstream's
+  `state_slot`; the fork's temporary-file write kept, through PortUtf8);
+  port_debug.h (FrameWorkStats, then the fork's vsync comment); and
+  tests/port_map_side.cpp (the fork's symlink skip, through PortUtf8).
+
+Build fixes: `gx::shutdown` lost upstream's reset of the single empty texture
+bind group (the fork's array of two is reset below it), and the launcher card
+import (main.cpp) and the fork's GCI import code (port_gci.cpp) use
+`PortUtf8::FromUtf8`/`ToUtf8` in place of the removed `PortGci::PathString` /
+`PathFromString`.
+
+Input (49e271151): any pad used, virtual included, now takes pad port 0. In
+Gamepad mode the "OpenXR Controllers" virtual pad takes it back as soon as the
+VR controllers move, and a real pad takes it when it is used. PrimedGun mode's
+VR pad is merged into port 0 whichever pad holds it.
+
+Checks: build/vr, `ctest -L port` 207/207 (port_entity_schema_current skipped:
+no clang-19 here), desktop Landing Site boot. Not checked: the headset, the
+Quest APK.
+
 ## 2026-11-23: functional HUD placement controls from Echoes
 
 Ported Echoes' completed HUD-offset rendering changes (Dawid Brüning's

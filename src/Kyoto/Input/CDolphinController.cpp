@@ -181,7 +181,8 @@ void CDolphinController::ReadDevices() {
       const float rawLength = std::sqrt(devices.cStickX * devices.cStickX + devices.cStickY * devices.cStickY);
       if (PortDebug::FlickStick() && (cx != 0.f || cy != 0.f) && rawLength > 0.f) {
         const PADDeadZones* zones = PADGetDeadZones(0);
-        const float inner = zones != nullptr && zones->useDeadzones
+        // Precise stick deadzones already start the tilt at the dead zone's edge.
+        const float inner = zones != nullptr && zones->useDeadzones && !PortDebug::PreciseStickDeadZones()
                                 ? static_cast< float >(zones->substickDeadZone) / 32767.f
                                 : 0.f;
         const float span = std::max(1.f - PortDebug::FlickOuterDeadZone() - inner, 0.05f);

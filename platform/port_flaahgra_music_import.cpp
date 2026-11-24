@@ -4,6 +4,7 @@
 
 #include "port_gci.h"
 #include "port_mods.h"
+#include "port_utf8_path.h"
 
 #include <aurora/dvd.h>
 
@@ -28,7 +29,7 @@ State sState;
 constexpr const char* kModName = "flaahgra-full-theme";
 constexpr const char* kFiles[2] = {"rui_flaaghraL.dsp", "rui_flaaghraR.dsp"};
 
-fs::path ModFolder() { return PortGci::PathFromString(PortMods::Folder()) / kModName; }
+fs::path ModFolder() { return PortUtf8::FromUtf8(PortMods::Folder()) / kModName; }
 
 void SetMessage(const std::string& message) {
   std::lock_guard lock(sMutex);
@@ -129,7 +130,7 @@ bool Import(const std::string& path, std::string& error) {
   std::error_code ec;
   fs::create_directories(folder, ec);
   if (ec) {
-    error = "Could not create " + PortGci::PathString(folder) + ".";
+    error = "Could not create " + PortUtf8::ToUtf8(folder) + ".";
     return false;
   }
   for (int i = 0; i < 2; ++i) {
@@ -139,14 +140,14 @@ bool Import(const std::string& path, std::string& error) {
       out.write(reinterpret_cast<const char*>(data[i].data()), std::streamsize(data[i].size()));
       out.flush();
       if (!out) {
-        error = "Could not write " + PortGci::PathString(temp) + ".";
+        error = "Could not write " + PortUtf8::ToUtf8(temp) + ".";
         fs::remove(temp, ec);
         return false;
       }
     }
     fs::rename(temp, folder / kFiles[i], ec);
     if (ec) {
-      error = "Could not move the file into " + PortGci::PathString(folder) + ".";
+      error = "Could not move the file into " + PortUtf8::ToUtf8(folder) + ".";
       fs::remove(temp, ec);
       return false;
     }
@@ -210,7 +211,7 @@ int RunFromCommandLine(const std::string& path) {
     std::fprintf(stderr, "%s\n", error.c_str());
     return 1;
   }
-  std::printf("Added the full Flaahgra theme in %s\n", PortGci::PathString(ModFolder()).c_str());
+  std::printf("Added the full Flaahgra theme in %s\n", PortUtf8::ToUtf8(ModFolder()).c_str());
   return 0;
 }
 

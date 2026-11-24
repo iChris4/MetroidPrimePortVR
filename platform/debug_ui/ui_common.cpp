@@ -6,6 +6,7 @@
 
 #include "port_env.h"
 #include "port_debug.h"
+#include "port_steam_triton.h"
 #include "port_graphics_backend.h"
 #include "port_gyro_motion.h"
 #include "port_pointer.h"
@@ -401,7 +402,10 @@ void UpdateUiScale() {
   if (window == nullptr) {
     return;
   }
-  const float displayScale = SDL_GetWindowDisplayScale(window);
+  // The overlay works in window coordinates, which on iOS and macOS are points already scaled up by
+  // the pixel density (ImGui's framebuffer scale), so take only the remaining content scale.
+  const float pixelDensity = SDL_GetWindowPixelDensity(window);
+  const float displayScale = SDL_GetWindowDisplayScale(window) / (pixelDensity > 0.f ? pixelDensity : 1.f);
   const float uiScale = std::clamp(displayScale, 1.f, 4.f);
   if (uiScale == sUiAppliedScale) {
     return;
@@ -477,6 +481,10 @@ void UpdateControllerNav() {
   }
   UpdateUiScale();
   ApplyThemeIfChanged();
+  TakePadPortForLastUsed();
+  // The Steam Controller's and Deck's own reports (gyro and back buttons) first, so the polls
+  // after this read this frame's.
+  PortSteamTriton::Update();
   PortInputDevices::PollPortActions();
   if (sToggleRequested.exchange(false, std::memory_order_acq_rel)) {
     Toggle();

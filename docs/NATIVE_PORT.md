@@ -177,8 +177,10 @@ storage and says so, with buttons to grant access again or stay there.
 and `MP_CACHE_PATH` the caches alone (neither moves the built-in Remastered
 import, which stays in app storage); use separate directories for automated
 testing so runs do not share normal saves/settings (the memory card stays with
-the executable either way). Screenshots are written to `screenshots/` in the
-working directory.
+the executable either way). Screenshots (the Screenshot binding, F12 by default,
+or F1 > Game) are PNGs written to `screenshots/` in the working directory; on
+Android they go to the shared Pictures/Metroid Prime. The console's `shot`
+still writes a BMP there.
 
 ### A Wayland session hangs at startup
 

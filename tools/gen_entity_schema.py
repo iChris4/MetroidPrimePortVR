@@ -49,7 +49,7 @@ MATH = {"CVector2f", "CVector3f", "CVector3d", "CUnitVector3f", "CTransform4f", 
         "CUnitQuaternion", "CColor", "CAABox", "COBBox", "CMatrix3f", "CMatrix4f", "CRelAngle",
         "CAxisAngle", "CPlane", "CSphere", "CLineSeg", "CVector2i", "CFrustumPlanes"}
 SMART = {"rstl::auto_ptr", "rstl::single_ptr", "rstl::rc_ptr", "rstl::ncrc_ptr", "TToken",
-         "TLockedToken", "TCachedToken", "CToken", "TCachedToken", "TSubAnimTypeToken"}
+         "TLockedToken", "TCachedToken", "CToken", "TSubAnimTypeToken"}
 # Plain integers that name a runtime resource: copying one restores nothing.
 HANDLES = {"CSfxHandle"}
 INTS = {"char", "signed char", "unsigned char", "short", "unsigned short", "int", "unsigned int",

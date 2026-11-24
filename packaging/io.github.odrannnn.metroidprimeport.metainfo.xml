@@ -55,6 +55,30 @@
        android/app/build.gradle; tools/make_flatpak.sh refuses to build when the
        two differ, since Flatpak reports the newest entry as the app's version. -->
   <releases>
+    <release version="0.46.0" date="2026-11-12">
+      <description>
+        <p>The resolution scale goes up to 8x, enough to supersample a 4K display; the frame buffer shrinks to fit the GPU's texture size limit. Precise stick deadzones (Controller settings) make the deadzone sliders the only deadzone, removing the game's own ~12% dead tilt. Button prompts switch to the right icon as soon as the input context changes. On Android, the pipeline cache no longer fails with a disk I/O error once it grows, so shaders stay cached between launches.</p>
+      </description>
+      <url type="details">https://github.com/Odrannnn/MetroidPrimePort/releases/tag/v0.46.0</url>
+    </release>
+    <release version="0.45.0" date="2026-11-10">
+      <description>
+        <p>Steam Deck and Steam Input: the gyro and back buttons of the controller behind Steam's virtual pad work on Linux, with Steam Deck button prompts. The controller used last plays as Player 1 without a trip to the Remap page. Doors open again with the FPS cap above 60. A save state made in Central Dynamo keeps the maze. Twin-stick and touch aim no longer turn Samus back after an elevator ride. On Android, an Archipelago companion app can hand over the room to connect to. Texture pack zips that inflate past their declared size are refused.</p>
+      </description>
+      <url type="details">https://github.com/Odrannnn/MetroidPrimePort/releases/tag/v0.45.0</url>
+    </release>
+    <release version="0.44.0" date="2026-11-09">
+      <description>
+        <p>Crosshair: an optional colour while aiming at an enemy the current beam hurts. Translation mods can now translate the port's own in-game text. Remastered: Hive Totem's and other rooms' water shows at the right level and type, the auto exposure no longer flashes white or black between rooms, Flaahgra's mirror beams point the right way, the Chozo Ghost's visor tint clears, and pickups bob as in Remastered. Map: collected pickups count as seen, and secret rooms show their pickups once the map station is used. The left hand stays drawn when looking straight up or down, and Fast Morph's zoom ends with the morph. Savestates loaded under water keep the underwater view, and the F5/F9 slot is kept between launches. On Android, enemies no longer go invisible after a moment off screen. Logs now record short freezes and where they happen.</p>
+      </description>
+      <url type="details">https://github.com/Odrannnn/MetroidPrimePort/releases/tag/v0.44.0</url>
+    </release>
+    <release version="0.43.0" date="2026-11-08">
+      <description>
+        <p>Cameras: the morph ball, spline and spindle cameras follow the FOV setting, with a toggle to keep the ball camera at retail's. Suit colours recolour Samus's body while morphing and in pickup cutscenes. Remastered: map floors in Phendrana Shorelines and nearby rooms draw filled, and the GameCube Z button fits inside the hint memo's ring. Dark Samus has her own Morph Ball. The overlay draws non-Latin game text and no longer draws too large on iPhone and Mac. The Screenshot binding saves a PNG, also on Android. The Steam Deck's built-in pad yields Player 1 to a connected controller, and quitting from Steam no longer crashes. Savestates restore animations and script fields more reliably. Performance: fewer texture and vertex copies, and Samus's shader pipelines are never trimmed.</p>
+      </description>
+      <url type="details">https://github.com/Odrannnn/MetroidPrimePort/releases/tag/v0.43.0</url>
+    </release>
     <release version="0.42.0" date="2026-11-06">
       <description>
         <p>Remastered: the thermal and X-ray visors draw the arm cannon, the suit arm and the grapple arm with Remastered's own heat and X-ray models, the X-ray models of the Chozo Ghost, Oculus and others use Remastered's, the X-ray view no longer turns the sky pale, and more room models use Remastered's instead of retail's. Cheats: moon jump, Boost Ball speed and duration, boosting in the air and steering while boosting, and moving Samus to the free camera. Difficulty: damage taken and dealt sliders. Savestates: every script object keeps its state, so cutscenes and room scripts resume as saved. Menus: a hold-to-quit Exit Game prompt on the main menu, the disc's version in the disc image section, and on Android a button that copies the shader cache into the data folder. Performance: fewer shader pipelines to compile, and texture packs shrink their cache when memory runs low. A user_textures folder is made at startup.</p>
